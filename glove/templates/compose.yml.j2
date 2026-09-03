@@ -12,16 +12,33 @@ services:
     command: {{ harness.entry | tojson }}
     stdin_open: true
     tty: true
+    # --- hardening set (PLAN §3.2); `allow_root` only drops the non-root user --
 {% if not allow_root %}
     user: "{{ uid }}:{{ gid }}"
-    security_opt:
-      - "no-new-privileges:true"
+{% endif %}
+    ipc: {{ hardening.ipc }}
     cap_drop:
       - ALL
+{% if hardening.cap_add %}
+    cap_add:
+{% for c in hardening.cap_add %}
+      - {{ c }}
+{% endfor %}
+{% endif %}
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp={{ hardening.seccomp_profile }}"
+{% if hardening.systempaths_unconfined %}
+      - "systempaths=unconfined"
+{% endif %}
     read_only: true
     tmpfs:
-      - /tmp
-{% endif %}
+{% for t in hardening.tmpfs %}
+      - {{ t }}
+{% endfor %}
+    pids_limit: {{ hardening.limits.pids }}
+    mem_limit: {{ hardening.limits.memory }}
+    cpus: {{ hardening.limits.cpus }}
     environment:
       HOME: "/home/agent"
 {% for k, v in environment.items() %}

@@ -34,6 +34,15 @@ def env_dir(env_id: str) -> Path:
     return envs_root() / env_id
 
 
+def sessions_root(env_id: str) -> Path:
+    """`<env_dir>/sessions` — one dir per `glove run … --name` session (§7.1)."""
+    return env_dir(env_id) / "sessions"
+
+
+def session_dir(env_id: str, session_name: str) -> Path:
+    return sessions_root(env_id) / session_name
+
+
 def registry_path() -> Path:
     return glove_home() / "registry.json"
 

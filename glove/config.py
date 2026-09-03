@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from .hardening import Limits
+
 
 class ConfigError(ValueError):
     """Raised for malformed or contradictory configuration."""
@@ -77,6 +79,12 @@ class Service:
 class Config:
     harness: str = "vibe"
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
+    # NEW in v2 (PLAN §7.2). `runtime` is the ring-0 layer (docker | podman |
+    # apple-container | gondolin | utm); for docker/podman it also drives which
+    # compose CLI `provider` shells out to. `enforcer` is the ring-1 in-container
+    # sandbox (nono | srt | none).
+    runtime: str = "docker"
+    enforcer: str = "nono"
     workdir: str = "."
     name: str | None = None
     add_dirs: list[AddDir] = field(default_factory=list)
@@ -124,6 +132,13 @@ class Config:
     # install them at runtime). Changing these yields a distinct image tag.
     apt_packages: list[str] = field(default_factory=list)
     pip_packages: list[str] = field(default_factory=list)
+    # NEW in v2 (PLAN §7.2). Resource bounds (ring 0) and per-backend options.
+    # `tools`/`browser` are consumed by later phases (ring 1 tool policy / ring 2
+    # browser wiring); modeled as free dicts here so §7.2 configs load today.
+    limits: Limits = field(default_factory=Limits)
+    tools: dict[str, Any] = field(default_factory=dict)
+    browser: dict[str, Any] = field(default_factory=dict)
+    enforcer_options: dict[str, Any] = field(default_factory=dict)
 
     def resolved_name(self) -> str:
         # The name IS the env-id (docs/plan-environments.md); the CLI always
@@ -172,6 +187,8 @@ def _coerce(data: dict[str, Any]) -> Config:
     if isinstance(net, str):
         net = [p.strip() for p in net.split(",") if p.strip()]
 
+    limits_raw = data.pop("limits", None)
+
     known = {f for f in Config.__dataclass_fields__}  # noqa: SIM118
     unknown = set(data) - known
     if unknown:
@@ -183,7 +200,21 @@ def _coerce(data: dict[str, Any]) -> Config:
     cfg.host_services = host_services
     if net is not None:
         cfg.net = net
+    if limits_raw is not None:
+        cfg.limits = _coerce_limits(limits_raw)
     return cfg
+
+
+def _coerce_limits(x: Any) -> Limits:
+    if isinstance(x, Limits):
+        return x
+    if isinstance(x, dict):
+        allowed = {f for f in Limits.__dataclass_fields__}  # noqa: SIM118
+        unknown = set(x) - allowed
+        if unknown:
+            raise ConfigError(f"unknown limits keys: {sorted(unknown)}")
+        return Limits(**x)
+    raise ConfigError(f"invalid limits (expected mapping): {x!r}")
 
 
 def _coerce_add_dir(x: Any) -> AddDir:

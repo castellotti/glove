@@ -71,14 +71,18 @@ def test_internal_network_and_external_ref(tmp_path):
     assert llm["extra_hosts"] == ["host.docker.internal:host-gateway"]
 
 
-def test_allow_root_relaxes_hardening(tmp_path):
+def test_allow_root_drops_only_the_user(tmp_path):
+    # PLAN §3.2: `allow_root` is an opt-out that runs as root but *keeps
+    # everything else* — cap_drop, read-only rootfs, seccomp, limits all remain.
     cfg, work = _session_cfg(tmp_path)
     cfg.allow_root = True
     result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
     doc = yaml.safe_load(result.compose_yaml)
     h = doc["services"]["glove-vibe-local-harness"]
-    assert "user" not in h
-    assert "cap_drop" not in h
+    assert "user" not in h  # runs as root
+    assert h["cap_drop"] == ["ALL"]  # but hardening is retained
+    assert h["read_only"] is True
+    assert any(s.startswith("seccomp=") for s in h["security_opt"])
 
 
 def test_mounts_rendered_with_readonly(tmp_path):

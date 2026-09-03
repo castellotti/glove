@@ -61,9 +61,10 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "name: glove-vibe-local" in result.output
-    compose = home / "envs" / "vibe-local" / "docker-compose.yml"
+    # compose renders under sessions/<session>/ (default session == env-id, §7.1)
+    compose = home / "envs" / "vibe-local" / "sessions" / "vibe-local" / "docker-compose.yml"
     assert compose.is_file()
-    # harness home seeded under the env's own home/
+    # harness home seeded under the env's own home/ (shared across sessions)
     assert (home / "envs" / "vibe-local" / "home" / ".vibe" / "config.toml").is_file()
 
 

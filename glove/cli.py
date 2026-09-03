@@ -40,7 +40,9 @@ from .registry import (
     envs_root,
     find_env_id,
     load_registry,
+    session_dir,
 )
+from .runtimes import get_runtime, known_runtimes
 
 app = typer.Typer(
     add_completion=False,
@@ -50,7 +52,7 @@ app = typer.Typer(
 console = Console()
 err = Console(stderr=True)
 
-SUBCOMMANDS = {"init", "run", "config", "down", "ls", "build", "version"}
+SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "version"}
 
 
 def _autodetect_provider() -> str:
@@ -142,7 +144,16 @@ def run(
     harness: Optional[str] = typer.Argument(
         None, help=f"one of: {', '.join(known_harnesses())}"
     ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="name this session (coexists with others; default: env-id)"
+    ),
     provider: Optional[str] = typer.Option(None, help="docker | podman (autodetect)"),
+    runtime: Optional[str] = typer.Option(
+        None, "--runtime", help=f"ring-0 runtime: {', '.join(known_runtimes())}"
+    ),
+    enforcer: Optional[str] = typer.Option(
+        None, "--enforcer", help="ring-1 enforcer: nono | srt | none"
+    ),
     config: Optional[Path] = typer.Option(None, "--config", help="YAML/JSON overlay"),
     env: Optional[str] = typer.Option(
         None, "--env", help="select an env by id, ignoring cwd resolution"
@@ -157,6 +168,9 @@ def run(
     allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
     allow_sensitive: bool = typer.Option(
         False, "--allow-sensitive", help="permit mounting / or $HOME"
+    ),
+    iknow: list[str] = typer.Option(
+        [], "--i-know-what-i-am-doing", help="waive a §3.2 hardening row by key (repeatable)"
     ),
     rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the harness image"),
     dry_run: bool = typer.Option(
@@ -177,11 +191,20 @@ def run(
     edir = env_dir(env_id)
     env_cfg_path = _env_config_path(env_id)
 
+    # The session names this run; its compose project is glove-<env>[-<session>]
+    # so several sessions of one env can coexist (§7.1/§7.3).
+    session_name = name or env_id
+    session_token = env_id if session_name == env_id else f"{env_id}-{session_name}"
+
+    rt = runtime or None
+    prov = provider or (rt if rt in ("docker", "podman") else None) or _autodetect_provider()
     overrides = {
         "harness": harness,
-        "provider": provider or _autodetect_provider(),
+        "provider": prov,
+        "runtime": rt,
+        "enforcer": enforcer or None,
         "workdir": str(workdir) if workdir else None,
-        "name": env_id,  # identity is the env-id; keep naming consistent
+        "name": session_token,
         "net": [p.strip() for p in net.split(",") if p.strip()] if net else None,
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
@@ -193,18 +216,31 @@ def run(
         cfg = resolve(
             env_config_path=env_cfg_path, config_path=config, overrides=overrides
         )
+        if cfg.runtime not in ("docker", "podman"):
+            raise ConfigError(
+                f"runtime {cfg.runtime!r} is not implemented yet (see PLAN §5/§9); "
+                "use docker or podman"
+            )
         home_dir = _home_dir(cfg, edir)
-        result = render_compose(cfg, home_dir=str(home_dir), cwd=os.getcwd())
+        result = render_compose(
+            cfg,
+            home_dir=str(home_dir),
+            cwd=os.getcwd(),
+            env_id=env_id,
+            overrides=frozenset(iknow),
+        )
     except (ConfigError, ValueError) as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
-    # Materialize under ~/.glove/envs/<env-id>/: compose + effective config +
-    # seeded harness home. Nothing is written to the invocation dir.
-    edir.mkdir(parents=True, exist_ok=True)
-    compose_path = edir / "docker-compose.yml"
+    # Materialize under ~/.glove/envs/<env-id>/sessions/<session>/: compose +
+    # effective config; the seeded harness home stays at the env level so
+    # sessions of one env share config. Nothing is written to the invocation dir.
+    sdir = session_dir(env_id, session_name)
+    sdir.mkdir(parents=True, exist_ok=True)
+    compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(result.compose_yaml)
-    (edir / "glove.effective.yaml").write_text(cfg.to_yaml())
+    (sdir / "glove.effective.yaml").write_text(cfg.to_yaml())
     home_files = render_home(cfg, result.profile, env_id, home_dir)
 
     if dry_run:
@@ -221,13 +257,13 @@ def run(
 
     # Start host-side helpers (SSH tunnel, Chrome, Playwright MCP) before the
     # harness, then print anything left for the operator to run by hand.
-    start_host_services(cfg, env_id, edir)
+    start_host_services(cfg, env_id, sdir)
     print_host_setup(cfg)
     # Non-dry-run launch lives in session.py; import lazily so --dry-run needs
     # no provider present.
     from .session import launch
 
-    launch(cfg, edir, provider=cfg.provider, rebuild=cfg.rebuild)
+    launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild)
 
 
 def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) -> str:
@@ -350,13 +386,13 @@ def down(
             err.print(f"[red]error:[/red] multiple envs for this dir ({ids}); pass an env-id")
             raise typer.Exit(1)
 
-    edir = env_dir(env_id)
-    effective = edir / "glove.effective.yaml"
+    sdir = session_dir(env_id, env_id)
+    effective = sdir / "glove.effective.yaml"
     if effective.exists():
         try:
             cfg = load_config(effective)
             console.print("[bold]stopping host services…[/bold]")
-            stop_host_services(cfg, env_id, edir)
+            stop_host_services(cfg, env_id, sdir)
         except Exception as e:  # noqa: BLE001 - teardown must be best-effort
             err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
 
@@ -402,6 +438,70 @@ def list_envs() -> None:
         console.print(
             f"[bold]{e.env_id}[/bold]  [cyan]{e.harness}[/cyan]  "
             f"[dim]<-[/dim]  {e.dir}{wd}"
+        )
+
+
+@app.command()
+def doctor(
+    env: Optional[str] = typer.Option(None, "--env", help="read runtime/enforcer from an env's config"),
+    runtime: Optional[str] = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
+    enforcer: Optional[str] = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
+    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
+    no_container: bool = typer.Option(
+        False, "--no-container", help="skip container probes (host-only, fast)"
+    ),
+) -> None:
+    """Probe host + runtime + enforcer readiness (PLAN §3.3)."""
+    import json as _json
+
+    from .doctor import run_doctor, worst_status
+
+    rt, enf = runtime or "docker", enforcer or "nono"
+    if env is not None:
+        cfg_path = _env_config_path(env)
+        if cfg_path.is_file():
+            data = yaml.safe_load(cfg_path.read_text()) or {}
+            rt = runtime or data.get("runtime", rt)
+            enf = enforcer or data.get("enforcer", enf)
+
+    try:
+        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
+    except ValueError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if json_out:
+        console.print_json(
+            _json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]})
+        )
+    else:
+        glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
+                 "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
+        from rich.markup import escape
+
+        console.print(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}\n")
+        for c in checks:
+            console.print(
+                f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  "
+                f"[dim]{escape(c.detail)}[/dim]"
+            )
+    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+
+
+@app.command("ps")
+def list_sessions(
+    runtime: Optional[str] = typer.Option(None, "--runtime", help="docker | podman"),
+) -> None:
+    """List running glove sessions (compose projects)."""
+    rt = get_runtime(runtime or _autodetect_provider())
+    sessions = rt.ps()
+    if not sessions:
+        console.print("[dim]no running glove sessions[/dim]")
+        return
+    for s in sorted(sessions, key=lambda x: x.project):
+        console.print(
+            f"[bold]{s.project}[/bold]  [dim]({len(s.services)} services: "
+            f"{', '.join(sorted(s.services))})[/dim]"
         )
 
 
