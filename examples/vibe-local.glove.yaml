@@ -1,0 +1,115 @@
+# glove session preset — Vibe media-search crawl (DESIGN.md Part B).
+# Import once into an environment bound to (cwd, vibe), then launch:
+#   cd ~/development/ai/vibe-local
+#   glove init vibe --from <glove-repo>/examples/vibe-local.glove.yaml
+#   glove vibe            # launch
+#   glove vibe --dry-run  # preview
+harness: vibe
+provider: docker
+# The crawl's working tree IS the leeroy_jenkins dir → it mounts at /work, so
+# Vibe can `@media-search-plan.md` directly and writes research/ right here.
+# (workdir is resolved relative to the invocation dir — the dir you run `glove`
+# from, e.g. ~/development/ai/vibe-local — NOT to ~/.glove.)
+workdir: ../minimax-h3/input/leeroy_jenkins
+# `name` is the env-id; glove sets it at `init` (derived from cwd, or --name).
+
+# The faustulus LLM, configured entirely inside the container: glove points the
+# harness at the `llm` forwarder sidecar and sends this model id.
+model: qwen3.8-27b-5090
+llm_service: llm
+# Outputs go under research/vibe/ so a parallel Pi run (research/pi/) stays
+# completely separate and the two collections can be compared.
+collection: vibe
+# The faustulus endpoint requires an API key. Replace with the real one; glove
+# injects it as $GLOVE_LLM_API_KEY in the container and wires the provider to it.
+llm_api_key: sk-REPLACE-ME
+
+# Harness sits on an internal-only bridge; these forwarders are the allow-list.
+net: [service]
+allow_root: false
+
+services:
+  # faustulus model via the host SSH port-forward (host 127.0.0.1:8899).
+  - name: llm
+    to: host.docker.internal:8899
+    port: 8080
+  # reuse the already-running local-llm SearXNG by joining its network.
+  - name: search
+    to: searxng:8080
+    join_network: local-llm_ai-net
+    port: 8080
+  # host-side headed Playwright MCP (SSE) — a visible Chromium window.
+  - name: browser
+    to: host.docker.internal:8931
+    port: 8931
+
+# glove auto-derives Vibe MCP servers from the `search` + `browser` services
+# above (searxng stdio + playwright http). Add extra [[mcp_servers]] here if
+# needed.
+
+# Run these on the host before launching (glove prints them; it won't run them):
+# glove auto-starts these on the host in detached tmux sessions (attach with
+# `tmux attach -t glove-vibe-local-host-<name>`), health-checks their ports, and
+# tears them down on `glove down` (except keep:true). {placeholders} are filled
+# by glove from the session, so nothing here is path-specific to one machine.
+host_services:
+  # SSH port-forward to the faustulus model (reuses host SSH trust).
+  - name: model-tunnel
+    command: "ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 faustulus.local"
+    ready_port: 8899
+
+  # Persistent HEADED Chrome you can watch. A separate --user-data-dir is required
+  # (Chrome refuses remote debugging on the default profile). Owned by glove/you,
+  # not Playwright, so the window stays open and every navigation reuses it.
+  # keep:true → left running after `glove down` (avoids re-launch churn).
+  - name: chrome
+    command: '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir={chrome_profile} --no-first-run --no-default-browser-check'
+    ready_port: 9222
+    keep: true
+
+  # Playwright MCP ATTACHES to that Chrome via CDP (--cdp-endpoint) instead of
+  # launching its own browser. --host 127.0.0.1 = IPv4 (bare --port binds IPv6
+  # ::1 on macOS, unreachable by the sidecar); --allowed-hosts passes Playwright's
+  # DNS-rebinding check for the sidecar hostname; --output-dir maps screenshots
+  # into /work/research/media (glove fills {media_dir} = <workdir>/research/vibe/media).
+  - name: playwright
+    command: "npx @playwright/mcp@latest --host 127.0.0.1 --port 8931 --allowed-hosts glove-{session}-browser:8931 --cdp-endpoint http://127.0.0.1:9222 --shared-browser-context --output-dir {media_dir}"
+    ready_port: 8931
+
+brief: |
+  This directory (/work) is the Leeroy-Jenkins job. Follow the plan in
+  media-search-plan.md. TWO things are deliverables and BOTH matter: (1) the
+  reference images/media under research/vibe/media/, and (2) the written
+  catalog research/vibe/SEARCH-RESULTS.md. The images directly inform the visual style of
+  AI-generated video, so collecting them is essential — aim for 2-3 solid visual
+  references per subject, not just prose.
+
+  ANALYSIS TOOLS ARE INSTALLED — use them directly, do NOT spend turns probing
+  for them: python3 with Pillow/PIL, ffmpeg/ffprobe, imagemagick
+  (identify/convert), exiftool, and cwebp/dwebp. Inspect the local
+  Leeroy_Jenkins_WoW.webp and every saved image right here in /work with these.
+
+  HOW YOUR ENVIRONMENT WORKS — read carefully, it is not a normal setup:
+  - Your shell/bash (/work) is a locked sandbox with NO internet and NO LAN.
+    curl/wget/pip to any external URL WILL FAIL — do not try, it is not a bug.
+  - Your browser tools (browser_navigate, browser_snapshot, browser_take_screenshot,
+    …) drive a REAL Chromium on the operator's host, which DOES have internet and
+    is how you reach the web. A human watches it. It is a plain browser — NOT a
+    ComfyUI dashboard; ignore any stale files under /work/.playwright-mcp.
+  - Do NOT use file:// URLs or browser_run_code_unsafe to reach the browser's
+    filesystem — the browser is on the host, out of your reach.
+
+  HOW TO COLLECT REFERENCE IMAGES (via screenshot — the box can't download files):
+  - For each keeper, navigate the browser to the image's FULL-resolution src URL
+    so the image fills the view, then browser_take_screenshot. IMPORTANT: call
+    browser_take_screenshot with NO custom filename — a custom name is written to
+    the MCP server's host-side cwd and you will NOT see it. The default-named PNG
+    lands in /work/research/vibe/media/; then `mv` it to the plan §4 name yourself
+    (rookery-env-01.png, whelp-01.png, leeroy-01.png, …).
+  - Verify each capture locally with `identify`/PIL and note its resolution.
+  - In the catalog, pair every image with its source page URL, the image src URL,
+    and pixel resolution. The screenshots ARE the collected reference set — treat
+    capturing them as a primary task, not an afterthought.
+
+  SEARCH via web_search (SearXNG): shares one exit IP — do not hammer, never
+  auto-retry on 429 (slow down). CAPTCHA/login: stop and ask the operator.
