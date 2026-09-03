@@ -81,6 +81,31 @@ def test_context_file_environment_block(tmp_path):
     assert "nono" in text  # names the enforcer
 
 
+def test_vibe_seeds_hooks_for_nono(tmp_path):
+    cfg = _cfg("vibe", tmp_path)
+    cfg.enforcer = "nono"
+    home = tmp_path / "home"
+    render_home(cfg, get_profile("vibe"), "vibe-sess", home)
+    hooks = home / ".vibe" / "hooks.toml"
+    assert hooks.is_file()
+    text = hooks.read_text()
+    assert 'type = "pre_tool"' in text
+    assert "/opt/glove/vibe-hook" in text
+    assert "strict = true" in text
+    import tomllib
+
+    cfg_doc = tomllib.loads((home / ".vibe" / "config.toml").read_text())
+    assert cfg_doc["experimental_bash_tool"] is False
+
+
+def test_vibe_no_hooks_for_none_enforcer(tmp_path):
+    cfg = _cfg("vibe", tmp_path)
+    cfg.enforcer = "none"
+    home = tmp_path / "home"
+    render_home(cfg, get_profile("vibe"), "vibe-sess", home)
+    assert not (home / ".vibe" / "hooks.toml").exists()
+
+
 def test_pi_config_and_extension(tmp_path):
     cfg = _cfg("pi", tmp_path)
     home = tmp_path / "home"

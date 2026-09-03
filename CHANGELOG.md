@@ -5,6 +5,34 @@ phase plan in `docs/PLAN.md`.
 
 ## [0.2.0] — unreleased
 
+### Phase 3 — Vibe integration
+
+- **Vibe image (`glove/vibe:0.3.0`)**: bakes the pinned nono binary, the
+  fail-closed entrypoint, and `/opt/glove/vibe-hook`. The harness process is
+  nono-wrapped generically (as Pi), so its config home (`/home/agent/.vibe`) is
+  writable to the harness but denied to shell tools.
+- **`vibe-hook`** (`glove/harnesses/vibe/vibe_hook.py`, PLAN §5.3): a `pre_tool`
+  hook that reads Vibe's tool-call JSON on stdin and (a) rewrites the `bash`
+  tool's `command` to run under the enforcer's per-command wrapper (from
+  `/etc/glove/enforcer/tool-wrapper.json`), returning a full
+  `hook_specific_output.tool_input` replacement; (b) denies direct-egress tool
+  names (`web_fetch`/`web_search`); (c) passes everything else through. Fails
+  closed on bad input/missing wrapper.
+- **Seeding** (`harnessconfig`): writes `~/.vibe/hooks.toml` (one `pre_tool`
+  hook, `match="*"`, `strict=true`) when an in-container enforcer is active, and
+  sets `experimental_bash_tool = false` so the shell-spawning bash tool is used
+  (the plan's `managed_shell_tools_enabled` key is outdated — see docs/TODO.md).
+- New tests (11): the hook's rewrite/deny/passthrough/fail-closed logic (pure
+  Python, incl. a stdin end-to-end run) and hooks.toml seeding. Suite:
+  **102 passed**.
+- **Verified against the real `glove/vibe:0.3.0` image**
+  (`tests/integration/test_vibe_nono.sh`, **10/10**): nono enforces in the Vibe
+  image (write /work ok, vibe home denied to shell, net blocked, secrets
+  stripped); the baked `vibe-hook` rewrites a bash tool call through the wrapper,
+  denies `web_fetch`, and exits non-zero (→ strict denial) on bad input;
+  entrypoint execs with valid policies. The live-TUI path (hook firing during a
+  real `vibe -p` run, strict denial in the UI) is documented as manual.
+
 ### Phase 2 — nono enforcer + Pi integration (the core deliverable)
 
 - **Ring-1 enforcer layer** (`glove/enforcers/`): `Enforcer` protocol

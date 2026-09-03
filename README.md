@@ -30,7 +30,7 @@ research-backed design and phase plan is the authority for this work:
 | 0 | Bootstrap from v1 (code, tests, docs) | ✅ done |
 | 1 | Runtime layer + hardening + `glove doctor` | ✅ done |
 | 2 | nono enforcer + Pi integration | ✅ done |
-| 3 | Vibe integration | ⬜ not started |
+| 3 | Vibe integration | ✅ done |
 | 4 | srt enforcer (opt-in) | ⬜ not started |
 | 5 | Browser providers | ⬜ not started |
 | 6 | Runtime stubs, podman, docs | ⬜ not started |

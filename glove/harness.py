@@ -32,9 +32,9 @@ class HarnessProfile:
 _REGISTRY: dict[str, HarnessProfile] = {
     "vibe": HarnessProfile(
         name="vibe",
-        # 0.2.0: added the media-analysis toolchain (Pillow/ffmpeg/imagemagick/
-        # exiftool/webp). The version bump forces a rebuild of stale 0.1.0 images.
-        image="glove/vibe:0.2.0",
+        # 0.3.0: ring-1 enforcer — baked nono binary + pre_tool hook that routes
+        # every bash tool call through the per-command sandbox policy.
+        image="glove/vibe:0.3.0",
         entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
         config_home_env="VIBE_HOME",
         config_home_path="/home/agent/.vibe",

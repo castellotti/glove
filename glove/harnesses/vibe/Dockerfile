@@ -1,7 +1,11 @@
-# glove/vibe — Mistral Vibe inside the sandbox (DESIGN.md A.3, B.3).
+# glove/vibe — Mistral Vibe inside the sandbox (DESIGN.md A.3, B.3 + PLAN §4.2/§5.3).
 # Tools install to SYSTEM paths, never /home/agent: that home is a per-session
 # bind mount at runtime and would shadow anything baked into it.
 FROM python:3.12-slim
+
+# Ring-1 enforcer: pinned nono binary (PLAN §4.2). Keep in sync with
+# glove/enforcers/nono/version.py (`glove build` / tests warn on drift).
+COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -37,10 +41,19 @@ RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
 
 COPY searxng_mcp.py /opt/glove/searxng_mcp.py
 
+# Ring-1 tool hook: rewrites every `bash` tool call to run under the enforcer's
+# per-command sandbox (declared in ~/.vibe/hooks.toml by glove). Baked as an
+# executable so hooks.toml can invoke it directly.
+COPY vibe_hook.py /opt/glove/vibe-hook
+COPY entrypoint.sh /opt/glove/entrypoint.sh
+RUN chmod 0755 /opt/glove/vibe-hook /opt/glove/entrypoint.sh
+
 # Baked home is overlaid by the per-session bind mount; keep it world-writable
 # so an arbitrary runtime uid can use it if the mount is ever absent.
 RUN mkdir -p /home/agent && chmod 0777 /home/agent
 ENV HOME=/home/agent
 WORKDIR /work
 
-# No ENTRYPOINT: glove's compose supplies the full `command` (vibe --trust …).
+# The entrypoint validates the enforcer policies then execs glove's compose
+# `command` (for nono: `nono run --profile harness.json -- vibe …`; else bare vibe).
+ENTRYPOINT ["/opt/glove/entrypoint.sh"]
