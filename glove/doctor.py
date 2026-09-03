@@ -69,13 +69,27 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
+def _browser_checks(browser: str | None) -> list[Check]:
+    if not browser or browser == "none":
+        return []
+    try:
+        from .browsers import get_provider
+
+        from .config import Config
+
+        return get_provider(browser).doctor(Config())
+    except ValueError as e:
+        return [Check(f"browser: {browser}", "warn", str(e))]
+
+
 def run_doctor(
     *,
     runtime: str = "docker",
     enforcer: str = "nono",
+    browser: str | None = None,
     include_container_probes: bool = True,
 ) -> list[Check]:
-    """Full doctor report for the given runtime/enforcer selection."""
+    """Full doctor report for the given runtime/enforcer/browser selection."""
     checks: list[Check] = [Check("os", "info", f"{os.uname().sysname} {os.uname().release} {os.uname().machine}")]
     rt = get_runtime(runtime)
     if include_container_probes:
@@ -83,6 +97,7 @@ def run_doctor(
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
     checks.extend(_enforcer_checks(enforcer, rt))
+    checks.extend(_browser_checks(browser))
     checks.append(_file_sharing_check())
     checks.extend(_host_tool_checks())
     return checks

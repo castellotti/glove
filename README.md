@@ -32,7 +32,7 @@ research-backed design and phase plan is the authority for this work:
 | 2 | nono enforcer + Pi integration | ✅ done |
 | 3 | Vibe integration | ✅ done |
 | 4 | srt enforcer (opt-in) | ✅ done |
-| 5 | Browser providers | ⬜ not started |
+| 5 | Browser providers | ✅ done |
 | 6 | Runtime stubs, podman, docs | ⬜ not started |
 
 ### Runtime / enforcer / browser support
@@ -45,9 +45,9 @@ research-backed design and phase plan is the authority for this work:
 | Enforcer | nono (Landlock) — default | ✅ Pi wired + verified (16-check integration) |
 | Enforcer | srt (bubblewrap) — opt-in | ✅ Pi wired + verified (7-check integration); tool commands only |
 | Enforcer | none (ring 0 only) | ✅ debug |
-| Browser | host-mcp | v1-proven |
-| Browser | host-server | planned Phase 5 |
-| Browser | sidecar-desktop / vm-desktop | spec only |
+| Browser | host-mcp — v2 default | ✅ provider layer (wiring/security/doctor verified; live nav manual) |
+| Browser | host-server | ✅ implemented (ws-path + version-pin; needs playwright in image) |
+| Browser | sidecar-desktop / vm-desktop | spec only ([docs/browsers/](docs/browsers/)) |
 
 ## Toolchain
 

@@ -60,8 +60,11 @@ def build_environment_context(cfg: Config) -> str:
     rule, and where outputs go — rendered from the resolved config so the agent
     is told exactly what this session can and cannot do.
     """
+    from .browsers import provider_name
+
     service_names = {s.name for s in cfg.services}
-    has_browser = "browser" in service_names
+    browser_provider = provider_name(cfg)
+    has_browser = browser_provider is not None or "browser" in service_names
     collection = cfg.resolved_collection()
 
     lines = ["# How your environment works", ""]
@@ -80,7 +83,14 @@ def build_environment_context(cfg: Config) -> str:
         "itself can read them."
     )
     lines += ["", "## Network", ""]
-    if has_browser:
+    if browser_provider == "host-server":
+        lines.append(
+            "- **Shell commands have no network at all** (`curl`, `wget`, `pip` will "
+            "fail). Reach the web from your own code with "
+            "`chromium.connect(process.env.PLAYWRIGHT_WS_ENDPOINT)` — a Playwright "
+            "server on the operator's host. A shell `curl` cannot reach it."
+        )
+    elif has_browser:
         lines.append(
             "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, `npm "
             "install` will fail). The **browser tool is the only way to reach the "

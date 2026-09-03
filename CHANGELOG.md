@@ -5,6 +5,39 @@ phase plan in `docs/PLAN.md`.
 
 ## [0.2.0] — unreleased
 
+### Phase 5 — browser providers
+
+- **Browser provider layer** (`glove/browsers/`, PLAN §6): a `BrowserProvider`
+  turns a compact `browser: {provider, port}` block into the concrete wiring —
+  forwarder sidecars (network allow-list), host helpers (headed Chrome +
+  Playwright MCP/server, run by `hostsvc`), harness env, and an agent-facing
+  context note. `apply_browser(cfg, session)` merges it into the session;
+  hand-configured `services`/`host_services` win (v1 configs keep working).
+- **`host-mcp`** (v2 default): headed Chrome + `@playwright/mcp` via CDP →
+  `glove-<session>-browser:<port>` forwarder; `BROWSER_MCP_URL` for Pi's
+  extension / Vibe's auto-MCP; `--allowed-hosts` pinned to the sidecar,
+  `--output-dir` in the collection media dir.
+- **`host-server`**: `playwright run-server` on the host with a **random
+  per-session `--ws-path`**; the agent connects with
+  `chromium.connect($PLAYWRIGHT_WS_ENDPOINT)`. `doctor` runs a **version-pin
+  check** (host Playwright minor must equal the image's); requires the
+  playwright package in the harness image.
+- **Specs** for the deferred providers: `docs/browsers/sidecar-desktop.md`
+  (Xvfb/x11vnc/noVNC sidecar on the internal net, `127.0.0.1` noVNC only,
+  egress-proxy sidecar) and `docs/browsers/vm-desktop.md` (UTM/`utmctl` + gondolin).
+- `glove run --browser …`, `glove doctor --browser …`, and a provider-aware
+  context note (host-server tells the agent to use `chromium.connect`).
+- New tests (9): provider wiring, `apply_browser` merge/dedup/net-enable,
+  ws-path stability, version parse. Suite: **119 passed**.
+- **Verified** (host lacks a full Chrome/display + LLM, so live navigation is
+  manual): both providers render the correct forwarder sidecar + host services +
+  env from the `browser:` block; the **§6 security rule holds** — the browser
+  endpoint is reachable by the harness (ring-0 net) but `tool.json` is
+  `network.block: true`, so a prompt-injected shell `curl` cannot drive it; the
+  host-server version-pin check correctly flagged host Playwright 1.62.1 ≠ image
+  1.55.0. The visible-Chrome-navigates + screenshot-to-`/work` end-to-end needs a
+  live LLM and is documented as manual.
+
 ### Phase 4 — srt enforcer (opt-in)
 
 - **`SrtEnforcer`** (`glove/enforcers/srt.py`, PLAN §4.3): renders a single

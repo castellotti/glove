@@ -155,6 +155,9 @@ def run(
     enforcer: Optional[str] = typer.Option(
         None, "--enforcer", help="ring-1 enforcer: nono | srt | none"
     ),
+    browser: Optional[str] = typer.Option(
+        None, "--browser", help="browser provider: host-mcp | host-server | none"
+    ),
     config: Optional[Path] = typer.Option(None, "--config", help="YAML/JSON overlay"),
     env: Optional[str] = typer.Option(
         None, "--env", help="select an env by id, ignoring cwd resolution"
@@ -223,6 +226,12 @@ def run(
                 f"runtime {cfg.runtime!r} is not implemented yet (see PLAN §5/§9); "
                 "use docker or podman"
             )
+        # Expand the browser provider into services/host_services/env (§6).
+        from .browsers import apply_browser
+
+        if browser is not None:
+            cfg.browser = {**(cfg.browser or {}), "provider": browser}
+        cfg = apply_browser(cfg, session_token)
         home_dir = _home_dir(cfg, edir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
@@ -460,36 +469,38 @@ def list_envs() -> None:
 
 @app.command()
 def doctor(
-    env: Optional[str] = typer.Option(None, "--env", help="read runtime/enforcer from an env's config"),
+    env: Optional[str] = typer.Option(None, "--env", help="read runtime/enforcer/browser from an env's config"),
     runtime: Optional[str] = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
     enforcer: Optional[str] = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
+    browser: Optional[str] = typer.Option(None, "--browser", help="probe a browser provider: host-mcp | host-server"),
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
     no_container: bool = typer.Option(
         False, "--no-container", help="skip container probes (host-only, fast)"
     ),
 ) -> None:
-    """Probe host + runtime + enforcer readiness (PLAN §3.3)."""
+    """Probe host + runtime + enforcer + browser readiness (PLAN §3.3)."""
     import json as _json
 
     from .doctor import run_doctor, worst_status
 
-    rt, enf = runtime or "docker", enforcer or "nono"
+    rt, enf, brw = runtime or "docker", enforcer or "nono", browser
     if env is not None:
         cfg_path = _env_config_path(env)
         if cfg_path.is_file():
             data = yaml.safe_load(cfg_path.read_text()) or {}
             rt = runtime or data.get("runtime", rt)
             enf = enforcer or data.get("enforcer", enf)
+            brw = browser or (data.get("browser") or {}).get("provider")
 
     try:
-        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
+        checks = run_doctor(runtime=rt, enforcer=enf, browser=brw, include_container_probes=not no_container)
     except ValueError as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
     if json_out:
         console.print_json(
-            _json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]})
+            _json.dumps({"runtime": rt, "enforcer": enf, "browser": brw, "checks": [c.to_dict() for c in checks]})
         )
     else:
         glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
