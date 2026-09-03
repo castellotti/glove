@@ -110,6 +110,26 @@ def test_render_none_enforcer_no_policies_mount(tmp_path):
     assert "/etc/glove/enforcer" not in binds
 
 
+def test_runtime_docs_exist_for_non_docker():
+    docs = Path(__file__).parent.parent / "docs" / "runtimes"
+    for name in ("podman", "apple-container", "gondolin", "utm"):
+        assert (docs / f"{name}.md").is_file(), f"missing docs/runtimes/{name}.md"
+
+
+def test_doctor_surfaces_untested_podman():
+    from glove.doctor import run_doctor
+
+    checks = run_doctor(runtime="podman", enforcer="nono", include_container_probes=False)
+    assert any(c.status == "warn" and "UNTESTED" in c.detail for c in checks)
+
+
+def test_doctor_surfaces_stub_runtime():
+    from glove.doctor import run_doctor
+
+    checks = run_doctor(runtime="gondolin", enforcer="none", include_container_probes=False)
+    assert any("not implemented" in c.detail for c in checks)
+
+
 def test_doctor_host_only_json_shape():
     checks = run_doctor(runtime="docker", enforcer="nono", include_container_probes=False)
     assert all({"name", "status", "detail"} <= set(c.to_dict()) for c in checks)

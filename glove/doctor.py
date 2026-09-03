@@ -92,6 +92,10 @@ def run_doctor(
     """Full doctor report for the given runtime/enforcer/browser selection."""
     checks: list[Check] = [Check("os", "info", f"{os.uname().sysname} {os.uname().release} {os.uname().machine}")]
     rt = get_runtime(runtime)
+    if not rt.caps.tested:
+        checks.append(Check(f"runtime: {runtime}", "warn", "ships but UNTESTED on this host — validate before relying on it"))
+    if not rt.caps.implemented:
+        checks.append(Check(f"runtime: {runtime}", "warn", "not implemented (stub) — see docs/runtimes/"))
     if include_container_probes:
         checks.extend(rt.doctor())
     else:

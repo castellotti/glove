@@ -18,7 +18,7 @@ if False:  # typing only
 class _StubRuntime:
     name = "stub"
     caps = RuntimeCaps(implemented=False, tested=False)
-    _pointer = "PLAN.md §5/§9"
+    _pointer = "docs/runtimes/"
 
     def render(self, plan: "SessionPlan", project_dir: Path) -> RenderedProject:  # noqa: F821
         raise NotImplementedError(
@@ -42,7 +42,7 @@ class AppleContainerRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "PLAN.md §5 (one lightweight VM per container; macOS 26, Apple silicon)"
+    _pointer = "docs/runtimes/apple-container.md (one lightweight VM per container; macOS 26, Apple silicon)"
 
 
 class GondolinRuntime(_StubRuntime):
@@ -54,7 +54,7 @@ class GondolinRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "PLAN.md §9 (microVM peer of Docker; mapped-TCP egress, no UDP)"
+    _pointer = "docs/runtimes/gondolin.md (microVM peer of Docker; mapped-TCP egress, no UDP)"
 
 
 class UTMRuntime(_StubRuntime):
@@ -66,4 +66,4 @@ class UTMRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "PLAN.md §9 (Linux VM running the same image under podman, over SSH/utmctl)"
+    _pointer = "docs/runtimes/utm.md (Linux VM running the same image under podman, over SSH/utmctl)"

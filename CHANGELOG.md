@@ -5,6 +5,33 @@ phase plan in `docs/PLAN.md`.
 
 ## [0.2.0] — unreleased
 
+All six implementation phases (PLAN §8) are complete.
+
+### Phase 6 — runtime stubs, podman, docs
+
+- **`glove doctor` surfaces runtime status independently of container probes**:
+  `podman` is flagged **UNTESTED** and the `apple-container`/`gondolin`/`utm`
+  stubs are flagged **not implemented**, even in `--no-container`/host-only mode.
+- **Runtime docs** with the concrete per-backend mapping (`docs/runtimes/`):
+  `podman.md` (rootless userns / seccomp / internal-net validation checklist),
+  `apple-container.md` (one VM per container, `--volume` mounts, no compose →
+  glove orchestrates sidecars, macOS 26 + Apple silicon), `gondolin.md` (OCI →
+  gondolin image, VFS `RealFSProvider` mounts, sidecars → mapped-TCP egress, no
+  UDP), `utm.md` (Linux VM running the same image under Podman over SSH/`utmctl`).
+  Stub `NotImplementedError` pointers now reference these docs.
+- **`docs/SECURITY.md`** — the threat model: three-ring table, assets ×
+  adversaries × rings, the Docker Desktop macOS blast-radius explanation
+  (container root = VM root, File-sharing list, config-not-fate), operator
+  recommendations (narrow File sharing, ECI, keep Docker Desktop patched — cites
+  CVE-2026-2664 / CVE-2026-6406 as examples of the class, prefer per-container
+  VMs, prefer nono over srt), and the explicit list of what glove does **not**
+  defend against (kernel 0-days, malicious host, side channels, DoS beyond the
+  limits, authorized-but-bad edits, supply chain).
+- **README** rewritten: three-ring overview, quick start, full `glove.yaml`
+  reference, CLI reference, integration-test commands, and links to the new docs.
+- New tests (3): runtime docs exist; doctor surfaces untested podman + stub
+  runtimes. Suite: **122 passed**.
+
 ### Phase 5 — browser providers
 
 - **Browser provider layer** (`glove/browsers/`, PLAN §6): a `BrowserProvider`
