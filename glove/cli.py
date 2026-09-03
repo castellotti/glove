@@ -53,7 +53,7 @@ app = typer.Typer(
 console = Console()
 err = Console(stderr=True)
 
-SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "version"}
+SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "policy", "version"}
 
 
 def _autodetect_provider() -> str:
@@ -420,6 +420,9 @@ def build(
         "omit to build the forwarder only"
     ),
     provider: Optional[str] = typer.Option(None),
+    enforcer: Optional[str] = typer.Option(
+        None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
+    ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
     """Build the forwarder and (optionally) a harness image."""
@@ -429,7 +432,7 @@ def build(
     prov = provider or _autodetect_provider()
     build_forwarder(prov, force=rebuild)
     if harness:
-        build_harness(prov, get_profile(harness), force=rebuild)
+        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
 
 
 @app.command("ls")
@@ -500,6 +503,64 @@ def doctor(
                 f"[dim]{escape(c.detail)}[/dim]"
             )
     raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+
+
+policy_app = typer.Typer(add_completion=False, help="Inspect rendered ring-1 policies + ring-0 hardening.")
+app.add_typer(policy_app, name="policy")
+
+
+@policy_app.command("show")
+def policy_show(
+    harness: Optional[str] = typer.Argument(None, help="harness, to resolve the env from cwd"),
+    env: Optional[str] = typer.Option(None, "--env", help="select an env by id"),
+) -> None:
+    """Print the rendered ring-1 policies and the ring-0 hardening for review."""
+    try:
+        env_id = _locate_env(env, harness)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    edir = env_dir(env_id)
+    cfg = resolve(env_config_path=_env_config_path(env_id), overrides={})
+    try:
+        plan = build_session_plan(
+            cfg, env_id=env_id, home_dir=str(_home_dir(cfg, edir)), cwd=os.getcwd()
+        )
+    except (ConfigError, ValueError) as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    h = plan.hardening
+    console.print(f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}\n")
+    console.print("[bold]ring 0 — hardening (PLAN §3.2)[/bold]")
+    console.print(
+        f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
+        f"cap_add={list(h.cap_add) or '[]'}  no_new_privileges={h.no_new_privileges}"
+    )
+    console.print(
+        f"  read_only={h.read_only}  ipc={h.ipc}  pids={h.limits.pids}  "
+        f"mem={h.limits.memory}  cpus={h.limits.cpus}"
+    )
+    console.print(f"  seccomp={h.seccomp_profile}")
+    if h.systempaths_unconfined:
+        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys exposed to the container (srt strong)")
+    console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
+
+    if not plan.policies:
+        console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")
+    else:
+        for fname in sorted(plan.policies):
+            console.print(f"\n[bold]ring 1 — {fname}[/bold]")
+            console.print(Syntax(plan.policies[fname].rstrip(), "json", theme="ansi_dark"))
+
+    from .enforcers import get_enforcer
+
+    enf = get_enforcer(cfg.enforcer)
+    if hasattr(enf, "gaps"):
+        console.print("\n[bold yellow]documented gaps[/bold yellow]")
+        for g in enf.gaps(plan):
+            console.print(f"  [yellow]![/yellow] {g}")
 
 
 @app.command("ps")

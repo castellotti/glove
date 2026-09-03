@@ -31,7 +31,7 @@ research-backed design and phase plan is the authority for this work:
 | 1 | Runtime layer + hardening + `glove doctor` | ✅ done |
 | 2 | nono enforcer + Pi integration | ✅ done |
 | 3 | Vibe integration | ✅ done |
-| 4 | srt enforcer (opt-in) | ⬜ not started |
+| 4 | srt enforcer (opt-in) | ✅ done |
 | 5 | Browser providers | ⬜ not started |
 | 6 | Runtime stubs, podman, docs | ⬜ not started |
 
@@ -43,7 +43,7 @@ research-backed design and phase plan is the authority for this work:
 | Runtime | podman | ships, **untested** (no podman on host) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) — default | ✅ Pi wired + verified (16-check integration) |
-| Enforcer | srt (bubblewrap) — opt-in | planned Phase 4 |
+| Enforcer | srt (bubblewrap) — opt-in | ✅ Pi wired + verified (7-check integration); tool commands only |
 | Enforcer | none (ring 0 only) | ✅ debug |
 | Browser | host-mcp | v1-proven |
 | Browser | host-server | planned Phase 5 |

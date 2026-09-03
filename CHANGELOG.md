@@ -5,6 +5,39 @@ phase plan in `docs/PLAN.md`.
 
 ## [0.2.0] — unreleased
 
+### Phase 4 — srt enforcer (opt-in)
+
+- **`SrtEnforcer`** (`glove/enforcers/srt.py`, PLAN §4.3): renders a single
+  `srt-settings.json` (`filesystem.allowWrite` = /work + rw mounts + /tmp,
+  `denyRead`/`denyWrite` = the harness home mount, `network.allowedDomains` = []
+  → no tool network, `enableWeakerNestedSandbox` per `srt.nested`). Wraps **tool
+  commands only** (`srt -s … -- bash -lc <cmd>`) via the shared tool-wrapper
+  file; the harness *process* is unwrapped (ring-0 only), documented as a gap.
+  No credential injection (key stays in the harness env). Registered in
+  `get_enforcer`; `enforcer: srt` selects the surgical `nested-userns` seccomp
+  (Phase 1) and, for `srt.nested: strong`, `systempaths=unconfined`.
+- **`-srt` image variant**: ARG-gated `bubblewrap`/`socat`/`sandbox-runtime@0.0.75`
+  install in the Pi Dockerfile; `glove build pi --enforcer srt` and the plan's
+  image resolution append `-srt`.
+- **`glove policy show`** (§7.3): prints the ring-0 hardening (with the
+  `systempaths=unconfined` warning), the harness command, the rendered ring-1
+  policies, and the enforcer's documented gaps.
+- **`glove doctor --enforcer srt`** runs a bwrap smoke test as uid 1000 under the
+  relaxed profile in a baked `-srt` image (reproduces research §3 weak mode).
+- **Finding (verification is real):** srt's `--ro-bind /` does **not** downgrade
+  a nested docker bind mount, and denying a *subdir* of a bind mount is a no-op —
+  so `allowWrite` alone would leave the harness home writable to tool commands.
+  Fixed by denying the whole home **mount point** in `denyRead`/`denyWrite`
+  (verified: write to a home subdir is denied, /work still writable). Recorded in
+  docs/TODO.md and `SrtEnforcer.gaps`.
+- New tests (8: settings weak/strong goldens, unwrapped-harness, `-srt` image,
+  relaxed seccomp, gaps). Suite: **110 passed**.
+- **Verified against the real `glove/pi:0.3.0-srt` image**
+  (`tests/integration/test_pi_srt.sh`, **7/7**): weak mode enforces under the
+  surgical seccomp (write /work ok, write outside allowWrite denied, network
+  blocked, `denyRead` hides the harness home); strong mode fails without
+  `systempaths=unconfined` and succeeds with it (research §5 matrix).
+
 ### Phase 3 — Vibe integration
 
 - **Vibe image (`glove/vibe:0.3.0`)**: bakes the pinned nono binary, the

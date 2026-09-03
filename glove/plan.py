@@ -153,11 +153,16 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
+    # srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix (§4.3).
+    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
+    if cfg.enforcer == "srt":
+        image = f"{image}-srt"
+
     plan = SessionPlan(
         session=session,
         env_id=env_id,
         profile=profile,
-        image=effective_image(profile, cfg.apt_packages, cfg.pip_packages),
+        image=image,
         working_dir=mount_plan.working_dir,
         home_dir=home_dir,
         mount_plan=mount_plan,

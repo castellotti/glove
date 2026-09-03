@@ -51,11 +51,15 @@ def build_harness(
     *,
     apt_packages: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    enforcer: str = "nono",
     force: bool = False,
 ) -> str:
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
     tag = effective_image(profile, apt_packages, pip_packages)
+    # srt needs bwrap/socat/srt baked in; build a distinct `-srt` image (§4.3).
+    if enforcer == "srt":
+        tag = f"{tag}-srt"
     if not force and _image_exists(provider, tag):
         return tag
     context = profile.dockerfile.parent
@@ -67,6 +71,8 @@ def build_harness(
         cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:
         cmd += ["--build-arg", f"GLOVE_PIP={' '.join(pip_packages)}"]
+    if enforcer == "srt":
+        cmd += ["--build-arg", "GLOVE_ENFORCER=srt"]
     cmd.append(str(context))
     subprocess.run(cmd, check=True)
     return tag
@@ -81,6 +87,7 @@ def ensure_images(cfg: Config, provider: str, *, rebuild: bool = False) -> None:
         profile,
         apt_packages=cfg.apt_packages,
         pip_packages=cfg.pip_packages,
+        enforcer=cfg.enforcer,
         force=rebuild,
     )
 

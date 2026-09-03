@@ -61,8 +61,6 @@ def _file_sharing_check() -> Check:
 
 
 def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
-    if enforcer == "srt":
-        return [Check("enforcer: srt", "info", "opt-in bubblewrap enforcer — wired in Phase 4 (relaxed seccomp)")]
     try:
         from .enforcers import get_enforcer
 

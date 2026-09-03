@@ -21,6 +21,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
+# Opt-in srt enforcer (PLAN §4.3): baked only for the `-srt` image variant
+# (built with --build-arg GLOVE_ENFORCER=srt). Node ≥22 is already present.
+ARG GLOVE_ENFORCER=nono
+RUN if [ "$GLOVE_ENFORCER" = "srt" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends bubblewrap socat \
+      && rm -rf /var/lib/apt/lists/* \
+      && npm install -g @anthropic-ai/sandbox-runtime@0.0.75; \
+    fi
+
 # glove's extensions, with their npm deps installed at build time so jiti can
 # resolve them at runtime. Loaded via `pi -e /opt/glove/pi-extensions/<name>`.
 # The `enforcer` extension is pure node builtins (no deps to install).
