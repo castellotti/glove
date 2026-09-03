@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "nono",
+    "wrap",
+    "-s",
+    "--allow-cwd",
+    "--profile",
+    "/etc/glove/enforcer/tool.json",
+    "--"
+  ]
+}

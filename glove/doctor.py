@@ -60,14 +60,15 @@ def _file_sharing_check() -> Check:
     return Check("docker desktop file sharing", "ok", ", ".join(shared))
 
 
-def _enforcer_checks(enforcer: str) -> list[Check]:
-    if enforcer == "none":
-        return [Check("enforcer: none", "fail", "ring-0 only — no in-container kernel policy (debug/VM runtimes only)")]
-    if enforcer == "nono":
-        return [Check("enforcer: nono", "info", "default Landlock enforcer — wired in Phase 2")]
+def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
     if enforcer == "srt":
         return [Check("enforcer: srt", "info", "opt-in bubblewrap enforcer — wired in Phase 4 (relaxed seccomp)")]
-    return [Check(f"enforcer: {enforcer}", "warn", "unknown enforcer")]
+    try:
+        from .enforcers import get_enforcer
+
+        return get_enforcer(enforcer).doctor(runtime)
+    except ValueError as e:
+        return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
 def run_doctor(
@@ -83,7 +84,7 @@ def run_doctor(
         checks.extend(rt.doctor())
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
-    checks.extend(_enforcer_checks(enforcer))
+    checks.extend(_enforcer_checks(enforcer, rt))
     checks.append(_file_sharing_check())
     checks.extend(_host_tool_checks())
     return checks

@@ -9,7 +9,7 @@ Built from a resolved ``Config`` plus the mount (A.4) and network (A.5) plans.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .config import Config
 from .hardening import Hardening, Limits
@@ -40,10 +40,23 @@ class SessionPlan:
     runtime: str = "docker"
     enforcer: str = "nono"
     forwarder_image: str = FORWARDER_IMAGE
+    tools: dict = field(default_factory=dict)
+    # Ring-1 enforcer artifacts (populated by build_session_plan). `command` is
+    # the wrapped harness entry; `policies` is filename→contents rendered to the
+    # session enforcer dir and bind-mounted read-only at policies_container_dir.
+    command: list[str] = field(default_factory=list)
+    policies: dict[str, str] = field(default_factory=dict)
+    enforcer_env: dict[str, str] = field(default_factory=dict)
+    policies_host_dir: str | None = None
+    policies_container_dir: str = "/etc/glove/enforcer"
 
     @property
     def project(self) -> str:
         return f"glove-{self.session}"
+
+    @property
+    def harness_command(self) -> list[str]:
+        return self.command or list(self.profile.entry)
 
     @property
     def harness_service(self) -> str:
@@ -128,6 +141,10 @@ def build_session_plan(
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
 
+    from .enforcers import get_enforcer
+
+    enforcer = get_enforcer(cfg.enforcer)
+
     hardening = Hardening(
         user=None if cfg.allow_root else f"{uid}:{gid}",
         seccomp_profile=seccomp_profile,
@@ -136,7 +153,7 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
-    return SessionPlan(
+    plan = SessionPlan(
         session=session,
         env_id=env_id,
         profile=profile,
@@ -152,4 +169,14 @@ def build_session_plan(
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
         forwarder_image=forwarder_image,
+        tools=dict(cfg.tools or {}),
     )
+
+    # Ring-1: render policies, wrap the harness entry, collect enforcer env/caps.
+    plan.policies = enforcer.render_policies(plan)
+    plan.command = enforcer.wrap_harness(plan, list(profile.entry))
+    plan.enforcer_env = enforcer.compose_env(plan)
+    extra_caps = tuple(enforcer.cap_add(plan))
+    if extra_caps:
+        plan.hardening = replace(hardening, cap_add=extra_caps)
+    return plan

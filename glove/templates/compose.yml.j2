@@ -9,7 +9,7 @@ services:
     container_name: glove-{{ session }}-harness
     image: {{ harness_image }}
     working_dir: {{ working_dir }}
-    command: {{ harness.entry | tojson }}
+    command: {{ command | tojson }}
     stdin_open: true
     tty: true
     # --- hardening set (PLAN §3.2); `allow_root` only drops the non-root user --
@@ -44,10 +44,20 @@ services:
 {% for k, v in environment.items() %}
       {{ k }}: {{ v | tojson }}
 {% endfor %}
+{% for k, v in enforcer_env.items() %}
+      {{ k }}: {{ v | tojson }}
+{% endfor %}
     volumes:
       - type: bind
         source: {{ home_dir | tojson }}
         target: /home/agent
+{% if policies_host_dir %}
+      # ring-1 enforcer policies (read-only; never inside /work, PLAN §4.1)
+      - type: bind
+        source: {{ policies_host_dir | tojson }}
+        target: {{ policies_container_dir }}
+        read_only: true
+{% endif %}
 {% for m in mounts %}
       - type: bind
         source: {{ m.host_path | tojson }}

@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "name": "glove-harness"
+  },
+  "extends": "default",
+  "workdir": {
+    "access": "readwrite"
+  },
+  "filesystem": {
+    "allow": [
+      "/work",
+      "/mnt/out",
+      "/home/agent/.pi/agent",
+      "/tmp"
+    ],
+    "read": [
+      "/mnt/lib",
+      "/etc/glove",
+      "/opt/glove"
+    ]
+  },
+  "network": {
+    "block": false
+  },
+  "security": {
+    "signal_mode": "allow_same_sandbox"
+  }
+}

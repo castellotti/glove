@@ -67,6 +67,20 @@ def test_vibe_context_file_has_sudo_relay_and_brief(tmp_path):
     assert "Write output to /mnt/x." in text
 
 
+def test_context_file_environment_block(tmp_path):
+    # PLAN §5.1: generated "How your environment works" block.
+    cfg = _cfg("pi", tmp_path)
+    home = tmp_path / "home"
+    render_home(cfg, get_profile("pi"), "pi-sess", home)
+    text = (home / ".pi" / "agent" / "AGENTS.md").read_text()
+    assert "How your environment works" in text
+    assert "/work" in text
+    assert "browser tool is the only way to reach the web" in text
+    assert "Shell commands have no network" in text
+    assert "cannot read the LLM API key" in text
+    assert "nono" in text  # names the enforcer
+
+
 def test_pi_config_and_extension(tmp_path):
     cfg = _cfg("pi", tmp_path)
     home = tmp_path / "home"

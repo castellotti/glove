@@ -45,6 +45,73 @@ then stop and wait for the operator to run it and paste back the output.
 """
 
 
+def _container_mount(path: str, mode: str) -> str:
+    import os
+
+    base = os.path.basename(path.rstrip("/")) or "root"
+    return f"/mnt/{base}  ({mode})"
+
+
+def build_environment_context(cfg: Config) -> str:
+    """Generate the "How your environment works" block (PLAN §5.1).
+
+    Describes the mounts and their modes, that shell commands have no network,
+    that the browser tool is the only path to the web, the RUN ON HOST relay
+    rule, and where outputs go — rendered from the resolved config so the agent
+    is told exactly what this session can and cannot do.
+    """
+    service_names = {s.name for s in cfg.services}
+    has_browser = "browser" in service_names
+    collection = cfg.resolved_collection()
+
+    lines = ["# How your environment works", ""]
+    lines.append(
+        "You run inside a defence-in-depth sandbox: a container (namespace, mounts, "
+        "network) with a kernel capability sandbox "
+        f"({cfg.enforcer}) wrapping the agent and **every shell command** it runs."
+    )
+    lines += ["", "## Files", ""]
+    lines.append("- `/work` — your writable workspace (this is the project you were launched on).")
+    for a in cfg.add_dirs:
+        lines.append(f"- `{_container_mount(a.path, a.mode)}` — extra directory; `ro` = read-only.")
+    lines.append(
+        "- Everything else (system dirs) is read-only; your **config/extensions/"
+        "session history are NOT reachable from a shell command** — only the agent "
+        "itself can read them."
+    )
+    lines += ["", "## Network", ""]
+    if has_browser:
+        lines.append(
+            "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, `npm "
+            "install` will fail). The **browser tool is the only way to reach the "
+            "web** — use it for anything online."
+        )
+    else:
+        lines.append(
+            "- **Shell commands have no network** (`curl`, `wget`, `pip`, `npm "
+            "install` will fail). There is no web access in this session."
+        )
+    lines.append(
+        "- You cannot read the LLM API key or any secret from a shell (`env` hides them)."
+    )
+    lines += ["", "## Outputs", ""]
+    lines.append(f"- Write deliverables under `/work/research/{collection}/` (media, filtered, results).")
+    lines += ["", "## Privileged host commands", "", SUDO_RELAY_BODY]
+    return "\n".join(lines) + "\n"
+
+
+# The RUN ON HOST relay text, reused inside the generated environment block.
+SUDO_RELAY_BODY = """\
+Root is **disabled** here and `sudo` will fail. If a task genuinely needs a
+privileged **host** command, print it verbatim under a banner and stop:
+
+    ===== RUN ON HOST =====
+    <the command>
+    =======================
+
+then wait for the operator to run it and paste back the output."""
+
+
 def container_llm_base(cfg: Config, session: str) -> str | None:
     """`http://glove-<session>-<llm_service>:<port>/v1`, or None if absent."""
     for svc in cfg.services:
@@ -286,7 +353,7 @@ def _write_context_file(
     rel = Path(profile.context_file).relative_to(CONTAINER_HOME)
     path = home_dir / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = SUDO_RELAY
+    body = build_environment_context(cfg)
     if cfg.brief:
         body += "\n---\n\n# Session brief\n\n" + cfg.brief.strip() + "\n"
     path.write_text(body)

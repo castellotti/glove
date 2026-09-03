@@ -24,9 +24,10 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from . import __version__
-from .compose import render_compose
 from .config import ConfigError, parse_add_dir_flag, resolve
+from .hardening import HardeningError
 from .harness import known_harnesses
+from .plan import build_session_plan
 from .harnessconfig import render_home
 from .hostsvc import (
     describe_host_services,
@@ -212,6 +213,7 @@ def run(
         "add_dirs": [parse_add_dir_flag(a) for a in add_dir] if add_dir else None,
     }
 
+    sdir = session_dir(env_id, session_name)
     try:
         cfg = resolve(
             env_config_path=env_cfg_path, config_path=config, overrides=overrides
@@ -222,35 +224,42 @@ def run(
                 "use docker or podman"
             )
         home_dir = _home_dir(cfg, edir)
-        result = render_compose(
-            cfg,
-            home_dir=str(home_dir),
-            cwd=os.getcwd(),
-            env_id=env_id,
-            overrides=frozenset(iknow),
+        plan = build_session_plan(
+            cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
         )
-    except (ConfigError, ValueError) as e:
+        # Materialize under ~/.glove/envs/<env>/sessions/<session>/. Ring-1
+        # policies are written *before* render so the read-only bind source
+        # exists; they live outside /work and are never writable by the agent.
+        sdir.mkdir(parents=True, exist_ok=True)
+        if plan.policies:
+            enforcer_dir = sdir / "enforcer"
+            enforcer_dir.mkdir(parents=True, exist_ok=True)
+            for fname, content in plan.policies.items():
+                (enforcer_dir / fname).write_text(content)
+            plan.policies_host_dir = str(enforcer_dir)
+        rendered = get_runtime(cfg.runtime).render(
+            plan, sdir, overrides=frozenset(iknow)
+        )
+    except (ConfigError, ValueError, HardeningError) as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
-    # Materialize under ~/.glove/envs/<env-id>/sessions/<session>/: compose +
-    # effective config; the seeded harness home stays at the env level so
-    # sessions of one env share config. Nothing is written to the invocation dir.
-    sdir = session_dir(env_id, session_name)
-    sdir.mkdir(parents=True, exist_ok=True)
+    # The seeded harness home stays at the env level so sessions of one env share
+    # config. Nothing is written to the invocation dir.
     compose_path = sdir / "docker-compose.yml"
-    compose_path.write_text(result.compose_yaml)
+    compose_path.write_text(rendered.compose_yaml)
     (sdir / "glove.effective.yaml").write_text(cfg.to_yaml())
-    home_files = render_home(cfg, result.profile, env_id, home_dir)
+    home_files = render_home(cfg, plan.profile, env_id, home_dir)
 
     if dry_run:
         console.print(
             f"[bold]env:[/bold] {env_id}   "
-            f"[bold]workdir→[/bold] {result.mount_plan.working_dir}"
+            f"[bold]workdir→[/bold] {plan.working_dir}   "
+            f"[bold]enforcer:[/bold] {cfg.enforcer}"
         )
         console.print(f"[dim]written to {compose_path}[/dim]\n")
-        console.print(Syntax(result.compose_yaml, "yaml", theme="ansi_dark"))
-        _print_summary(result, home_files)
+        console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
+        _print_summary(plan, home_files)
         describe_host_services(cfg, env_id)
         print_host_setup(cfg)
         return
@@ -289,16 +298,21 @@ def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) 
     )
 
 
-def _print_summary(result, home_files) -> None:  # noqa: ANN001 - internal helper
+def _print_summary(plan, home_files) -> None:  # noqa: ANN001 - internal helper
     console.print("\n[bold]mounts[/bold]")
-    for m in result.mount_plan.mounts:
+    for m in plan.mounts:
         console.print(f"  {m.host_path}  →  {m.container_path}  ({m.mode})")
-    console.print("[bold]forwarders (network allow-list)[/bold]")
-    if not result.network_plan.sidecars:
-        console.print("  [dim](none — harness is fully offline)[/dim]")
-    for s in result.network_plan.sidecars:
+    if plan.policies:
         console.print(
-            f"  glove-{result.session}-{s.role}:{s.listen_port}  →  {s.target}"
+            f"[bold]enforcer[/bold] ({plan.enforcer}): "
+            f"{', '.join(sorted(plan.policies))} → {plan.policies_container_dir} [dim](ro)[/dim]"
+        )
+    console.print("[bold]forwarders (network allow-list)[/bold]")
+    if not plan.network.sidecars:
+        console.print("  [dim](none — harness is fully offline)[/dim]")
+    for s in plan.network.sidecars:
+        console.print(
+            f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}"
         )
     console.print("[bold]harness config seeded[/bold]")
     for f in home_files:

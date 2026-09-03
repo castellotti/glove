@@ -32,10 +32,27 @@ def test_nono_uses_default_seccomp(tmp_path):
 
 
 def test_srt_uses_nested_seccomp(tmp_path):
+    # The srt *enforcer* is wired in Phase 4, but seccomp *selection* is ready:
+    # test _seccomp_for directly so this doesn't depend on the enforcer backend.
+    from glove.plan import _seccomp_for
+
     cfg = _cfg(tmp_path, enforcer="srt", enforcer_options={"srt": {"nested": "strong"}})
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
-    assert plan.hardening.seccomp_profile == str(NESTED_USERNS_PROFILE)
-    assert plan.hardening.systempaths_unconfined is True  # strong mode
+    profile, systempaths = _seccomp_for(cfg)
+    assert profile == str(NESTED_USERNS_PROFILE)
+    assert systempaths is True  # strong mode
+
+
+def test_nono_wraps_harness_command(tmp_path):
+    plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), env_id="s", home_dir=str(tmp_path / "h"))
+    assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
+    assert plan.harness_command[-1] == "/opt/glove/pi-extensions/browser"  # original entry preserved
+    assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json"}
+
+
+def test_none_enforcer_leaves_command_bare(tmp_path):
+    plan = build_session_plan(_cfg(tmp_path, enforcer="none"), env_id="s", home_dir=str(tmp_path / "h"))
+    assert plan.harness_command == list(plan.profile.entry)
+    assert plan.policies == {}
 
 
 def test_limits_flow_through(tmp_path):

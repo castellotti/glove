@@ -5,6 +5,48 @@ phase plan in `docs/PLAN.md`.
 
 ## [0.2.0] — unreleased
 
+### Phase 2 — nono enforcer + Pi integration (the core deliverable)
+
+- **Ring-1 enforcer layer** (`glove/enforcers/`): `Enforcer` protocol
+  (`base.py`), the default **nono** backend (`nono/` — policy renderer, harness
+  wrapping, pinned 0.75.0 binary in `version.py`), and a `none` backend
+  (ring-0 only). `get_enforcer()` registry.
+- **Two nono policies per session** (`enforcers/nono/policies.py`), both
+  extending nono's built-in `default`:
+  - `harness.json` — the harness *process*: /work + rw mounts + its config
+    subdir + /tmp writable, ro mounts readable, network open (ring 0 already
+    limits routable hosts to the sidecars).
+  - `tool.json` — every *shell command*: /work + rw mounts + /tmp writable,
+    **harness home denied** (omitted → Landlock denies), `network.block`, and
+    secret-shaped env vars stripped (`deny_vars`) so a prompt-injected `env`
+    cannot read the LLM key.
+  Wrapped via `nono run … -- <TUI>` (harness) and `nono wrap … -- bash -lc`
+  (tools); nested Landlock only tightens. No `SYS_PTRACE` needed (no proxy).
+- **`SessionPlan`/render wiring**: `build_session_plan` now renders policies,
+  wraps the harness command, and the docker runtime mounts the policy dir
+  read-only at `/etc/glove/enforcer` and merges enforcer env. `glove run`
+  writes policies to `sessions/<name>/enforcer/`.
+- **Pi image (`glove/pi:0.3.0`)**: bakes the pinned nono binary, a fail-closed
+  `/opt/glove/entrypoint.sh` (validates policies before exec), and a
+  dependency-free `enforcer` Pi extension that rewrites every `bash` tool call
+  and `!` command through the per-command wrapper (via `tool_call` in-place
+  mutation + `user_bash` operations).
+- **Context generator** (`harnessconfig.build_environment_context`): a
+  generated "How your environment works" block (mounts/modes, shell has no
+  network, browser tool is the only web path, RUN ON HOST relay, output dir).
+- **`glove doctor`** now runs the selected enforcer's checks.
+- New tests (golden policy files verified with real `nono profile validate`,
+  render/wiring, context block, pin-drift guard). Suite: **91 passed**.
+- **Verified against the real `glove/pi:0.3.0` image**
+  (`tests/integration/test_pi_nono.sh`, **16/16**): write /work ok; harness
+  home denied to shell; network blocked; secrets stripped; /etc write, apt,
+  sudo all fail; the 4-part malicious-extension drill all fail; harness writes
+  its own config home; a nested tool is denied the harness transcript;
+  entrypoint fails closed on an invalid policy. The LLM/TUI-dependent checks
+  (trivial prompt, browser_navigate) are documented as manual. Deferred:
+  nono proxy allowlist + credential-injection (blocked on HTTPS-upstream for the
+  plain-HTTP LLM sidecar) — see docs/TODO.md.
+
 ### Phase 1 — runtime layer + hardening + doctor
 
 - **Ring-0 runtime layer** (`glove/runtimes/`): `Runtime` protocol +

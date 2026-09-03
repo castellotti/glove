@@ -67,13 +67,15 @@ def test_ps_parses_container_names():
 
     import glove.runtimes.docker as mod
 
-    orig = mod.subprocess.run
+    orig_run = mod.subprocess.run
+    orig_which = mod.shutil.which
     mod.subprocess.run = lambda *a, **k: _Fake()
     mod.shutil.which = lambda _c: "/usr/bin/docker"
     try:
         sessions = rt.ps()
     finally:
-        mod.subprocess.run = orig
+        mod.subprocess.run = orig_run
+        mod.shutil.which = orig_which
     assert len(sessions) == 1
     assert sessions[0].session == "ticket-1234"
     assert len(sessions[0].services) == 2
@@ -82,6 +84,30 @@ def test_ps_parses_container_names():
 def test_stub_render_raises(tmp_path):
     with pytest.raises(NotImplementedError):
         AppleContainerRuntime().render(_plan(tmp_path), tmp_path)
+
+
+def test_render_wraps_command_and_mounts_policies(tmp_path):
+    plan = _plan(tmp_path, enforcer="nono")
+    plan.policies_host_dir = str(tmp_path / "enforcer")
+    doc = yaml.safe_load(DockerRuntime().render(plan, tmp_path).compose_yaml)
+    h = doc["services"]["glove-s-harness"]
+    # harness command is nono-wrapped
+    assert h["command"][:2] == ["nono", "run"]
+    # policies bind-mounted read-only at /etc/glove/enforcer
+    binds = {v["target"]: v for v in h["volumes"] if v["type"] == "bind"}
+    assert "/etc/glove/enforcer" in binds
+    assert binds["/etc/glove/enforcer"]["read_only"] is True
+    # enforcer env present
+    assert h["environment"]["NONO_NO_PROXY"] == "localhost,127.0.0.1"
+
+
+def test_render_none_enforcer_no_policies_mount(tmp_path):
+    plan = _plan(tmp_path, enforcer="none")
+    doc = yaml.safe_load(DockerRuntime().render(plan, tmp_path).compose_yaml)
+    h = doc["services"]["glove-s-harness"]
+    assert h["command"][0] == "pi"  # bare entry, not wrapped
+    binds = {v["target"] for v in h["volumes"] if v["type"] == "bind"}
+    assert "/etc/glove/enforcer" not in binds
 
 
 def test_doctor_host_only_json_shape():

@@ -43,12 +43,15 @@ _REGISTRY: dict[str, HarnessProfile] = {
     ),
     "pi": HarnessProfile(
         name="pi",
-        # 0.2.0: media toolchain + baked glove extensions (searxng, browser).
-        image="glove/pi:0.2.0",
+        # 0.3.0: ring-1 enforcer — baked nono binary + enforcer extension that
+        # routes every shell command through the per-command sandbox policy.
+        image="glove/pi:0.3.0",
         # Load glove's baked extensions (deps installed in the image) from system
-        # paths; the user's own extensions still load from the config home.
+        # paths; the user's own extensions still load from the config home. The
+        # `enforcer` extension must load so shell commands are sandboxed.
         entry=[
             "pi",
+            "-e", "/opt/glove/pi-extensions/enforcer",
             "-e", "/opt/glove/pi-extensions/searxng",
             "-e", "/opt/glove/pi-extensions/browser",
         ],
