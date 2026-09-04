@@ -11,6 +11,8 @@ behavior).
 
 from __future__ import annotations
 
+import glob
+import os
 import shutil
 from typing import TYPE_CHECKING
 
@@ -64,9 +66,52 @@ class HostMcpProvider:
         for tool in ("node", "npx"):
             p = shutil.which(tool)
             checks.append(Check(f"browser host-mcp: {tool}", "ok" if p else "warn", p or "absent — needed for @playwright/mcp"))
-        chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        import os
-
-        checks.append(Check("browser host-mcp: Chrome", "ok" if os.path.exists(chrome) else "warn",
-                            chrome if os.path.exists(chrome) else "Google Chrome not found at the default path"))
+        checks.append(_browser_backend_check())
         return checks
+
+
+# The Chrome for Testing binary (Playwright's managed Chromium build) shipped in
+# the ms-playwright cache; the standard headed browser for a no-system-Chrome host.
+_CFT_GLOBS = (
+    # macOS (chrome-mac / chrome-mac-arm64)
+    "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/Google Chrome for Testing",
+    # Linux
+    "~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
+)
+
+
+def chrome_for_testing_path() -> str | None:
+    """Newest Playwright-managed Chrome for Testing binary on this host, or None."""
+    hits: list[str] = []
+    for pat in _CFT_GLOBS:
+        hits += glob.glob(os.path.expanduser(pat))
+    return sorted(hits)[-1] if hits else None
+
+
+def _browser_backend_check():
+    """One check line for the browser backend, with actionable guidance.
+
+    ``@playwright/mcp``'s ``--browser`` only accepts channels
+    (chrome/msedge/firefox/webkit) and defaults to the ``chrome`` channel = a
+    system Google Chrome. When that is absent, the friction-free path is to point
+    ``--executable-path`` at Playwright's own Chrome for Testing; surface it.
+    """
+    from ..runtimes.base import Check
+
+    system_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if os.path.exists(system_chrome):
+        return Check("browser host-mcp: browser", "ok", f"system Google Chrome ({system_chrome})")
+    cft = chrome_for_testing_path()
+    if cft:
+        return Check(
+            "browser host-mcp: browser",
+            "ok",
+            "no system Google Chrome — use Chrome for Testing via "
+            f"--executable-path '{cft}' (see docs/pi-remote-llm.md)",
+        )
+    return Check(
+        "browser host-mcp: browser",
+        "warn",
+        "no Google Chrome and no Playwright browser found — run "
+        "`npx playwright install chromium` (see docs/pi-remote-llm.md)",
+    )

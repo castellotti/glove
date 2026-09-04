@@ -51,6 +51,10 @@ services:
     port: 8932
 
 host_services:
+  # This preset drives a SYSTEM Google Chrome over CDP (option 2 in
+  # docs/pi-remote-llm.md). If Chrome isn't installed, either install it or
+  # switch to a dedicated Playwright Chrome-for-Testing via --executable-path —
+  # see examples/pi-remote-llm.glove.yaml.
   # Shared with a Vibe run if one is up (glove reuses a live port).
   - name: model-tunnel
     command: "ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 faustulus.local"

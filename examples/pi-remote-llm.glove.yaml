@@ -1,0 +1,85 @@
+# glove preset — Pi against a REMOTE OpenAI-compatible LLM over an SSH tunnel,
+# with a dedicated headed Playwright browser on the host.
+#
+# This is a minimal, general-purpose setup: the harness sees ONLY its own working
+# directory, talks to an LLM on another machine, and reaches the web solely
+# through a Playwright browser you can watch. See docs/pi-remote-llm.md.
+#
+# Use it:
+#   cd ~/path/to/your/project           # the dir the agent should work in
+#   glove init pi --from <glove-repo>/examples/pi-remote-llm.glove.yaml
+#   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the API key + host/model
+#   glove pi --dry-run                  # preview
+#   glove pi                            # launch
+#
+# NOTE: `init` copies this file into ~/.glove/envs/<env-id>/glove.yaml (outside
+# your repo). Put the real API key THERE, never in the repo.
+
+harness: pi
+runtime: docker         # docker (incl. Docker Desktop on macOS/Windows) | podman
+enforcer: nono          # ring-1 kernel sandbox wrapping the agent + every command
+
+# The agent's /work — its only writable mount. No `add_dirs` → nothing else on
+# the host is mounted or reachable. `.` resolves to the dir you launch from.
+workdir: .
+
+# --- LLM ---------------------------------------------------------------------
+# The model id MUST match what the endpoint advertises at
+#   curl http://<remote-host>:8080/v1/models
+model: your-model-id
+llm_service: llm
+# API key for the endpoint (if it needs one). glove injects it inline into Pi's
+# generated models.json; the sandboxed shell can't read it (ring-1 hides the
+# config home and strips secret-shaped env vars). Replace in the ENV copy.
+llm_api_key: sk-REPLACE-ME
+
+# Raise Pi's default reasoning effort (off | low | medium | xhigh). glove already
+# pins contextWindow 262144 and images (input: text+image) for the model entry;
+# override those or add fields via `harness_config.model` if needed.
+# SAMPLING (temperature/top_p/top_k/min_p/penalties) is NOT sent by Pi — pin it
+# server-side where the model is launched (e.g. llama.cpp flags).
+harness_config:
+  settings:
+    defaultThinkingLevel: xhigh
+
+# --- network -----------------------------------------------------------------
+# Internal-only container; the only routable hosts are the forwarder sidecars.
+net: [service]
+allow_root: false
+
+services:
+  # LLM bridge: harness → glove-<session>-llm:8080 → host 127.0.0.1:8899 → SSH →
+  # <remote-host>:8080. host.docker.internal is how a sidecar reaches a host port.
+  - name: llm
+    to: host.docker.internal:8899
+    port: 8080
+  # Browser bridge: harness → glove-<session>-browser:8931 → host :8931 (the
+  # Playwright MCP). Declaring a `browser` service auto-sets BROWSER_MCP_URL for
+  # Pi's baked `browser` extension. Reachable only by the browser_* tools —
+  # shell commands have no network (ring-1 tool policy), so `curl` can't hit it.
+  - name: browser
+    to: host.docker.internal:8931
+    port: 8931
+
+host_services:
+  # SSH tunnel: host 127.0.0.1:8899 → <remote-host>'s 127.0.0.1:8080. Needs
+  # passwordless SSH to the remote. glove starts it in tmux, waits for :8899, and
+  # reuses a live one. (A container can't resolve mDNS/.local or route to the LAN;
+  # the tunnel keeps the LLM reachable via a single host-loopback port.)
+  - name: model-tunnel
+    command: "ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 <remote-host>"
+    ready_port: 8899
+  # A DEDICATED headed Playwright browser (Chrome for Testing) you can watch,
+  # isolated from your daily browser. @playwright/mcp's --browser only accepts
+  # channels and defaults to system Google Chrome, so we point --executable-path
+  # at the Chrome for Testing that `npx playwright install chromium` downloads,
+  # resolved by glob so it survives Playwright revision bumps. Screenshots land in
+  # {media_dir} = <workdir>/research/<collection>/media.  (Linux path differs:
+  # ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome — see docs.)
+  - name: playwright
+    command: >-
+      npx @playwright/mcp@latest --host 127.0.0.1 --port 8931
+      --allowed-hosts glove-{session}-browser:8931 --shared-browser-context
+      --output-dir {media_dir}
+      --executable-path "$(ls -d ~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/* 2>/dev/null | grep -i 'for Testing' | sort -V | tail -1)"
+    ready_port: 8931

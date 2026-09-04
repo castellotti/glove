@@ -59,9 +59,17 @@ This is **glove v2**; all planned phases are complete. See
 | Enforcer | nono (Landlock) — default | ✅ Pi wired + verified (16-check integration) |
 | Enforcer | srt (bubblewrap) — opt-in | ✅ Pi wired + verified (7-check integration); tool commands only |
 | Enforcer | none (ring 0 only) | ✅ debug |
-| Browser | host-mcp — v2 default | ✅ provider layer (wiring/security/doctor verified; live nav manual) |
+| Browser | host-mcp — v2 default | ✅ implemented + live nav verified — see [docs/pi-remote-llm.md](docs/pi-remote-llm.md) |
 | Browser | host-server | ✅ implemented (ws-path + version-pin; needs playwright in image) |
 | Browser | sidecar-desktop / vm-desktop | spec only (not implemented) |
+
+Giving a harness web access needs Node/npx and a Chromium-family browser on the
+host; the friction-free option is Playwright's own Chrome for Testing
+(`npx playwright install chromium`). For a complete, reproducible setup — Pi
+against a remote OpenAI-compatible LLM over an SSH tunnel plus a dedicated headed
+Playwright browser, including the `@playwright/mcp` `--browser` channel gotcha and
+the `--executable-path` fix — see **[docs/pi-remote-llm.md](docs/pi-remote-llm.md)**
+and copy **[examples/pi-remote-llm.glove.yaml](examples/pi-remote-llm.glove.yaml)**.
 
 ## Quick start
 

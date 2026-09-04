@@ -8,6 +8,16 @@ All six implementation phases are complete.
 
 ### Changes
 
+- **Browser docs + a remote-LLM example, and clearer host-mcp doctor guidance**:
+  the default `host-mcp` browser provider had no doc and `glove doctor` only said
+  "Google Chrome not found". Setting up a dedicated Playwright browser meant
+  discovering that `@playwright/mcp`'s `--browser` accepts only channels
+  (defaulting to a *system* Chrome) and that the fix is `--executable-path` to
+  Playwright's Chrome for Testing. Now documented in `docs/pi-remote-llm.md`,
+  demonstrated end-to-end in `examples/pi-remote-llm.glove.yaml` (remote LLM over
+  SSH tunnel + dedicated headed Playwright Chromium), and `glove doctor
+  --browser host-mcp` detects Chrome for Testing and prints the `--executable-path`
+  to use (or points to `npx playwright install chromium`).
 - **nono state roots now sit on tmpfs, fixing Pi launch on Docker Desktop
   (macOS/Windows)**: nono's supervisor creates a PTY-proxy Unix socket under
   `$HOME/.local/state/nono` and lock/audit state under `$HOME/.nono`, both on the
