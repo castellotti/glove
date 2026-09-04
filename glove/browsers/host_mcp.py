@@ -11,13 +11,12 @@ state (never the project working tree).
 
 from __future__ import annotations
 
-import glob
-import os
 import shutil
 from typing import TYPE_CHECKING
 
 from ..config import HostService, Service
 from .base import BrowserWiring, headed_chrome_service
+from .chrome import discover_chrome
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -75,60 +74,6 @@ class HostMcpProvider:
         return checks
 
 
-# Well-known system Google Chrome / Chromium install locations, by platform. The
-# headed browser glove drives on the host is discovered here (falling back to
-# Chrome for Testing) so the browser feature works on macOS, Linux and Windows
-# without a hardcoded path.
-_SYSTEM_CHROME = (
-    # macOS
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    # Linux
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/opt/google/chrome/chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/snap/bin/chromium",
-    # Windows
-    "C:/Program Files/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files/Chromium/Application/chrome.exe",
-)
-
-# The Chrome for Testing binary (Playwright's managed Chromium build) shipped in
-# the ms-playwright cache; the standard headed browser for a no-system-Chrome host.
-_CFT_GLOBS = (
-    # macOS (chrome-mac / chrome-mac-arm64)
-    "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/Google Chrome for Testing",
-    # Linux
-    "~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
-    # Windows (%USERPROFILE%\AppData\Local\ms-playwright)
-    "~/AppData/Local/ms-playwright/chromium-*/chrome-win*/chrome.exe",
-)
-
-
-def chrome_for_testing_path() -> str | None:
-    """Newest Playwright-managed Chrome for Testing binary on this host, or None."""
-    hits: list[str] = []
-    for pat in _CFT_GLOBS:
-        hits += glob.glob(os.path.expanduser(pat))
-    return sorted(hits)[-1] if hits else None
-
-
-def chrome_executable() -> str | None:
-    """Best headed browser on this host, or None.
-
-    Prefers a system Google Chrome / Chromium, then Playwright's Chrome for
-    Testing. All three speak CDP on ``--remote-debugging-port``, which is what
-    both browser providers attach to.
-    """
-    for path in _SYSTEM_CHROME:
-        if os.path.exists(path):
-            return path
-    return chrome_for_testing_path()
-
-
 def _browser_backend_check():
     """One check line for the browser backend, with actionable guidance.
 
@@ -139,16 +84,15 @@ def _browser_backend_check():
     """
     from ..runtimes.base import Check
 
-    system_chrome = next((p for p in _SYSTEM_CHROME if os.path.exists(p)), None)
-    if system_chrome:
-        return Check("browser host-mcp: browser", "ok", f"system Chrome/Chromium ({system_chrome})")
-    cft = chrome_for_testing_path()
-    if cft:
+    path, kind = discover_chrome()
+    if kind == "system":
+        return Check("browser host-mcp: browser", "ok", f"system Chrome/Chromium ({path})")
+    if kind == "cft":
         return Check(
             "browser host-mcp: browser",
             "ok",
             "no system Google Chrome — use Chrome for Testing via "
-            f"--executable-path '{cft}' (see docs/pi-remote-llm.md)",
+            f"--executable-path '{path}' (see docs/pi-remote-llm.md)",
         )
     return Check(
         "browser host-mcp: browser",

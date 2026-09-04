@@ -87,27 +87,27 @@ def test_host_server_wspath_stable_after_apply():
 
 
 def test_chrome_for_testing_path_picks_newest(monkeypatch):
-    import glove.browsers.host_mcp as hm
+    import glove.browsers.chrome as chrome
 
     suffix = "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
     fake = {
-        hm._CFT_GLOBS[0]: [
+        chrome._CFT_GLOBS[0]: [
             f"/x/ms-playwright/chromium-1200/{suffix}",
             f"/x/ms-playwright/chromium-1243/{suffix}",
         ],
-        hm._CFT_GLOBS[1]: [],
+        chrome._CFT_GLOBS[1]: [],
     }
-    monkeypatch.setattr(hm.os.path, "expanduser", lambda p: p)
-    monkeypatch.setattr(hm.glob, "glob", lambda p: fake.get(p, []))
-    assert "chromium-1243" in hm.chrome_for_testing_path()
+    monkeypatch.setattr(chrome.os.path, "expanduser", lambda p: p)
+    monkeypatch.setattr(chrome.glob, "glob", lambda p: fake.get(p, []))
+    assert "chromium-1243" in chrome.chrome_for_testing_path()
 
 
 def test_host_mcp_doctor_guides_to_chrome_for_testing(monkeypatch):
-    import glove.browsers.host_mcp as hm
+    import glove.browsers.chrome as chrome
 
     # No system Chrome, but Chrome for Testing present → ok + actionable guidance.
-    monkeypatch.setattr(hm.os.path, "exists", lambda p: False)
-    monkeypatch.setattr(hm, "chrome_for_testing_path", lambda: "/cache/.../Google Chrome for Testing")
+    monkeypatch.setattr(chrome.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(chrome, "chrome_for_testing_path", lambda: "/cache/.../Google Chrome for Testing")
     checks = get_provider("host-mcp").doctor(Config(harness="pi"))
     backend = next(c for c in checks if c.name == "browser host-mcp: browser")
     assert backend.status == "ok"
@@ -115,10 +115,10 @@ def test_host_mcp_doctor_guides_to_chrome_for_testing(monkeypatch):
 
 
 def test_host_mcp_doctor_warns_when_no_browser(monkeypatch):
-    import glove.browsers.host_mcp as hm
+    import glove.browsers.chrome as chrome
 
-    monkeypatch.setattr(hm.os.path, "exists", lambda p: False)
-    monkeypatch.setattr(hm, "chrome_for_testing_path", lambda: None)
+    monkeypatch.setattr(chrome.os.path, "exists", lambda p: False)
+    monkeypatch.setattr(chrome, "chrome_for_testing_path", lambda: None)
     checks = get_provider("host-mcp").doctor(Config(harness="pi"))
     backend = next(c for c in checks if c.name == "browser host-mcp: browser")
     assert backend.status == "warn"

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ..config import HostService, Service
+from .chrome import DEFAULT_CHROME, chrome_executable
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -54,11 +55,7 @@ class BrowserProvider(Protocol):
 # recommends. Falls back to the macOS system path only so the command is still
 # well-formed when nothing is found (doctor will have warned).
 def headed_chrome_service() -> HostService:
-    # Lazy import: host_mcp imports this module, so importing it at top level
-    # would be a cycle. chrome discovery lives beside the doctor guidance there.
-    from .host_mcp import _SYSTEM_CHROME, chrome_executable
-
-    chrome = chrome_executable() or _SYSTEM_CHROME[0]
+    chrome = chrome_executable() or DEFAULT_CHROME
     return HostService(
         name="chrome",
         command=(

@@ -43,6 +43,12 @@ def session_dir(env_id: str, session_name: str) -> Path:
     return sessions_root(env_id) / session_name
 
 
+def session_token(env_id: str, session_name: str) -> str:
+    """Compose-project token for a session: `<env>` for the default (unnamed)
+    session, else `<env>-<name>`. The compose project is `glove-<token>`."""
+    return env_id if session_name == env_id else f"{env_id}-{session_name}"
+
+
 def registry_path() -> Path:
     return glove_home() / "registry.json"
 

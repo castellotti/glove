@@ -42,6 +42,7 @@ from .registry import (
     find_env_id,
     load_registry,
     session_dir,
+    session_token,
 )
 from .runtimes import get_runtime, known_runtimes
 
@@ -202,7 +203,7 @@ def run(
     # The session names this run; its compose project is glove-<env>[-<session>]
     # so several sessions of one env can coexist.
     session_name = name or env_id
-    session_token = env_id if session_name == env_id else f"{env_id}-{session_name}"
+    token = session_token(env_id, session_name)
 
     rt = runtime or None
     prov = provider or (rt if rt in ("docker", "podman") else None) or _autodetect_provider()
@@ -212,7 +213,7 @@ def run(
         "runtime": rt,
         "enforcer": enforcer or None,
         "workdir": str(workdir) if workdir else None,
-        "name": session_token,
+        "name": token,
         "net": [p.strip() for p in net.split(",") if p.strip()] if net else None,
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
@@ -235,7 +236,7 @@ def run(
 
         if browser is not None:
             cfg.browser = {**(cfg.browser or {}), "provider": browser}
-        cfg = apply_browser(cfg, session_token)
+        cfg = apply_browser(cfg, token)
         home_dir = _home_dir(cfg, edir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
@@ -275,7 +276,7 @@ def run(
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
         _print_summary(plan, home_files)
-        describe_host_services(cfg, session_token, sdir)
+        describe_host_services(cfg, token, sdir)
         print_host_setup(cfg)
         return
 
@@ -283,7 +284,7 @@ def run(
     # harness, then print anything left for the operator to run by hand. Key them
     # by the session token (== compose project suffix) so `glove down` can find
     # and stop them per session, not just the default unnamed one.
-    start_host_services(cfg, session_token, sdir)
+    start_host_services(cfg, token, sdir)
     print_host_setup(cfg)
     # Non-dry-run launch lives in session.py; import lazily so --dry-run needs
     # no provider present.
@@ -442,7 +443,7 @@ def down(
 
     for sname in session_names:
         sdir = session_dir(env_id, sname)
-        token = env_id if sname == env_id else f"{env_id}-{sname}"
+        token = session_token(env_id, sname)
         effective = sdir / "glove.effective.yaml"
         if effective.exists():
             try:
