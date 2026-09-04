@@ -6,6 +6,28 @@ All notable changes to glove are documented here.
 
 All six implementation phases are complete.
 
+### Changes
+
+- **nono state roots now sit on tmpfs, fixing Pi launch on Docker Desktop
+  (macOS/Windows)**: nono's supervisor creates a PTY-proxy Unix socket under
+  `$HOME/.local/state/nono` and lock/audit state under `$HOME/.nono`, both on the
+  `/home/agent` bind mount. On Docker Desktop that mount is a virtiofs/gRPC-FUSE
+  share which cannot host an `AF_UNIX` socket (`bind()` → `EINVAL`, os error 22),
+  so the sandbox never started. Enforcers can now declare `extra_tmpfs`; nono
+  backs those two state roots with tmpfs (native fs, ephemeral per-session, and —
+  being outside both Landlock profiles' allow-lists — still off-limits to the
+  agent). All tmpfs mounts render as long-form `type: tmpfs` with an explicit
+  `mode: 01777`: a bare tmpfs over a mountpoint that already exists on the bind
+  mount comes up `755 root:root`, which the non-root harness can't write
+  (`EACCES`, os error 13).
+- **Pi `harness_config` now overrides generated settings/model fields**: the Pi
+  `settings.json` (e.g. `defaultThinkingLevel`) and the per-model entry in
+  `models.json` were fully hardcoded, so a session could not raise the default
+  thinking level or tune model fields without patching glove. `harness_config`
+  may now carry a `settings` mapping (deep-merged, preserving the derived
+  `SEARXNG_URL`) and a `model` mapping (overlaid on the model entry), matching
+  how the Vibe renderer already honours `harness_config`.
+
 ### Fixes (post-review)
 
 - **Environment context file now renders the resolved `MountPlan`**: the

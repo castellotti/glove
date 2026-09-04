@@ -364,7 +364,20 @@ def _render_pi(
     }
     search_host = _service_host(cfg, session, "search")
     if search_host:
-        settings_json["env"] = {"SEARXNG_URL": search_host}
+        settings_json.setdefault("env", {})["SEARXNG_URL"] = search_host
+
+    # Let the (git-tracked) glove.yaml `harness_config` override Pi settings and
+    # model fields without a code change — e.g. `defaultThinkingLevel: xhigh`, or
+    # extra per-model tuning if the endpoint supports it. `env` is deep-merged so
+    # the SEARXNG_URL glove derived above is preserved.
+    extra_settings = dict(cfg.harness_config.get("settings", {}))
+    extra_env = extra_settings.pop("env", None)
+    settings_json.update(extra_settings)
+    if extra_env:
+        settings_json.setdefault("env", {}).update(extra_env)
+    model_overrides = cfg.harness_config.get("model", {})
+    if model_overrides:
+        models_json["providers"]["faustulus"]["models"][0].update(model_overrides)
 
     written: list[Path] = []
     for name, data in (

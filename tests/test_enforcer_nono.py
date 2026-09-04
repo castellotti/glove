@@ -90,6 +90,27 @@ def test_nono_pin_matches_dockerfile():
     assert f"COPY --from={nono_image_ref()} " in dockerfile
 
 
+def test_nono_backs_state_roots_with_tmpfs(tmp_path):
+    # nono's control socket needs a native fs (Docker Desktop bind mounts can't
+    # host AF_UNIX sockets), so its state roots get tmpfs on top of /tmp — and
+    # those paths stay OUT of both Landlock profiles' allow-lists.
+    plan = _plan(tmp_path)
+    tmpfs = plan.hardening.tmpfs
+    assert "/tmp" in tmpfs
+    assert "/home/agent/.local/state" in tmpfs
+    assert "/home/agent/.nono" in tmpfs
+    for policy in ("harness.json", "tool.json"):
+        fs = json.loads(plan.policies[policy])["filesystem"]
+        grants = [*fs["allow"], *fs.get("read", [])]
+        assert "/home/agent/.local/state" not in grants
+        assert "/home/agent/.nono" not in grants
+
+
+def test_none_enforcer_adds_no_tmpfs(tmp_path):
+    plan = _plan(tmp_path, enforcer="none")
+    assert plan.hardening.tmpfs == ("/tmp",)
+
+
 def test_rw_add_dir_writable_in_tool_but_ro_not(tmp_path):
     ro = tmp_path / "lib"
     rw = tmp_path / "out"

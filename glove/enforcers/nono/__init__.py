@@ -30,6 +30,17 @@ class NonoEnforcer:
         # nono's supervisor talks to its child over loopback; keep that direct.
         return {"NONO_NO_PROXY": "localhost,127.0.0.1"}
 
+    def extra_tmpfs(self, plan: SessionPlan) -> list[str]:
+        # The supervisor creates a PTY-proxy Unix socket under its state root
+        # ($HOME/.local/state/nono) plus lock/state under $HOME/.nono. On Docker
+        # Desktop (macOS/Windows) the /home/agent bind mount is a virtiofs/
+        # gRPC-FUSE share that cannot host an AF_UNIX socket — bind() fails with
+        # EINVAL ("os error 22") and the sandbox never starts. Back both state
+        # roots with tmpfs: a native fs that supports sockets, and — since neither
+        # path is in the harness/tool Landlock allow-lists — still off-limits to
+        # the sandboxed agent. State is per-session and needs no persistence.
+        return ["/home/agent/.nono", "/home/agent/.local/state"]
+
     def cap_add(self, plan: SessionPlan) -> list[str]:
         # Phase 2 runs no proxy, so no SYS_PTRACE is needed (verified). The
         # proxy/credential-injection path that needs it is a follow-up.

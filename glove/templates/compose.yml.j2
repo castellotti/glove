@@ -32,10 +32,6 @@ services:
       - "systempaths=unconfined"
 {% endif %}
     read_only: true
-    tmpfs:
-{% for t in hardening.tmpfs %}
-      - {{ t }}
-{% endfor %}
     pids_limit: {{ hardening.limits.pids }}
     mem_limit: {{ hardening.limits.memory }}
     cpus: {{ hardening.limits.cpus }}
@@ -65,6 +61,18 @@ services:
 {% if m.read_only %}
         read_only: true
 {% endif %}
+{% endfor %}
+{% for t in hardening.tmpfs %}
+      # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
+      # a target nested under /home/agent overlays the bind. mode is forced
+      # explicitly: over a mountpoint that already exists on the bind, a bare
+      # tmpfs mounts 755 root:root and the non-root harness can't write it.
+      # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
+      # mount can't host) lives here; the agent's Landlock policy still denies it.
+      - type: tmpfs
+        target: {{ t }}
+        tmpfs:
+          mode: 01777
 {% endfor %}
     networks:
       - glove-{{ session }}-net

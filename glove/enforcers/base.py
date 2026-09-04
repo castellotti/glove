@@ -41,6 +41,15 @@ class Enforcer(Protocol):
         """Extra environment variables the enforcer needs on the harness service."""
         ...
 
+    def extra_tmpfs(self, plan: SessionPlan) -> list[str]:
+        """Extra tmpfs mount paths the enforcer needs on the harness service.
+
+        Used for enforcer state that must live on a native filesystem (e.g. a
+        Unix-domain control socket) rather than the /home/agent bind mount, which
+        on Docker Desktop is a virtiofs/gRPC-FUSE share that cannot host sockets.
+        """
+        ...
+
     def cap_add(self, plan: SessionPlan) -> list[str]:
         """Linux capabilities the enforcer requires (scoped)."""
         ...

@@ -181,7 +181,15 @@ def build_session_plan(
     plan.policies = enforcer.render_policies(plan)
     plan.command = enforcer.wrap_harness(plan, list(profile.entry))
     plan.enforcer_env = enforcer.compose_env(plan)
+
+    # Fold enforcer-requested caps/tmpfs into the hardening spec in one replace.
+    updates: dict = {}
     extra_caps = tuple(enforcer.cap_add(plan))
     if extra_caps:
-        plan.hardening = replace(hardening, cap_add=extra_caps)
+        updates["cap_add"] = extra_caps
+    extra_tmpfs = tuple(t for t in enforcer.extra_tmpfs(plan) if t not in hardening.tmpfs)
+    if extra_tmpfs:
+        updates["tmpfs"] = (*hardening.tmpfs, *extra_tmpfs)
+    if updates:
+        plan.hardening = replace(hardening, **updates)
     return plan

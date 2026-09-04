@@ -101,6 +101,9 @@ class SrtEnforcer:
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         return {}
 
+    def extra_tmpfs(self, plan: SessionPlan) -> list[str]:
+        return []
+
     def cap_add(self, plan: SessionPlan) -> list[str]:
         return []  # bwrap uses userns via the relaxed seccomp; no caps needed
 

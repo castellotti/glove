@@ -172,3 +172,26 @@ def test_pi_config_and_extension(tmp_path):
     # glove's extensions are baked into the image (loaded via `pi -e`), not
     # seeded here; only a user extensions/ dir is ensured.
     assert (agent / "extensions").is_dir()
+
+
+def test_pi_harness_config_overrides(tmp_path):
+    # glove.yaml `harness_config` can override Pi settings (e.g. the default
+    # thinking level) and per-model fields, and env deep-merges with SEARXNG_URL.
+    cfg = _cfg("pi", tmp_path)
+    cfg.harness_config = {
+        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"}},
+        "model": {"contextWindow": 131072, "maxTokens": 100000},
+    }
+    home = tmp_path / "home"
+    render_home(cfg, get_profile("pi"), "pi-sess", home)
+    agent = home / ".pi" / "agent"
+    settings = json.loads((agent / "settings.json").read_text())
+    assert settings["defaultThinkingLevel"] == "xhigh"
+    # env override is merged, not clobbered — both keys survive
+    assert settings["env"]["FOO"] == "bar"
+    assert settings["env"]["SEARXNG_URL"] == "http://glove-pi-sess-search:8080"
+    model = json.loads((agent / "models.json").read_text())["providers"]["faustulus"]["models"][0]
+    assert model["contextWindow"] == 131072
+    assert model["maxTokens"] == 100000
+    # images stay enabled and reasoning intact after the override merge
+    assert model["input"] == ["text", "image"]
