@@ -9,10 +9,6 @@ dist/
 .DS_Store
 
 # Internal design/planning docs — kept on disk, not published.
-/docs/PLAN.md
-/docs/KICKOFF-PROMPT.md
-/docs/TODO.md
-/docs/research/
-/docs/v1/
-/docs/runtimes/
-/docs/browsers/
+# Active plans live in docs/planning/, legacy/implemented ones in
+# docs/planning/archive/. The whole tree stays out of the published repo.
+/docs/planning/
