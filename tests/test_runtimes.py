@@ -57,18 +57,16 @@ def test_docker_render_refuses_bad_hardening(tmp_path):
 
 
 def _run_ps(stdout: str):
+    import types
+
     rt = DockerRuntime()
-
-    class _Fake:
-        returncode = 0
-
-    _Fake.stdout = stdout
+    fake = types.SimpleNamespace(returncode=0, stdout=stdout)
 
     import glove.runtimes.docker as mod
 
     orig_run = mod.subprocess.run
     orig_which = mod.shutil.which
-    mod.subprocess.run = lambda *a, **k: _Fake()
+    mod.subprocess.run = lambda *a, **k: fake
     mod.shutil.which = lambda _c: "/usr/bin/docker"
     try:
         return rt.ps()

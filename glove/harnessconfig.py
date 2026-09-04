@@ -67,7 +67,6 @@ def build_environment_context(
     )
     lines += ["", "## Files", ""]
     lines.append(f"- You start in `{mount_plan.working_dir}` — your working directory.")
-    mount_paths = {m.container_path for m in mount_plan.mounts}
     for m in mount_plan.mounts:
         if m.is_workdir:
             role = "your writable workspace (this is the project you were launched on)"
@@ -76,7 +75,7 @@ def build_environment_context(
                 " (read-only)" if m.read_only else " (writable)"
             )
         lines.append(f"- `{m.container_path}` ({m.mode}) — {role}.")
-    if mount_plan.working_dir not in mount_paths:
+    if not any(m.is_workdir for m in mount_plan.mounts):
         # workdir was absorbed into an add-dir mount; there is no /work.
         lines.append(
             "- (Your working directory lives inside one of the mounts above; there is "
@@ -88,31 +87,24 @@ def build_environment_context(
         "itself can read them."
     )
     lines += ["", "## Network", ""]
+    no_network = (
+        "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, "
+        "`npm install` will fail)."
+    )
+    browser_only = (
+        "- The **browser tool is the only way to reach the web** — use it for "
+        "anything online."
+    )
     if browser_provider is not None:
-        lines.append(
-            "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, "
-            "`npm install` will fail)."
-        )
         note = get_provider(browser_provider).wiring(
             cfg, cfg.resolved_name()
         ).context_note
-        lines.append(
-            note.strip()
-            if note
-            else "- The **browser tool is the only way to reach the web** — use it "
-            "for anything online."
-        )
+        lines.append(no_network)
+        lines.append(note.strip() if note else browser_only)
     elif has_browser:
-        lines.append(
-            "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, `npm "
-            "install` will fail). The **browser tool is the only way to reach the "
-            "web** — use it for anything online."
-        )
+        lines += [no_network, browser_only]
     else:
-        lines.append(
-            "- **Shell commands have no network** (`curl`, `wget`, `pip`, `npm "
-            "install` will fail). There is no web access in this session."
-        )
+        lines.append(no_network + " There is no web access in this session.")
     lines.append(
         "- You cannot read the LLM API key or any secret from a shell (`env` hides them)."
     )

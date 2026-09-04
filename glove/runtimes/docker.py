@@ -152,8 +152,8 @@ class DockerRuntime:
             # Fall back to the name prefix when the label is absent (a container
             # not started by compose); the compose project is always glove-<session>.
             if not project:
-                project = name.rsplit("-", 1)[0] if "-" in name else name
-            session = project[len("glove-"):] if project.startswith("glove-") else project
+                project = name.rsplit("-", 1)[0]
+            session = project.removeprefix("glove-")
             sess = by_project.setdefault(
                 project, RunningSession(project=project, session=session)
             )
