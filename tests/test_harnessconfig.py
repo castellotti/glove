@@ -7,7 +7,8 @@ import tomllib
 
 from glove.config import AddDir, Config, Service
 from glove.harness import get_profile
-from glove.harnessconfig import container_llm_base, render_home
+from glove.harnessconfig import build_environment_context, container_llm_base, render_home
+from glove.mounts import compute_mounts
 
 
 def _cfg(harness: str, tmp_path):
@@ -79,6 +80,56 @@ def test_context_file_environment_block(tmp_path):
     assert "Shell commands have no network" in text
     assert "cannot read the LLM API key" in text
     assert "nono" in text  # names the enforcer
+
+
+def test_context_uses_resolved_mounts_on_basename_collision(tmp_path):
+    # add_dirs with the same basename must show the *deduplicated* container
+    # paths (/mnt/foo and /mnt/foo-2), not both collapsed to /mnt/foo.
+    (tmp_path / "a" / "foo").mkdir(parents=True)
+    (tmp_path / "b" / "foo").mkdir(parents=True)
+    work = tmp_path / "wd"
+    work.mkdir()
+    cfg = Config(harness="pi", workdir=str(work), name="pi-sess")
+    cfg.add_dirs = [
+        AddDir(path=str(tmp_path / "a" / "foo"), mode="ro"),
+        AddDir(path=str(tmp_path / "b" / "foo"), mode="rw"),
+    ]
+    plan = compute_mounts(
+        cfg.workdir, [(a.path, a.mode) for a in cfg.add_dirs]
+    )
+    text = build_environment_context(cfg, plan)
+    assert "/mnt/foo`" in text  # first foo
+    assert "/mnt/foo-2`" in text  # the collision got a distinct mountpoint
+    assert "(ro)" in text and "(rw)" in text
+
+
+def test_context_reflects_absorbed_workdir(tmp_path):
+    # When an add-dir is an ancestor of the workdir, the workdir has no /work
+    # mount; the agent must be told the real working_dir under /mnt/<parent>.
+    parent = tmp_path / "proj"
+    (parent / "sub").mkdir(parents=True)
+    cfg = Config(harness="pi", workdir=str(parent / "sub"), name="pi-sess")
+    cfg.add_dirs = [AddDir(path=str(parent), mode="ro")]
+    plan = compute_mounts(
+        cfg.workdir, [(a.path, a.mode) for a in cfg.add_dirs]
+    )
+    text = build_environment_context(cfg, plan)
+    assert plan.working_dir == "/mnt/proj/sub"
+    assert "You start in `/mnt/proj/sub`" in text
+    # the absorbing mount was widened to rw (it swallowed the writable workdir)
+    assert "/mnt/proj` (rw)" in text
+
+
+def test_context_renders_browser_provider_note(tmp_path):
+    # host-server's provider note (with the exact ws:// endpoint) must reach the
+    # context file, not be discarded in favour of generic text.
+    work = tmp_path / "wd"
+    work.mkdir()
+    cfg = Config(harness="pi", workdir=str(work), name="pi-sess")
+    cfg.browser = {"provider": "host-server", "ws_path": "pw-fixed", "port": 3000}
+    text = build_environment_context(cfg)
+    assert "ws://glove-pi-sess-browser:3000/pw-fixed" in text
+    assert "PLAYWRIGHT_WS_ENDPOINT" in text
 
 
 def test_vibe_seeds_hooks_for_nono(tmp_path):

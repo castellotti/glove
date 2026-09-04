@@ -74,3 +74,25 @@ def test_explicit_name(glove_home, tmp_path):
     env_id = registry.create_env(d, "pi", name="custom")
     assert env_id == "custom"
     assert registry.find_env_id(d, "pi") == "custom"
+
+
+def test_explicit_name_clash_across_dirs_is_refused(glove_home, tmp_path):
+    a = _mkdir(tmp_path / "one", "wd")
+    b = _mkdir(tmp_path / "two", "wd")
+    registry.create_env(a, "pi", name="shared")
+    with pytest.raises(registry.RegistryError):
+        registry.create_env(b, "vibe", name="shared")
+    # The clash must not have created a second entry.
+    assert {e.env_id for e in registry.load_registry()} == {"shared"}
+
+
+def test_explicit_name_rebinds_same_dir_harness(glove_home, tmp_path):
+    d = _mkdir(tmp_path, "wd")
+    registry.create_env(d, "pi", name="shared")
+    # Re-forcing the SAME (dir, harness) to the same name is a no-op rebind.
+    assert registry.create_env(d, "pi", name="shared") == "shared"
+    assert len(registry.load_registry()) == 1
+    # A different harness in the same dir cannot reuse the name (it would clobber
+    # the shared env tree); it must be refused just like a cross-dir clash.
+    with pytest.raises(registry.RegistryError):
+        registry.create_env(d, "vibe", name="shared")

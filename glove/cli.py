@@ -36,6 +36,7 @@ from .hostsvc import (
     stop_host_services,
 )
 from .registry import (
+    RegistryError,
     create_env,
     env_dir,
     envs_root,
@@ -116,7 +117,11 @@ def init(
         env_id = existing
         console.print(f"[dim]reusing existing env[/dim] {env_id}")
     else:
-        env_id = create_env(cwd, resolved_harness, name=name)
+        try:
+            env_id = create_env(cwd, resolved_harness, name=name)
+        except RegistryError as e:
+            err.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(1) from e
 
     edir = env_dir(env_id)
     edir.mkdir(parents=True, exist_ok=True)
@@ -258,7 +263,9 @@ def run(
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
     (sdir / "glove.effective.yaml").write_text(cfg.to_yaml())
-    home_files = render_home(cfg, plan.profile, env_id, home_dir)
+    home_files = render_home(
+        cfg, plan.profile, env_id, home_dir, mount_plan=plan.mount_plan
+    )
 
     if dry_run:
         console.print(

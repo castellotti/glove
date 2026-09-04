@@ -130,8 +130,14 @@ class DockerRuntime:
     def ps(self) -> list[RunningSession]:
         if not shutil.which(self.cli):
             return []
+        # Group by compose's own project label rather than parsing the container
+        # name: `compose run` appends `-run-<hash>` and a service role may itself
+        # contain dashes (e.g. `my-llm`), so name surgery mis-attributes both.
         proc = subprocess.run(
-            [self.cli, "ps", "--filter", "name=glove-", "--format", "{{.Names}}\t{{.Status}}"],
+            [
+                self.cli, "ps", "--filter", "name=glove-", "--format",
+                '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Status}}',
+            ],
             capture_output=True,
             text=True,
         )
@@ -141,13 +147,13 @@ class DockerRuntime:
         for line in proc.stdout.splitlines():
             if not line.strip():
                 continue
-            name, _, status = line.partition("\t")
-            # container names are glove-<session>-<service>
-            parts = name.split("-")
-            if len(parts) < 3:
-                continue
-            session = "-".join(parts[1:-1])
-            project = f"glove-{session}"
+            name, _, rest = line.partition("\t")
+            project, _, _status = rest.partition("\t")
+            # Fall back to the name prefix when the label is absent (a container
+            # not started by compose); the compose project is always glove-<session>.
+            if not project:
+                project = name.rsplit("-", 1)[0] if "-" in name else name
+            session = project[len("glove-"):] if project.startswith("glove-") else project
             sess = by_project.setdefault(
                 project, RunningSession(project=project, session=session)
             )
@@ -185,12 +191,21 @@ class DockerRuntime:
         return checks
 
     def _landlock_check(self) -> Check:
-        """Run the hardened-container Landlock/userns/kvm probe."""
+        """Run the hardened-container Landlock/userns/kvm probe.
+
+        Applies glove's vendored default seccomp profile (§3.4) so the probe
+        runs under the same syscall filter as the real harness — a bare
+        ``docker run`` would use Docker's built-in default and could report a
+        different Landlock/userns result than the hardened container gets.
+        """
+        from .seccomp import default_profile_path
+
         proc = subprocess.run(
             [
                 self.cli, "run", "--rm",
                 "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges:true",
+                "--security-opt", f"seccomp={default_profile_path()}",
                 "python:3.12-slim", "python", "-c", _PROBE,
             ],
             capture_output=True, text=True,

@@ -47,6 +47,10 @@ def registry_path() -> Path:
     return glove_home() / "registry.json"
 
 
+class RegistryError(ValueError):
+    """Raised for an invalid registry operation (e.g. an env-id name clash)."""
+
+
 @dataclass
 class EnvEntry:
     dir: str  # abs realpath of the invocation dir
@@ -116,12 +120,28 @@ def create_env(dir: str, harness: str, *, name: str | None = None) -> str:
     """Register (or re-bind) `(dir, harness)` and return its env-id.
 
     An explicit `name` forces the env-id; otherwise it's derived. Any existing
-    binding for the same `(dir, harness)` is replaced.
+    binding for the same `(dir, harness)` is replaced. A forced name already held
+    by a *different* `(dir, harness)` is refused: an env-id owns the whole
+    `~/.glove/envs/<env-id>/` tree (config, home, sessions, state), so two
+    bindings cannot share one without clobbering each other.
     """
     dir_real = os.path.realpath(dir)
     entries = load_registry()
     if name is not None:
         env_id = name
+        clash = next(
+            (
+                e
+                for e in entries
+                if e.env_id == env_id and (e.dir, e.harness) != (dir_real, harness)
+            ),
+            None,
+        )
+        if clash is not None:
+            raise RegistryError(
+                f"env-id {env_id!r} is already bound to {clash.harness} @ "
+                f"{clash.dir}; pick another --name"
+            )
     else:
         env_id = derive_env_id(entries, dir_real, harness)
     entries = [

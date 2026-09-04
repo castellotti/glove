@@ -56,14 +56,13 @@ def test_docker_render_refuses_bad_hardening(tmp_path):
         DockerRuntime().render(broken, tmp_path)
 
 
-def test_ps_parses_container_names():
+def _run_ps(stdout: str):
     rt = DockerRuntime()
-    # exercise the pure grouping logic without a daemon
-    line = "glove-ticket-1234-harness\tUp 2 minutes\nglove-ticket-1234-llm\tUp 2 minutes"
 
     class _Fake:
         returncode = 0
-        stdout = line
+
+    _Fake.stdout = stdout
 
     import glove.runtimes.docker as mod
 
@@ -72,13 +71,44 @@ def test_ps_parses_container_names():
     mod.subprocess.run = lambda *a, **k: _Fake()
     mod.shutil.which = lambda _c: "/usr/bin/docker"
     try:
-        sessions = rt.ps()
+        return rt.ps()
     finally:
         mod.subprocess.run = orig_run
         mod.shutil.which = orig_which
+
+
+def test_ps_groups_by_compose_project_label():
+    # format is Names\tproject-label\tStatus; a dashed session name must survive.
+    stdout = (
+        "glove-ticket-1234-harness\tglove-ticket-1234\tUp 2 minutes\n"
+        "glove-ticket-1234-llm\tglove-ticket-1234\tUp 2 minutes"
+    )
+    sessions = _run_ps(stdout)
+    assert len(sessions) == 1
+    assert sessions[0].session == "ticket-1234"
+    assert sessions[0].project == "glove-ticket-1234"
+    assert len(sessions[0].services) == 2
+
+
+def test_ps_handles_compose_run_and_dashed_service():
+    # `compose run` appends -run-<hash>; a service role (my-llm) contains a dash.
+    # Both would break name-surgery but the project label keeps them grouped.
+    stdout = (
+        "glove-ticket-1234-harness-run-abcdef01\tglove-ticket-1234\tUp\n"
+        "glove-ticket-1234-my-llm\tglove-ticket-1234\tUp"
+    )
+    sessions = _run_ps(stdout)
     assert len(sessions) == 1
     assert sessions[0].session == "ticket-1234"
     assert len(sessions[0].services) == 2
+
+
+def test_ps_falls_back_to_name_without_label():
+    # No project label (a non-compose container): derive project from the name.
+    stdout = "glove-ticket-1234-harness\t\tUp"
+    sessions = _run_ps(stdout)
+    assert len(sessions) == 1
+    assert sessions[0].session == "ticket-1234"
 
 
 def test_stub_render_raises(tmp_path):

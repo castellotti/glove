@@ -21,46 +21,38 @@ import tomli_w
 
 from .config import Config
 from .harness import HarnessProfile
+from .mounts import MountPlan, compute_mounts
 
 CONTAINER_HOME = "/home/agent"
 
 # Env var glove injects the LLM API key into (see Config.llm_api_key).
 LLM_API_KEY_ENV = "GLOVE_LLM_API_KEY"
 
-SUDO_RELAY = """\
-# glove sandbox — operating rules
 
-Root is **disabled** in this sandbox: you run as an unprivileged user, the root
-filesystem is read-only, and `sudo` will fail. This is intentional.
-
-If a task genuinely requires a privileged **host** command (installing a package,
-changing host config, anything needing root on the host), do **not** attempt it
-inside the container. Instead, print the exact command verbatim under a banner:
-
-    ===== RUN ON HOST =====
-    <the command>
-    =======================
-
-then stop and wait for the operator to run it and paste back the output.
-"""
+def _mount_plan_for(cfg: Config) -> MountPlan:
+    """Resolve the same mount plan the runtime renders (A.4), for the context file."""
+    return compute_mounts(
+        cfg.workdir,
+        [(a.path, a.mode) for a in cfg.add_dirs],
+        allow_sensitive=cfg.allow_sensitive,
+    )
 
 
-def _container_mount(path: str, mode: str) -> str:
-    import os
-
-    base = os.path.basename(path.rstrip("/")) or "root"
-    return f"/mnt/{base}  ({mode})"
-
-
-def build_environment_context(cfg: Config) -> str:
+def build_environment_context(
+    cfg: Config, mount_plan: MountPlan | None = None
+) -> str:
     """Generate the "How your environment works" block (PLAN §5.1).
 
     Describes the mounts and their modes, that shell commands have no network,
     that the browser tool is the only path to the web, the RUN ON HOST relay
-    rule, and where outputs go — rendered from the resolved config so the agent
-    is told exactly what this session can and cannot do.
+    rule, and where outputs go — rendered from the *resolved* ``MountPlan`` (the
+    same one the runtime mounts) so the paths and modes shown to the agent match
+    reality even when basenames collide or an add-dir absorbs the workdir.
     """
-    from .browsers import provider_name
+    from .browsers import get_provider, provider_name
+
+    if mount_plan is None:
+        mount_plan = _mount_plan_for(cfg)
 
     service_names = {s.name for s in cfg.services}
     browser_provider = provider_name(cfg)
@@ -74,21 +66,41 @@ def build_environment_context(cfg: Config) -> str:
         f"({cfg.enforcer}) wrapping the agent and **every shell command** it runs."
     )
     lines += ["", "## Files", ""]
-    lines.append("- `/work` — your writable workspace (this is the project you were launched on).")
-    for a in cfg.add_dirs:
-        lines.append(f"- `{_container_mount(a.path, a.mode)}` — extra directory; `ro` = read-only.")
+    lines.append(f"- You start in `{mount_plan.working_dir}` — your working directory.")
+    mount_paths = {m.container_path for m in mount_plan.mounts}
+    for m in mount_plan.mounts:
+        if m.is_workdir:
+            role = "your writable workspace (this is the project you were launched on)"
+        else:
+            role = "extra directory" + (
+                " (read-only)" if m.read_only else " (writable)"
+            )
+        lines.append(f"- `{m.container_path}` ({m.mode}) — {role}.")
+    if mount_plan.working_dir not in mount_paths:
+        # workdir was absorbed into an add-dir mount; there is no /work.
+        lines.append(
+            "- (Your working directory lives inside one of the mounts above; there is "
+            "no separate `/work`.)"
+        )
     lines.append(
         "- Everything else (system dirs) is read-only; your **config/extensions/"
         "session history are NOT reachable from a shell command** — only the agent "
         "itself can read them."
     )
     lines += ["", "## Network", ""]
-    if browser_provider == "host-server":
+    if browser_provider is not None:
         lines.append(
-            "- **Shell commands have no network at all** (`curl`, `wget`, `pip` will "
-            "fail). Reach the web from your own code with "
-            "`chromium.connect(process.env.PLAYWRIGHT_WS_ENDPOINT)` — a Playwright "
-            "server on the operator's host. A shell `curl` cannot reach it."
+            "- **Shell commands have no network at all** (`curl`, `wget`, `pip`, "
+            "`npm install` will fail)."
+        )
+        note = get_provider(browser_provider).wiring(
+            cfg, cfg.resolved_name()
+        ).context_note
+        lines.append(
+            note.strip()
+            if note
+            else "- The **browser tool is the only way to reach the web** — use it "
+            "for anything online."
         )
     elif has_browser:
         lines.append(
@@ -143,9 +155,18 @@ _service_host = service_base
 
 
 def render_home(
-    cfg: Config, profile: HarnessProfile, session: str, home_dir: Path
+    cfg: Config,
+    profile: HarnessProfile,
+    session: str,
+    home_dir: Path,
+    *,
+    mount_plan: MountPlan | None = None,
 ) -> list[Path]:
-    """Write the harness config tree under `home_dir`; return files written."""
+    """Write the harness config tree under `home_dir`; return files written.
+
+    `mount_plan` is the runtime's resolved mount plan; when omitted it is
+    recomputed from `cfg` so the context file still reflects the real mounts.
+    """
     home_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
 
@@ -156,7 +177,7 @@ def render_home(
     elif cfg.harness == "claude-code":
         written += _render_claude(cfg, profile, session, home_dir)
 
-    written.append(_write_context_file(cfg, profile, home_dir))
+    written.append(_write_context_file(cfg, profile, home_dir, mount_plan))
     return written
 
 
@@ -389,12 +410,15 @@ def _render_claude(
 
 
 def _write_context_file(
-    cfg: Config, profile: HarnessProfile, home_dir: Path
+    cfg: Config,
+    profile: HarnessProfile,
+    home_dir: Path,
+    mount_plan: MountPlan | None = None,
 ) -> Path:
     rel = Path(profile.context_file).relative_to(CONTAINER_HOME)
     path = home_dir / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = build_environment_context(cfg)
+    body = build_environment_context(cfg, mount_plan)
     if cfg.brief:
         body += "\n---\n\n# Session brief\n\n" + cfg.brief.strip() + "\n"
     path.write_text(body)

@@ -7,6 +7,29 @@ phase plan in `docs/PLAN.md`.
 
 All six implementation phases (PLAN §8) are complete.
 
+### Fixes (post-review)
+
+- **Environment context file now renders the resolved `MountPlan`**: the
+  "How your environment works" block reported container paths by recomputing
+  basenames, so it diverged from the real mounts on basename collisions
+  (`/mnt/foo` vs `/mnt/foo-2`) and still claimed a `/work` mount when an
+  add-dir absorbed the workdir. It now lists the actual mounts/modes and the
+  real `working_dir`.
+- **Browser provider `context_note` is rendered**: host-mcp's screenshot-dir
+  guidance and host-server's exact `ws://…` endpoint reached `BrowserWiring`
+  but were dropped from the context file. They are now emitted in the Network
+  section.
+- **`glove init --name` refuses a name already bound to another
+  `(dir, harness)`**: an env-id owns the whole `~/.glove/envs/<env-id>/` tree,
+  so a forced name that collides is rejected (`RegistryError`) instead of
+  silently pointing two projects at one directory.
+- **`glove ps` groups by the compose project label** instead of parsing the
+  container name, so `compose run`'s `-run-<hash>` suffix and dashed service
+  roles (`my-llm`) are attributed to the right session.
+- **`glove doctor` Landlock probe applies glove's vendored default seccomp
+  profile**, so it reflects the syscall filter the real harness runs under.
+- Removed the dead `SUDO_RELAY` constant (superseded by `SUDO_RELAY_BODY`).
+
 ### Phase 6 — runtime stubs, podman, docs
 
 - **`glove doctor` surfaces runtime status independently of container probes**:
