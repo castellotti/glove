@@ -1,4 +1,4 @@
-"""Compose-render tests (DESIGN.md A.7 + Verification: --dry-run parses)."""
+"""Compose-render tests."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def test_internal_network_and_external_ref(tmp_path):
 
 
 def test_allow_root_drops_only_the_user(tmp_path):
-    # PLAN §3.2: `allow_root` is an opt-out that runs as root but *keeps
+    # `allow_root` is an opt-out that runs as root but *keeps
     # everything else* — cap_drop, read-only rootfs, seccomp, limits all remain.
     cfg, work = _session_cfg(tmp_path)
     cfg.allow_root = True

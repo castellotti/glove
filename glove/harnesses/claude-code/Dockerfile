@@ -1,4 +1,4 @@
-# glove/claude-code — Claude Code inside the sandbox (DESIGN.md A.3).
+# glove/claude-code — Claude Code inside the sandbox.
 FROM node:24-bookworm-slim
 
 RUN apt-get update \

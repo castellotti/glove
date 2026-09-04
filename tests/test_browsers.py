@@ -1,4 +1,4 @@
-"""Browser provider tests (PLAN §6) — wiring generation + merge, no browser needed."""
+"""Browser provider tests — wiring generation + merge, no browser needed."""
 
 from __future__ import annotations
 

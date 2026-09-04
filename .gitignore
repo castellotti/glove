@@ -7,3 +7,12 @@ build/
 dist/
 *.glove.local.yaml
 .DS_Store
+
+# Internal design/planning docs — kept on disk, not published.
+/docs/PLAN.md
+/docs/KICKOFF-PROMPT.md
+/docs/TODO.md
+/docs/research/
+/docs/v1/
+/docs/runtimes/
+/docs/browsers/

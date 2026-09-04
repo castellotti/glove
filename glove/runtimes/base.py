@@ -1,4 +1,4 @@
-"""Ring-0 runtime interface (PLAN §3.1).
+"""Ring-0 runtime interface.
 
 A ``Runtime`` owns the container/VM boundary: image build, the mount
 allow-list, network topology, resource limits, and the hardening set. It turns

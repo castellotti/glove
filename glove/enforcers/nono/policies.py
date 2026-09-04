@@ -1,4 +1,4 @@
-"""Render nono profiles from a ``SessionPlan`` (PLAN §4.2).
+"""Render nono profiles from a ``SessionPlan``.
 
 Two profiles per session, both extending nono's built-in ``default`` (which
 brings system reads, deny_credentials/deny_shell_configs, and the
@@ -81,7 +81,7 @@ def render_harness_profile(plan: SessionPlan) -> dict:
         },
         # Ring 0 already limits routable hosts to the sidecars; the harness needs
         # network to reach them. (Proxy-allowlist + credential injection is a
-        # follow-up — see docs/TODO.md.)
+        # follow-up.)
         "network": {"block": False},
         "security": {"signal_mode": "allow_same_sandbox"},
     }

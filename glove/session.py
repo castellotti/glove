@@ -1,4 +1,4 @@
-"""Session lifecycle (DESIGN.md A.7): bring up sidecars, run the harness on a
+"""Session lifecycle: bring up sidecars, run the harness on a
 PTY, tear the project down.
 
 The heavy validation (mounts, network, compose render) happens in the render
@@ -57,7 +57,7 @@ def build_harness(
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
     tag = effective_image(profile, apt_packages, pip_packages)
-    # srt needs bwrap/socat/srt baked in; build a distinct `-srt` image (§4.3).
+    # srt needs bwrap/socat/srt baked in; build a distinct `-srt` image.
     if enforcer == "srt":
         tag = f"{tag}-srt"
     if not force and _image_exists(provider, tag):

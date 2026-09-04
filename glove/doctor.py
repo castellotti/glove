@@ -1,4 +1,4 @@
-"""``glove doctor`` (PLAN §3.3): probe the host, runtime, and enforcer.
+"""``glove doctor``: probe the host, runtime, and enforcer.
 
 Aggregates host-tool checks and Docker Desktop hints with the runtime's own
 container probes (Landlock ABI, seccomp, kvm) and per-enforcer readiness. Every
@@ -95,7 +95,7 @@ def run_doctor(
     if not rt.caps.tested:
         checks.append(Check(f"runtime: {runtime}", "warn", "ships but UNTESTED on this host — validate before relying on it"))
     if not rt.caps.implemented:
-        checks.append(Check(f"runtime: {runtime}", "warn", "not implemented (stub) — see docs/runtimes/"))
+        checks.append(Check(f"runtime: {runtime}", "warn", "not implemented (stub)"))
     if include_container_probes:
         checks.extend(rt.doctor())
     else:

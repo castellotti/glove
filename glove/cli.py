@@ -1,4 +1,4 @@
-"""glove command-line interface (DESIGN.md A.1 + docs/plan-environments.md).
+"""glove command-line interface.
 
 Identity is the pair `(invocation_dir, harness)` — the dir you run `glove` from
 plus the harness — bound to a stable `env-id` in `~/.glove/registry.json`. All
@@ -179,7 +179,7 @@ def run(
         False, "--allow-sensitive", help="permit mounting / or $HOME"
     ),
     iknow: list[str] = typer.Option(
-        [], "--i-know-what-i-am-doing", help="waive a §3.2 hardening row by key (repeatable)"
+        [], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)"
     ),
     rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the harness image"),
     dry_run: bool = typer.Option(
@@ -201,7 +201,7 @@ def run(
     env_cfg_path = _env_config_path(env_id)
 
     # The session names this run; its compose project is glove-<env>[-<session>]
-    # so several sessions of one env can coexist (§7.1/§7.3).
+    # so several sessions of one env can coexist.
     session_name = name or env_id
     session_token = env_id if session_name == env_id else f"{env_id}-{session_name}"
 
@@ -228,10 +228,10 @@ def run(
         )
         if cfg.runtime not in ("docker", "podman"):
             raise ConfigError(
-                f"runtime {cfg.runtime!r} is not implemented yet (see PLAN §5/§9); "
+                f"runtime {cfg.runtime!r} is not implemented yet; "
                 "use docker or podman"
             )
-        # Expand the browser provider into services/host_services/env (§6).
+        # Expand the browser provider into services/host_services/env.
         from .browsers import apply_browser
 
         if browser is not None:
@@ -485,7 +485,7 @@ def doctor(
         False, "--no-container", help="skip container probes (host-only, fast)"
     ),
 ) -> None:
-    """Probe host + runtime + enforcer + browser readiness (PLAN §3.3)."""
+    """Probe host + runtime + enforcer + browser readiness."""
     import json as _json
 
     from .doctor import run_doctor, worst_status
@@ -551,7 +551,7 @@ def policy_show(
 
     h = plan.hardening
     console.print(f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}\n")
-    console.print("[bold]ring 0 — hardening (PLAN §3.2)[/bold]")
+    console.print("[bold]ring 0 — hardening[/bold]")
     console.print(
         f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
         f"cap_add={list(h.cap_add) or '[]'}  no_new_privileges={h.no_new_privileges}"

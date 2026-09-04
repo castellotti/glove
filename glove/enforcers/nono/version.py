@@ -1,4 +1,4 @@
-"""Pinned nono release (PLAN §4.2). `glove build` fails loudly on drift."""
+"""Pinned nono release. `glove build` fails loudly on drift."""
 
 from __future__ import annotations
 

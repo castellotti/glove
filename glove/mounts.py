@@ -1,4 +1,4 @@
-"""Bind-mount computation (DESIGN.md A.4).
+"""Bind-mount computation.
 
 Restrict the harness filesystem to the workdir (rw) plus explicitly added
 paths. Dedup so a parent mount absorbs its children, widening the parent's
@@ -68,9 +68,9 @@ def compute_mounts(
         workdir: host path that becomes /work (always rw).
         add_dirs: list of (host_path, mode) where mode is "ro" or "rw".
         cwd: the original working directory used to derive working_dir; when it
-            falls inside an absorbing parent no extra mount is added (A.4 step 4).
+            falls inside an absorbing parent no extra mount is added.
             Defaults to the resolved workdir.
-        allow_sensitive: permit mounting "/" or $HOME wholesale (A.4 step 5).
+        allow_sensitive: permit mounting "/" or $HOME wholesale.
     """
     add_dirs = add_dirs or []
 
@@ -147,7 +147,7 @@ def compute_mounts(
 def _resolve_working_dir(
     mounts: list[Mount], cwd: str | None, workdir_real: str
 ) -> str:
-    """Map the original cwd onto whichever mount absorbs it (A.4 step 4)."""
+    """Map the original cwd onto whichever mount absorbs it."""
     target = os.path.realpath(cwd) if cwd else workdir_real
     target_path = Path(target)
     # Deepest containing mount wins.

@@ -1,4 +1,4 @@
-"""The ``none`` enforcer (PLAN §4.4) — ring 0 only, for debugging / VM runtimes.
+"""The ``none`` enforcer — ring 0 only, for debugging / VM runtimes.
 
 `glove doctor` prints a red line when this is selected: there is no in-container
 kernel policy, so a malicious extension is confined only by the container.

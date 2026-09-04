@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""glove Vibe pre_tool hook (PLAN §5.3) — routes shell through the ring-1 sandbox.
+"""glove Vibe pre_tool hook — routes shell through the ring-1 sandbox.
 
 Baked at /opt/glove/vibe-hook and declared in ~/.vibe/hooks.toml as a `pre_tool`
 hook with `strict = true`. Vibe passes each tool call as JSON on stdin

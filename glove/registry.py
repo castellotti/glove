@@ -1,4 +1,4 @@
-"""Environment identity registry (docs/plan-environments.md).
+"""Environment identity registry.
 
 An *environment* is the unit of identity: the pair `(invocation_dir, harness)`,
 where `invocation_dir` is the directory you run `glove` from (NOT the mounted
@@ -35,7 +35,7 @@ def env_dir(env_id: str) -> Path:
 
 
 def sessions_root(env_id: str) -> Path:
-    """`<env_dir>/sessions` — one dir per `glove run … --name` session (§7.1)."""
+    """`<env_dir>/sessions` — one dir per `glove run … --name` session."""
     return env_dir(env_id) / "sessions"
 
 

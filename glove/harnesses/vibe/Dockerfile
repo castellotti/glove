@@ -1,9 +1,9 @@
-# glove/vibe — Mistral Vibe inside the sandbox (DESIGN.md A.3, B.3 + PLAN §4.2/§5.3).
+# glove/vibe — Mistral Vibe inside the sandbox.
 # Tools install to SYSTEM paths, never /home/agent: that home is a per-session
 # bind mount at runtime and would shadow anything baked into it.
 FROM python:3.12-slim
 
-# Ring-1 enforcer: pinned nono binary (PLAN §4.2). Keep in sync with
+# Ring-1 enforcer: pinned nono binary. Keep in sync with
 # glove/enforcers/nono/version.py (`glove build` / tests warn on drift).
 COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
 

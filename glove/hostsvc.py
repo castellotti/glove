@@ -1,4 +1,4 @@
-"""Host-side services (DESIGN.md B.2), auto-managed by glove.
+"""Host-side services, auto-managed by glove.
 
 Some things the sandbox reaches must run on the *host*, using host trust the
 container deliberately lacks: the SSH port-forward to the faustulus model, a

@@ -1,7 +1,7 @@
-"""The ``docker`` runtime (PLAN §3.1) — full implementation for v2.
+"""The ``docker`` runtime — full implementation for v2.
 
 Renders the per-session compose project from a ``SessionPlan`` (evolving v1's
-``compose.py`` + template), enforces the §3.2 hardening set before writing
+``compose.py`` + template), enforces the hardening set before writing
 anything, and exposes the container/landlock probes ``glove doctor`` needs.
 """
 
@@ -193,7 +193,7 @@ class DockerRuntime:
     def _landlock_check(self) -> Check:
         """Run the hardened-container Landlock/userns/kvm probe.
 
-        Applies glove's vendored default seccomp profile (§3.4) so the probe
+        Applies glove's vendored default seccomp profile so the probe
         runs under the same syscall filter as the real harness — a bare
         ``docker run`` would use Docker's built-in default and could report a
         different Landlock/userns result than the hardened container gets.

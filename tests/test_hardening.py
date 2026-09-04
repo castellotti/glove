@@ -1,4 +1,4 @@
-"""Hardening-set tests (PLAN §3.2): one row per assertion + the refusal path."""
+"""Hardening-set tests: one row per assertion + the refusal path."""
 
 from __future__ import annotations
 

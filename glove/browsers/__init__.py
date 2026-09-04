@@ -1,4 +1,4 @@
-"""Browser provider registry + wiring merge (PLAN §6).
+"""Browser provider registry + wiring merge.
 
 ``apply_browser(cfg, session)`` expands a ``browser:`` config block into the
 session's ``services`` (forwarder allow-list), ``host_services`` (host helpers),
@@ -23,10 +23,10 @@ _PROVIDERS: dict[str, type] = {
     "host-server": HostServerProvider,
 }
 
-# Registered-but-unimplemented (spec only, PLAN §6/§9).
+# Registered-but-unimplemented (spec only).
 _STUBS = {
-    "sidecar-desktop": "docs/browsers/sidecar-desktop.md",
-    "vm-desktop": "docs/browsers/vm-desktop.md",
+    "sidecar-desktop": "a desktop container + egress-proxy sidecar",
+    "vm-desktop": "a full desktop VM (UTM/gondolin)",
 }
 
 
@@ -36,7 +36,7 @@ def known_providers() -> list[str]:
 
 def get_provider(name: str) -> BrowserProvider:
     if name in _STUBS:
-        raise ValueError(f"browser provider {name!r} is spec-only — see {_STUBS[name]}")
+        raise ValueError(f"browser provider {name!r} is spec-only ({_STUBS[name]}) — not yet implemented")
     try:
         return _PROVIDERS[name]()
     except KeyError:

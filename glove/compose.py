@@ -1,4 +1,4 @@
-"""Compatibility shim over the ring-0 render path (PLAN §3.1).
+"""Compatibility shim over the ring-0 render path.
 
 The actual rendering moved to ``glove.runtimes.docker.DockerRuntime.render``,
 fed by a runtime-agnostic ``SessionPlan`` (``glove.plan``). This module keeps

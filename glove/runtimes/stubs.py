@@ -1,8 +1,8 @@
-"""Registered-but-unimplemented runtimes (PLAN §3.1 / §6 / §9).
+"""Registered-but-unimplemented runtimes.
 
-These exist so ``--runtime`` validation, ``glove ls`` and the docs are complete
-from day one. Each declares its ``RuntimeCaps`` and raises ``NotImplementedError``
-with a pointer to the design section that specifies the mapping.
+These exist so ``--runtime`` validation and ``glove ls`` are complete from day
+one. Each declares its ``RuntimeCaps`` and raises ``NotImplementedError`` with a
+short description of the backend it will map to.
 """
 
 from __future__ import annotations
@@ -18,18 +18,18 @@ if False:  # typing only
 class _StubRuntime:
     name = "stub"
     caps = RuntimeCaps(implemented=False, tested=False)
-    _pointer = "docs/runtimes/"
+    _desc = "registered but not implemented"
 
     def render(self, plan: "SessionPlan", project_dir: Path) -> RenderedProject:  # noqa: F821
         raise NotImplementedError(
-            f"runtime {self.name!r} is not implemented yet — see {self._pointer}"
+            f"runtime {self.name!r} is not implemented yet ({self._desc})"
         )
 
     def ps(self) -> list[RunningSession]:
         return []
 
     def doctor(self) -> list[Check]:
-        return [Check(f"runtime {self.name}", "info", f"stub — not implemented ({self._pointer})")]
+        return [Check(f"runtime {self.name}", "info", f"stub — not implemented ({self._desc})")]
 
 
 class AppleContainerRuntime(_StubRuntime):
@@ -42,7 +42,7 @@ class AppleContainerRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "docs/runtimes/apple-container.md (one lightweight VM per container; macOS 26, Apple silicon)"
+    _desc = "one lightweight VM per container; macOS 26, Apple silicon"
 
 
 class GondolinRuntime(_StubRuntime):
@@ -54,7 +54,7 @@ class GondolinRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "docs/runtimes/gondolin.md (microVM peer of Docker; mapped-TCP egress, no UDP)"
+    _desc = "microVM peer of Docker; mapped-TCP egress, no UDP"
 
 
 class UTMRuntime(_StubRuntime):
@@ -66,4 +66,4 @@ class UTMRuntime(_StubRuntime):
         implemented=False,
         tested=False,
     )
-    _pointer = "docs/runtimes/utm.md (Linux VM running the same image under podman, over SSH/utmctl)"
+    _desc = "Linux VM running the same image under podman, over SSH/utmctl"

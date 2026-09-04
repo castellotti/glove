@@ -1,4 +1,4 @@
-"""Vibe pre_tool hook tests (PLAN §5.3) — pure Python, no container.
+"""Vibe pre_tool hook tests — pure Python, no container.
 
 Loads the baked hook module by path (it lives in the image build context, not
 the importable package tree) and exercises its rewrite/deny/passthrough logic.

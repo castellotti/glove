@@ -1,4 +1,4 @@
-"""`host-mcp` browser provider (PLAN §6) — v1-proven, the v2 default.
+"""`host-mcp` browser provider — v1-proven, the v2 default.
 
 Headed Chrome runs on the host; a Playwright MCP attaches to it via CDP and
 listens on a loopback port; a forwarder sidecar bridges

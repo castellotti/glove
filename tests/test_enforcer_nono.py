@@ -1,4 +1,4 @@
-"""nono policy renderer tests (PLAN §4.2) with golden files.
+"""nono policy renderer tests with golden files.
 
 The golden files under tests/golden/nono/ were verified with real nono
 (`nono profile validate`) against the 0.75.0 image; see
@@ -83,7 +83,7 @@ def test_wrap_and_wrapper_argv(tmp_path):
 
 def test_nono_pin_matches_dockerfile():
     # The Pi image's `COPY --from` tag must match the pinned nono version, so a
-    # bump in one place cannot silently diverge (PLAN §4.2 "fails loudly on drift").
+    # bump in one place cannot silently diverge.
     from glove.enforcers.nono.version import nono_image_ref
 
     dockerfile = (Path(__file__).parent.parent / "glove/harnesses/pi/Dockerfile").read_text()

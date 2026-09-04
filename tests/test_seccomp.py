@@ -1,4 +1,4 @@
-"""Seccomp profile tests (PLAN §3.4): the surgical relaxation, nothing more."""
+"""Seccomp profile tests: the surgical relaxation, nothing more."""
 
 from __future__ import annotations
 

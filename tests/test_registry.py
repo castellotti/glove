@@ -1,4 +1,4 @@
-"""Environment identity + registry tests (docs/plan-environments.md)."""
+"""Environment identity + registry tests."""
 
 from __future__ import annotations
 

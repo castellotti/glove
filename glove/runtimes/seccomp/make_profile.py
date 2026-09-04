@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Generate ``nested-userns.json`` from the vendored moby ``default.json``.
 
-This is the *surgical* relaxation described in PLAN.md §3.4 (not the coarse
-research profile in ``docs/research/``). It takes the vendored Docker default
+This is the *surgical* relaxation described here (not a coarse profile). It takes the vendored Docker default
 seccomp profile and makes exactly the namespace/mount syscalls that
 bubblewrap needs available to an *unprivileged* process, and **nothing else**.
 
@@ -25,7 +24,7 @@ Concretely it:
 
 No Linux capability is granted; the still-masked ``/proc`` paths that make
 bwrap's *fresh* ``/proc`` mount fail are a Docker ``systempaths`` concern, not
-a seccomp one (see PLAN.md §3.4 / research §3).
+a seccomp one.
 
 Run ``python -m glove.runtimes.seccomp.make_profile`` to regenerate the
 checked-in ``nested-userns.json``; ``glove build`` / CI assert it is current.

@@ -1,4 +1,4 @@
-"""Host-service placeholder expansion + config round-trip (B.2)."""
+"""Host-service placeholder expansion + config round-trip."""
 
 from __future__ import annotations
 

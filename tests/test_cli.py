@@ -1,4 +1,4 @@
-"""CLI-level tests for the env workflow (docs/plan-environments.md)."""
+"""CLI-level tests for the env workflow."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "name: glove-vibe-local" in result.output
-    # compose renders under sessions/<session>/ (default session == env-id, §7.1)
+    # compose renders under sessions/<session>/ (default session == env-id)
     compose = home / "envs" / "vibe-local" / "sessions" / "vibe-local" / "docker-compose.yml"
     assert compose.is_file()
     # harness home seeded under the env's own home/ (shared across sessions)

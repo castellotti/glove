@@ -1,7 +1,7 @@
-"""srt enforcer tests (PLAN §4.3) — settings renderer, wrapping, image suffix.
+"""srt enforcer tests — settings renderer, wrapping, image suffix.
 
 Golden settings verified against sandbox-runtime 0.0.75 (see
-tests/integration/test_pi_srt.sh, which reproduces the research §5 matrix).
+tests/integration/test_pi_srt.sh, which reproduces the nested-sandbox matrix).
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def test_rw_add_dir_in_allow_write(tmp_path):
 
 def test_srt_does_not_wrap_harness(tmp_path):
     plan = _plan(tmp_path)
-    assert plan.harness_command == list(plan.profile.entry)  # TUI unwrapped (§4.3)
+    assert plan.harness_command == list(plan.profile.entry)  # TUI unwrapped
     assert plan.image.endswith("-srt")  # distinct image variant
     wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
     assert wrapper[0] == "srt"

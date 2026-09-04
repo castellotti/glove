@@ -1,4 +1,4 @@
-"""Network profiles + forwarder sidecar synthesis (DESIGN.md A.5).
+"""Network profiles + forwarder sidecar synthesis.
 
 The harness container is attached only to an `internal: true` bridge, so it has
 no route off the host and cannot see host localhost or the LAN. Everything it

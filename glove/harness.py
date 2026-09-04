@@ -1,8 +1,8 @@
-"""Harness profile registry (DESIGN.md A.3).
+"""Harness profile registry.
 
 Each profile keeps the glove core generic: it declares the base image build
 context, the config-home env var + in-container path, the TUI entry command,
-the context file that carries the host-sudo relay rule (A.6), and default env.
+the context file that carries the host-sudo relay rule, and default env.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ class HarnessProfile:
     entry: list[str]  # TUI entry command
     config_home_env: str  # env var pointing the harness at its config dir
     config_home_path: str  # in-container config dir (on a writable volume)
-    context_file: str  # in-container path for the sudo-relay instruction (A.6)
+    context_file: str  # in-container path for the sudo-relay instruction
     default_env: dict[str, str] = field(default_factory=dict)
 
     @property

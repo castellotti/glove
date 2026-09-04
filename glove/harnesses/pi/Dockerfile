@@ -1,4 +1,4 @@
-# glove/pi — Pi coding agent inside the sandbox (DESIGN.md A.3 + PLAN §4.2/§5.2).
+# glove/pi — Pi coding agent inside the sandbox.
 # Based on Pi's own plain-Docker recipe, plus a media-analysis toolchain (the
 # sandbox has no egress, so analysis is in-box), glove's baked extensions
 # (searxng web_search + a browser bridge, since Pi has no MCP client of its own),
@@ -6,7 +6,7 @@
 # routes every shell command through the per-command sandbox policy.
 FROM node:24-bookworm-slim
 
-# Ring-1 enforcer: pinned nono binary (PLAN §4.2). glove/enforcers/nono/version.py
+# Ring-1 enforcer: pinned nono binary. glove/enforcers/nono/version.py
 # holds the source of truth; keep this ref in sync (`glove build` warns on drift).
 COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
 
@@ -21,7 +21,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
-# Opt-in srt enforcer (PLAN §4.3): baked only for the `-srt` image variant
+# Opt-in srt enforcer: baked only for the `-srt` image variant
 # (built with --build-arg GLOVE_ENFORCER=srt). Node ≥22 is already present.
 ARG GLOVE_ENFORCER=nono
 RUN if [ "$GLOVE_ENFORCER" = "srt" ]; then \

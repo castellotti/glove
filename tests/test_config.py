@@ -1,4 +1,4 @@
-"""Config resolution tests (DESIGN.md A.2 + Verification)."""
+"""Config resolution tests."""
 
 from __future__ import annotations
 

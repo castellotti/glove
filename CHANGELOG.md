@@ -1,11 +1,10 @@
 # Changelog
 
-All notable changes to glove are documented here. This project follows the
-phase plan in `docs/PLAN.md`.
+All notable changes to glove are documented here.
 
 ## [0.2.0] — unreleased
 
-All six implementation phases (PLAN §8) are complete.
+All six implementation phases are complete.
 
 ### Fixes (post-review)
 
@@ -35,13 +34,11 @@ All six implementation phases (PLAN §8) are complete.
 - **`glove doctor` surfaces runtime status independently of container probes**:
   `podman` is flagged **UNTESTED** and the `apple-container`/`gondolin`/`utm`
   stubs are flagged **not implemented**, even in `--no-container`/host-only mode.
-- **Runtime docs** with the concrete per-backend mapping (`docs/runtimes/`):
-  `podman.md` (rootless userns / seccomp / internal-net validation checklist),
-  `apple-container.md` (one VM per container, `--volume` mounts, no compose →
-  glove orchestrates sidecars, macOS 26 + Apple silicon), `gondolin.md` (OCI →
-  gondolin image, VFS `RealFSProvider` mounts, sidecars → mapped-TCP egress, no
-  UDP), `utm.md` (Linux VM running the same image under Podman over SSH/`utmctl`).
-  Stub `NotImplementedError` pointers now reference these docs.
+- **Per-backend mapping** worked out for the stub runtimes: podman (rootless
+  userns / seccomp / internal-net validation), apple-container (one VM per
+  container, no compose → glove orchestrates sidecars, macOS 26 + Apple silicon),
+  gondolin (OCI → mapped-TCP egress, no UDP), and utm (Linux VM running the same
+  image under Podman over SSH/`utmctl`).
 - **`docs/SECURITY.md`** — the threat model: three-ring table, assets ×
   adversaries × rings, the Docker Desktop macOS blast-radius explanation
   (container root = VM root, File-sharing list, config-not-fate), operator
@@ -52,12 +49,11 @@ All six implementation phases (PLAN §8) are complete.
   limits, authorized-but-bad edits, supply chain).
 - **README** rewritten: three-ring overview, quick start, full `glove.yaml`
   reference, CLI reference, integration-test commands, and links to the new docs.
-- New tests (3): runtime docs exist; doctor surfaces untested podman + stub
-  runtimes. Suite: **122 passed**.
+- New tests: doctor surfaces untested podman + the stub runtimes.
 
 ### Phase 5 — browser providers
 
-- **Browser provider layer** (`glove/browsers/`, PLAN §6): a `BrowserProvider`
+- **Browser provider layer** (`glove/browsers/`): a `BrowserProvider`
   turns a compact `browser: {provider, port}` block into the concrete wiring —
   forwarder sidecars (network allow-list), host helpers (headed Chrome +
   Playwright MCP/server, run by `hostsvc`), harness env, and an agent-facing
@@ -72,16 +68,16 @@ All six implementation phases (PLAN §8) are complete.
   `chromium.connect($PLAYWRIGHT_WS_ENDPOINT)`. `doctor` runs a **version-pin
   check** (host Playwright minor must equal the image's); requires the
   playwright package in the harness image.
-- **Specs** for the deferred providers: `docs/browsers/sidecar-desktop.md`
+- **Specs** worked out for the deferred providers: sidecar-desktop
   (Xvfb/x11vnc/noVNC sidecar on the internal net, `127.0.0.1` noVNC only,
-  egress-proxy sidecar) and `docs/browsers/vm-desktop.md` (UTM/`utmctl` + gondolin).
+  egress-proxy sidecar) and vm-desktop (UTM/`utmctl` + gondolin).
 - `glove run --browser …`, `glove doctor --browser …`, and a provider-aware
   context note (host-server tells the agent to use `chromium.connect`).
 - New tests (9): provider wiring, `apply_browser` merge/dedup/net-enable,
   ws-path stability, version parse. Suite: **119 passed**.
 - **Verified** (host lacks a full Chrome/display + LLM, so live navigation is
   manual): both providers render the correct forwarder sidecar + host services +
-  env from the `browser:` block; the **§6 security rule holds** — the browser
+  env from the `browser:` block; the **browser security rule holds** — the browser
   endpoint is reachable by the harness (ring-0 net) but `tool.json` is
   `network.block: true`, so a prompt-injected shell `curl` cannot drive it; the
   host-server version-pin check correctly flagged host Playwright 1.62.1 ≠ image
@@ -90,7 +86,7 @@ All six implementation phases (PLAN §8) are complete.
 
 ### Phase 4 — srt enforcer (opt-in)
 
-- **`SrtEnforcer`** (`glove/enforcers/srt.py`, PLAN §4.3): renders a single
+- **`SrtEnforcer`** (`glove/enforcers/srt.py`): renders a single
   `srt-settings.json` (`filesystem.allowWrite` = /work + rw mounts + /tmp,
   `denyRead`/`denyWrite` = the harness home mount, `network.allowedDomains` = []
   → no tool network, `enableWeakerNestedSandbox` per `srt.nested`). Wraps **tool
@@ -102,24 +98,24 @@ All six implementation phases (PLAN §8) are complete.
 - **`-srt` image variant**: ARG-gated `bubblewrap`/`socat`/`sandbox-runtime@0.0.75`
   install in the Pi Dockerfile; `glove build pi --enforcer srt` and the plan's
   image resolution append `-srt`.
-- **`glove policy show`** (§7.3): prints the ring-0 hardening (with the
+- **`glove policy show`**: prints the ring-0 hardening (with the
   `systempaths=unconfined` warning), the harness command, the rendered ring-1
   policies, and the enforcer's documented gaps.
 - **`glove doctor --enforcer srt`** runs a bwrap smoke test as uid 1000 under the
-  relaxed profile in a baked `-srt` image (reproduces research §3 weak mode).
+  relaxed profile in a baked `-srt` image (reproduces weak mode).
 - **Finding (verification is real):** srt's `--ro-bind /` does **not** downgrade
   a nested docker bind mount, and denying a *subdir* of a bind mount is a no-op —
   so `allowWrite` alone would leave the harness home writable to tool commands.
   Fixed by denying the whole home **mount point** in `denyRead`/`denyWrite`
   (verified: write to a home subdir is denied, /work still writable). Recorded in
-  docs/TODO.md and `SrtEnforcer.gaps`.
+  `SrtEnforcer.gaps`.
 - New tests (8: settings weak/strong goldens, unwrapped-harness, `-srt` image,
   relaxed seccomp, gaps). Suite: **110 passed**.
 - **Verified against the real `glove/pi:0.3.0-srt` image**
   (`tests/integration/test_pi_srt.sh`, **7/7**): weak mode enforces under the
   surgical seccomp (write /work ok, write outside allowWrite denied, network
   blocked, `denyRead` hides the harness home); strong mode fails without
-  `systempaths=unconfined` and succeeds with it (research §5 matrix).
+  `systempaths=unconfined` and succeeds with it (matrix).
 
 ### Phase 3 — Vibe integration
 
@@ -127,7 +123,7 @@ All six implementation phases (PLAN §8) are complete.
   fail-closed entrypoint, and `/opt/glove/vibe-hook`. The harness process is
   nono-wrapped generically (as Pi), so its config home (`/home/agent/.vibe`) is
   writable to the harness but denied to shell tools.
-- **`vibe-hook`** (`glove/harnesses/vibe/vibe_hook.py`, PLAN §5.3): a `pre_tool`
+- **`vibe-hook`** (`glove/harnesses/vibe/vibe_hook.py`): a `pre_tool`
   hook that reads Vibe's tool-call JSON on stdin and (a) rewrites the `bash`
   tool's `command` to run under the enforcer's per-command wrapper (from
   `/etc/glove/enforcer/tool-wrapper.json`), returning a full
@@ -137,7 +133,7 @@ All six implementation phases (PLAN §8) are complete.
 - **Seeding** (`harnessconfig`): writes `~/.vibe/hooks.toml` (one `pre_tool`
   hook, `match="*"`, `strict=true`) when an in-container enforcer is active, and
   sets `experimental_bash_tool = false` so the shell-spawning bash tool is used
-  (the plan's `managed_shell_tools_enabled` key is outdated — see docs/TODO.md).
+  (the plan's `managed_shell_tools_enabled` key is outdated).
 - New tests (11): the hook's rewrite/deny/passthrough/fail-closed logic (pure
   Python, incl. a stdin end-to-end run) and hooks.toml seeding. Suite:
   **102 passed**.
@@ -189,7 +185,7 @@ All six implementation phases (PLAN §8) are complete.
   entrypoint fails closed on an invalid policy. The LLM/TUI-dependent checks
   (trivial prompt, browser_navigate) are documented as manual. Deferred:
   nono proxy allowlist + credential-injection (blocked on HTTPS-upstream for the
-  plain-HTTP LLM sidecar) — see docs/TODO.md.
+  plain-HTTP LLM sidecar).
 
 ### Phase 1 — runtime layer + hardening + doctor
 
@@ -200,7 +196,7 @@ All six implementation phases (PLAN §8) are complete.
   `apple-container`/`gondolin`/`utm` stubs. `get_runtime()` registry.
 - **`SessionPlan`** (`glove/plan.py`): runtime-agnostic resolution of `Config`
   + mounts + network + hardening; `compose.py` is now a thin shim over it.
-- **Hardening set** (`glove/hardening.py`, PLAN §3.2): `Hardening`/`Limits`
+- **Hardening set** (`glove/hardening.py`): `Hardening`/`Limits`
   dataclasses and `validate_hardening()` that refuses to render a
   non-compliant project unless a row is waived with
   `--i-know-what-i-am-doing <key>`. Rendered rows now include `ipc: private`,
@@ -213,8 +209,8 @@ All six implementation phases (PLAN §8) are complete.
   `syslog`/… stay gated). A test asserts the surgical diff and that the
   checked-in file is current.
 - **Session naming + layout**: `glove run --name SESSION` renders coexisting
-  sessions under `envs/<env>/sessions/<name>/` (§7.1). New `glove ps`.
-- **`glove doctor`** (PLAN §3.3): host + runtime + enforcer probes with a
+  sessions under `envs/<env>/sessions/<name>/`. New `glove ps`.
+- **`glove doctor`**: host + runtime + enforcer probes with a
   `--json` mode; runs a hardened container to report Landlock ABI, userns,
   kvm, and effective caps. New config keys: `runtime`, `enforcer`, `limits`,
   `tools`, `browser`, `enforcer_options`.
@@ -225,16 +221,14 @@ All six implementation phases (PLAN §8) are complete.
   `no-new-privileges` + seccomp profile, `ReadonlyRootfs`, `PidsLimit=512`,
   `Memory=4g`, `IpcMode=private`, `User=501:20`; inside: `id -u=501`,
   `CapEff=0`, `host.docker.internal` unresolvable, read-only rootfs, Landlock
-  ABI 8; `glove doctor` reports Landlock ABI ≥ 4. See docs/TODO.md for the
-  deferred llm-sidecar positive-path check.
+  ABI 8; `glove doctor` reports Landlock ABI ≥ 4. The llm-sidecar positive-path
+  check remains deferred.
 
 ### Phase 0 — bootstrap from v1
 
 - Bootstrapped the v2 repository from the v1 working tree (`env-identity`
   branch, uncommitted changes included): `glove/`, `tests/`, `examples/`,
   `pyproject.toml`, `uv.lock`.
-- Moved v1 design docs under `docs/v1/` (`DESIGN.md`, `plan-environments.md`).
 - Bumped package version `0.1.0` → `0.2.0`.
-- Added `README.md` (points at `docs/PLAN.md`), `CLAUDE.md` (repo conventions),
-  and this `CHANGELOG.md`.
+- Added `README.md`, `CLAUDE.md` (repo conventions), and this `CHANGELOG.md`.
 - v1 test suite passes unchanged under `uv run pytest -q`.

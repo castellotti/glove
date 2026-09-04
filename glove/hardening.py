@@ -1,4 +1,4 @@
-"""The non-negotiable hardening set (PLAN.md §3.2) and its validator.
+"""The non-negotiable hardening set and its validator.
 
 Every harness container glove renders must satisfy the table below. A config
 key may only *tighten* these; the one documented opt-out (`allow_root`) still
@@ -21,17 +21,17 @@ if TYPE_CHECKING:  # avoid an import cycle: plan imports hardening
 
 
 class HardeningError(ValueError):
-    """Raised when a rendered project would violate the §3.2 hardening set."""
+    """Raised when a rendered project would violate the hardening set."""
 
 
 # Capabilities glove may ever add back. SYS_PTRACE is scoped to nono's proxy
-# mode (PLAN.md §3.2/§4.2); nothing else is permitted.
+# mode; nothing else is permitted.
 ALLOWED_CAP_ADD: frozenset[str] = frozenset({"SYS_PTRACE"})
 
 
 @dataclass(frozen=True)
 class Limits:
-    """Resource bounds (PLAN.md §3.2). Defaults double as fork-bomb/DoS caps."""
+    """Resource bounds. Defaults double as fork-bomb/DoS caps."""
 
     pids: int = 512
     memory: str = "4g"
@@ -48,7 +48,7 @@ class Hardening:
     no_new_privileges: bool = True
     read_only: bool = True
     seccomp_profile: str | None = None  # host path to the vendored profile
-    systempaths_unconfined: bool = False  # only for srt strong mode (§3.4)
+    systempaths_unconfined: bool = False  # only for srt strong mode
     ipc: str = "private"
     tmpfs: tuple[str, ...] = ("/tmp",)
     limits: Limits = field(default_factory=Limits)
@@ -62,7 +62,7 @@ class Violation:
 
 
 def find_violations(plan: SessionPlan) -> list[Violation]:
-    """Return every §3.2 row the plan breaks (empty == compliant).
+    """Return every hardening row the plan breaks (empty == compliant).
 
     Kept side-effect-free and structural so each row is unit-testable.
     """
@@ -135,7 +135,7 @@ def validate_hardening(plan: SessionPlan, *, overrides: frozenset[str] = frozens
         lines = "\n".join(f"  - [{x.key}] {x.message}" for x in unwaived)
         keys = ", ".join(sorted({x.key for x in unwaived}))
         raise HardeningError(
-            "refusing to render: hardening set (PLAN §3.2) violated:\n"
+            "refusing to render: hardening set violated:\n"
             f"{lines}\n"
             f"override individually with --i-know-what-i-am-doing <key> ({keys})"
         )

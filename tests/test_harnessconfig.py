@@ -1,4 +1,4 @@
-"""Harness-config generation tests (DESIGN.md B.3 + A.6)."""
+"""Harness-config generation tests."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def test_vibe_context_file_has_sudo_relay_and_brief(tmp_path):
 
 
 def test_context_file_environment_block(tmp_path):
-    # PLAN §5.1: generated "How your environment works" block.
+    # generated "How your environment works" block.
     cfg = _cfg("pi", tmp_path)
     home = tmp_path / "home"
     render_home(cfg, get_profile("pi"), "pi-sess", home)

@@ -1,4 +1,4 @@
-"""SessionPlan tests (PLAN §3.1): resolution of Config → runtime-agnostic plan."""
+"""SessionPlan tests: resolution of Config → runtime-agnostic plan."""
 
 from __future__ import annotations
 

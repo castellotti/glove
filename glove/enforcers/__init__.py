@@ -1,4 +1,4 @@
-"""Enforcer registry (PLAN §4). ``get_enforcer(name)`` returns the backend."""
+"""Enforcer registry. ``get_enforcer(name)`` returns the backend."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def known_enforcers() -> list[str]:
 
 
 def get_enforcer(name: str):
-    """Instantiate an enforcer backend by name (PLAN §7.2 `enforcer:`)."""
+    """Instantiate an enforcer backend by name."""
     try:
         return _ENFORCERS[name]()
     except KeyError:

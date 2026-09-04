@@ -1,7 +1,7 @@
-"""Session configuration: schema + defaults < env file < --config < flags (A.2).
+"""Session configuration: schema + defaults < env file < --config < flags.
 
 Resolution precedence is built-in defaults, then the environment's own
-`glove.yaml` (under `~/.glove/envs/<env-id>/`, see docs/plan-environments.md),
+`glove.yaml` (under `~/.glove/envs/<env-id>/`),
 then an explicit `--config` overlay, then CLI flags. There is no in-workdir
 auto-discovery — nothing is read from (or written to) the invocation dir. The
 fully resolved ("effective") config round-trips to YAML so a session is
@@ -36,7 +36,7 @@ class AddDir:
 
 @dataclass
 class HostService:
-    """A host-side helper glove starts in a detached tmux session (B.2).
+    """A host-side helper glove starts in a detached tmux session.
 
     These run on the host (outside the sandbox) using host trust the container
     deliberately lacks — the SSH model tunnel, the headed Chrome, the Playwright
@@ -53,7 +53,7 @@ class HostService:
 
 @dataclass
 class Service:
-    """A forwarder sidecar / network allow-list entry (A.5)."""
+    """A forwarder sidecar / network allow-list entry."""
 
     name: str
     to: str  # target host:port the sidecar forwards to
@@ -79,7 +79,7 @@ class Service:
 class Config:
     harness: str = "vibe"
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
-    # NEW in v2 (PLAN §7.2). `runtime` is the ring-0 layer (docker | podman |
+    # NEW in v2. `runtime` is the ring-0 layer (docker | podman |
     # apple-container | gondolin | utm); for docker/podman it also drives which
     # compose CLI `provider` shells out to. `enforcer` is the ring-1 in-container
     # sandbox (nono | srt | none).
@@ -97,7 +97,7 @@ class Config:
     env: dict[str, Any] = field(default_factory=dict)
     # The model id the harness sends to its LLM endpoint (OpenAI `model` field).
     model: str | None = None
-    # Which service (A.5) fronts the LLM; its `<host>:<port>` becomes the
+    # Which service fronts the LLM; its `<host>:<port>` becomes the
     # harness's api_base. glove synthesises the provider config from this so the
     # LLM host/port live entirely inside the container.
     llm_service: str = "llm"
@@ -117,10 +117,10 @@ class Config:
     # outputs go under research/<collection>/ (media, filtered, SEARCH-RESULTS).
     # Defaults to the harness name.
     collection: str | None = None
-    # Free-text session brief appended to the harness context file (A.6), e.g.
+    # Free-text session brief appended to the harness context file, e.g.
     # where to read the plan and where to write outputs.
     brief: str | None = None
-    # Host-side helpers glove auto-starts in detached tmux sessions (A.7/B.2):
+    # Host-side helpers glove auto-starts in detached tmux sessions:
     # SSH model tunnel, headed Chrome, Playwright MCP. Managed lifecycle:
     # port-deduped, health-checked, torn down on `glove down` (unless keep).
     host_services: list[HostService] = field(default_factory=list)
@@ -132,16 +132,16 @@ class Config:
     # install them at runtime). Changing these yields a distinct image tag.
     apt_packages: list[str] = field(default_factory=list)
     pip_packages: list[str] = field(default_factory=list)
-    # NEW in v2 (PLAN §7.2). Resource bounds (ring 0) and per-backend options.
+    # NEW in v2. Resource bounds (ring 0) and per-backend options.
     # `tools`/`browser` are consumed by later phases (ring 1 tool policy / ring 2
-    # browser wiring); modeled as free dicts here so §7.2 configs load today.
+    # browser wiring); modeled as free dicts here so these configs load today.
     limits: Limits = field(default_factory=Limits)
     tools: dict[str, Any] = field(default_factory=dict)
     browser: dict[str, Any] = field(default_factory=dict)
     enforcer_options: dict[str, Any] = field(default_factory=dict)
 
     def resolved_name(self) -> str:
-        # The name IS the env-id (docs/plan-environments.md); the CLI always
+        # The name IS the env-id; the CLI always
         # binds it from the registry before rendering. Resolution no longer
         # falls back to the workdir basename.
         return self.name or "env"

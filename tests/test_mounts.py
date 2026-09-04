@@ -1,4 +1,4 @@
-"""Mount-dedup tests (DESIGN.md A.4 + Verification)."""
+"""Mount-dedup tests."""
 
 from __future__ import annotations
 

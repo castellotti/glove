@@ -1,10 +1,10 @@
-"""The ``podman`` runtime (PLAN §3.1) — a docker subclass, marked *untested*.
+"""The ``podman`` runtime — a docker subclass, marked *untested*.
 
 Podman is not installed on the development host, so glove ships this backend
 but ``glove doctor`` flags it untested until validated on a machine that has
 it. Differences from docker (rootless userns, ``--userns=keep-id``, seccomp /
-systempaths flag spelling, ``internal`` network validation) are tracked in
-docs/TODO.md and the runtime doc.
+systempaths flag spelling, ``internal`` network validation) are documented
+inline; validate before relying on it.
 """
 
 from __future__ import annotations

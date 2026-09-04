@@ -1,8 +1,6 @@
-"""Runtime layer tests (PLAN §3.1): registry, render, ps parsing, stubs."""
+"""Runtime layer tests: registry, render, ps parsing, stubs."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 import yaml
@@ -136,12 +134,6 @@ def test_render_none_enforcer_no_policies_mount(tmp_path):
     assert h["command"][0] == "pi"  # bare entry, not wrapped
     binds = {v["target"] for v in h["volumes"] if v["type"] == "bind"}
     assert "/etc/glove/enforcer" not in binds
-
-
-def test_runtime_docs_exist_for_non_docker():
-    docs = Path(__file__).parent.parent / "docs" / "runtimes"
-    for name in ("podman", "apple-container", "gondolin", "utm"):
-        assert (docs / f"{name}.md").is_file(), f"missing docs/runtimes/{name}.md"
 
 
 def test_doctor_surfaces_untested_podman():

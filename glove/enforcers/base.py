@@ -1,4 +1,4 @@
-"""Ring-1 enforcer interface (PLAN §4.1).
+"""Ring-1 enforcer interface.
 
 An ``Enforcer`` renders the kernel-policy files for a session, wraps the harness
 process, and provides the per-command wrapper the harness hooks prepend to every
@@ -42,7 +42,7 @@ class Enforcer(Protocol):
         ...
 
     def cap_add(self, plan: SessionPlan) -> list[str]:
-        """Linux capabilities the enforcer requires (scoped; see PLAN §3.2)."""
+        """Linux capabilities the enforcer requires (scoped)."""
         ...
 
     def doctor(self, runtime) -> list[Check]:

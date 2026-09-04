@@ -36,17 +36,8 @@ Docker Desktop macOS blast-radius explanation.
 
 ## Status
 
-This is **glove v2**. All planned phases are complete; the design authority and
-research are kept alongside the code:
-
-- **docs/PLAN.md** — the specification (three-ring architecture, hardening set,
-  enforcer/runtime/browser layers, phases).
-- **docs/research/** — the experiments and probe scripts behind the decisions
-  (`bash docs/research/run-all.sh` to re-verify).
-- **[docs/SECURITY.md](docs/SECURITY.md)**, **[docs/runtimes/](docs/runtimes/)**,
-  **[docs/browsers/](docs/browsers/)**, **[docs/TODO.md](docs/TODO.md)** — threat
-  model, per-runtime mappings, browser specs, and the deferred backlog.
-- **[docs/v1/](docs/v1/)** — the original v1 design docs, kept for reference.
+This is **glove v2**; all planned phases are complete. See
+**[docs/SECURITY.md](docs/SECURITY.md)** for the threat model.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -70,7 +61,7 @@ research are kept alongside the code:
 | Enforcer | none (ring 0 only) | ✅ debug |
 | Browser | host-mcp — v2 default | ✅ provider layer (wiring/security/doctor verified; live nav manual) |
 | Browser | host-server | ✅ implemented (ws-path + version-pin; needs playwright in image) |
-| Browser | sidecar-desktop / vm-desktop | spec only ([docs/browsers/](docs/browsers/)) |
+| Browser | sidecar-desktop / vm-desktop | spec only (not implemented) |
 
 ## Quick start
 
@@ -136,7 +127,7 @@ Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
-uv run pytest -q                     # unit suite (119 tests)
+uv run pytest -q                     # unit suite
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)

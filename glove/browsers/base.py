@@ -1,4 +1,4 @@
-"""Browser provider layer (PLAN §6).
+"""Browser provider layer.
 
 A ``BrowserProvider`` turns a compact ``browser:`` config block into the concrete
 wiring the rest of glove already understands: host-side helpers (headed Chrome +
@@ -6,7 +6,7 @@ a Playwright MCP/server, run by ``hostsvc``), forwarder sidecars (the network
 allow-list entry that bridges the harness to the host browser endpoint), the
 harness env/MCP wiring, and an agent-facing context snippet.
 
-The security rule that falls out of ring 1 (PLAN §6): the browser endpoint
+The security rule that falls out of ring 1: the browser endpoint
 hostname is in the *harness* policy allow-list but not the *tool* policy, so only
 the harness's browser tool can drive it — a prompt-injected `curl` from a shell
 command is ``--block-net`` and cannot reach it.

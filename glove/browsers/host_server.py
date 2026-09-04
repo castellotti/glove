@@ -1,4 +1,4 @@
-"""`host-server` browser provider (PLAN §6) — Playwright server on the host.
+"""`host-server` browser provider — Playwright server on the host.
 
 ``npx playwright run-server --host 127.0.0.1 --port <port> --ws-path <random>``
 runs on the host; a forwarder bridges ``glove-<session>-browser:<port>`` → the

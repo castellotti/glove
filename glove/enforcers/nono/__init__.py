@@ -1,4 +1,4 @@
-"""The ``nono`` enforcer (PLAN §4.2) — default ring-1 Landlock sandbox."""
+"""The ``nono`` enforcer — default ring-1 Landlock sandbox."""
 
 from __future__ import annotations
 

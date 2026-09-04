@@ -1,4 +1,4 @@
-"""Runtime registry (PLAN §3.1). ``get_runtime(name)`` returns the backend."""
+"""Runtime registry. ``get_runtime(name)`` returns the backend."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def known_runtimes() -> list[str]:
 
 
 def get_runtime(name: str):
-    """Instantiate a runtime backend by name (PLAN §7.2 `runtime:`)."""
+    """Instantiate a runtime backend by name."""
     try:
         return _RUNTIMES[name]()
     except KeyError:

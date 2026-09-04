@@ -1,4 +1,4 @@
-"""The ``srt`` enforcer (PLAN §4.3) — opt-in Anthropic sandbox-runtime backend.
+"""The ``srt`` enforcer — opt-in Anthropic sandbox-runtime backend.
 
 For users who prefer Anthropic's runtime (parity with Claude Code's sandbox, or
 Pi's own `sandbox` extension). Unlike nono, srt:
@@ -17,7 +17,7 @@ Pi's own `sandbox` extension). Unlike nono, srt:
 Verified against the sandbox-runtime 0.0.75 probe: weak mode enforces under the
 surgical profile (allowWrite honored, everything else read-only, empty
 allowedDomains = no network, denyRead hides the harness home); strong mode needs
-`systempaths=unconfined` (reproduces research §5).
+`systempaths=unconfined`.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _rw_paths(plan: SessionPlan) -> list[str]:
 
 
 def render_settings(plan: SessionPlan) -> dict:
-    """Render the single srt tool-command settings file (PLAN §4.3).
+    """Render the single srt tool-command settings file.
 
     `deniedDomains` and `denyWrite` are required keys in 0.0.75 (validation
     error otherwise). `enableWeakerNestedSandbox` follows `srt.nested` — strong
@@ -70,7 +70,7 @@ def render_settings(plan: SessionPlan) -> dict:
             "allowWrite": _rw_paths(plan),
             "denyWrite": [HARNESS_HOME_MOUNT],
         },
-        # Tool commands get no network (§6: only the harness browser tool reaches
+        # Tool commands get no network (only the harness browser tool reaches
         # the web). srt network is allow-only, so empty allowedDomains = blocked.
         "network": {"allowedDomains": [], "deniedDomains": []},
         "allowUnixSockets": [],
@@ -92,7 +92,7 @@ class SrtEnforcer:
         }
 
     def wrap_harness(self, plan: SessionPlan, entry: list[str]) -> list[str]:
-        # srt does not wrap the TUI; the harness process is ring-0 only (§4.3).
+        # srt does not wrap the TUI; the harness process is ring-0 only.
         return list(entry)
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
@@ -122,14 +122,14 @@ class SrtEnforcer:
             Check("enforcer: srt", "warn",
                   f"opt-in; wraps tool commands only, harness process is ring-0 only ({SRT_PACKAGE})"),
         ]
-        # bwrap smoke test under the relaxed profile (reproduces research §3).
+        # bwrap smoke test under the relaxed profile.
         checks.append(self._bwrap_smoke(runtime))
         return checks
 
     def _bwrap_smoke(self, runtime) -> Check:
         """Run bwrap as uid 1000 under the relaxed profile in a baked -srt image.
 
-        Reproduces research §3 weak mode: unprivileged userns + bind /proc. Uses
+        Reproduces weak mode: unprivileged userns + bind /proc. Uses
         a locally-built `*-srt` harness image (which has bubblewrap baked) so the
         probe never needs network or root to install it; skips if none exists.
         """

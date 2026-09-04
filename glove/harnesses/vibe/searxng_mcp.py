@@ -3,7 +3,7 @@
 
 Mirrors the pi-local web-search extension: it only ever talks to the SearXNG
 endpoint bridged in by the `search` forwarder sidecar (never the open internet
-directly). Per the DESIGN.md risk note it rate-limits and NEVER auto-retries on
+directly). By design it rate-limits and NEVER auto-retries on
 429 — the shared exit IP is easily throttled.
 """
 

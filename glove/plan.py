@@ -1,9 +1,9 @@
-"""``SessionPlan`` — the runtime-agnostic description of one session (PLAN §3.1).
+"""``SessionPlan`` — the runtime-agnostic description of one session.
 
 Everything the operator decides is resolved here into a single, runtime-neutral
 plan (mounts, env, network, hardening, limits). Only a ``Runtime.render()``
 knows how to turn it into a concrete project (compose yaml for docker/podman).
-Built from a resolved ``Config`` plus the mount (A.4) and network (A.5) plans.
+Built from a resolved ``Config`` plus the mount and network plans.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 
 @dataclass
 class SessionPlan:
-    """A fully-resolved, runtime-agnostic session (PLAN §3.1)."""
+    """A fully-resolved, runtime-agnostic session."""
 
     session: str  # session name; compose project = glove-<session>
     env_id: str
@@ -153,7 +153,7 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
-    # srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix (§4.3).
+    # srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix.
     image = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
     if cfg.enforcer == "srt":
         image = f"{image}-srt"

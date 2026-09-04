@@ -10,7 +10,7 @@ README, or tool result that makes the model run a command it shouldn't.
 
 | Ring | Boundary | Mechanism | What it stops |
 |---|---|---|---|
-| 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, §3.2 hardening (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
+| 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono** (Landlock) by default, or **srt** (bubblewrap); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
 | 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
@@ -25,9 +25,9 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 |---|---|---|---|
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
-| LLM API key | shell cmd (`env`, reading config) | ring 1 | nono `deny_vars` / srt env masking strip secrets from wrapped commands; key never in a tool's env. (Full proxy credential-injection so the key isn't in the *harness* env either is deferred — see docs/TODO.md) |
+| LLM API key | shell cmd (`env`, reading config) | ring 1 | nono `deny_vars` / srt env masking strip secrets from wrapped commands; key never in a tool's env. (Full proxy credential-injection so the key isn't in the *harness* env either is deferred) |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
-| The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot (§6) |
+| The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 
 ## The Docker Desktop (macOS) blast radius
@@ -48,7 +48,7 @@ Be precise about what "container root" means here:
 3. **The trivial escalations are configuration, not fate.** They come from
    mounting `/var/run/docker.sock`, `--privileged`, running as root with
    `CAP_SYS_ADMIN`, or over-broad bind mounts. glove does none of these and
-   refuses to render a project that violates the §3.2 table unless an operator
+   refuses to render a project that violates the hardening table unless an operator
    explicitly waives a row with `--i-know-what-i-am-doing <key>`.
 
 ## Operator recommendations
@@ -67,7 +67,7 @@ Be precise about what "container root" means here:
 - **Prefer a per-container-VM runtime when available** — Apple `container`
   (macOS 26, Apple silicon) or a `utm`/`gondolin` VM gives each container its own
   kernel, so an escape yields a throwaway VM, not the shared one. glove keeps the
-  runtime layer pluggable for exactly this (see docs/runtimes/).
+  runtime layer pluggable for exactly this.
 - **Choose `enforcer: nono`** (default) over `srt` unless you specifically need
   srt: srt requires relaxing the seccomp profile to allow unprivileged user
   namespaces (a historical source of kernel LPE bugs) and wraps tool commands
