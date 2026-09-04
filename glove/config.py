@@ -113,12 +113,8 @@ class Config:
     # harness's config + your own extensions there. glove only writes the files
     # it owns; anything else you add is preserved.
     config_home_source: str | None = None
-    # Names this run's output collection so parallel harnesses stay separate:
-    # outputs go under research/<collection>/ (media, filtered, SEARCH-RESULTS).
-    # Defaults to the harness name.
-    collection: str | None = None
     # Free-text session brief appended to the harness context file, e.g.
-    # where to read the plan and where to write outputs.
+    # what the agent should work on in /work.
     brief: str | None = None
     # Host-side helpers glove auto-starts in detached tmux sessions:
     # SSH model tunnel, headed Chrome, Playwright MCP. Managed lifecycle:
@@ -145,9 +141,6 @@ class Config:
         # binds it from the registry before rendering. Resolution no longer
         # falls back to the workdir basename.
         return self.name or "env"
-
-    def resolved_collection(self) -> str:
-        return self.collection or self.harness
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

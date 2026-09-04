@@ -5,7 +5,8 @@
  * MCP server (the `browser` forwarder sidecar → host Playwright → shared Chrome
  * via CDP) and re-exposes its tools as native Pi tools. MCP result content maps
  * 1:1 to Pi content, so image blocks (screenshots) flow straight into Pi's
- * vision, and screenshots also land in the host --output-dir (research/<coll>/media).
+ * vision (they also land in the host-side Playwright --output-dir, which glove
+ * points at its own session state, not the project working tree).
  *
  * BROWSER_MCP_URL is injected by glove from the browser sidecar. One persistent
  * MCP client is kept for the whole session, so the browser context/page is
@@ -17,7 +18,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const BROWSER_MCP_URL = process.env.BROWSER_MCP_URL ?? "http://localhost:8931/mcp";
 
-// Curated surface — the tools the media crawl needs. Others from the server are
+// Curated surface — the core browsing tools. Others from the server are
 // ignored to keep Pi's tool list focused.
 const ALLOW = new Set([
   "browser_navigate",

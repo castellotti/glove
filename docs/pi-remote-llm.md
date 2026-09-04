@@ -8,12 +8,12 @@ A complete, reproducible setup for the **Pi** harness that:
 - reaches the web solely through a **dedicated headed Playwright browser** on the
   host that you can watch.
 
-Copy **[`examples/pi-remote-llm.glove.yaml`](../examples/pi-remote-llm.glove.yaml)**
+Copy **[`docs/examples/pi-remote-llm.glove.yaml`](examples/pi-remote-llm.glove.yaml)**
 as your starting config; this doc explains the pieces and the non-obvious bits.
 
 ```sh
 cd ~/path/to/your/project
-glove init pi --from <glove-repo>/examples/pi-remote-llm.glove.yaml
+glove init pi --from <glove-repo>/docs/examples/pi-remote-llm.glove.yaml
 $EDITOR ~/.glove/envs/<env-id>/glove.yaml     # set host, model, API key
 glove doctor --env <env-id> --browser host-mcp
 glove pi --dry-run                            # preview
@@ -83,7 +83,7 @@ their network), so a prompt-injected `curl` can't reach the browser or the web.
                                            │ launches / drives
                                            ▼
                                     headed browser on your desktop (you watch)
-                                    screenshots ─▶ <workdir>/research/<collection>/media
+                                    screenshots ─▶ returned to the agent inline
 ```
 
 Declaring a `browser` service makes glove set `BROWSER_MCP_URL` for Pi's baked
@@ -141,7 +141,7 @@ Three ways to satisfy it:
    block (`browser: { provider: host-mcp }`, or `glove pi --browser host-mcp`)
    does — it adds a `chrome` host service (Google Chrome) plus a `playwright`
    host service. Override the `chrome` command to use a different Chromium
-   browser (e.g. Brave). See `examples/pi-local.glove.yaml`.
+   browser (e.g. Brave). See `docs/examples/vibe-local.glove.yaml`.
 
 3. **Install Google Chrome.** `npx playwright install chrome`, or install Chrome
    normally, so the default `chrome` channel resolves.
@@ -153,10 +153,12 @@ Three ways to satisfy it:
   option 2/3).
 - **Hand-wired** (recommended for the dedicated Chrome-for-Testing setup, option
   1): declare the `browser` service and a `playwright` host service yourself, as
-  in `examples/pi-remote-llm.glove.yaml`.
+  in `docs/examples/pi-remote-llm.glove.yaml`.
 
-Screenshots taken with no custom filename land in
-`<workdir>/research/<collection>/media/` (glove pre-creates it).
+`browser_take_screenshot` returns the image to the agent inline. Playwright's
+`--output-dir` (the `{media_dir}` placeholder) is a glove-managed dir under the
+session state (`~/.glove/envs/<env-id>/sessions/<session>/media`) — **never** your
+project working tree, so glove leaves no files behind in the repo you launch it on.
 
 ## Security recap
 

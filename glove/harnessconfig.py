@@ -6,8 +6,8 @@ entirely inside the container — the operator never edits the harness config by
 hand. It also writes the host-sudo-relay context file.
 
 The LLM endpoint is synthesised from the `llm` forwarder sidecar: the
-harness talks to `glove-<session>-llm:<port>`, which socat-forwards to the host
-SSH tunnel, which reaches faustulus. Nothing about faustulus leaks into the
+harness talks to `glove-<session>-llm:<port>`, which socat-forwards (via the host
+tunnel/forward) to the real LLM host. Nothing about that host leaks into the
 harness config.
 """
 
@@ -57,7 +57,6 @@ def build_environment_context(
     service_names = {s.name for s in cfg.services}
     browser_provider = provider_name(cfg)
     has_browser = browser_provider is not None or "browser" in service_names
-    collection = cfg.resolved_collection()
 
     lines = ["# How your environment works", ""]
     lines.append(
@@ -108,8 +107,6 @@ def build_environment_context(
     lines.append(
         "- You cannot read the LLM API key or any secret from a shell (`env` hides them)."
     )
-    lines += ["", "## Outputs", ""]
-    lines.append(f"- Write deliverables under `/work/research/{collection}/` (media, filtered, results).")
     lines += ["", "## Privileged host commands", "", SUDO_RELAY_BODY]
     return "\n".join(lines) + "\n"
 
@@ -217,7 +214,7 @@ def _render_vibe(
     model_id = cfg.model or "local"
     # Must NOT be a built-in Vibe alias ("local" is its bundled llamacpp Devstral;
     # Vibe deep-merges models by alias, so a collision silently shadows ours).
-    alias = "faustulus"
+    alias = "glove"
 
     doc: dict[str, Any] = {
         "active_model": alias,
@@ -232,7 +229,7 @@ def _render_vibe(
         "mcp_servers": _mcp_servers(cfg, session),
         "providers": [
             {
-                "name": "faustulus",
+                "name": "glove",
                 "api_base": llm_base or "http://glove-llm:8080/v1",
                 "api_key_env_var": LLM_API_KEY_ENV if cfg.llm_api_key else "",
                 "api_style": "openai",
@@ -243,7 +240,7 @@ def _render_vibe(
         "models": [
             {
                 "name": model_id,
-                "provider": "faustulus",
+                "provider": "glove",
                 "alias": alias,
                 "temperature": 1.0,
                 "input_price": 0.0,
@@ -311,7 +308,7 @@ def _render_pi(
     llm_base = container_llm_base(cfg, session) or "http://glove-llm:8080/v1"
     model_id = cfg.model or "local"
 
-    faustulus_provider: dict[str, Any] = {
+    glove_provider: dict[str, Any] = {
         "baseUrl": llm_base,
         "api": "openai-completions",
     }
@@ -319,12 +316,12 @@ def _render_pi(
     # available"). Supply the key inline (provider.apiKey) when the endpoint
     # needs one — sent as Authorization: Bearer by the openai-completions adapter.
     if cfg.llm_api_key:
-        faustulus_provider["apiKey"] = str(cfg.llm_api_key)
+        glove_provider["apiKey"] = str(cfg.llm_api_key)
 
     models_json = {
         "providers": {
-            "faustulus": {
-                **faustulus_provider,
+            "glove": {
+                **glove_provider,
                 "compat": {
                     "supportsDeveloperRole": False,
                     "supportsReasoningEffort": True,
@@ -334,7 +331,7 @@ def _render_pi(
                 "models": [
                     {
                         "id": model_id,
-                        "name": f"{model_id} (faustulus, via glove)",
+                        "name": f"{model_id} (glove, via glove)",
                         "reasoning": True,
                         "thinkingLevelMap": {
                             "off": "none",
@@ -357,7 +354,7 @@ def _render_pi(
         }
     }
     settings_json = {
-        "defaultProvider": "faustulus",
+        "defaultProvider": "glove",
         "defaultModel": model_id,
         "defaultThinkingLevel": "low",
         "theme": "dark",
@@ -377,7 +374,7 @@ def _render_pi(
         settings_json.setdefault("env", {}).update(extra_env)
     model_overrides = cfg.harness_config.get("model", {})
     if model_overrides:
-        models_json["providers"]["faustulus"]["models"][0].update(model_overrides)
+        models_json["providers"]["glove"]["models"][0].update(model_overrides)
 
     written: list[Path] = []
     for name, data in (

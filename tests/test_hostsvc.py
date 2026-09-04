@@ -9,26 +9,33 @@ from glove.hostsvc import _expand
 
 
 def _cfg(tmp_path):
-    work = tmp_path / "leeroy"
+    work = tmp_path / "project"
     work.mkdir()
     cfg = Config(harness="vibe", workdir=str(work), name="vibe-local")
     return cfg, work
 
 
 def test_expand_placeholders(tmp_path):
-    cfg, work = _cfg(tmp_path)  # harness=vibe → collection defaults to "vibe"
-    cmd = "mcp --allowed-hosts glove-{session}-browser:8931 --output-dir {media_dir}"
-    out = _expand(cmd, cfg, "vibe-local")
-    assert "glove-vibe-local-browser:8931" in out
-    assert out.endswith(os.path.join(str(os.path.realpath(work)), "research", "vibe", "media"))
-
-
-def test_collection_overrides_media_dir(tmp_path):
     cfg, work = _cfg(tmp_path)
-    cfg.collection = "pi"
-    out = _expand("{media_dir}|{filtered_dir}", cfg, "pi-local")
-    base = os.path.join(str(os.path.realpath(work)), "research", "pi")
-    assert out == f"{os.path.join(base, 'media')}|{os.path.join(base, 'filtered')}"
+    sdir = tmp_path / "state"
+    cmd = "mcp --allowed-hosts glove-{session}-browser:8931 --output-dir {media_dir}"
+    out = _expand(cmd, cfg, "vibe-local", sdir)
+    assert "glove-vibe-local-browser:8931" in out
+    assert out.endswith(os.path.join(str(sdir), "media"))
+
+
+def test_media_dir_never_inside_project(tmp_path):
+    # glove must not litter the project working tree — the browser output dir
+    # lives in glove's own session state, never under the workdir.
+    cfg, work = _cfg(tmp_path)
+    sdir = tmp_path / "state"
+    out = _expand("{media_dir}", cfg, "vibe-local", sdir)
+    assert str(os.path.realpath(work)) not in out
+    assert "research" not in out
+    # bare expansion (no session dir) still avoids the project — falls back to ~/.glove
+    bare = _expand("{media_dir}", cfg, "vibe-local")
+    assert str(os.path.realpath(work)) not in bare
+    assert bare.startswith(os.path.join(os.path.expanduser("~"), ".glove"))
 
 
 def test_expand_chrome_profile_and_home(tmp_path):
@@ -42,7 +49,7 @@ def test_host_services_coerced_from_file(tmp_path):
         "harness: vibe\n"
         "host_services:\n"
         "  - name: model-tunnel\n"
-        "    command: ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 faustulus.local\n"
+        "    command: ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 llm-host.example\n"
         "    ready_port: 8899\n"
         "  - name: chrome\n"
         "    command: chrome --foo\n"

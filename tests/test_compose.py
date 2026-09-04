@@ -15,7 +15,7 @@ from glove.config import AddDir, Config, Service
 def _session_cfg(tmp_path):
     work = tmp_path / "vibe-local"
     work.mkdir()
-    deliverable = tmp_path / "leeroy"
+    deliverable = tmp_path / "shared_lib"
     deliverable.mkdir()
     cfg = Config(
         harness="vibe",
@@ -26,7 +26,7 @@ def _session_cfg(tmp_path):
     )
     cfg.services = [
         Service(name="llm", to="host.docker.internal:8899", port=8080),
-        Service(name="search", to="searxng:8080", join_network="local-llm_ai-net"),
+        Service(name="search", to="searxng:8080", join_network="my-llm-net"),
         Service(name="browser", to="host.docker.internal:8931"),
     ]
     return cfg, work
@@ -63,10 +63,10 @@ def test_internal_network_and_external_ref(tmp_path):
     doc = yaml.safe_load(result.compose_yaml)
     nets = doc["networks"]
     assert nets["glove-vibe-local-net"]["internal"] is True
-    assert nets["local-llm_ai-net"]["external"] is True
+    assert nets["my-llm-net"]["external"] is True
     # the search sidecar joins the external net; host-gateway sidecars don't
     search = doc["services"]["glove-vibe-local-search"]
-    assert "local-llm_ai-net" in search["networks"]
+    assert "my-llm-net" in search["networks"]
     llm = doc["services"]["glove-vibe-local-llm"]
     assert llm["extra_hosts"] == ["host.docker.internal:host-gateway"]
 
@@ -92,7 +92,7 @@ def test_mounts_rendered_with_readonly(tmp_path):
     vols = doc["services"]["glove-vibe-local-harness"]["volumes"]
     binds = {v["target"]: v for v in vols if v["type"] == "bind"}
     assert binds["/work"].get("read_only") in (None, False)
-    assert binds["/mnt/leeroy"].get("read_only") in (None, False)  # added rw
+    assert binds["/mnt/shared_lib"].get("read_only") in (None, False)  # added rw
 
 
 @pytest.mark.skipif(not shutil.which("docker"), reason="docker not installed")

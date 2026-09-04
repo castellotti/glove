@@ -5,8 +5,8 @@ listens on a loopback port; a forwarder sidecar bridges
 ``glove-<session>-browser:<port>`` → ``host.docker.internal:<port>``. Pi's baked
 `browser` extension (reads ``BROWSER_MCP_URL``) and Vibe's auto-derived MCP
 server both speak to that endpoint. `--allowed-hosts` is pinned to the sidecar
-name and `--output-dir` lands screenshots in the collection media dir (v1
-behavior).
+name and `--output-dir` points at a glove-managed host dir under the session
+state (never the project working tree).
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ class HostMcpProvider:
         note = (
             "- Your `browser_*` tools drive a REAL Chromium on the operator's host "
             "(which has internet); that browser is the only way you reach the web. "
-            "`browser_take_screenshot` with NO custom filename saves into your "
-            "collection's media dir under /work."
+            "`browser_take_screenshot` returns the image to you directly — you do "
+            "not need to read it from disk."
         )
         return BrowserWiring(
             services=[browser],

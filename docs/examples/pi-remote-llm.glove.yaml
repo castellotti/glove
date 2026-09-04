@@ -7,7 +7,7 @@
 #
 # Use it:
 #   cd ~/path/to/your/project           # the dir the agent should work in
-#   glove init pi --from <glove-repo>/examples/pi-remote-llm.glove.yaml
+#   glove init pi --from <glove-repo>/docs/examples/pi-remote-llm.glove.yaml
 #   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the API key + host/model
 #   glove pi --dry-run                  # preview
 #   glove pi                            # launch
@@ -73,9 +73,11 @@ host_services:
   # isolated from your daily browser. @playwright/mcp's --browser only accepts
   # channels and defaults to system Google Chrome, so we point --executable-path
   # at the Chrome for Testing that `npx playwright install chromium` downloads,
-  # resolved by glob so it survives Playwright revision bumps. Screenshots land in
-  # {media_dir} = <workdir>/research/<collection>/media.  (Linux path differs:
-  # ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome — see docs.)
+  # resolved by glob so it survives Playwright revision bumps. {media_dir} is a
+  # glove-managed dir under the session state (NOT your project) where Playwright
+  # writes output; the agent gets screenshots inline from the browser tool.
+  # (Linux binary path differs: ~/.cache/ms-playwright/chromium-*/chrome-linux/
+  # chrome — see docs/pi-remote-llm.md.)
   - name: playwright
     command: >-
       npx @playwright/mcp@latest --host 127.0.0.1 --port 8931

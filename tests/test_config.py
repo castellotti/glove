@@ -75,7 +75,7 @@ def test_service_infers_port():
 
 
 def test_service_join_network_no_host_gateway():
-    s = Service(name="search", to="searxng:8080", join_network="local-llm_ai-net")
+    s = Service(name="search", to="searxng:8080", join_network="my-llm-net")
     assert s.host_gateway is False
     assert s.port == 8080
 

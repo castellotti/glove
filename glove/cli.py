@@ -276,7 +276,7 @@ def run(
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
         _print_summary(plan, home_files)
-        describe_host_services(cfg, env_id)
+        describe_host_services(cfg, env_id, sdir)
         print_host_setup(cfg)
         return
 

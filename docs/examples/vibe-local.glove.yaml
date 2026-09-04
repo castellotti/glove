@@ -1,0 +1,45 @@
+# glove preset — Mistral Vibe against a local LLM, with a host browser.
+#
+# Shows the Vibe harness and the compact `browser:` provider block: glove
+# auto-wires the forwarder sidecar + host Chrome + Playwright MCP, and Vibe
+# auto-derives an MCP server for it (Vibe has a native MCP client).
+#
+# Use it:
+#   cd ~/path/to/your/project
+#   glove init vibe --from <glove-repo>/docs/examples/vibe-local.glove.yaml
+#   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the model + API key
+#   glove vibe --dry-run                # preview
+#   glove vibe                          # launch
+#
+# `init` copies this file into ~/.glove/envs/<env-id>/glove.yaml (outside your
+# repo). Put the real API key THERE, never in the repo.
+
+harness: vibe
+runtime: docker
+enforcer: nono
+workdir: .
+
+# The LLM must match `curl http://127.0.0.1:8080/v1/models`.
+model: your-model-id
+llm_service: llm
+llm_api_key: sk-REPLACE-ME
+
+net: [service]
+allow_root: false
+
+services:
+  # Bridge to an LLM running on the Docker host (127.0.0.1:8080). For a remote
+  # model, add an SSH-tunnel host service and target :8899 (see
+  # pi-remote-llm.glove.yaml).
+  - name: llm
+    to: host.docker.internal:8080
+    port: 8080
+
+# Compact browser wiring: glove adds the `browser` forwarder plus `chrome` and
+# `playwright` host services, and sets the harness MCP env. This path drives a
+# SYSTEM Google Chrome over CDP; if Chrome isn't installed, use a dedicated
+# Playwright Chrome for Testing instead (see docs/pi-remote-llm.md and the
+# hand-wired pi-remote-llm.glove.yaml example).
+browser:
+  provider: host-mcp
+  port: 8931

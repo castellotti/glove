@@ -8,13 +8,28 @@ All six implementation phases are complete.
 
 ### Changes
 
+- **glove no longer writes anything into the project working tree**: browser
+  output (`{media_dir}`, e.g. Playwright screenshots) defaulted to
+  `<workdir>/research/<collection>/media` and glove `mkdir`'d it on launch,
+  littering whatever repo you ran in with a `research/` tree. Output now lives in
+  glove's own session state (`~/.glove/envs/<env>/sessions/<session>/media`); the
+  agent gets screenshots inline from the browser tool. The research-specific
+  `collection` config field and the `research_dir`/`filtered_dir`/`collection`
+  command placeholders are removed, and the agent context file no longer tells the
+  agent to "write deliverables under /work/research/…". glove is a generic
+  sandbox and leaves no files behind in the repo it is launched on.
+- **Examples moved to `docs/examples/` and anonymized**: the presets left the repo
+  root and were rewritten to be generic (no personal project names, hosts, or
+  briefs). `pi-local` (local LLM, no browser), `pi-remote-llm` (remote LLM over
+  SSH + dedicated Playwright browser), `vibe-local` (Vibe + browser provider
+  block).
 - **Browser docs + a remote-LLM example, and clearer host-mcp doctor guidance**:
   the default `host-mcp` browser provider had no doc and `glove doctor` only said
   "Google Chrome not found". Setting up a dedicated Playwright browser meant
   discovering that `@playwright/mcp`'s `--browser` accepts only channels
   (defaulting to a *system* Chrome) and that the fix is `--executable-path` to
   Playwright's Chrome for Testing. Now documented in `docs/pi-remote-llm.md`,
-  demonstrated end-to-end in `examples/pi-remote-llm.glove.yaml` (remote LLM over
+  demonstrated end-to-end in `docs/examples/pi-remote-llm.glove.yaml` (remote LLM over
   SSH tunnel + dedicated headed Playwright Chromium), and `glove doctor
   --browser host-mcp` detects Chrome for Testing and prints the `--executable-path`
   to use (or points to `npx playwright install chromium`).

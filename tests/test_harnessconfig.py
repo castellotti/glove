@@ -24,7 +24,7 @@ def _cfg(harness: str, tmp_path):
     )
     cfg.services = [
         Service(name="llm", to="host.docker.internal:8899", port=8080),
-        Service(name="search", to="searxng:8080", join_network="local-llm_ai-net"),
+        Service(name="search", to="searxng:8080", join_network="my-llm-net"),
         Service(name="browser", to="host.docker.internal:8931"),
     ]
     return cfg
@@ -41,15 +41,15 @@ def test_vibe_config_toml(tmp_path):
     render_home(cfg, get_profile("vibe"), "vibe-sess", home)
     doc = tomllib.loads((home / ".vibe" / "config.toml").read_text())
     # Must be a unique alias, NOT Vibe's built-in "local" (Devstral) alias.
-    assert doc["active_model"] == "faustulus"
-    assert doc["models"][0]["alias"] == "faustulus"
+    assert doc["active_model"] == "glove"
+    assert doc["models"][0]["alias"] == "glove"
     prov = doc["providers"][0]
-    assert prov["name"] == "faustulus"
+    assert prov["name"] == "glove"
     assert prov["api_base"] == "http://glove-vibe-sess-llm:8080/v1"
     assert prov["api_key_env_var"] == ""  # no MISTRAL_API_KEY needed
     model = doc["models"][0]
     assert model["name"] == "qwen3.8-27b-5090"
-    assert model["provider"] == "faustulus"
+    assert model["provider"] == "glove"
     # MCP auto-derived from services
     names = {s["name"] for s in doc["mcp_servers"]}
     assert names == {"playwright", "searxng"}
@@ -163,7 +163,7 @@ def test_pi_config_and_extension(tmp_path):
     render_home(cfg, get_profile("pi"), "pi-sess", home)
     agent = home / ".pi" / "agent"
     models = json.loads((agent / "models.json").read_text())
-    prov = models["providers"]["faustulus"]
+    prov = models["providers"]["glove"]
     assert prov["baseUrl"] == "http://glove-pi-sess-llm:8080/v1"
     assert prov["models"][0]["id"] == "qwen3.8-27b-5090"
     settings = json.loads((agent / "settings.json").read_text())
@@ -190,7 +190,7 @@ def test_pi_harness_config_overrides(tmp_path):
     # env override is merged, not clobbered — both keys survive
     assert settings["env"]["FOO"] == "bar"
     assert settings["env"]["SEARXNG_URL"] == "http://glove-pi-sess-search:8080"
-    model = json.loads((agent / "models.json").read_text())["providers"]["faustulus"]["models"][0]
+    model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000
     # images stay enabled and reasoning intact after the override merge
