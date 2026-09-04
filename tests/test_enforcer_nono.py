@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from glove.config import AddDir, Config
 from glove.enforcers import get_enforcer
 from glove.enforcers.base import ENFORCER_DIR
@@ -97,12 +95,15 @@ def test_nono_backs_state_roots_with_tmpfs(tmp_path):
     plan = _plan(tmp_path)
     tmpfs = plan.hardening.tmpfs
     assert "/tmp" in tmpfs
-    assert "/home/agent/.local/state" in tmpfs
+    # nono's own state root, not the whole ~/.local/state (which would shadow
+    # any sibling's persisted state under the /home/agent bind mount).
+    assert "/home/agent/.local/state/nono" in tmpfs
+    assert "/home/agent/.local/state" not in tmpfs
     assert "/home/agent/.nono" in tmpfs
     for policy in ("harness.json", "tool.json"):
         fs = json.loads(plan.policies[policy])["filesystem"]
         grants = [*fs["allow"], *fs.get("read", [])]
-        assert "/home/agent/.local/state" not in grants
+        assert "/home/agent/.local/state/nono" not in grants
         assert "/home/agent/.nono" not in grants
 
 

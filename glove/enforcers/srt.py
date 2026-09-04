@@ -145,7 +145,8 @@ class SrtEnforcer:
         )
         image = next((ln for ln in images.stdout.splitlines() if ln.strip()), None)
         if not image:
-            return Check("srt bwrap smoke", "skip", "no local glove/*-srt image — run `glove build <harness> --enforcer srt`")
+            return Check("srt bwrap smoke", "skip",
+                         "no local glove/*-srt image — run `glove build <harness> --enforcer srt`")
         from ..runtimes.seccomp import nested_userns_profile_path
 
         proc = subprocess.run(

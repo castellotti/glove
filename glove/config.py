@@ -142,19 +142,25 @@ class Config:
         # falls back to the workdir basename.
         return self.name or "env"
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, *, redact_secrets: bool = False) -> dict[str, Any]:
+        d = asdict(self)
+        # The effective config is persisted to ~/.glove as a reproducibility
+        # artifact; don't leave the LLM key in cleartext there. The real key
+        # stays in the (git-ignorable) env glove.yaml source and is injected
+        # into the harness config/env at render time.
+        if redact_secrets and d.get("llm_api_key"):
+            d["llm_api_key"] = None
+        return d
 
-    def to_yaml(self) -> str:
-        return yaml.safe_dump(self.to_dict(), sort_keys=False)
+    def to_yaml(self, *, redact_secrets: bool = False) -> str:
+        return yaml.safe_dump(
+            self.to_dict(redact_secrets=redact_secrets), sort_keys=False
+        )
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
     text = path.read_text()
-    if path.suffix == ".json":
-        data = json.loads(text)
-    else:
-        data = yaml.safe_load(text)
+    data = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -182,7 +188,7 @@ def _coerce(data: dict[str, Any]) -> Config:
 
     limits_raw = data.pop("limits", None)
 
-    known = {f for f in Config.__dataclass_fields__}  # noqa: SIM118
+    known = set(Config.__dataclass_fields__)
     unknown = set(data) - known
     if unknown:
         raise ConfigError(f"unknown config keys: {sorted(unknown)}")
@@ -202,7 +208,7 @@ def _coerce_limits(x: Any) -> Limits:
     if isinstance(x, Limits):
         return x
     if isinstance(x, dict):
-        allowed = {f for f in Limits.__dataclass_fields__}  # noqa: SIM118
+        allowed = set(Limits.__dataclass_fields__)
         unknown = set(x) - allowed
         if unknown:
             raise ConfigError(f"unknown limits keys: {sorted(unknown)}")

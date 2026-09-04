@@ -19,7 +19,7 @@ from .network import NetworkPlan
 from .plan import FORWARDER_IMAGE, build_session_plan
 from .runtimes.docker import TEMPLATES_DIR, DockerRuntime
 
-__all__ = ["RenderResult", "render_compose", "FORWARDER_IMAGE", "TEMPLATES_DIR"]
+__all__ = ["FORWARDER_IMAGE", "TEMPLATES_DIR", "RenderResult", "render_compose"]
 
 
 @dataclass

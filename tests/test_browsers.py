@@ -7,6 +7,7 @@ import pytest
 from glove.browsers import apply_browser, get_provider, known_providers, provider_name
 from glove.browsers.host_server import _minor
 from glove.config import Config, Service
+from glove.harnessconfig import service_base
 
 
 def test_registry():
@@ -26,7 +27,11 @@ def test_host_mcp_wiring():
     assert [s.name for s in w.services] == ["browser"]
     assert w.services[0].to == "host.docker.internal:8931"
     assert {h.name for h in w.host_services} == {"chrome", "playwright"}
-    assert w.env["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
+    # The provider declares the `browser` service; BROWSER_MCP_URL is derived
+    # from it once, at plan time (not duplicated in the wiring env).
+    assert "BROWSER_MCP_URL" not in w.env
+    svc = w.services[0]
+    assert f"http://glove-s-{svc.name}:{svc.port}/mcp" == "http://glove-s-browser:8931/mcp"
     pw = next(h for h in w.host_services if h.name == "playwright")
     assert "@playwright/mcp" in pw.command
     assert "--allowed-hosts glove-s-browser:8931" in pw.command  # pinned to sidecar
@@ -48,7 +53,10 @@ def test_apply_browser_merges_and_enables_service_net():
     assert "service" in cfg.net  # forwarder sidecars now render
     assert any(s.name == "browser" for s in cfg.services)
     assert {h.name for h in cfg.host_services} == {"chrome", "playwright"}
-    assert cfg.env["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
+    # BROWSER_MCP_URL is not injected into cfg.env by the provider; it's derived
+    # from the declared `browser` service at plan time (single construction site).
+    assert "BROWSER_MCP_URL" not in cfg.env
+    assert f"{service_base(cfg, 's', 'browser')}/mcp" == "http://glove-s-browser:8931/mcp"
 
 
 def test_apply_browser_manual_service_wins():
@@ -81,10 +89,11 @@ def test_host_server_wspath_stable_after_apply():
 def test_chrome_for_testing_path_picks_newest(monkeypatch):
     import glove.browsers.host_mcp as hm
 
+    suffix = "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
     fake = {
         hm._CFT_GLOBS[0]: [
-            "/x/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-            "/x/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            f"/x/ms-playwright/chromium-1200/{suffix}",
+            f"/x/ms-playwright/chromium-1243/{suffix}",
         ],
         hm._CFT_GLOBS[1]: [],
     }

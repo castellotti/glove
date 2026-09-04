@@ -113,7 +113,7 @@ glove <harness> …                    # alias of run
 glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]
 glove policy show [--env ID]         # rendered ring-1 policies + ring-0 hardening
 glove config  [--env ID] [--edit|--path]
-glove ls | ps | down [ID] [--wipe] | build [HARNESS] [--enforcer srt]
+glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
 ```
 
 ## Toolchain
@@ -122,6 +122,7 @@ Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
+uv run ruff check glove tests        # lint
 uv run pytest -q                     # unit suite
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)

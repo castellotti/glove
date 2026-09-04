@@ -93,6 +93,9 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
     search = service_base(cfg, session, "search")
     if search:
         environment.setdefault("SEARXNG_URL", search)
+    # Single construction site for the browser MCP endpoint: derived from the
+    # declared `browser` service, whether it came from a browser provider
+    # (browsers.apply_browser) or was hand-wired in the config.
     browser = service_base(cfg, session, "browser")
     if browser:
         environment.setdefault("BROWSER_MCP_URL", f"{browser}/mcp")

@@ -153,11 +153,11 @@ def _resolve_working_dir(
     # Deepest containing mount wins.
     best: Mount | None = None
     for m in mounts:
-        if _is_ancestor(Path(m.host_path), target_path):
-            if best is None or len(Path(m.host_path).parts) > len(
-                Path(best.host_path).parts
-            ):
-                best = m
+        if _is_ancestor(Path(m.host_path), target_path) and (
+            best is None
+            or len(Path(m.host_path).parts) > len(Path(best.host_path).parts)
+        ):
+            best = m
     if best is None:
         return "/work"
     rel = os.path.relpath(target, best.host_path)

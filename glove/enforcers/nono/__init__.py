@@ -39,7 +39,11 @@ class NonoEnforcer:
         # roots with tmpfs: a native fs that supports sockets, and — since neither
         # path is in the harness/tool Landlock allow-lists — still off-limits to
         # the sandboxed agent. State is per-session and needs no persistence.
-        return ["/home/agent/.nono", "/home/agent/.local/state"]
+        #
+        # Target nono's OWN state root, not the whole ~/.local/state: a broad
+        # tmpfs there would shadow every sibling's persisted state (caches,
+        # tokens, resume data) under the /home/agent bind mount each session.
+        return ["/home/agent/.nono", "/home/agent/.local/state/nono"]
 
     def cap_add(self, plan: SessionPlan) -> list[str]:
         # Phase 2 runs no proxy, so no SYS_PTRACE is needed (verified). The

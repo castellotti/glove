@@ -32,12 +32,12 @@ def get_runtime(name: str):
 
 __all__ = [
     "Check",
+    "DockerRuntime",
+    "PodmanRuntime",
     "RenderedProject",
     "RunningSession",
     "Runtime",
     "RuntimeCaps",
-    "DockerRuntime",
-    "PodmanRuntime",
     "get_runtime",
     "known_runtimes",
 ]

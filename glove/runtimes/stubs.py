@@ -20,7 +20,7 @@ class _StubRuntime:
     caps = RuntimeCaps(implemented=False, tested=False)
     _desc = "registered but not implemented"
 
-    def render(self, plan: "SessionPlan", project_dir: Path) -> RenderedProject:  # noqa: F821
+    def render(self, plan: SessionPlan, project_dir: Path) -> RenderedProject:
         raise NotImplementedError(
             f"runtime {self.name!r} is not implemented yet ({self._desc})"
         )

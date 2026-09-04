@@ -7,7 +7,11 @@ import tomllib
 
 from glove.config import AddDir, Config, Service
 from glove.harness import get_profile
-from glove.harnessconfig import build_environment_context, container_llm_base, render_home
+from glove.harnessconfig import (
+    build_environment_context,
+    container_llm_base,
+    render_home,
+)
 from glove.mounts import compute_mounts
 
 

@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.16"]
 
 [project.scripts]
 glove = "glove.cli:main"
@@ -32,3 +32,17 @@ artifacts = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+# The codebase wraps prose at ~88 but runs functional lines longer; 120 is a
+# real ceiling that matches practice without a wholesale reflow.
+line-length = 120
+# Integration scripts are bash; the harness images vendor third-party code.
+extend-exclude = ["tests/integration", "glove/harnesses"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
+# B008: Typer's API *requires* `= typer.Option(...)` / `typer.Argument(...)` in
+# defaults — the whole CLI relies on it, so it is not a smell here.
+ignore = ["B008"]

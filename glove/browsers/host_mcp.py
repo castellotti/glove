@@ -52,10 +52,12 @@ class HostMcpProvider:
             "`browser_take_screenshot` returns the image to you directly — you do "
             "not need to read it from disk."
         )
+        # No env here: BROWSER_MCP_URL is derived once, at plan time, from the
+        # `browser` service declared above (see plan._service_env), so the
+        # endpoint string has a single construction site.
         return BrowserWiring(
             services=[browser],
             host_services=[headed_chrome_service(), playwright],
-            env={"BROWSER_MCP_URL": f"http://{sidecar}:{port}/mcp"},
             context_note=note,
         )
 
@@ -65,10 +67,34 @@ class HostMcpProvider:
         checks = []
         for tool in ("node", "npx"):
             p = shutil.which(tool)
-            checks.append(Check(f"browser host-mcp: {tool}", "ok" if p else "warn", p or "absent — needed for @playwright/mcp"))
+            checks.append(Check(
+                f"browser host-mcp: {tool}", "ok" if p else "warn",
+                p or "absent — needed for @playwright/mcp",
+            ))
         checks.append(_browser_backend_check())
         return checks
 
+
+# Well-known system Google Chrome / Chromium install locations, by platform. The
+# headed browser glove drives on the host is discovered here (falling back to
+# Chrome for Testing) so the browser feature works on macOS, Linux and Windows
+# without a hardcoded path.
+_SYSTEM_CHROME = (
+    # macOS
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    # Linux
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/opt/google/chrome/chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
+    # Windows
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files/Chromium/Application/chrome.exe",
+)
 
 # The Chrome for Testing binary (Playwright's managed Chromium build) shipped in
 # the ms-playwright cache; the standard headed browser for a no-system-Chrome host.
@@ -77,6 +103,8 @@ _CFT_GLOBS = (
     "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/Google Chrome for Testing",
     # Linux
     "~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
+    # Windows (%USERPROFILE%\AppData\Local\ms-playwright)
+    "~/AppData/Local/ms-playwright/chromium-*/chrome-win*/chrome.exe",
 )
 
 
@@ -86,6 +114,19 @@ def chrome_for_testing_path() -> str | None:
     for pat in _CFT_GLOBS:
         hits += glob.glob(os.path.expanduser(pat))
     return sorted(hits)[-1] if hits else None
+
+
+def chrome_executable() -> str | None:
+    """Best headed browser on this host, or None.
+
+    Prefers a system Google Chrome / Chromium, then Playwright's Chrome for
+    Testing. All three speak CDP on ``--remote-debugging-port``, which is what
+    both browser providers attach to.
+    """
+    for path in _SYSTEM_CHROME:
+        if os.path.exists(path):
+            return path
+    return chrome_for_testing_path()
 
 
 def _browser_backend_check():
@@ -98,9 +139,9 @@ def _browser_backend_check():
     """
     from ..runtimes.base import Check
 
-    system_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if os.path.exists(system_chrome):
-        return Check("browser host-mcp: browser", "ok", f"system Google Chrome ({system_chrome})")
+    system_chrome = next((p for p in _SYSTEM_CHROME if os.path.exists(p)), None)
+    if system_chrome:
+        return Check("browser host-mcp: browser", "ok", f"system Chrome/Chromium ({system_chrome})")
     cft = chrome_for_testing_path()
     if cft:
         return Check(

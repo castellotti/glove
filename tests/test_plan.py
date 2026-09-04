@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from glove.config import AddDir, Config
 from glove.hardening import Limits
 from glove.plan import build_session_plan
@@ -61,6 +59,19 @@ def test_limits_flow_through(tmp_path):
     plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
     assert plan.hardening.limits.pids == 100
     assert plan.hardening.limits.memory == "2g"
+
+
+def test_browser_endpoint_reaches_environment(tmp_path):
+    # apply_browser declares the `browser` service (no env of its own); the plan
+    # must still surface BROWSER_MCP_URL to the harness, derived once from that
+    # service. Guards against the wiring/plan endpoint duplication being removed
+    # without the single remaining source keeping the container wired.
+    from glove.browsers import apply_browser
+
+    cfg = _cfg(tmp_path, browser={"provider": "host-mcp", "port": 8931})
+    apply_browser(cfg, "s")
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
 
 
 def test_add_dir_modes(tmp_path):

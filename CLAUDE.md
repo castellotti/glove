@@ -8,6 +8,7 @@ in-container kernel enforcer wrapping the agent and every command it runs.
 
 - Python ≥ 3.11, managed with **uv**. Never call `pip` or a bare `python`.
   - `uv sync` — install/refresh the environment.
+  - `uv run ruff check glove tests` — lint (must be clean before moving on).
   - `uv run pytest -q` — run the test suite (must be green before moving on).
   - `uv run glove …` — run the CLI.
 - `podman`, `nono`, `srt`, and Apple `container` are **not** installed on this

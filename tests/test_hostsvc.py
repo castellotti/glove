@@ -16,7 +16,7 @@ def _cfg(tmp_path):
 
 
 def test_expand_placeholders(tmp_path):
-    cfg, work = _cfg(tmp_path)
+    cfg, _work = _cfg(tmp_path)
     sdir = tmp_path / "state"
     cmd = "mcp --allowed-hosts glove-{session}-browser:8931 --output-dir {media_dir}"
     out = _expand(cmd, cfg, "vibe-local", sdir)

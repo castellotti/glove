@@ -12,6 +12,7 @@ Falls back to plain backgrounded processes (with logfiles) when tmux is absent.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import socket
@@ -148,10 +149,8 @@ def stop_host_services(cfg: Config, session: str, session_dir: Path) -> None:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         pidfile = log_dir / f"{svc.name}.pid"
         if pidfile.exists():
-            try:
+            with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
                 os.killpg(os.getpgid(int(pidfile.read_text())), 15)
-            except (ProcessLookupError, ValueError, PermissionError):
-                pass
             pidfile.unlink(missing_ok=True)
         console.print(f"  [dim]• {svc.name}: stopped[/dim]")
 

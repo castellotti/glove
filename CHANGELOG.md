@@ -76,6 +76,60 @@ All six implementation phases are complete.
   profile**, so it reflects the syscall filter the real harness runs under.
 - Removed the dead `SUDO_RELAY` constant (superseded by `SUDO_RELAY_BODY`).
 
+### Tooling
+
+- **`ruff` is now a dev dependency with a project config** (`[tool.ruff]` in
+  `pyproject.toml`: E/F/W/I/UP/B/SIM/C4/RUF at line-length 120, Typer's `B008`
+  exempted, `tests/integration` + `glove/harnesses` excluded). `uv run ruff check
+  glove tests` is clean and is part of the documented test flow. The existing
+  code was brought up to the ruleset (import order, unused imports, `Optional[X]`
+  → `X | None` in the CLI, minor simplifications).
+
+### Fixes (code review, 2nd pass)
+
+- **The headed-Chrome host helper now discovers the browser binary** instead of
+  hardcoding `"/Applications/Google Chrome.app/…"`. Both browser providers
+  (`host-mcp`, `host-server`) launch a headed Chrome on the host; on Linux, or on
+  a macOS host with only Playwright's Chrome for Testing (the very setup `glove
+  doctor` recommends), that path did not exist, so the tmux session died, the
+  readiness check timed out on `:9222`, and the Playwright MCP could never attach —
+  the browser feature was broken via the provider sugar. `headed_chrome_service()`
+  now resolves a system Google Chrome / Chromium, then Chrome for Testing, across
+  macOS, Linux and Windows (`chrome_executable()`), and the `host-mcp` doctor check
+  reports whichever system browser it found.
+- **`glove down <env>` now tears down every session, including `--name`d ones.**
+  It only ever ran `docker compose -p glove-<env> down` and read the default
+  session dir, so a session started with `--name feat` (compose project
+  `glove-<env>-feat`, host services keyed the same) was orphaned — harness
+  container and forwarder/host sidecars left running with no CLI path to stop
+  them. `down` now iterates every session under the env (or one, with `--name`),
+  tearing down each session's compose project and host services; host services are
+  keyed by the session token to match.
+- **A declared service without the `service` net profile now errors loudly.** A
+  hand-declared service with the default `net: [none]` was silently dropped — no
+  sidecar, no error — while the harness config still pointed at the (dead)
+  endpoint, so the first turn failed with an opaque connection-refused. glove's
+  security default is *no network unless explicitly requested*, so rather than
+  silently dropping (the bug) or auto-granting a route (equally wrong), the
+  contradiction now raises a clear `ConfigError` telling the operator to add
+  `service` to `net`. Browser providers already flip `net` to include `service`,
+  so the `--browser` sugar is unaffected.
+- **The LLM API key is redacted from the persisted `glove.effective.yaml`.** The
+  rendered effective config wrote `llm_api_key` in cleartext under `~/.glove` on
+  every run, an extra on-disk copy of the secret never scrubbed on `down`.
+  `Config.to_yaml(redact_secrets=True)` nulls it in that artifact; the real key
+  still lives only in the (git-ignorable) env source and is injected at render
+  time.
+- **nono's per-session tmpfs now targets `~/.local/state/nono`, not the whole
+  `~/.local/state`.** The broad mount shadowed every sibling's persisted state
+  (caches, tokens, resume data) under the `/home/agent` bind mount each session;
+  it now isolates only nono's own state root.
+- **The browser MCP endpoint has a single construction site.** `BROWSER_MCP_URL`
+  was built both in the `host-mcp` provider wiring and again in `plan._service_env`,
+  two strings that had to stay byte-identical by hand. The provider now only
+  declares the `browser` service; the endpoint is derived once, at plan time, from
+  that service (also covering hand-wired configs).
+
 ### Phase 6 — runtime stubs, podman, docs
 
 - **`glove doctor` surfaces runtime status independently of container probes**:

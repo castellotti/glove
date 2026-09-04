@@ -74,7 +74,6 @@ def _browser_checks(browser: str | None) -> list[Check]:
         return []
     try:
         from .browsers import get_provider
-
         from .config import Config
 
         return get_provider(browser).doctor(Config())
@@ -93,7 +92,8 @@ def run_doctor(
     checks: list[Check] = [Check("os", "info", f"{os.uname().sysname} {os.uname().release} {os.uname().machine}")]
     rt = get_runtime(runtime)
     if not rt.caps.tested:
-        checks.append(Check(f"runtime: {runtime}", "warn", "ships but UNTESTED on this host — validate before relying on it"))
+        checks.append(Check(f"runtime: {runtime}", "warn",
+                            "ships but UNTESTED on this host — validate before relying on it"))
     if not rt.caps.implemented:
         checks.append(Check(f"runtime: {runtime}", "warn", "not implemented (stub)"))
     if include_container_probes:

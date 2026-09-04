@@ -16,7 +16,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 import yaml
@@ -27,7 +26,6 @@ from . import __version__
 from .config import ConfigError, parse_add_dir_flag, resolve
 from .hardening import HardeningError
 from .harness import known_harnesses
-from .plan import build_session_plan
 from .harnessconfig import render_home
 from .hostsvc import (
     describe_host_services,
@@ -35,6 +33,7 @@ from .hostsvc import (
     start_host_services,
     stop_host_services,
 )
+from .plan import build_session_plan
 from .registry import (
     RegistryError,
     create_env,
@@ -78,13 +77,13 @@ def _home_dir(cfg, edir: Path) -> Path:
 
 @app.command()
 def init(
-    harness: Optional[str] = typer.Argument(
+    harness: str | None = typer.Argument(
         None, help=f"one of: {', '.join(known_harnesses())} (default: vibe)"
     ),
-    name: Optional[str] = typer.Option(
+    name: str | None = typer.Option(
         None, "--name", help="force the env-id (default: derived from cwd)"
     ),
-    from_file: Optional[Path] = typer.Option(
+    from_file: Path | None = typer.Option(
         None, "--from", help="import an existing config (e.g. a legacy glove.yaml)"
     ),
 ) -> None:
@@ -147,31 +146,31 @@ def init(
 
 @app.command()
 def run(
-    harness: Optional[str] = typer.Argument(
+    harness: str | None = typer.Argument(
         None, help=f"one of: {', '.join(known_harnesses())}"
     ),
-    name: Optional[str] = typer.Option(
+    name: str | None = typer.Option(
         None, "--name", help="name this session (coexists with others; default: env-id)"
     ),
-    provider: Optional[str] = typer.Option(None, help="docker | podman (autodetect)"),
-    runtime: Optional[str] = typer.Option(
+    provider: str | None = typer.Option(None, help="docker | podman (autodetect)"),
+    runtime: str | None = typer.Option(
         None, "--runtime", help=f"ring-0 runtime: {', '.join(known_runtimes())}"
     ),
-    enforcer: Optional[str] = typer.Option(
+    enforcer: str | None = typer.Option(
         None, "--enforcer", help="ring-1 enforcer: nono | srt | none"
     ),
-    browser: Optional[str] = typer.Option(
+    browser: str | None = typer.Option(
         None, "--browser", help="browser provider: host-mcp | host-server | none"
     ),
-    config: Optional[Path] = typer.Option(None, "--config", help="YAML/JSON overlay"),
-    env: Optional[str] = typer.Option(
+    config: Path | None = typer.Option(None, "--config", help="YAML/JSON overlay"),
+    env: str | None = typer.Option(
         None, "--env", help="select an env by id, ignoring cwd resolution"
     ),
     add_dir: list[str] = typer.Option(
         [], "--add-dir", help="extra host path PATH[:ro|:rw] (repeatable)"
     ),
-    workdir: Optional[Path] = typer.Option(None, "--workdir", help="the /work mount"),
-    net: Optional[str] = typer.Option(
+    workdir: Path | None = typer.Option(None, "--workdir", help="the /work mount"),
+    net: str | None = typer.Option(
         None, "--net", help="comma list: none|internal|internet|lan|docker:<n>|service"
     ),
     allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
@@ -262,7 +261,7 @@ def run(
     # config. Nothing is written to the invocation dir.
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
-    (sdir / "glove.effective.yaml").write_text(cfg.to_yaml())
+    (sdir / "glove.effective.yaml").write_text(cfg.to_yaml(redact_secrets=True))
     home_files = render_home(
         cfg, plan.profile, env_id, home_dir, mount_plan=plan.mount_plan
     )
@@ -276,13 +275,15 @@ def run(
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
         _print_summary(plan, home_files)
-        describe_host_services(cfg, env_id, sdir)
+        describe_host_services(cfg, session_token, sdir)
         print_host_setup(cfg)
         return
 
     # Start host-side helpers (SSH tunnel, Chrome, Playwright MCP) before the
-    # harness, then print anything left for the operator to run by hand.
-    start_host_services(cfg, env_id, sdir)
+    # harness, then print anything left for the operator to run by hand. Key them
+    # by the session token (== compose project suffix) so `glove down` can find
+    # and stop them per session, not just the default unnamed one.
+    start_host_services(cfg, session_token, sdir)
     print_host_setup(cfg)
     # Non-dry-run launch lives in session.py; import lazily so --dry-run needs
     # no provider present.
@@ -314,7 +315,7 @@ def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) 
     )
 
 
-def _print_summary(plan, home_files) -> None:  # noqa: ANN001 - internal helper
+def _print_summary(plan, home_files) -> None:
     console.print("\n[bold]mounts[/bold]")
     for m in plan.mounts:
         console.print(f"  {m.host_path}  →  {m.container_path}  ({m.mode})")
@@ -341,10 +342,10 @@ def _print_summary(plan, home_files) -> None:  # noqa: ANN001 - internal helper
 
 @app.command()
 def config(
-    harness: Optional[str] = typer.Argument(
+    harness: str | None = typer.Argument(
         None, help="harness, to resolve the env from cwd"
     ),
-    env: Optional[str] = typer.Option(None, "--env", help="select an env by id"),
+    env: str | None = typer.Option(None, "--env", help="select an env by id"),
     path: bool = typer.Option(False, "--path", help="print the config path only"),
     edit: bool = typer.Option(False, "--edit", help="open the config in $EDITOR"),
 ) -> None:
@@ -395,12 +396,20 @@ def _locate_env(env: str | None, harness: str | None) -> str:
 
 @app.command()
 def down(
-    env_id: Optional[str] = typer.Argument(None, help="env-id to tear down"),
-    provider: Optional[str] = typer.Option(None),
+    env_id: str | None = typer.Argument(None, help="env-id to tear down"),
+    name: str | None = typer.Option(
+        None, "--name", help="tear down only this session (default: all sessions of the env)"
+    ),
+    provider: str | None = typer.Option(None),
     wipe: bool = typer.Option(False, "--wipe", help="also remove the config volume"),
 ) -> None:
-    """Tear down an env's compose project and its host services."""
+    """Tear down an env's sessions (compose projects) and their host services.
+
+    Every session of the env is torn down — including `--name`d ones, whose
+    compose project is `glove-<env>-<name>` — unless `--name` narrows it to one.
+    """
     from .config import load_config
+    from .registry import sessions_root
     from .session import teardown
 
     if env_id is None:
@@ -416,27 +425,44 @@ def down(
             err.print(f"[red]error:[/red] multiple envs for this dir ({ids}); pass an env-id")
             raise typer.Exit(1)
 
-    sdir = session_dir(env_id, env_id)
-    effective = sdir / "glove.effective.yaml"
-    if effective.exists():
-        try:
-            cfg = load_config(effective)
-            console.print("[bold]stopping host services…[/bold]")
-            stop_host_services(cfg, env_id, sdir)
-        except Exception as e:  # noqa: BLE001 - teardown must be best-effort
-            err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
+    prov = provider or _autodetect_provider()
+    # Session dirs are named by the bare session name (env-id for the default,
+    # unnamed session; the --name value otherwise). Their compose project is
+    # keyed by the session *token* (glove-<env>[-<name>]).
+    sroot = sessions_root(env_id)
+    if name is not None:
+        session_names = [name]
+    elif sroot.is_dir():
+        session_names = sorted(p.name for p in sroot.iterdir() if p.is_dir())
+    else:
+        session_names = []
+    # Fall back to the default session so a legacy/never-run env still tears down.
+    if not session_names:
+        session_names = [env_id]
 
-    teardown(env_id, provider=provider or _autodetect_provider(), wipe=wipe)
+    for sname in session_names:
+        sdir = session_dir(env_id, sname)
+        token = env_id if sname == env_id else f"{env_id}-{sname}"
+        effective = sdir / "glove.effective.yaml"
+        if effective.exists():
+            try:
+                cfg = load_config(effective)
+                token = cfg.resolved_name()
+                console.print(f"[bold]stopping host services…[/bold] ({sname})")
+                stop_host_services(cfg, token, sdir)
+            except Exception as e:
+                err.print(f"[yellow]warn:[/yellow] host-service teardown skipped for {sname}: {e}")
+        teardown(token, provider=prov, wipe=wipe)
 
 
 @app.command()
 def build(
-    harness: Optional[str] = typer.Argument(
+    harness: str | None = typer.Argument(
         None, help=f"harness image to build ({', '.join(known_harnesses())}); "
         "omit to build the forwarder only"
     ),
-    provider: Optional[str] = typer.Option(None),
-    enforcer: Optional[str] = typer.Option(
+    provider: str | None = typer.Option(None),
+    enforcer: str | None = typer.Option(
         None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
     ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
@@ -476,10 +502,10 @@ def list_envs() -> None:
 
 @app.command()
 def doctor(
-    env: Optional[str] = typer.Option(None, "--env", help="read runtime/enforcer/browser from an env's config"),
-    runtime: Optional[str] = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
-    enforcer: Optional[str] = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
-    browser: Optional[str] = typer.Option(None, "--browser", help="probe a browser provider: host-mcp | host-server"),
+    env: str | None = typer.Option(None, "--env", help="read runtime/enforcer/browser from an env's config"),
+    runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
+    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
+    browser: str | None = typer.Option(None, "--browser", help="probe a browser provider: host-mcp | host-server"),
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
     no_container: bool = typer.Option(
         False, "--no-container", help="skip container probes (host-only, fast)"
@@ -529,8 +555,8 @@ app.add_typer(policy_app, name="policy")
 
 @policy_app.command("show")
 def policy_show(
-    harness: Optional[str] = typer.Argument(None, help="harness, to resolve the env from cwd"),
-    env: Optional[str] = typer.Option(None, "--env", help="select an env by id"),
+    harness: str | None = typer.Argument(None, help="harness, to resolve the env from cwd"),
+    env: str | None = typer.Option(None, "--env", help="select an env by id"),
 ) -> None:
     """Print the rendered ring-1 policies and the ring-0 hardening for review."""
     try:
@@ -562,7 +588,8 @@ def policy_show(
     )
     console.print(f"  seccomp={h.seccomp_profile}")
     if h.systempaths_unconfined:
-        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys exposed to the container (srt strong)")
+        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys "
+                      "exposed to the container (srt strong)")
     console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
 
     if not plan.policies:
@@ -583,7 +610,7 @@ def policy_show(
 
 @app.command("ps")
 def list_sessions(
-    runtime: Optional[str] = typer.Option(None, "--runtime", help="docker | podman"),
+    runtime: str | None = typer.Option(None, "--runtime", help="docker | podman"),
 ) -> None:
     """List running glove sessions (compose projects)."""
     rt = get_runtime(runtime or _autodetect_provider())

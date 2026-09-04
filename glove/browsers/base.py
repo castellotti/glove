@@ -47,11 +47,22 @@ class BrowserProvider(Protocol):
 # Shared host helper: a headed Chrome on the host with remote debugging, so both
 # host-mcp (CDP) and host-server (connectOverCDP) can attach to the same browser
 # the operator watches. keep=true leaves it running across `glove down`.
+#
+# The binary is discovered on the host at wiring time (system Google Chrome, then
+# Playwright's Chrome for Testing) rather than hardcoded, so this works on Linux
+# and on a macOS host with only Chrome for Testing — the very setup `glove doctor`
+# recommends. Falls back to the macOS system path only so the command is still
+# well-formed when nothing is found (doctor will have warned).
 def headed_chrome_service() -> HostService:
+    # Lazy import: host_mcp imports this module, so importing it at top level
+    # would be a cycle. chrome discovery lives beside the doctor guidance there.
+    from .host_mcp import _SYSTEM_CHROME, chrome_executable
+
+    chrome = chrome_executable() or _SYSTEM_CHROME[0]
     return HostService(
         name="chrome",
         command=(
-            '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" '
+            f'"{chrome}" '
             "--remote-debugging-port=9222 --user-data-dir={chrome_profile} "
             "--no-first-run --no-default-browser-check"
         ),

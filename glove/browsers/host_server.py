@@ -80,7 +80,8 @@ class HostServerProvider:
             host_minor = _minor(host_v)
             want_minor = _minor(PLAYWRIGHT_VERSION)
             if host_minor and host_minor == want_minor:
-                checks.append(Check("browser host-server: playwright version", "ok", f"host {host_v} matches image {PLAYWRIGHT_VERSION}"))
+                checks.append(Check("browser host-server: playwright version", "ok",
+                                    f"host {host_v} matches image {PLAYWRIGHT_VERSION}"))
             elif host_minor:
                 checks.append(Check("browser host-server: playwright version", "fail",
                                     f"host {host_v} != image {PLAYWRIGHT_VERSION} (minor must match for connect())"))

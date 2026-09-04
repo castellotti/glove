@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .config import Config, Service
+from .config import Config, ConfigError, Service
 
 
 @dataclass(frozen=True)
@@ -66,9 +66,22 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
     wants_services = "service" in profiles or any(
         p.startswith("service:") for p in profiles
     )
-    # Services are the allow-list; include them whenever declared, and always
-    # when a "service" profile is requested.
-    if cfg.services and (wants_services or "none" not in profiles):
+    # Security default is no network: a forwarder sidecar (which grants the
+    # harness a route to an endpoint) renders ONLY when the operator has
+    # explicitly opted in with the `service` net profile. Declaring `services:`
+    # without it is a contradiction — the old behaviour silently dropped the
+    # service AND still pointed the harness config at the (now dead) endpoint,
+    # so the first turn failed with an opaque connection-refused. Fail loudly and
+    # early instead of either dropping silently or auto-granting network.
+    if cfg.services and not wants_services:
+        names = ", ".join(s.name for s in cfg.services)
+        raise ConfigError(
+            f"services are declared ({names}) but net={profiles} does not permit "
+            "them — add 'service' to `net` (e.g. net: [service]) to render their "
+            "forwarder sidecars, or remove the services. glove grants no network "
+            "unless explicitly requested."
+        )
+    if wants_services:
         for svc in cfg.services:
             sidecars.append(_sidecar_for(svc))
             if svc.join_network and svc.join_network not in external:

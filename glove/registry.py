@@ -103,7 +103,7 @@ def derive_env_id(entries: list[EnvEntry], dir_real: str, harness: str) -> str:
         return base
 
     holder = next((e for e in entries if e.env_id == base), None)
-    if holder is not None and holder.dir == dir_real:
+    if holder is not None and holder.dir == dir_real:  # noqa: SIM108 - ternary would be unreadable here
         candidate = f"{base}-{harness}"
     else:
         candidate = f"{base}-{_short(dir_real)}"
