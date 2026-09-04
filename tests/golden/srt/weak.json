@@ -1,0 +1,21 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "/home/agent"
+    ],
+    "allowRead": [],
+    "allowWrite": [
+      "/work",
+      "/tmp"
+    ],
+    "denyWrite": [
+      "/home/agent"
+    ]
+  },
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": []
+  },
+  "allowUnixSockets": [],
+  "enableWeakerNestedSandbox": true
+}

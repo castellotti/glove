@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "name": "glove-tool"
+  },
+  "extends": "default",
+  "workdir": {
+    "access": "readwrite"
+  },
+  "filesystem": {
+    "allow": [
+      "/work",
+      "/tmp"
+    ],
+    "read": [
+      "/etc/glove",
+      "/opt/glove"
+    ]
+  },
+  "network": {
+    "block": true
+  },
+  "environment": {
+    "deny_vars": [
+      "GLOVE_LLM_API_KEY",
+      "*KEY*",
+      "*TOKEN*",
+      "*SECRET*",
+      "*API_KEY*",
+      "*CREDENTIAL*",
+      "*PASSWORD*"
+    ]
+  },
+  "security": {
+    "signal_mode": "allow_same_sandbox"
+  },
+  "commands": {
+    "allow": [
+      "cp",
+      "mv",
+      "rm",
+      "chmod"
+    ],
+    "deny": [
+      "git"
+    ]
+  }
+}

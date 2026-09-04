@@ -1,0 +1,42 @@
+# glove preset — Pi against a local OpenAI-compatible LLM, no browser.
+#
+# The simplest useful setup: the agent works in its own directory, talks to an
+# LLM already running on THIS machine, and has no web access at all. Good for
+# working on a code repo offline.
+#
+# Use it:
+#   cd ~/path/to/your/project           # the dir the agent should work in
+#   glove init pi --from <glove-repo>/docs/examples/pi-local.glove.yaml
+#   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the model + API key
+#   glove pi --dry-run                  # preview
+#   glove pi                            # launch
+#
+# `init` copies this file into ~/.glove/envs/<env-id>/glove.yaml (outside your
+# repo). Put the real API key THERE, never in the repo.
+
+harness: pi
+runtime: docker
+enforcer: nono          # ring-1 kernel sandbox wrapping the agent + every command
+
+# The agent's /work — its only writable mount. `.` = the dir you launch from.
+# No `add_dirs` → nothing else on the host is mounted or reachable.
+workdir: .
+
+# The LLM. `model` must match what the endpoint advertises at
+#   curl http://127.0.0.1:8080/v1/models
+model: your-model-id
+llm_service: llm
+llm_api_key: sk-REPLACE-ME   # or omit if your endpoint needs no key
+
+# Internal-only container; the `llm` forwarder is the only routable host.
+net: [service]
+allow_root: false
+
+services:
+  # Bridge to an LLM listening on the Docker host itself (127.0.0.1:8080).
+  # host.docker.internal is how a sidecar reaches a host port; no SSH tunnel
+  # needed when the model runs on the same machine. (For a REMOTE model over an
+  # SSH tunnel, plus a browser, see pi-remote-llm.glove.yaml.)
+  - name: llm
+    to: host.docker.internal:8080
+    port: 8080

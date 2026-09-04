@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+*.glove.local.yaml
+.DS_Store
+
+# Internal design/planning docs — kept on disk, not published.
+# Active plans live in docs/planning/, legacy/implemented ones in
+# docs/planning/archive/. The whole tree stays out of the published repo.
+/docs/planning/
