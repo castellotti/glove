@@ -17,12 +17,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from ..config import HostService, Service
+from ...config import HostService, Service
 from .chrome import DEFAULT_CHROME, chrome_executable
 
 if TYPE_CHECKING:
-    from ..config import Config
-    from ..runtimes.base import Check
+    from ...config import Config
+    from ...runtimes.base import Check
 
 
 @dataclass

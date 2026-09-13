@@ -239,12 +239,11 @@ def run(
                 f"runtime {cfg.runtime!r} is not implemented yet; "
                 "use docker or podman"
             )
-        # Expand the browser provider into services/host_services/env.
-        from .browsers import apply_browser
-
+        # The --browser flag selects the provider; build_session_plan expands the
+        # browser plugin (host services, sidecar, env) via _apply_plugin_config,
+        # so run/dry-run/policy-show all compose the same session.
         if browser is not None:
             cfg.browser = {**(cfg.browser or {}), "provider": browser}
-        cfg = apply_browser(cfg, token)
         home_dir = _home_dir(cfg, edir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()

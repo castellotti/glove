@@ -49,7 +49,7 @@ def build_environment_context(
     same one the runtime mounts) so the paths and modes shown to the agent match
     reality even when basenames collide or an add-dir absorbs the workdir.
     """
-    from .browsers import get_provider, provider_name
+    from .plugins.browser import get_provider, provider_name
 
     if mount_plan is None:
         mount_plan = _mount_plan_for(cfg)
@@ -180,14 +180,6 @@ def _mcp_servers(cfg: Config, session: str) -> list[dict[str, Any]]:
     from .plugins import resolve_plugins
 
     servers: list[dict[str, Any]] = []
-    names = {s.name for s in cfg.services}
-    if "browser" in names:
-        base = _service_host(cfg, session, "browser")
-        # Vibe's "http" transport speaks Streamable HTTP (it has no SSE client),
-        # so point at Playwright MCP's /mcp endpoint, not /sse.
-        servers.append(
-            {"name": "playwright", "transport": "http", "url": f"{base}/mcp"}
-        )
     for plugin in resolve_plugins(cfg.plugins):
         if plugin.vibe_mcp is not None:
             servers.extend(plugin.vibe_mcp(cfg, session))

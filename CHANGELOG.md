@@ -9,6 +9,27 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Phase 5 — `browser` plugin
+
+- **`browser` plugin** (`plugins: [browser]` / `--with browser` / `--browser`) —
+  drive a real host Chromium via Playwright, restored as an opt-in capability.
+  The whole browser subsystem is now self-contained under `glove/plugins/browser/`:
+  the provider layer (`registry.py`, `base.py`, `host_mcp.py`, `host_server.py`,
+  `chrome.py`, moved from `glove/browsers/`), the Pi MCP-client extension
+  (`pi-extension/`), and the manifest.
+- **Central enablement:** `build_session_plan` now expands browser wiring
+  (`_apply_plugin_config`) — host services (Chrome + Playwright), the `browser`
+  forwarder sidecar, and harness env — so run, dry-run, `policy show`, and tests
+  all compose the same session (previously only the CLI ran `apply_browser`). A
+  legacy top-level `browser:` block implies the `browser` plugin; canonical
+  options live in `plugin_options.browser`; provider defaults to `host-mcp`.
+- Pi loads the browser extension (`-e`); Vibe reaches the same Playwright MCP via
+  the plugin's `vibe_mcp` entry (no image contribution needed — native MCP
+  client). `_mcp_servers` no longer hardcodes browser; it dispatches to plugins.
+- Verified on rootless podman: `browser` composes for Pi (extension +
+  `@modelcontextprotocol/sdk`; loads under `nono`, exit 0) and is a no-op image
+  layer for Vibe; the extension is absent from the base.
+
 ### Phase 4 — `search` plugin
 
 - **`search` plugin** (`plugins: [search]` / `--with search`) — web search via a

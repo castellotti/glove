@@ -237,3 +237,43 @@ def test_search_missing_service_errors(tmp_path):
     cfg.services = []  # drop the required `search` service
     with pytest.raises(ConfigError, match="plugin 'search' requires service"):
         build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+
+
+# --- shipped: browser ------------------------------------------------------
+
+def test_browser_plugin_registered():
+    assert "browser" in plugins.known_plugins()
+
+
+def _work(tmp_path):
+    w = tmp_path / "wd"
+    w.mkdir(exist_ok=True)
+    return str(w)
+
+
+def test_browser_legacy_block_enables_plugin_and_wires(tmp_path):
+    # A legacy top-level `browser:` block implies the browser plugin, and
+    # build_session_plan runs the provider wiring (service + host services).
+    from glove.plan import build_session_plan
+    from glove.plugins.browser import PI_EXTENSION_PATH
+
+    cfg = Config(harness="pi", workdir=_work(tmp_path), name="s",
+                 browser={"provider": "host-mcp", "port": 8931})
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    assert "browser" in cfg.plugins
+    assert any(s.name == "browser" for s in cfg.services)
+    assert {h.name for h in cfg.host_services} >= {"chrome", "playwright"}
+    assert "service" in cfg.net  # provider enabled the forwarder path
+    assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
+    assert PI_EXTENSION_PATH in plan.harness_command  # Pi loads the ext
+
+
+def test_browser_via_plugins_list_defaults_host_mcp(tmp_path):
+    from glove.plan import build_session_plan
+
+    cfg = Config(harness="vibe", workdir=_work(tmp_path), name="s", plugins=["browser"])
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    # No provider given → defaults to host-mcp, which wires the browser service.
+    assert cfg.browser.get("provider") == "host-mcp"
+    assert any(s.name == "browser" for s in cfg.services)
+    assert plan.environment["BROWSER_MCP_URL"].endswith("/mcp")

@@ -143,6 +143,30 @@ def _plugin_entry(cfg: Config, base_entry: list[str], plugins) -> list[str]:
     return entry
 
 
+def _apply_plugin_config(cfg: Config, session: str) -> None:
+    """Expand plugin-driven config before the network/plan is built.
+
+    For the browser plugin this means running the provider wiring (host services,
+    the `browser` forwarder sidecar, harness env). Runs here — not in the CLI — so
+    every plan (run, dry-run, `policy show`, tests) composes the same session.
+
+    Back-compat: a legacy top-level `browser:` block (provider set) implies the
+    `browser` plugin. Canonical options live in `plugin_options.browser`.
+    """
+    from .plugins.browser import apply_browser, provider_name
+
+    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
+        cfg.plugins = [*cfg.plugins, "browser"]
+    if "browser" in cfg.plugins:
+        opts = cfg.plugin_options.get("browser", {})
+        if opts:
+            # explicit top-level browser:/--browser wins over plugin_options
+            cfg.browser = {**opts, **(cfg.browser or {})}
+        if not (cfg.browser or {}).get("provider"):
+            cfg.browser = {**(cfg.browser or {}), "provider": "host-mcp"}  # v2 default
+        apply_browser(cfg, session)
+
+
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
     if cfg.enforcer == "srt":
@@ -167,6 +191,10 @@ def build_session_plan(
     profile = get_profile(cfg.harness)
     uid = uid if uid is not None else os.getuid()
     gid = gid if gid is not None else os.getgid()
+
+    # Expand plugin-driven config (e.g. browser provider wiring) first, so the
+    # mount/network plans and validation below see the composed session.
+    _apply_plugin_config(cfg, session)
 
     mount_plan = compute_mounts(
         cfg.workdir,

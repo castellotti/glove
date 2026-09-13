@@ -66,7 +66,7 @@ def test_browser_endpoint_reaches_environment(tmp_path):
     # must still surface BROWSER_MCP_URL to the harness, derived once from that
     # service. Guards against the wiring/plan endpoint duplication being removed
     # without the single remaining source keeping the container wired.
-    from glove.browsers import apply_browser
+    from glove.plugins.browser import apply_browser
 
     cfg = _cfg(tmp_path, browser={"provider": "host-mcp", "port": 8931})
     apply_browser(cfg, "s")

@@ -16,7 +16,7 @@ from .host_mcp import HostMcpProvider
 from .host_server import HostServerProvider
 
 if TYPE_CHECKING:
-    from ..config import Config
+    from ...config import Config
 
 _PROVIDERS: dict[str, type] = {
     "host-mcp": HostMcpProvider,

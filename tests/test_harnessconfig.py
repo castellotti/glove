@@ -23,7 +23,7 @@ def _cfg(harness: str, tmp_path):
         workdir=str(work),
         name=f"{harness}-sess",
         net=["service"],
-        plugins=["search"],
+        plugins=["search", "browser"],
         model="qwen3.8-27b-5090",
         brief="Write output to /mnt/x.",
     )
