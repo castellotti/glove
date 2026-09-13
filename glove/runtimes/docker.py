@@ -128,8 +128,14 @@ class DockerRuntime:
         # only checks that the *plan* names a profile; on a runtime that omits the
         # `seccomp=` line (podman) that plan value is discarded, so the invariant
         # would pass while the container runs unpinned. Refuse unless the runtime is
-        # known to apply a validated built-in default in that case.
-        if not extra.get("emit_seccomp", True) and not self.caps.applies_builtin_seccomp:
+        # known to apply a validated built-in default — or the operator explicitly
+        # waived the seccomp row, which validate_hardening already honoured above
+        # (kept symmetric so an accepted override isn't silently re-refused here).
+        if (
+            not extra.get("emit_seccomp", True)
+            and not self.caps.applies_builtin_seccomp
+            and "seccomp" not in overrides
+        ):
             raise HardeningError(
                 f"runtime {self.name!r} omits glove's seccomp profile but does not "
                 "apply a validated built-in default — the container would run "

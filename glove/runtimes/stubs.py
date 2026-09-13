@@ -25,6 +25,12 @@ class _StubRuntime:
             f"runtime {self.name!r} is not implemented yet ({self._desc})"
         )
 
+    def unsupported_enforcer_reason(self, enforcer: str) -> str | None:
+        # A stub renders nothing, so it makes no enforcer-specific claim here;
+        # `render`/`doctor` already report it as unimplemented. Present so the
+        # class satisfies the Runtime Protocol's compatibility gate.
+        return None
+
     def ps(self) -> list[RunningSession]:
         return []
 

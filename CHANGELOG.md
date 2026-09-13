@@ -8,6 +8,34 @@ All six implementation phases are complete.
 
 ### Changes
 
+- **Robustness follow-ups after the PR review (five fixes).**
+  - *`_host_info` no longer sticks on a transient failure.* The `@functools.cache`
+    on `_host_info` permanently memoized `{}` if the very first `podman info` probe
+    of a process failed (e.g. the machine not yet ready), silently degrading
+    rootless/seccomp/kernel for the whole run. It now caches only *successful*
+    probes (module-level dict + `_host_info.cache_clear`), so the next call
+    re-probes once podman is up; the module-scope caching that avoids re-probing
+    across fresh `get_runtime('podman')` instances is preserved.
+  - *`podman info` parsing hardened against a `|` in the kernel string.* The
+    probe format put the free-text kernel field first and split on `|`; a kernel
+    description containing a pipe shifted rootless/seccomp onto a fragment. The
+    two boolean flags now come first and the kernel last, split with `maxsplit=2`.
+  - *`Runtime.unsupported_enforcer_reason` is now on the Protocol.* The doctor
+    compatibility gate relied on a `getattr(..., lambda _e: None)` fallback, so a
+    runtime that forgot the method silently skipped the gate. It is declared on
+    the `Runtime` Protocol (a type error if omitted), the stub runtimes implement
+    it, and doctor calls it directly.
+  - *Render-time seccomp refusal now honours `--i-know-what-i-am-doing seccomp`.*
+    `render()` hard-failed on the built-in-default gap even when the operator had
+    waived the seccomp row (which `validate_hardening` accepts), making the
+    override silently ineffective. The refusal now also checks `overrides`, so the
+    two paths agree.
+  - *Tool-profile read-surface tradeoff documented honestly.* The shell-tool nono
+    profile reads whole `runtime_paths` trees (needed to exec node/python); the
+    "exposes no secret" comment overstated the guarantee. It now describes the
+    defense-in-depth tradeoff explicitly — an image-layout assumption bounded by
+    `network.block` (no exfil) and `environment.deny_vars` (secret-var stripping).
+
 - **Hardening follow-ups after the podman review (five fixes).**
   - *Interpreter paths now readable to shell tools too.* The `nono run` exit-127
     fix (interpreter/runtime paths in the read set) had been applied only to the
@@ -32,9 +60,9 @@ All six implementation phases are complete.
   - *`podman info` probed once, cached process-wide.* doctor called `podman info`
     three times per run (kernel, security fields, rootless) and the rootless cache
     lived on an instance that `get_runtime()` rebuilds each call. A module-level
-    `@functools.cache`'d `_host_info(cli)` templates all three fields in one call
-    and survives across the doctor/plan/run flow (verified: 1 call across 3 fresh
-    instances).
+    memoized `_host_info(cli)` templates all three fields in one call and survives
+    across the doctor/plan/run flow (verified: 1 call across 3 fresh instances).
+    (A later follow-up narrowed the memoization to successful probes only.)
   - *host-gateway forwarders on podman verified, not just assumed.* On rootless
     podman 6 `host.docker.internal:host-gateway` resolves to gvproxy's host
     address (192.168.127.254) — identical to podman's built-in

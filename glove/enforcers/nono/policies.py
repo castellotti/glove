@@ -15,7 +15,14 @@ dangerous_commands deny groups):
   that execs an interpreter living outside nono's default system reads (node/npm
   under /usr/local, a uv/venv python under /opt/uv) would otherwise be denied at
   exec and die exit 127 — the same Landlock failure the harness profile fixes.
-  Read access to these system dirs exposes no secret, so both profiles share it.
+  This read grant is a deliberate defense-in-depth tradeoff, not a free lunch: it
+  widens the tool sandbox's read surface to whole runtime trees, so it rests on
+  the image-layout assumption that glove's harness images bake no secret under
+  those prefixes (secrets reach the harness via env, and the tool profile's
+  ``environment.deny_vars`` already strips secret-shaped vars). The residual
+  risk — a prompt-injected read of a credential a future image layer dropped
+  there — is contained by ``network.block``: the tool sandbox has no egress, so
+  a read cannot be exfiltrated. The paths stay read-only in both profiles.
 
 Both are validated empirically against the nono probe image (see
 tests/integration/test_pi_nono.sh). A key subtlety: nono refuses to grant a
@@ -80,7 +87,9 @@ def _read_paths(plan: SessionPlan) -> list[str]:
     (venv/node prefix). The runtime paths must be readable in *both* profiles or
     an exec of that interpreter is denied by Landlock (exit 127) — for the
     harness that kills the TUI, for a tool command it kills the shell command.
-    All are read-only, so granting them exposes no writable state or secret.
+    All are read-only (no writable state), and in the tool profile the widened
+    read surface is a documented defense-in-depth tradeoff bounded by
+    ``network.block`` + secret-var stripping — see the module docstring.
     """
     return [*_ro_mounts(plan), *GLOVE_READ, *plan.profile.runtime_paths]
 
@@ -118,7 +127,8 @@ def render_tool_profile(plan: SessionPlan) -> dict:
         "filesystem": {
             # harness home intentionally absent → denied by omission (Landlock).
             # Interpreter/runtime paths ARE readable (see _read_paths) so a tool
-            # command can exec node/python; they are read-only, not writable.
+            # command can exec node/python; read-only, and the widened read
+            # surface is bounded by network.block + deny_vars (module docstring).
             "allow": [work, *_rw_mounts(plan), TMP],
             "read": _read_paths(plan),
         },

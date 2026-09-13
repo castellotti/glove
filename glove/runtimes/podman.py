@@ -30,7 +30,6 @@ be applied through the inlining compose provider.
 
 from __future__ import annotations
 
-import functools
 import shutil
 import subprocess
 from dataclasses import replace
@@ -43,28 +42,59 @@ if TYPE_CHECKING:
     from ..plan import SessionPlan
 
 
-@functools.cache
-def _host_info(cli: str) -> dict[str, str]:
-    """One `podman info` call for every Host field doctor + rootless detection
-    need (kernel, rootless, seccomp), cached process-wide by cli name.
+# Successful `podman info` probes, keyed by cli name. Only *successful* results
+# are memoized (see _host_info) so a transient early failure never sticks.
+_HOST_INFO_CACHE: dict[str, dict[str, str]] = {}
 
-    Cached at module scope, not on the instance: ``get_runtime('podman')`` builds
-    a fresh ``PodmanRuntime`` per call, so an instance-level cache would re-probe
-    on every doctor/plan/run step. Returns ``{}`` when podman is absent or the
-    probe fails (callers fall back to safe defaults). Empty on missing binary so
-    ``--dry-run`` on a host without podman never shells out.
+
+def _probe_host_info(cli: str) -> dict[str, str]:
+    """One `podman info` call for the Host fields doctor + rootless detection
+    need (kernel, rootless, seccomp). ``{}`` when podman is absent or the probe
+    fails, so callers fall back to safe defaults and ``--dry-run`` on a host
+    without podman never shells out.
+
+    Field order matters: the two boolean security flags come first and the
+    free-text kernel string last, split with ``maxsplit=2`` so a kernel
+    description containing ``|`` lands wholly in the trailing field instead of
+    shifting rootless/seccomp onto a kernel fragment.
     """
     if not shutil.which(cli):
         return {}
     proc = subprocess.run(
         [cli, "info", "--format",
-         "{{.Host.Kernel}}|{{.Host.Security.Rootless}}|{{.Host.Security.SECCOMPEnabled}}"],
+         "{{.Host.Security.Rootless}}|{{.Host.Security.SECCOMPEnabled}}|{{.Host.Kernel}}"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
         return {}
-    parts = [*proc.stdout.strip().split("|"), "", "", ""]
-    return {"kernel": parts[0], "rootless": parts[1], "seccomp": parts[2]}
+    parts = [*proc.stdout.strip().split("|", 2), "", "", ""]
+    return {"rootless": parts[0], "seccomp": parts[1], "kernel": parts[2]}
+
+
+def _host_info(cli: str) -> dict[str, str]:
+    """`_probe_host_info` memoized process-wide by cli name.
+
+    Cached at module scope, not on the instance: ``get_runtime('podman')`` builds
+    a fresh ``PodmanRuntime`` per call, so an instance-level cache would re-probe
+    on every doctor/plan/run step.
+
+    Only a *successful* (non-empty) probe is cached. A transient failure — the
+    podman machine not yet ready on the first probe of a process — must not
+    permanently pin rootless/seccomp/kernel to their unknown-defaults for the
+    whole run; leaving it uncached lets the next call re-probe once the machine
+    is up.
+    """
+    cached = _HOST_INFO_CACHE.get(cli)
+    if cached is not None:
+        return cached
+    info = _probe_host_info(cli)
+    if info:
+        _HOST_INFO_CACHE[cli] = info
+    return info
+
+
+# functools.cache-style hook so tests (and callers) can drop the memoized probe.
+_host_info.cache_clear = _HOST_INFO_CACHE.clear  # type: ignore[attr-defined]
 
 
 class PodmanRuntime(DockerRuntime):
