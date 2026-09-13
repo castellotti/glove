@@ -77,7 +77,9 @@ def render_harness_profile(plan: SessionPlan) -> dict:
         "workdir": {"access": "readwrite"},
         "filesystem": {
             "allow": [work, *_rw_mounts(plan), config_home, TMP],
-            "read": [*_ro_mounts(plan), *GLOVE_READ],
+            # The harness's interpreter/runtime (its venv or node prefix) must be
+            # readable or `nono run` cannot exec the TUI (exit 127 under Landlock).
+            "read": [*_ro_mounts(plan), *GLOVE_READ, *plan.profile.runtime_paths],
         },
         # Ring 0 already limits routable hosts to the sidecars; the harness needs
         # network to reach them. (Proxy-allowlist + credential injection is a
