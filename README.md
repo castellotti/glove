@@ -12,19 +12,14 @@ security does not rest on the container alone: a kernel-level capability
 sandbox (nono/Landlock by default) runs *inside* the container and wraps every
 command the agent executes.
 
-> **In progress — minimal core + opt-in plugins.** The base image is being
-> stripped to *harness + enforcer only*; every optional capability (web search,
-> browser, media/analysis toolchain) is moving behind an off-by-default plugin
-> system enabled per session (like `net:`). See
-> `docs/planning/minimal-core-plugins-designnote.md`. **Done:** the media
-> toolchain and the SearXNG client are no longer baked, and Pi loads only its
-> always-on `enforcer` extension (images bumped to `0.4.0`) (phase 1); the
-> `plugins:` config key + `--with` flag + derived-layer image composition are
-> wired (phase 2); **`media`** (analysis toolchain, phase 3), **`search`**
-> (private SearXNG, phase 4), and **`browser`** (host Chromium via Playwright,
-> phase 5) ship as plugins (`--with media,search,browser`). A legacy top-level
-> `browser:` block still works (it implies the `browser` plugin); remaining:
-> deprecation warnings + example-config migration (phase 6).
+> **Minimal core + opt-in plugins.** The base image is *harness + enforcer only*;
+> every optional capability is an off-by-default plugin enabled per session (like
+> `net:`) — **`media`** (analysis toolchain), **`search`** (private SearXNG), and
+> **`browser`** (host Chromium via Playwright). Enable them with
+> `plugins: [media, search, browser]` (+ `plugin_options:`) or `--with a,b`; each
+> composes as a derived image layer + its wiring only when enabled. See
+> `docs/planning/minimal-core-plugins-designnote.md`. Legacy top-level `browser:`
+> / bare `search` service configs still work with a deprecation warning.
 
 ## How it works - three rings (defense in depth)
 
@@ -105,10 +100,11 @@ workdir: .
 add_dirs:
   - { path: ../shared-lib, mode: ro }
 net: [service]              # none | service | internet | lan | docker:<name>
-plugins: [media]            # opt-in capabilities (off by default); also `--with a,b`
+plugins: [media, browser]   # opt-in capabilities (off by default); also `--with a,b`
+plugin_options:             # per-plugin config
+  browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
-browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
 model: your-model-id       # must match the endpoint's /v1/models
 llm_api_key: sk-...         # stripped from shell tools' env by ring 1
 tools: { net: block, allow_commands: [cp, mv, rm] }

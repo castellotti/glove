@@ -277,3 +277,41 @@ def test_browser_via_plugins_list_defaults_host_mcp(tmp_path):
     assert cfg.browser.get("provider") == "host-mcp"
     assert any(s.name == "browser" for s in cfg.services)
     assert plan.environment["BROWSER_MCP_URL"].endswith("/mcp")
+
+
+def test_browser_provider_none_skips_host_wiring(tmp_path):
+    # provider: none → the plugin composes the ext/MCP but the operator hand-wires
+    # host services (the pi-remote-llm pattern). No chrome host service auto-added.
+    from glove.plan import build_session_plan
+    from glove.plugins.browser import PI_EXTENSION_PATH
+
+    cfg = Config(
+        harness="pi", workdir=_work(tmp_path), name="s",
+        net=["service"], plugins=["browser"],
+        plugin_options={"browser": {"provider": "none"}},
+    )
+    cfg.services = [Service(name="browser", to="host.docker.internal:8931", port=8931)]
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    assert "chrome" not in {h.name for h in cfg.host_services}
+    assert PI_EXTENSION_PATH in plan.harness_command  # ext still composed
+
+
+# --- back-compat shim ------------------------------------------------------
+
+def test_legacy_warnings_browser_block(tmp_path):
+    from glove.plan import legacy_warnings
+
+    cfg = Config(harness="vibe", workdir=_work(tmp_path), name="s",
+                 browser={"provider": "host-mcp"})
+    assert any("browser:" in w for w in legacy_warnings(cfg))
+    # No warning once migrated to plugins.
+    cfg2 = Config(harness="vibe", workdir=_work(tmp_path), name="s", plugins=["browser"])
+    assert legacy_warnings(cfg2) == []
+
+
+def test_legacy_warnings_search_service(tmp_path):
+    from glove.plan import legacy_warnings
+
+    cfg = Config(harness="pi", workdir=_work(tmp_path), name="s", net=["service"])
+    cfg.services = [Service(name="search", to="x:8080", port=8080)]
+    assert any("search" in w for w in legacy_warnings(cfg))

@@ -244,6 +244,10 @@ def run(
         # so run/dry-run/policy-show all compose the same session.
         if browser is not None:
             cfg.browser = {**(cfg.browser or {}), "provider": browser}
+        from .plan import legacy_warnings
+
+        for w in legacy_warnings(cfg):
+            err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, edir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
@@ -544,7 +548,13 @@ def doctor(
             data = yaml.safe_load(cfg_path.read_text()) or {}
             rt = runtime or data.get("runtime", rt)
             enf = enforcer or data.get("enforcer", enf)
-            brw = browser or (data.get("browser") or {}).get("provider")
+            # Probe the browser only when the browser plugin (or a legacy
+            # `browser:` block) is enabled for this env.
+            plugins = data.get("plugins") or []
+            legacy = (data.get("browser") or {}).get("provider")
+            if "browser" in plugins or legacy:
+                opts = (data.get("plugin_options") or {}).get("browser") or {}
+                brw = browser or legacy or opts.get("provider") or "host-mcp"
 
     try:
         checks = run_doctor(runtime=rt, enforcer=enf, browser=brw, include_container_probes=not no_container)
@@ -615,6 +625,35 @@ def policy_show(
         console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys "
                       "exposed to the container (srt strong)")
     console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
+
+    # Enabled plugins and exactly what each one grants (reviewable per §6-Q5).
+    from .plugins import resolve_plugins
+
+    enabled = resolve_plugins(cfg.plugins)  # cfg.plugins now includes bridged ones
+    console.print("\n[bold]plugins[/bold]")
+    if not enabled:
+        console.print("  [dim](none — minimal base image)[/dim]")
+    for p in enabled:
+        console.print(f"  [cyan]{p.name}[/cyan] — {p.summary}")
+        if p.requires_services:
+            console.print(
+                f"    egress: only via forwarder sidecar(s) {list(p.requires_services)} "
+                "(network allow-list; shell tools stay --block-net)"
+            )
+        if p.pi_extensions and cfg.harness == "pi":
+            console.print(f"    pi extension(s): {list(p.pi_extensions)}")
+        layers = p.layers_for(cfg.harness)
+        pkgs = {
+            "apt": [x for lyr in layers for x in lyr.apt],
+            "pip": [x for lyr in layers for x in lyr.pip],
+            "npm": [x for lyr in layers for x in lyr.npm],
+        }
+        shown = ", ".join(f"{k}={v}" for k, v in pkgs.items() if v)
+        if shown:
+            console.print(f"    image layer: {shown}")
+    hs = [h.name for h in cfg.host_services]
+    if hs:
+        console.print(f"  [dim]host services (run on host): {hs}[/dim]")
 
     if not plan.policies:
         console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")

@@ -155,6 +155,9 @@ def _apply_plugin_config(cfg: Config, session: str) -> None:
     """
     from .plugins.browser import apply_browser, provider_name
 
+    # Back-compat: a declared `search` service implies the search plugin.
+    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+        cfg.plugins = [*cfg.plugins, "search"]
     if provider_name(cfg) is not None and "browser" not in cfg.plugins:
         cfg.plugins = [*cfg.plugins, "browser"]
     if "browser" in cfg.plugins:
@@ -165,6 +168,24 @@ def _apply_plugin_config(cfg: Config, session: str) -> None:
         if not (cfg.browser or {}).get("provider"):
             cfg.browser = {**(cfg.browser or {}), "provider": "host-mcp"}  # v2 default
         apply_browser(cfg, session)
+
+
+def legacy_warnings(cfg: Config) -> list[str]:
+    """Deprecation notices for pre-plugin config that still works via the shim."""
+    from .plugins.browser import provider_name
+
+    warnings: list[str] = []
+    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
+        warnings.append(
+            "top-level `browser:` is deprecated — use `plugins: [browser]` with "
+            "`plugin_options: {browser: {…}}` (still works for now)."
+        )
+    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+        warnings.append(
+            "a `search` service without `plugins: [search]` is deprecated — add "
+            "`plugins: [search]` (implied for now)."
+        )
+    return warnings
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:

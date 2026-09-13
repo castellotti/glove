@@ -9,6 +9,24 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Phase 6 — doctor / policy show integration + migration
+
+- **`glove policy show`** now prints a per-plugin section: each enabled plugin's
+  summary, its egress (only via the named forwarder sidecars; shell tools stay
+  `--block-net`), its Pi extensions, and its image layer — plus the host services
+  the plugins add. The composed harness command shows all loaded `-e` extensions.
+- **`glove doctor`** probes the browser provider only when the browser plugin
+  (or a legacy `browser:` block) is enabled for the env, reading the provider
+  from `plugin_options.browser`.
+- **Back-compat shim with deprecation warnings.** A legacy top-level `browser:`
+  block still implies the `browser` plugin, and a declared `search` service still
+  implies the `search` plugin — both now print a `deprecation:` warning on `run`
+  pointing at the `plugins:` form.
+- **Example configs migrated** to `plugins:` + `plugin_options:`
+  (`vibe-local` → `plugins: [browser]`; `pi-remote-llm` → `plugins: [browser]`
+  with `provider: none` for its hand-wired browser; `pi-local` documents
+  `plugins: []`).
+
 ### Phase 5 — `browser` plugin
 
 - **`browser` plugin** (`plugins: [browser]` / `--with browser` / `--browser`) —
