@@ -143,6 +143,33 @@ def _plugin_entry(cfg: Config, base_entry: list[str], plugins) -> list[str]:
     return entry
 
 
+def _legacy_bridges(cfg: Config) -> list[tuple[str, str]]:
+    """Pre-plugin configs that imply a plugin: `(plugin_name, deprecation)`.
+
+    Single source of truth for the back-compat shim — a declared `search`
+    service implies the `search` plugin; a top-level `browser:` block (provider
+    set) implies `browser`. `_apply_plugin_config` injects the names,
+    `legacy_warnings` surfaces the messages, so the bridge rule and its warning
+    can't drift.
+    """
+    from .plugins.browser import provider_name
+
+    bridges: list[tuple[str, str]] = []
+    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+        bridges.append((
+            "search",
+            "a `search` service without `plugins: [search]` is deprecated — add "
+            "`plugins: [search]` (implied for now).",
+        ))
+    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
+        bridges.append((
+            "browser",
+            "top-level `browser:` is deprecated — use `plugins: [browser]` with "
+            "`plugin_options: {browser: {…}}` (still works for now).",
+        ))
+    return bridges
+
+
 def _apply_plugin_config(cfg: Config, session: str) -> None:
     """Expand plugin-driven config before the network/plan is built.
 
@@ -150,16 +177,13 @@ def _apply_plugin_config(cfg: Config, session: str) -> None:
     the `browser` forwarder sidecar, harness env). Runs here — not in the CLI — so
     every plan (run, dry-run, `policy show`, tests) composes the same session.
 
-    Back-compat: a legacy top-level `browser:` block (provider set) implies the
-    `browser` plugin. Canonical options live in `plugin_options.browser`.
+    Back-compat: legacy configs that imply a plugin (see `_legacy_bridges`) get
+    that plugin injected here. Canonical options live in `plugin_options.browser`.
     """
-    from .plugins.browser import apply_browser, provider_name
+    from .plugins.browser import apply_browser
 
-    # Back-compat: a declared `search` service implies the search plugin.
-    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
-        cfg.plugins = [*cfg.plugins, "search"]
-    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
-        cfg.plugins = [*cfg.plugins, "browser"]
+    for plugin_name, _ in _legacy_bridges(cfg):
+        cfg.plugins = [*cfg.plugins, plugin_name]
     if "browser" in cfg.plugins:
         opts = cfg.plugin_options.get("browser", {})
         if opts:
@@ -172,20 +196,7 @@ def _apply_plugin_config(cfg: Config, session: str) -> None:
 
 def legacy_warnings(cfg: Config) -> list[str]:
     """Deprecation notices for pre-plugin config that still works via the shim."""
-    from .plugins.browser import provider_name
-
-    warnings: list[str] = []
-    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
-        warnings.append(
-            "top-level `browser:` is deprecated — use `plugins: [browser]` with "
-            "`plugin_options: {browser: {…}}` (still works for now)."
-        )
-    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
-        warnings.append(
-            "a `search` service without `plugins: [search]` is deprecated — add "
-            "`plugins: [search]` (implied for now)."
-        )
-    return warnings
+    return [msg for _, msg in _legacy_bridges(cfg)]
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:

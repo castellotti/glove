@@ -166,6 +166,16 @@ class Config:
         )
 
 
+def split_csv(value: str) -> list[str]:
+    """Split a comma-separated string into stripped, non-empty tokens.
+
+    The one normalization rule for comma-list config/flags (`net`, `plugins`,
+    `--with`), shared by the config coercer, the CLI, and doctor so they can't
+    drift on what a comma-string means.
+    """
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
 def _load_mapping(path: Path) -> dict[str, Any]:
     text = path.read_text()
     data = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
@@ -192,11 +202,11 @@ def _coerce(data: dict[str, Any]) -> Config:
 
     net = data.pop("net", None)
     if isinstance(net, str):
-        net = [p.strip() for p in net.split(",") if p.strip()]
+        net = split_csv(net)
 
     plugins = data.pop("plugins", None)
     if isinstance(plugins, str):
-        plugins = [p.strip() for p in plugins.split(",") if p.strip()]
+        plugins = split_csv(plugins)
 
     limits_raw = data.pop("limits", None)
 

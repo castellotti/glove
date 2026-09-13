@@ -29,6 +29,16 @@ default (no-plugins) path stays fully working at each step.
 - **`glove doctor --env`** normalizes a comma-string `plugins:` value to a list
   before the `browser` membership test, matching how config parses it.
 
+### Internal
+
+- **Back-compat shim de-duplicated.** The rule mapping a legacy config to an
+  implied plugin (a `search` service ⇒ `search`; a top-level `browser:` block ⇒
+  `browser`) lives in one `_legacy_bridges` helper, consumed by both the plugin
+  injection and the deprecation warnings so they can't drift.
+- **One comma-list parser.** `config.split_csv` replaces the six hand-inlined
+  copies of the `net`/`plugins`/`--with` comma-split across config, CLI, and
+  doctor.
+
 ### Phase 6 — doctor / policy show integration + migration
 
 - **`glove policy show`** now prints a per-plugin section: each enabled plugin's

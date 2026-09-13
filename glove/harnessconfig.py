@@ -139,10 +139,6 @@ def service_base(cfg: Config, session: str, name: str) -> str | None:
     return None
 
 
-# Backwards-compatible internal alias.
-_service_host = service_base
-
-
 def render_home(
     cfg: Config,
     profile: HarnessProfile,

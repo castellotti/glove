@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from . import __version__
-from .config import ConfigError, parse_add_dir_flag, resolve
+from .config import ConfigError, parse_add_dir_flag, resolve, split_csv
 from .hardening import HardeningError
 from .harness import known_harnesses
 from .harnessconfig import render_home
@@ -217,12 +217,8 @@ def run(
         "enforcer": enforcer or None,
         "workdir": str(workdir) if workdir else None,
         "name": token,
-        "net": [p.strip() for p in net.split(",") if p.strip()] if net else None,
-        "plugins": (
-            [p.strip() for p in with_plugins.split(",") if p.strip()]
-            if with_plugins is not None
-            else None
-        ),
+        "net": split_csv(net) if net else None,
+        "plugins": split_csv(with_plugins) if with_plugins is not None else None,
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
         "rebuild": rebuild or None,
@@ -488,9 +484,7 @@ def build(
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
-    plugins = (
-        [p.strip() for p in with_plugins.split(",") if p.strip()] if with_plugins else None
-    )
+    plugins = split_csv(with_plugins) if with_plugins else None
     build_forwarder(prov, force=rebuild)
     if harness:
         build_harness(
@@ -550,11 +544,11 @@ def doctor(
             enf = enforcer or data.get("enforcer", enf)
             # Probe the browser only when the browser plugin (or a legacy
             # `browser:` block) is enabled for this env. `plugins` accepts a
-            # comma-string as well as a list (see config._normalize), so split
+            # comma-string as well as a list (see config._coerce), so split
             # before the membership test to avoid a substring false-positive.
             plugins = data.get("plugins") or []
             if isinstance(plugins, str):
-                plugins = [p.strip() for p in plugins.split(",") if p.strip()]
+                plugins = split_csv(plugins)
             legacy = (data.get("browser") or {}).get("provider")
             if "browser" in plugins or legacy:
                 opts = (data.get("plugin_options") or {}).get("browser") or {}
