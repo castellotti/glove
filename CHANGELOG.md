@@ -9,6 +9,27 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Phase 2 — plugin interface + image plumbing
+
+- **New `glove.plugins` package** — a `Plugin` manifest (capability-centric, with
+  a per-harness `ImageLayer` map) + registry (`register`/`get_plugin`/
+  `resolve_plugins`). Empty for now; capabilities are ported in later phases.
+- **New config surface:** `plugins: [ … ]` (default `[]`, mirrors `net`) and
+  `plugin_options: { <name>: { … } }`; CLI `--with a,b` on `run`/`build`
+  (replaces the config list). Unknown plugin names fail loudly. Shown in
+  `--dry-run` and `glove policy show`.
+- **Derived-layer image composition.** The minimal base stays built from the
+  harness Dockerfile; enabling plugins composes a *derived* image
+  (`FROM <base>` + one layer set per plugin), tagged with a hash of the enabled
+  set (+ apt/pip). No plugins ⇒ the base *is* the session image (byte-identical
+  to before). `effective_image` folds the plugin set into the tag.
+- Added `HarnessProfile.pip_install` (Vibe → `uv pip install --system`; Node
+  harnesses have none) so plugin `pip` layers render per harness.
+- Verified on rootless podman: a probe plugin composes `FROM glove/vibe:0.4.0`
+  reusing the cached base, tags `glove/vibe:0.4.0-<hash>`, the tool is present in
+  the derived image and **absent from the untouched base**, and a second build
+  short-circuits on the cached tag.
+
 ### Phase 1 — strip the base images
 
 - **The base harness images are now minimal: harness + ring-1 enforcer only.**

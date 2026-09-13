@@ -29,6 +29,10 @@ class HarnessProfile:
     # can actually launch the TUI (its shebang/interpreter lives here). Omitting
     # them makes the harness exec fail with exit 127 under Landlock.
     runtime_paths: tuple[str, ...] = ("/usr/local",)
+    # Command that installs Python packages into the image, for plugin/user `pip`
+    # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
+    # error). Vibe installs via uv; the Node-based harnesses have none.
+    pip_install: tuple[str, ...] | None = None
 
     @property
     def dockerfile(self) -> Path:
@@ -49,6 +53,8 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # vibe is installed with `uv tool install` under /opt/uv; its shebang
         # points at that venv's python (→ /usr/local's cpython).
         runtime_paths=("/opt/uv", "/usr/local"),
+        # Python packages install system-wide via the baked uv.
+        pip_install=("uv", "pip", "install", "--system"),
     ),
     "pi": HarnessProfile(
         name="pi",
@@ -89,15 +95,23 @@ def effective_image(
     profile: HarnessProfile,
     apt_packages: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    plugins: list[str] | None = None,
 ) -> str:
-    """Image tag for a profile, suffixed with a hash when extra packages are
-    requested so a distinct package set gets its own image (and rebuilds)."""
+    """Image tag for a profile, suffixed with a hash when extra packages or
+    plugins are requested so each distinct set gets its own image (and rebuilds).
+
+    Plugin names are part of the hash: a plugin name deterministically maps to
+    its image contribution, so the set of enabled plugins uniquely identifies the
+    composed image. With nothing extra, returns the plain minimal base tag."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    if not apt_packages and not pip_packages:
+    plugins = plugins or []
+    if not apt_packages and not pip_packages and not plugins:
         return profile.image
-    payload = "apt:" + ",".join(sorted(apt_packages)) + "|pip:" + ",".join(
-        sorted(pip_packages)
+    payload = (
+        "apt:" + ",".join(sorted(apt_packages))
+        + "|pip:" + ",".join(sorted(pip_packages))
+        + "|plugins:" + ",".join(sorted(plugins))
     )
     digest = hashlib.sha1(payload.encode()).hexdigest()[:10]
     base, sep, tag = profile.image.rpartition(":")

@@ -16,9 +16,11 @@ command the agent executes.
 > stripped to *harness + enforcer only*; every optional capability (web search,
 > browser, media/analysis toolchain) is moving behind an off-by-default plugin
 > system enabled per session (like `net:`). See
-> `docs/planning/minimal-core-plugins-designnote.md`. **Phase 1 (done):** the
-> media toolchain and the SearXNG client are no longer baked, and Pi loads only
-> its always-on `enforcer` extension (images bumped to `0.4.0`). During the
+> `docs/planning/minimal-core-plugins-designnote.md`. **Done:** the media
+> toolchain and the SearXNG client are no longer baked, and Pi loads only its
+> always-on `enforcer` extension (images bumped to `0.4.0`) (phase 1); the
+> `plugins:` config key + `--with` flag + derived-layer image composition are
+> wired, though no capabilities are registered yet (phase 2). During the
 > migration, Pi search/browser and Vibe search are temporarily unavailable
 > pending their plugin ports; Vibe browser via `host-mcp` is unaffected.
 
@@ -101,6 +103,7 @@ workdir: .
 add_dirs:
   - { path: ../shared-lib, mode: ro }
 net: [service]              # none | service | internet | lan | docker:<name>
+plugins: []                 # opt-in capabilities (off by default); also `--with a,b`
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
 browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
@@ -117,7 +120,7 @@ Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
 
 ```
 glove init [HARNESS] [--name ENV] [--from FILE]
-glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--browser …]
+glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--with a,b] [--browser …]
                     [--runtime …] [--enforcer …] [--dry-run] [--rebuild]
 glove <harness> …                    # alias of run
 glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]

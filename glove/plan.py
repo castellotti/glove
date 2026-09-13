@@ -156,8 +156,13 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
+    # Validate plugin names early (fails loudly on an unknown plugin) and fold
+    # them into the image tag so an enabled set gets its own composed image.
+    from .plugins import resolve_plugins
+
+    resolve_plugins(cfg.plugins)
     # srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix.
-    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
+    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, cfg.plugins)
     if cfg.enforcer == "srt":
         image = f"{image}-srt"
 

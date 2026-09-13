@@ -174,6 +174,9 @@ def run(
     net: str | None = typer.Option(
         None, "--net", help="comma list: none|internal|internet|lan|docker:<n>|service"
     ),
+    with_plugins: str | None = typer.Option(
+        None, "--with", help="comma list of plugins to enable (replaces glove.yaml plugins)"
+    ),
     allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
     allow_sensitive: bool = typer.Option(
         False, "--allow-sensitive", help="permit mounting / or $HOME"
@@ -215,6 +218,11 @@ def run(
         "workdir": str(workdir) if workdir else None,
         "name": token,
         "net": [p.strip() for p in net.split(",") if p.strip()] if net else None,
+        "plugins": (
+            [p.strip() for p in with_plugins.split(",") if p.strip()]
+            if with_plugins is not None
+            else None
+        ),
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
         "rebuild": rebuild or None,
@@ -271,7 +279,8 @@ def run(
         console.print(
             f"[bold]env:[/bold] {env_id}   "
             f"[bold]workdir→[/bold] {plan.working_dir}   "
-            f"[bold]enforcer:[/bold] {cfg.enforcer}"
+            f"[bold]enforcer:[/bold] {cfg.enforcer}   "
+            f"[bold]plugins:[/bold] {', '.join(cfg.plugins) or 'none'}"
         )
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
@@ -466,6 +475,9 @@ def build(
     enforcer: str | None = typer.Option(
         None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
     ),
+    with_plugins: str | None = typer.Option(
+        None, "--with", help="comma list of plugins to compose into the image"
+    ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
     """Build the forwarder and (optionally) a harness image."""
@@ -473,9 +485,18 @@ def build(
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
+    plugins = (
+        [p.strip() for p in with_plugins.split(",") if p.strip()] if with_plugins else None
+    )
     build_forwarder(prov, force=rebuild)
     if harness:
-        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
+        build_harness(
+            prov,
+            get_profile(harness),
+            plugins=plugins,
+            enforcer=enforcer or "nono",
+            force=rebuild,
+        )
 
 
 @app.command("ls")
@@ -577,7 +598,10 @@ def policy_show(
         raise typer.Exit(1) from e
 
     h = plan.hardening
-    console.print(f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}\n")
+    console.print(
+        f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
+        f"plugins={', '.join(cfg.plugins) or 'none'}\n"
+    )
     console.print("[bold]ring 0 — hardening[/bold]")
     console.print(
         f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
