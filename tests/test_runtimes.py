@@ -69,6 +69,108 @@ def test_podman_srt_unsupported(tmp_path):
         rt.render(_plan(tmp_path, enforcer="srt"), tmp_path)
 
 
+def test_podman_srt_incompat_surfaced_by_doctor():
+    # The podman+srt gate must fail up front in doctor, not only mid-render.
+    checks = run_doctor(runtime="podman", enforcer="srt", include_container_probes=False)
+    gate = [c for c in checks if c.name.startswith("enforcer: srt")]
+    assert gate and gate[0].status == "fail"
+    assert "not supported on the podman runtime" in gate[0].detail
+
+
+def test_docker_supports_all_enforcers():
+    assert DockerRuntime().unsupported_enforcer_reason("srt") is None
+    assert DockerRuntime().unsupported_enforcer_reason("nono") is None
+
+
+def test_render_refuses_builtin_seccomp_without_cap(tmp_path):
+    # A runtime that omits glove's seccomp profile without a validated built-in
+    # default must be refused — the seccomp invariant is coupled to the render.
+    import dataclasses
+
+    from glove.hardening import HardeningError
+    from glove.runtimes.podman import PodmanRuntime
+
+    class NoBuiltinPodman(PodmanRuntime):
+        # emit_seccomp=False (inherited) but drop the built-in-default sanction.
+        caps = dataclasses.replace(PodmanRuntime.caps, applies_builtin_seccomp=False)
+
+    rt = NoBuiltinPodman()
+    rt._rootless = True
+    with pytest.raises(HardeningError, match="unpinned"):
+        rt.render(_plan(tmp_path), tmp_path)
+
+
+def test_render_seccomp_override_permits_builtin_gap(tmp_path):
+    # Symmetric with validate_hardening: waiving the seccomp row via override must
+    # also suppress the render-time built-in-default refusal, not hard-fail anyway.
+    import dataclasses
+
+    from glove.runtimes.podman import PodmanRuntime
+
+    class NoBuiltinPodman(PodmanRuntime):
+        caps = dataclasses.replace(PodmanRuntime.caps, applies_builtin_seccomp=False)
+
+    rt = NoBuiltinPodman()
+    rt._rootless = True
+    # No override → refused (guarded by test_render_refuses_builtin_seccomp_without_cap);
+    # with the seccomp row waived it renders.
+    rendered = rt.render(_plan(tmp_path), tmp_path, overrides=frozenset({"seccomp"}))
+    assert rendered.compose_yaml
+
+
+def test_host_info_does_not_cache_transient_failure(monkeypatch):
+    # A transient early `podman info` failure must not be memoized — the next call
+    # re-probes once the machine is up, instead of pinning unknown-defaults forever.
+    import glove.runtimes.podman as mod
+
+    mod._host_info.cache_clear()
+    monkeypatch.setattr(mod.shutil, "which", lambda _c: "/usr/bin/podman")
+    calls = {"n": 0}
+
+    def fake_run(argv, **kw):
+        import types
+
+        calls["n"] += 1
+        if calls["n"] == 1:  # first probe fails (machine not ready)
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="not ready")
+        return types.SimpleNamespace(returncode=0, stdout="false|true|6.1.0\n", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    assert mod._host_info("podman") == {}  # failure, uncached
+    assert mod._host_info("podman") == {"rootless": "false", "seccomp": "true", "kernel": "6.1.0"}
+    mod._host_info.cache_clear()
+
+
+def test_host_info_tolerates_pipe_in_kernel(monkeypatch):
+    # A kernel string containing '|' must not shift rootless/seccomp onto a fragment.
+    import glove.runtimes.podman as mod
+
+    mod._host_info.cache_clear()
+    monkeypatch.setattr(mod.shutil, "which", lambda _c: "/usr/bin/podman")
+
+    def fake_run(argv, **kw):
+        import types
+
+        return types.SimpleNamespace(
+            returncode=0, stdout="false|true|6.1.0 weird|build\n", stderr=""
+        )
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    info = mod._host_info("podman")
+    assert info["rootless"] == "false"
+    assert info["seccomp"] == "true"
+    assert info["kernel"] == "6.1.0 weird|build"
+    mod._host_info.cache_clear()
+
+
+def test_all_runtimes_declare_enforcer_gate():
+    # Every registered runtime implements the compatibility gate (Protocol method),
+    # so doctor can call it directly without a getattr fallback that silently skips.
+    for name in known_runtimes():
+        rt = get_runtime(name)
+        assert rt.unsupported_enforcer_reason("nono") is None
+
+
 def test_docker_render_refuses_bad_hardening(tmp_path):
     import dataclasses
 

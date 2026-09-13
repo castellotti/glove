@@ -15,7 +15,13 @@ diverge:
   (the same moby-derived filter that already allows the ``landlock_*`` calls).
 - **Host gateway / networking.** podman provides both ``host.docker.internal``
   and ``host.containers.internal`` (gvproxy); the harness never uses either,
-  but egress forwarder sidecars route off-host through gvproxy.
+  but egress forwarder sidecars route off-host through gvproxy. The template's
+  ``extra_hosts: host.docker.internal:host-gateway`` on host-service forwarders
+  is safe here: on rootless podman 6 ``host-gateway`` resolves to gvproxy's host
+  address (192.168.127.254) — identical to podman's built-in
+  ``host.containers.internal`` and distinct from the netavark bridge gateway
+  (10.88.0.x) — so it reaches the host rather than shadowing it. Verified with
+  ``podman run --add-host host.docker.internal:host-gateway`` on this machine.
 
 Validated on rootless podman 6 (libkrun machine, Fedora VM, Landlock ABI 9).
 ``srt`` is not supported on podman yet: its relaxed nested-userns profile can't
@@ -36,10 +42,74 @@ if TYPE_CHECKING:
     from ..plan import SessionPlan
 
 
+# Successful `podman info` probes, keyed by cli name. Only *successful* results
+# are memoized (see _host_info) so a transient early failure never sticks.
+_HOST_INFO_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _probe_host_info(cli: str) -> dict[str, str]:
+    """One `podman info` call for the Host fields doctor + rootless detection
+    need (kernel, rootless, seccomp). ``{}`` when podman is absent or the probe
+    fails, so callers fall back to safe defaults and ``--dry-run`` on a host
+    without podman never shells out.
+
+    Field order matters: the two boolean security flags come first and the
+    free-text kernel string last, split with ``maxsplit=2`` so a kernel
+    description containing ``|`` lands wholly in the trailing field instead of
+    shifting rootless/seccomp onto a kernel fragment.
+    """
+    if not shutil.which(cli):
+        return {}
+    proc = subprocess.run(
+        [cli, "info", "--format",
+         "{{.Host.Security.Rootless}}|{{.Host.Security.SECCOMPEnabled}}|{{.Host.Kernel}}"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return {}
+    parts = [*proc.stdout.strip().split("|", 2), "", "", ""]
+    return {"rootless": parts[0], "seccomp": parts[1], "kernel": parts[2]}
+
+
+def _host_info(cli: str) -> dict[str, str]:
+    """`_probe_host_info` memoized process-wide by cli name.
+
+    Cached at module scope, not on the instance: ``get_runtime('podman')`` builds
+    a fresh ``PodmanRuntime`` per call, so an instance-level cache would re-probe
+    on every doctor/plan/run step.
+
+    Only a *successful* (non-empty) probe is cached. A transient failure — the
+    podman machine not yet ready on the first probe of a process — must not
+    permanently pin rootless/seccomp/kernel to their unknown-defaults for the
+    whole run; leaving it uncached lets the next call re-probe once the machine
+    is up.
+    """
+    cached = _HOST_INFO_CACHE.get(cli)
+    if cached is not None:
+        return cached
+    info = _probe_host_info(cli)
+    if info:
+        _HOST_INFO_CACHE[cli] = info
+    return info
+
+
+# functools.cache-style hook so tests (and callers) can drop the memoized probe.
+_host_info.cache_clear = _HOST_INFO_CACHE.clear  # type: ignore[attr-defined]
+
+
 class PodmanRuntime(DockerRuntime):
     name = "podman"
     cli = "podman"
-    caps = replace(DockerRuntime.caps, compose_cmd=("podman", "compose"), tested=True)
+    caps = replace(
+        DockerRuntime.caps,
+        compose_cmd=("podman", "compose"),
+        tested=True,
+        # podman's compose provider inlines a referenced seccomp file (rejected by
+        # the compat API), so glove omits it and relies on podman's built-in
+        # default — the same moby-derived filter that allows landlock_*. This flag
+        # sanctions that omission for the render-layer seccomp invariant check.
+        applies_builtin_seccomp=True,
+    )
 
     _rootless: bool | None = None
 
@@ -54,26 +124,29 @@ class PodmanRuntime(DockerRuntime):
         """
         if self._rootless is not None:
             return self._rootless
-        if not shutil.which(self.cli):
-            self._rootless = True
-            return self._rootless
-        proc = subprocess.run(
-            [self.cli, "info", "--format", "{{.Host.Security.Rootless}}"],
-            capture_output=True, text=True,
-        )
-        self._rootless = proc.returncode != 0 or proc.stdout.strip() != "false"
+        # `!= "false"` (not `== "true"`) keeps rootless the default when podman is
+        # absent or the probe fails: _host_info returns {} → "" → rootless.
+        self._rootless = _host_info(self.cli).get("rootless", "") != "false"
         return self._rootless
 
-    # --- rendering ---------------------------------------------------------
+    # --- compatibility -----------------------------------------------------
 
-    def compose_extra(self, plan: SessionPlan) -> dict:
-        if plan.enforcer == "srt":
-            raise NotImplementedError(
+    def unsupported_enforcer_reason(self, enforcer: str) -> str | None:
+        if enforcer == "srt":
+            return (
                 "enforcer 'srt' is not supported on the podman runtime yet: its "
                 "relaxed seccomp profile can't be applied through podman's "
                 "inlining compose provider. Use --enforcer nono (or run srt on "
                 "the docker runtime)."
             )
+        return None
+
+    # --- rendering ---------------------------------------------------------
+
+    def compose_extra(self, plan: SessionPlan) -> dict:
+        reason = self.unsupported_enforcer_reason(plan.enforcer)
+        if reason:
+            raise NotImplementedError(reason)
         return {
             # Map the host uid/gid through so bind mounts stay owned by the
             # non-root harness user (rootless only; rootful maps 1:1 already).
@@ -88,30 +161,23 @@ class PodmanRuntime(DockerRuntime):
     def _engine_check(self) -> Check:
         # podman's `version --format` has no `.Server.Os`/`.Server.Arch`/
         # `.Server.KernelVersion`; use `.Server.OsArch` and read the kernel from
-        # `info` (`.Host.Kernel`).
+        # the shared (cached) `podman info` probe (`.Host.Kernel`).
         ver = subprocess.run(
             [self.cli, "version", "--format", "{{.Server.Version}} {{.Server.OsArch}}"],
             capture_output=True, text=True,
         )
         if ver.returncode != 0:
             return Check("podman engine", "fail", ver.stderr.strip() or "not responding")
-        kern = subprocess.run(
-            [self.cli, "info", "--format", "{{.Host.Kernel}}"],
-            capture_output=True, text=True,
-        )
         detail = ver.stdout.strip()
-        if kern.returncode == 0 and kern.stdout.strip():
-            detail += f" kernel={kern.stdout.strip()}"
+        kernel = _host_info(self.cli).get("kernel")
+        if kernel:
+            detail += f" kernel={kernel}"
         return Check("podman engine", "ok", detail)
 
     def _security_checks(self) -> list[Check]:
-        info = subprocess.run(
-            [self.cli, "info", "--format",
-             "seccomp={{.Host.Security.SECCOMPEnabled}} rootless={{.Host.Security.Rootless}}"],
-            capture_output=True, text=True,
-        )
-        sec = info.stdout.strip()
-        checks = [Check("security options", "ok" if "seccomp=true" in sec else "warn", sec)]
+        info = _host_info(self.cli)
+        sec = f"seccomp={info.get('seccomp', '')} rootless={info.get('rootless', '')}"
+        checks = [Check("security options", "ok" if info.get("seccomp") == "true" else "warn", sec)]
         # A compose provider must exist or the compose-based launch path fails.
         prov = subprocess.run(
             [self.cli, "compose", "version"], capture_output=True, text=True,

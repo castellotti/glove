@@ -65,14 +65,18 @@ def test_harness_policy_grants_home_and_allows_net(tmp_path):
     assert harness["network"]["block"] is False
 
 
-def test_harness_policy_grants_interpreter_runtime_paths(tmp_path):
-    # The harness's own interpreter/runtime must be readable or `nono run` cannot
-    # exec the TUI (Landlock → exit 127). pi (node) needs /usr/local.
-    harness = json.loads(_plan(tmp_path).policies["harness.json"])
+def test_both_policies_grant_interpreter_runtime_paths(tmp_path):
+    # The interpreter/runtime must be READABLE in both profiles or an exec of it
+    # is denied by Landlock (exit 127): the harness needs it to launch the TUI,
+    # and a tool command needs it to run node/python. pi (node) needs /usr/local.
+    plan = _plan(tmp_path)
+    harness = json.loads(plan.policies["harness.json"])
+    tool = json.loads(plan.policies["tool.json"])
     assert "/usr/local" in harness["filesystem"]["read"]
-    # ...but shell tool commands do NOT get these (tool.json is unaffected).
-    tool = json.loads(_plan(tmp_path).policies["tool.json"])
-    assert "/usr/local" not in tool["filesystem"].get("read", [])
+    assert "/usr/local" in tool["filesystem"]["read"]
+    # read-only only: the runtime path is never in either profile's writable set.
+    assert "/usr/local" not in harness["filesystem"]["allow"]
+    assert "/usr/local" not in tool["filesystem"]["allow"]
 
 
 def test_vibe_harness_policy_grants_uv_venv(tmp_path):

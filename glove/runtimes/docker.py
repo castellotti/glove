@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from ..hardening import validate_hardening
+from ..hardening import HardeningError, validate_hardening
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
 
 if TYPE_CHECKING:
@@ -78,6 +78,18 @@ class DockerRuntime:
     # The CLI binary this runtime shells out to (podman overrides).
     cli = "docker"
 
+    # --- compatibility -----------------------------------------------------
+
+    def unsupported_enforcer_reason(self, enforcer: str) -> str | None:
+        """Why ``enforcer`` can't run on this runtime, or None if it can.
+
+        A single source of truth for runtime/enforcer compatibility: both the
+        render path (which refuses) and ``glove doctor`` (which surfaces the
+        incompatibility up front) consult it, so a bad combo is reported before
+        launch rather than aborting mid-render. Docker supports every enforcer.
+        """
+        return None
+
     # --- rendering ---------------------------------------------------------
 
     def compose_extra(self, plan: SessionPlan) -> dict:
@@ -111,6 +123,24 @@ class DockerRuntime:
         overrides: frozenset[str] = frozenset(),
     ) -> RenderedProject:
         validate_hardening(plan, overrides=overrides)
+        extra = self.compose_extra(plan)
+        # Couple the seccomp hardening row to what actually renders. validate_hardening
+        # only checks that the *plan* names a profile; on a runtime that omits the
+        # `seccomp=` line (podman) that plan value is discarded, so the invariant
+        # would pass while the container runs unpinned. Refuse unless the runtime is
+        # known to apply a validated built-in default — or the operator explicitly
+        # waived the seccomp row, which validate_hardening already honoured above
+        # (kept symmetric so an accepted override isn't silently re-refused here).
+        if (
+            not extra.get("emit_seccomp", True)
+            and not self.caps.applies_builtin_seccomp
+            and "seccomp" not in overrides
+        ):
+            raise HardeningError(
+                f"runtime {self.name!r} omits glove's seccomp profile but does not "
+                "apply a validated built-in default — the container would run "
+                "unpinned. Refusing to render."
+            )
         ctx = {
             "session": plan.session,
             "harness": plan.profile,
@@ -133,7 +163,7 @@ class DockerRuntime:
             "gid": plan.gid,
             "hardening": plan.hardening,
             "allow_root": plan.allow_root,
-            **self.compose_extra(plan),
+            **extra,
         }
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
         return RenderedProject(

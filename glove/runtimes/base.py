@@ -25,6 +25,12 @@ class RuntimeCaps:
     supports_internal_networks: bool = False
     supports_sidecars: bool = False
     supports_seccomp_profile: bool = False
+    # True when the runtime applies a validated built-in default seccomp profile
+    # if glove omits its vendored one (podman, whose compose provider can't inline
+    # the file). This is what lets the render layer honour the "a seccomp profile
+    # is always applied" hardening row without emitting a `seccomp=` line — see
+    # DockerRuntime.render. Docker must emit the profile, so it stays False.
+    applies_builtin_seccomp: bool = False
     supports_userns: bool = False
     supports_kvm: bool = False
     host_gateway_name: str | None = None
@@ -75,3 +81,9 @@ class Runtime(Protocol):
     def doctor(self) -> list[Check]: ...
     def render(self, plan: SessionPlan, project_dir: Path) -> RenderedProject: ...
     def ps(self) -> list[RunningSession]: ...
+
+    # Declared on the Protocol (not left to a getattr fallback) so a runtime that
+    # cannot support some enforcer must return the reason here — the doctor
+    # compatibility gate calls it directly, and a runtime that omits it is a
+    # type error rather than a combo silently reported as OK. None == supported.
+    def unsupported_enforcer_reason(self, enforcer: str) -> str | None: ...

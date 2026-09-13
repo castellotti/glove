@@ -61,6 +61,12 @@ def _file_sharing_check() -> Check:
 
 
 def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
+    # Runtime/enforcer compatibility gate, surfaced BEFORE the enforcer's own
+    # probes: a combo the runtime can't render (e.g. podman + srt) fails here up
+    # front rather than aborting mid-render on `glove run`.
+    reason = runtime.unsupported_enforcer_reason(enforcer)
+    if reason:
+        return [Check(f"enforcer: {enforcer} on {runtime.name}", "fail", reason)]
     try:
         from .enforcers import get_enforcer
 
