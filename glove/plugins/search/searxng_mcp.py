@@ -61,7 +61,7 @@ def web_search(
                 "wait and lower query cadence, or ask the operator."
             )
         return f"SearXNG error: HTTP {e.code}"
-    except Exception as e:  # noqa: BLE001 - degrade honestly, never fall back
+    except Exception as e:
         return f"SearXNG unreachable at {SEARXNG_URL}: {e}"
     finally:
         _last_call = time.time()

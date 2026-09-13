@@ -23,8 +23,9 @@ def _register_builtins() -> None:
     """Register the plugins glove ships with. Imported here (not at module top)
     so the shipped plugin modules can import from this package without a cycle."""
     from .media import MEDIA
+    from .search import SEARCH
 
-    for plugin in (MEDIA,):
+    for plugin in (MEDIA, SEARCH):
         register(plugin)
 
 

@@ -20,10 +20,10 @@ command the agent executes.
 > toolchain and the SearXNG client are no longer baked, and Pi loads only its
 > always-on `enforcer` extension (images bumped to `0.4.0`) (phase 1); the
 > `plugins:` config key + `--with` flag + derived-layer image composition are
-> wired (phase 2); the **`media`** analysis toolchain is the first shipped plugin
-> (`--with media`) (phase 3). During the migration, Pi search/browser and Vibe
-> search are temporarily unavailable pending their plugin ports; Vibe browser via
-> `host-mcp` is unaffected.
+> wired (phase 2); **`media`** (analysis toolchain, phase 3) and **`search`**
+> (private SearXNG, phase 4) ship as plugins (`--with media,search`). Still
+> pending: the **`browser`** plugin (phase 5) — until then Pi browser is
+> unavailable, though Vibe browser via `host-mcp` is unaffected.
 
 ## How it works - three rings (defense in depth)
 

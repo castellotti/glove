@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from glove import plugins
-from glove.config import Config, _coerce
+from glove.config import Config, Service, _coerce
 from glove.harness import effective_image, get_profile
 from glove.plugins import ALL_HARNESSES, ImageLayer, Plugin, resolve_plugins
 from glove.plugins.image import render_dockerfile, stage_context
@@ -162,6 +162,14 @@ def test_media_plugin_registered():
     assert resolve_plugins(["media"])[0].name == "media"
 
 
+def test_search_pip_spec_is_shell_quoted():
+    # `mcp<2` must be quoted or the shell reads `<2` as a redirection.
+    search = plugins.get_plugin("search")
+    df = render_dockerfile("base", get_profile("vibe"), [search])
+    assert "uv pip install --system 'mcp<2'" in df
+    assert "mcp<2 " not in df  # not left bare
+
+
 def test_media_renders_shared_apt_and_per_harness():
     media = plugins.get_plugin("media")
     vibe_df = render_dockerfile("base", get_profile("vibe"), [media])
@@ -173,3 +181,59 @@ def test_media_renders_shared_apt_and_per_harness():
     assert "ffmpeg imagemagick webp libimage-exiftool-perl" in pi_df
     assert "python3 python3-pil" in pi_df
     assert "Pillow" not in pi_df  # vibe-only
+
+
+# --- shipped: search (plan-level wiring) -----------------------------------
+
+def _search_cfg(tmp_path, harness):
+    work = tmp_path / "wd"
+    work.mkdir(exist_ok=True)
+    cfg = Config(
+        harness=harness, workdir=str(work), name="s",
+        net=["service"], plugins=["search"],
+    )
+    cfg.services = [Service(name="search", to="searxng-host:8080", port=8080)]
+    return cfg
+
+
+def test_search_injects_searxng_url_env(tmp_path):
+    from glove.plan import build_session_plan
+
+    plan = build_session_plan(_search_cfg(tmp_path, "pi"), env_id="s", home_dir=str(tmp_path / "h"))
+    assert plan.environment["SEARXNG_URL"] == "http://glove-s-search:8080"
+
+
+def test_search_augments_pi_entry(tmp_path):
+    from glove.plan import build_session_plan
+    from glove.plugins.search import PI_EXTENSION_PATH
+
+    plan = build_session_plan(_search_cfg(tmp_path, "pi"), env_id="s", home_dir=str(tmp_path / "h"))
+    cmd = plan.harness_command
+    assert "-e" in cmd and PI_EXTENSION_PATH in cmd
+    # enforcer extension still loads too
+    assert "/opt/glove/pi-extensions/enforcer" in cmd
+
+
+def test_search_vibe_gets_mcp_not_pi_extension(tmp_path):
+    from glove.harnessconfig import _mcp_servers
+    from glove.plan import build_session_plan
+    from glove.plugins.search import PI_EXTENSION_PATH
+
+    cfg = _search_cfg(tmp_path, "vibe")
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    # Vibe uses MCP, not a `-e` extension.
+    assert PI_EXTENSION_PATH not in plan.harness_command
+    servers = _mcp_servers(cfg, "s")
+    sx = next(s for s in servers if s["name"] == "searxng")
+    assert sx["transport"] == "stdio"
+    assert sx["env"]["SEARXNG_URL"] == "http://glove-s-search:8080"
+
+
+def test_search_missing_service_errors(tmp_path):
+    from glove.config import ConfigError
+    from glove.plan import build_session_plan
+
+    cfg = _search_cfg(tmp_path, "pi")
+    cfg.services = []  # drop the required `search` service
+    with pytest.raises(ConfigError, match="plugin 'search' requires service"):
+        build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))

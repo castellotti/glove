@@ -9,6 +9,28 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Phase 4 — `search` plugin
+
+- **`search` plugin** (`plugins: [search]` / `--with search`) — web search via a
+  private SearXNG instance, restored as an opt-in capability. Its sources now
+  live self-contained under `glove/plugins/search/` (moved out of the harness
+  image trees): the Pi extension (`pi-extension/`, loaded via `-e`) and the Vibe
+  stdio MCP server (`searxng_mcp.py`).
+- **Plugin manifest gains runtime-wiring fields:** `pi_extensions` (Pi `-e`
+  paths), `requires_services` (forwarder services the operator must declare —
+  glove now errors early if missing), `env_from_services` (endpoint env like
+  `SEARXNG_URL` from the `search` sidecar), and `vibe_mcp` (Vibe MCP server
+  entries). `build_session_plan` augments the Pi entry, injects the env, and
+  validates required services; `harnessconfig._mcp_servers` dispatches to enabled
+  plugins instead of hardcoding searxng.
+- The `search` wiring is now gated on the **plugin** being enabled, not merely a
+  `search` service being present (which previously produced a broken MCP entry
+  pointing at removed code). Native Vibe `web_search`/`web_fetch` stay blocked by
+  the ring-1 hook; the SearXNG MCP is the search path (unchanged).
+- Verified on rootless podman: `search` composes for both harnesses — Pi carries
+  the extension + its `typebox` npm dep and loads it under `nono` (exit 0); Vibe
+  carries `searxng_mcp.py` with `import mcp` working; both absent from the base.
+
 ### Phase 3 — `media` plugin
 
 - **First shipped plugin: `media`** (`plugins: [media]` / `--with media`) —

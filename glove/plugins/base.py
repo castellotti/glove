@@ -14,7 +14,12 @@ so there is no unused machinery.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..config import Config
 
 # Sentinel harness key for image layers shared by every harness.
 ALL_HARNESSES = "*"
@@ -45,12 +50,29 @@ class ImageLayer:
 
 @dataclass(frozen=True)
 class Plugin:
-    """An opt-in capability. ``image`` maps a harness name (or ``ALL_HARNESSES``)
-    to that harness's image contribution."""
+    """An opt-in capability, composed into a session when enabled.
+
+    - ``image`` maps a harness name (or ``ALL_HARNESSES``) to its image
+      contribution (see ``ImageLayer``).
+    - ``pi_extensions`` — in-container extension paths appended to Pi's
+      ``-e`` load when this plugin is enabled (ignored for other harnesses).
+    - ``requires_services`` — forwarder service names the operator must declare
+      for this plugin to work (glove errors early if one is missing). The
+      capability reaches the network only through those sidecars.
+    - ``env_from_services`` — ``ENV_VAR: service_name`` env glove injects into the
+      harness, set to the service's in-container base URL.
+    - ``vibe_mcp`` — builds Vibe MCP server entries for this plugin, given the
+      resolved config + session (Vibe has a native MCP client; Pi uses
+      ``pi_extensions`` instead).
+    """
 
     name: str
     summary: str
     image: dict[str, ImageLayer] = field(default_factory=dict)
+    pi_extensions: tuple[str, ...] = ()
+    requires_services: tuple[str, ...] = ()
+    env_from_services: dict[str, str] = field(default_factory=dict)
+    vibe_mcp: Callable[[Config, str], list[dict[str, Any]]] | None = None
 
     def layers_for(self, harness: str) -> list[ImageLayer]:
         """Image layers this plugin contributes to ``harness`` (shared first)."""

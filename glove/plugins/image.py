@@ -13,6 +13,7 @@ no plugin ⇒ no derived layer ⇒ the plain base runs.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 from pathlib import Path
 
@@ -20,14 +21,18 @@ from ..harness import HarnessProfile
 from .base import ImageLayer, Plugin
 
 
+def _q(pkgs: tuple[str, ...]) -> str:
+    """Shell-quote package tokens (pip version specifiers carry `<`/`>`/`;`)."""
+    return " ".join(shlex.quote(p) for p in pkgs)
+
+
 def _render_layer(layer: ImageLayer, profile: HarnessProfile) -> list[str]:
     """Dockerfile lines for one image layer (Debian-derived bases)."""
     lines: list[str] = []
     if layer.apt:
-        pkgs = " ".join(layer.apt)
         lines.append(
             "RUN apt-get update "
-            f"&& apt-get install -y --no-install-recommends {pkgs} "
+            f"&& apt-get install -y --no-install-recommends {_q(layer.apt)} "
             "&& rm -rf /var/lib/apt/lists/*"
         )
     if layer.pip:
@@ -37,9 +42,9 @@ def _render_layer(layer: ImageLayer, profile: HarnessProfile) -> list[str]:
                 f"requests pip packages {list(layer.pip)}"
             )
         installer = " ".join(profile.pip_install)
-        lines.append(f"RUN {installer} {' '.join(layer.pip)}")
+        lines.append(f"RUN {installer} {_q(layer.pip)}")
     if layer.npm:
-        lines.append(f"RUN npm install -g {' '.join(layer.npm)}")
+        lines.append(f"RUN npm install -g {_q(layer.npm)}")
     for src, dst in layer.copy:
         # src is staged into the build context under its basename (see
         # stage_context); COPY references that staged name.

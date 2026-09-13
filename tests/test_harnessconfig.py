@@ -23,6 +23,7 @@ def _cfg(harness: str, tmp_path):
         workdir=str(work),
         name=f"{harness}-sess",
         net=["service"],
+        plugins=["search"],
         model="qwen3.8-27b-5090",
         brief="Write output to /mnt/x.",
     )
@@ -172,7 +173,9 @@ def test_pi_config_and_extension(tmp_path):
     assert prov["models"][0]["id"] == "qwen3.8-27b-5090"
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultModel"] == "qwen3.8-27b-5090"
-    assert settings["env"]["SEARXNG_URL"] == "http://glove-pi-sess-search:8080"
+    # SEARXNG_URL is injected into the container env by the plan (the Pi search
+    # extension reads it there), not written into settings.json.
+    assert "SEARXNG_URL" not in settings.get("env", {})
     # glove's extensions are baked into the image (loaded via `pi -e`), not
     # seeded here; only a user extensions/ dir is ensured.
     assert (agent / "extensions").is_dir()
@@ -180,7 +183,7 @@ def test_pi_config_and_extension(tmp_path):
 
 def test_pi_harness_config_overrides(tmp_path):
     # glove.yaml `harness_config` can override Pi settings (e.g. the default
-    # thinking level) and per-model fields, and env deep-merges with SEARXNG_URL.
+    # thinking level), inject env, and override per-model fields.
     cfg = _cfg("pi", tmp_path)
     cfg.harness_config = {
         "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"}},
@@ -191,9 +194,7 @@ def test_pi_harness_config_overrides(tmp_path):
     agent = home / ".pi" / "agent"
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"
-    # env override is merged, not clobbered — both keys survive
     assert settings["env"]["FOO"] == "bar"
-    assert settings["env"]["SEARXNG_URL"] == "http://glove-pi-sess-search:8080"
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000
