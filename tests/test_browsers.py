@@ -10,6 +10,17 @@ from glove.plugins.browser import apply_browser, get_provider, known_providers, 
 from glove.plugins.browser.host_server import _minor
 
 
+@pytest.fixture(autouse=True)
+def _clear_chrome_cache():
+    """discover_chrome() is process-cached; drop it so per-test monkeypatching
+    of the discovery internals isn't shadowed by an earlier test's scan."""
+    from glove.plugins.browser.chrome import discover_chrome
+
+    discover_chrome.cache_clear()
+    yield
+    discover_chrome.cache_clear()
+
+
 def test_registry():
     assert set(known_providers()) >= {"host-mcp", "host-server", "sidecar-desktop", "vm-desktop", "none"}
     assert get_provider("host-mcp").name == "host-mcp"

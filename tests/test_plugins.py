@@ -40,14 +40,25 @@ def test_effective_image_no_extras_is_base():
 
 
 def test_effective_image_plugins_hashed_and_distinct():
+    # media and search both contribute image layers on vibe.
     profile = get_profile("vibe")
     a = effective_image(profile, plugins=["media"])
-    b = effective_image(profile, plugins=["browser"])
-    ab = effective_image(profile, plugins=["media", "browser"])
+    b = effective_image(profile, plugins=["search"])
+    ab = effective_image(profile, plugins=["media", "search"])
     assert a != profile.image and a != b and a != ab
     # Order-independent: same set → same tag.
-    assert effective_image(profile, plugins=["browser", "media"]) == ab
+    assert effective_image(profile, plugins=["search", "media"]) == ab
     assert all(t.startswith(profile.image + "-") for t in (a, b, ab))
+
+
+def test_effective_image_ignores_plugins_with_no_layer_for_harness():
+    # browser contributes only runtime wiring on vibe (no image layer), so it
+    # must not force a distinct tag / a redundant derived build.
+    profile = get_profile("vibe")
+    assert effective_image(profile, plugins=["browser"]) == profile.image
+    # …but it does contribute an image layer on pi, so there it's hashed.
+    pi = get_profile("pi")
+    assert effective_image(pi, plugins=["browser"]) != pi.image
 
 
 def test_effective_image_plugins_and_pkgs_combine():
@@ -118,7 +129,7 @@ def test_render_dockerfile_copy_and_run():
         image={ALL_HARNESSES: ImageLayer(copy=(("/abs/host/foo.py", "/opt/glove/foo.py"),), run=("echo hi",))},
     )
     df = render_dockerfile(profile.image, profile, [plugin])
-    assert "COPY foo.py /opt/glove/foo.py" in df  # staged under basename
+    assert "COPY p/foo.py /opt/glove/foo.py" in df  # staged under plugin-name dir
     assert "RUN echo hi" in df
 
 
@@ -133,7 +144,32 @@ def test_stage_context_copies_sources(tmp_path):
         image={ALL_HARNESSES: ImageLayer(copy=((str(src), "/opt/glove/foo.py"),))},
     )
     stage_context(dest, profile, [plugin])
-    assert (dest / "foo.py").read_text() == "x = 1\n"
+    assert (dest / "p" / "foo.py").read_text() == "x = 1\n"
+
+
+def test_stage_context_namespaces_same_named_sources(tmp_path):
+    # Two plugins each shipping a directory named `ext` must not collide in the
+    # build context (the search + browser `pi-extension` case).
+    dest = tmp_path / "ctx"
+    dest.mkdir()
+    plugins_ = []
+    for name in ("a", "b"):
+        d = tmp_path / name / "ext"
+        d.mkdir(parents=True)
+        (d / "index.ts").write_text(f"// {name}\n")
+        plugins_.append(
+            Plugin(
+                name=name, summary="s",
+                image={ALL_HARNESSES: ImageLayer(copy=((str(d), f"/opt/{name}"),))},
+            )
+        )
+    profile = get_profile("pi")
+    stage_context(dest, profile, plugins_)
+    assert (dest / "a" / "ext" / "index.ts").read_text() == "// a\n"
+    assert (dest / "b" / "ext" / "index.ts").read_text() == "// b\n"
+    df = render_dockerfile("base", profile, plugins_)
+    assert "COPY a/ext /opt/a" in df
+    assert "COPY b/ext /opt/b" in df
 
 
 # --- config surface --------------------------------------------------------

@@ -91,6 +91,29 @@ _REGISTRY: dict[str, HarnessProfile] = {
 }
 
 
+def _image_contributing_plugins(plugins: list[str], harness: str) -> list[str]:
+    """Subset of plugin names that add image layers for ``harness``.
+
+    Imported lazily: the plugins package imports ``HarnessProfile`` from here, so
+    a top-level import would cycle. Unknown names are left in place so tag
+    computation stays a pure function and the loud "unknown plugin" error still
+    surfaces where plugins are actually resolved."""
+    if not plugins:
+        return plugins
+    from .plugins import get_plugin
+
+    contributing: list[str] = []
+    for name in plugins:
+        try:
+            plugin = get_plugin(name)
+        except ValueError:
+            contributing.append(name)
+            continue
+        if plugin.layers_for(harness):
+            contributing.append(name)
+    return contributing
+
+
 def effective_image(
     profile: HarnessProfile,
     apt_packages: list[str] | None = None,
@@ -102,10 +125,15 @@ def effective_image(
 
     Plugin names are part of the hash: a plugin name deterministically maps to
     its image contribution, so the set of enabled plugins uniquely identifies the
-    composed image. With nothing extra, returns the plain minimal base tag."""
+    composed image. Only plugins that actually contribute image layers *for this
+    harness* count — one whose contribution is purely runtime wiring (e.g.
+    ``browser`` on Vibe, which adds an MCP server but no layer) leaves the image
+    byte-identical to the base, so it must not force a distinct tag and a
+    redundant derived build. With nothing extra, returns the plain minimal base
+    tag."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    plugins = plugins or []
+    plugins = _image_contributing_plugins(plugins or [], profile.name)
     if not apt_packages and not pip_packages and not plugins:
         return profile.image
     payload = (

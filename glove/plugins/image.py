@@ -26,7 +26,20 @@ def _q(pkgs: tuple[str, ...]) -> str:
     return " ".join(shlex.quote(p) for p in pkgs)
 
 
-def _render_layer(layer: ImageLayer, profile: HarnessProfile) -> list[str]:
+def _staged_rel(plugin_name: str, src: str) -> str:
+    """Build-context path a plugin's copy source is staged at.
+
+    Namespaced by plugin so two plugins shipping a same-named source (e.g. both
+    the ``search`` and ``browser`` plugins ship a ``pi-extension`` directory)
+    don't collide in the shared context. ``stage_context`` and the ``COPY`` line
+    ``_render_layer`` emits must agree on this path.
+    """
+    return f"{plugin_name}/{Path(src).name}"
+
+
+def _render_layer(
+    layer: ImageLayer, profile: HarnessProfile, plugin_name: str
+) -> list[str]:
     """Dockerfile lines for one image layer (Debian-derived bases)."""
     lines: list[str] = []
     if layer.apt:
@@ -46,9 +59,9 @@ def _render_layer(layer: ImageLayer, profile: HarnessProfile) -> list[str]:
     if layer.npm:
         lines.append(f"RUN npm install -g {_q(layer.npm)}")
     for src, dst in layer.copy:
-        # src is staged into the build context under its basename (see
-        # stage_context); COPY references that staged name.
-        lines.append(f"COPY {Path(src).name} {dst}")
+        # src is staged into the build context under a plugin-namespaced path
+        # (see stage_context); COPY references that staged path.
+        lines.append(f"COPY {_staged_rel(plugin_name, src)} {dst}")
     for cmd in layer.run:
         lines.append(f"RUN {cmd}")
     return lines
@@ -69,21 +82,22 @@ def render_dockerfile(
             continue
         lines.append(f"# plugin: {plugin.name} — {plugin.summary}")
         for layer in layers:
-            lines.extend(_render_layer(layer, profile))
+            lines.extend(_render_layer(layer, profile, plugin.name))
     return "\n".join(lines) + "\n"
 
 
 def stage_context(dest: Path, profile: HarnessProfile, plugins: list[Plugin]) -> None:
     """Copy every plugin ``copy`` source into the build context ``dest``.
 
-    Sources are staged under their basename, matching the ``COPY`` lines
-    ``render_dockerfile`` emits. ``dest`` must already exist.
+    Sources are staged under a plugin-namespaced path, matching the ``COPY``
+    lines ``render_dockerfile`` emits. ``dest`` must already exist.
     """
     for plugin in plugins:
         for layer in plugin.layers_for(profile.name):
             for src, _dst in layer.copy:
                 src_path = Path(src)
-                target = dest / src_path.name
+                target = dest / _staged_rel(plugin.name, src)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 if src_path.is_dir():
                     shutil.copytree(src_path, target, dirs_exist_ok=True)
                 else:

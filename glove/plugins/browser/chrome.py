@@ -9,6 +9,7 @@ without a hardcoded path.
 
 from __future__ import annotations
 
+import functools
 import glob
 import os
 
@@ -54,6 +55,7 @@ def chrome_for_testing_path() -> str | None:
     return sorted(hits)[-1] if hits else None
 
 
+@functools.cache
 def discover_chrome() -> tuple[str | None, str]:
     """``(path, kind)`` for the best headed browser on this host.
 
@@ -62,6 +64,10 @@ def discover_chrome() -> tuple[str | None, str]:
     ``--remote-debugging-port``, which is what both browser providers attach to.
     Single discovery point, so callers that only need the path and callers that
     need to word a message about *which* backend was found don't rescan.
+
+    Cached for the life of the process: the discovery walks several filesystem
+    globs and the result doesn't change within a run, so plan/doctor calling it
+    repeatedly reuse the first scan.
     """
     for path in SYSTEM_CHROME:
         if os.path.exists(path):

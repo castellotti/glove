@@ -11,9 +11,14 @@ FROM node:24-bookworm-slim
 COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
 
 ENV DEBIAN_FRONTEND=noninteractive
+# fd is a core Pi tool (Pi shells out to `fd` for file search and, absent it,
+# tries to download it at startup — which PI_OFFLINE=1 blocks in the sandbox),
+# so it's baked into the base, not deferred to a plugin. `ln` gives the
+# canonical `fd` name that Debian's fd-find package installs as `fdfind`.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       bash ca-certificates git ripgrep curl \
+       bash ca-certificates git ripgrep curl fd-find \
+    && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 

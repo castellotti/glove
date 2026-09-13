@@ -549,8 +549,12 @@ def doctor(
             rt = runtime or data.get("runtime", rt)
             enf = enforcer or data.get("enforcer", enf)
             # Probe the browser only when the browser plugin (or a legacy
-            # `browser:` block) is enabled for this env.
+            # `browser:` block) is enabled for this env. `plugins` accepts a
+            # comma-string as well as a list (see config._normalize), so split
+            # before the membership test to avoid a substring false-positive.
             plugins = data.get("plugins") or []
+            if isinstance(plugins, str):
+                plugins = [p.strip() for p in plugins.split(",") if p.strip()]
             legacy = (data.get("browser") or {}).get("provider")
             if "browser" in plugins or legacy:
                 opts = (data.get("plugin_options") or {}).get("browser") or {}

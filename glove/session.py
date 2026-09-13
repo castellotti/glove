@@ -105,8 +105,11 @@ def build_harness(
         return final_tag
 
     _build_base(provider, profile, apt_packages, pip_packages, srt, base_tag, force=force)
-    if not plugin_names:
-        return base_tag  # == final_tag: no derived layer to compose
+    if final_tag == base_tag:
+        # No derived layer to compose: either no plugins, or the enabled plugins
+        # contribute only runtime wiring (no image layers) for this harness, so
+        # effective_image collapsed the tag back onto the base.
+        return base_tag
 
     from .plugins import resolve_plugins
     from .plugins.image import render_dockerfile, stage_context

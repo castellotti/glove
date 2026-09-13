@@ -9,6 +9,26 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Fixes
+
+- **Plugin build contexts no longer collide.** Each plugin's `copy` sources are
+  staged under a plugin-namespaced path (`<plugin>/<name>`) instead of their bare
+  basename, so two plugins shipping a same-named source — e.g. the `search` and
+  `browser` plugins both ship a `pi-extension/` directory — compose cleanly
+  together on Pi instead of overwriting each other in the shared build context.
+- **`fd` restored to the Pi base.** It's a core tool Pi shells out to (and tries
+  to download at startup, which `PI_OFFLINE=1` blocks in the sandbox), so it's
+  baked into the base image rather than dropped with the media toolchain.
+- **No redundant derived image** for a plugin that contributes only runtime
+  wiring on a harness (e.g. `browser` on Vibe adds an MCP server but no image
+  layer): `effective_image` now hashes only layer-contributing plugins, so such
+  a session runs the base image directly instead of building a byte-identical
+  derived tag.
+- **`discover_chrome()` is process-cached**, so repeated plan/doctor calls reuse
+  a single filesystem scan.
+- **`glove doctor --env`** normalizes a comma-string `plugins:` value to a list
+  before the `browser` membership test, matching how config parses it.
+
 ### Phase 6 — doctor / policy show integration + migration
 
 - **`glove policy show`** now prints a per-plugin section: each enabled plugin's
