@@ -8,6 +8,39 @@ All six implementation phases are complete.
 
 ### Changes
 
+- **Hardening follow-ups after the podman review (five fixes).**
+  - *Interpreter paths now readable to shell tools too.* The `nono run` exit-127
+    fix (interpreter/runtime paths in the read set) had been applied only to the
+    *harness* profile. A shell **tool** command that execs an interpreter outside
+    nono's default system reads (node/npm under `/usr/local`, a uv/venv python
+    under `/opt/uv`) hit the same Landlock exec denial and died exit 127. Both
+    profiles now share one read set (`_read_paths`) that includes
+    `profile.runtime_paths` — read-only, so `tool.json` still can't read the
+    harness config home or any secret.
+  - *Seccomp invariant coupled to what actually renders.* `validate_hardening`
+    only checks that the *plan* names a profile; on podman that value is discarded
+    (no `seccomp=` line is emitted). `render()` now refuses unless the runtime
+    declares `RuntimeCaps.applies_builtin_seccomp` — so a runtime that drops
+    glove's profile without a validated built-in default can no longer render an
+    unpinned container silently. podman sets the flag (built-in moby-derived
+    default); docker must emit the vendored profile.
+  - *podman + srt incompatibility is now a first-class doctor gate.* The refusal
+    lived only inside the compose render hook, so `glove doctor --runtime podman
+    --enforcer srt` reported OK and `glove run` aborted late. A single
+    `Runtime.unsupported_enforcer_reason()` now backs both the render refusal and
+    a `fail` check surfaced by `glove doctor` up front.
+  - *`podman info` probed once, cached process-wide.* doctor called `podman info`
+    three times per run (kernel, security fields, rootless) and the rootless cache
+    lived on an instance that `get_runtime()` rebuilds each call. A module-level
+    `@functools.cache`'d `_host_info(cli)` templates all three fields in one call
+    and survives across the doctor/plan/run flow (verified: 1 call across 3 fresh
+    instances).
+  - *host-gateway forwarders on podman verified, not just assumed.* On rootless
+    podman 6 `host.docker.internal:host-gateway` resolves to gvproxy's host
+    address (192.168.127.254) — identical to podman's built-in
+    `host.containers.internal`, distinct from the netavark bridge gateway — so it
+    reaches the host without shadowing it. Documented in `runtimes/podman.py`.
+
 - **Fixed: the harness TUI could not launch under nono (`nono run` exited 127).**
   The ring-1 *harness* profile granted `/etc/glove`, `/opt/glove`, and the ro
   mounts, but **not the harness's own interpreter/runtime** — vibe's shebang

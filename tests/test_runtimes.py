@@ -69,6 +69,37 @@ def test_podman_srt_unsupported(tmp_path):
         rt.render(_plan(tmp_path, enforcer="srt"), tmp_path)
 
 
+def test_podman_srt_incompat_surfaced_by_doctor():
+    # The podman+srt gate must fail up front in doctor, not only mid-render.
+    checks = run_doctor(runtime="podman", enforcer="srt", include_container_probes=False)
+    gate = [c for c in checks if c.name.startswith("enforcer: srt")]
+    assert gate and gate[0].status == "fail"
+    assert "not supported on the podman runtime" in gate[0].detail
+
+
+def test_docker_supports_all_enforcers():
+    assert DockerRuntime().unsupported_enforcer_reason("srt") is None
+    assert DockerRuntime().unsupported_enforcer_reason("nono") is None
+
+
+def test_render_refuses_builtin_seccomp_without_cap(tmp_path):
+    # A runtime that omits glove's seccomp profile without a validated built-in
+    # default must be refused — the seccomp invariant is coupled to the render.
+    import dataclasses
+
+    from glove.hardening import HardeningError
+    from glove.runtimes.podman import PodmanRuntime
+
+    class NoBuiltinPodman(PodmanRuntime):
+        # emit_seccomp=False (inherited) but drop the built-in-default sanction.
+        caps = dataclasses.replace(PodmanRuntime.caps, applies_builtin_seccomp=False)
+
+    rt = NoBuiltinPodman()
+    rt._rootless = True
+    with pytest.raises(HardeningError, match="unpinned"):
+        rt.render(_plan(tmp_path), tmp_path)
+
+
 def test_docker_render_refuses_bad_hardening(tmp_path):
     import dataclasses
 
