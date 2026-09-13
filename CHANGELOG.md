@@ -8,6 +8,42 @@ All six implementation phases are complete.
 
 ### Changes
 
+- **Fixed: the harness TUI could not launch under nono (`nono run` exited 127).**
+  The ring-1 *harness* profile granted `/etc/glove`, `/opt/glove`, and the ro
+  mounts, but **not the harness's own interpreter/runtime** — vibe's shebang
+  resolves to a python under `/opt/uv`→`/usr/local`, and pi/node lives under
+  `/usr/local`. Under Landlock those paths were unreadable, so the kernel could
+  not exec the TUI and the container died with exit 127 and no output (this is
+  the live-TUI path, previously exercised only manually). `HarnessProfile` now
+  declares `runtime_paths` (default `/usr/local`; vibe adds `/opt/uv`) which the
+  nono renderer adds to `harness.json`'s read list — tool commands (`tool.json`)
+  are unaffected, so a shell still can't read the config home. Verified: the Vibe
+  TUI now renders under `nono run` (podman, `compose run`): "Mistral Vibe v2.25.0
+  · glove · 3 models · 1 hook".
+- **Podman runtime validated on rootless podman (macOS/libkrun) and promoted
+  from "untested" to a first-class backend.** `RuntimeCaps.tested` is now `True`
+  for podman. Rendering diverges from docker in two podman-specific ways, both
+  handled automatically: (1) rootless podman maps the invoking uid to container
+  root, so a `user: <uid:gid>` harness cannot write host-owned bind mounts —
+  glove now emits `userns_mode: keep-id` on rootless podman so ownership passes
+  through; (2) `podman compose` runs an external compose provider (docker-compose)
+  that *inlines* a referenced seccomp profile's JSON, which podman's compat API
+  rejects ("file name too long") — glove omits the custom profile on podman and
+  relies on podman's built-in default (the same moby-derived filter that already
+  allows `landlock_*`). `glove doctor --runtime podman` uses podman's version/info
+  fields (`.Server.OsArch`, `.Host.Kernel`, `.Host.Security.*`), reports whether a
+  compose provider is installed, and drops the docker-only File-sharing hint.
+  Verified end-to-end: `podman compose config` parses the rendered project; the
+  hardened harness comes up with `cap_drop=ALL`/CapEff=0, no-new-privileges,
+  read-only rootfs, pids/mem limits, and an internal-only network; all six ring-1
+  nono checks pass (write /work, config dir denied to shell, network blocked,
+  secret stripped, hook rewrite, web_fetch deny) against the real
+  `glove/vibe:0.3.0` image (Landlock ABI 9 in the libkrun VM); and the `llm`
+  forwarder sidecar reaches a Tailscale-hosted LLM through gvproxy egress.
+  `srt` on podman is not supported yet (its relaxed profile can't be inlined) and
+  fails fast with a clear message. Needs a compose provider (`brew install
+  docker-compose`).
+
 - **glove no longer writes anything into the project working tree**: browser
   output (`{media_dir}`, e.g. Playwright screenshots) defaulted to
   `<workdir>/research/<collection>/media` and glove `mkdir`'d it on launch,

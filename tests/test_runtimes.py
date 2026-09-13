@@ -23,7 +23,8 @@ def _plan(tmp_path, **kw):
 def test_registry_lists_all_backends():
     assert set(known_runtimes()) == {"docker", "podman", "apple-container", "gondolin", "utm"}
     assert get_runtime("docker").name == "docker"
-    assert get_runtime("podman").caps.tested is False
+    # podman is validated on rootless podman (see docs/planning/runtimes/podman.md).
+    assert get_runtime("podman").caps.tested is True
 
 
 def test_unknown_runtime_raises():
@@ -41,6 +42,31 @@ def test_docker_render_produces_hardened_compose(tmp_path):
     assert h["pids_limit"] == 512
     assert any(s.startswith("seccomp=") for s in h["security_opt"])
     assert "no-new-privileges:true" in h["security_opt"]
+
+
+def test_podman_render_rootless_keepid_and_no_inline_seccomp(tmp_path):
+    from glove.runtimes.podman import PodmanRuntime
+
+    rt = PodmanRuntime()
+    rt._rootless = True  # avoid probing podman; assert the rootless render
+    doc = yaml.safe_load(rt.render(_plan(tmp_path), tmp_path).compose_yaml)
+    h = doc["services"]["glove-s-harness"]
+    # rootless: uid/gid mapped through so bind mounts stay writable
+    assert h["userns_mode"] == "keep-id"
+    # hardening still enforced, but no inline seccomp (podman built-in default)
+    assert "no-new-privileges:true" in h["security_opt"]
+    assert not any(str(s).startswith("seccomp=") for s in h["security_opt"])
+    assert h["cap_drop"] == ["ALL"]
+    assert h["read_only"] is True
+
+
+def test_podman_srt_unsupported(tmp_path):
+    from glove.runtimes.podman import PodmanRuntime
+
+    rt = PodmanRuntime()
+    rt._rootless = True
+    with pytest.raises(NotImplementedError):
+        rt.render(_plan(tmp_path, enforcer="srt"), tmp_path)
 
 
 def test_docker_render_refuses_bad_hardening(tmp_path):
@@ -136,9 +162,16 @@ def test_render_none_enforcer_no_policies_mount(tmp_path):
     assert "/etc/glove/enforcer" not in binds
 
 
-def test_doctor_surfaces_untested_podman():
-    from glove.doctor import run_doctor
+def test_doctor_surfaces_untested_runtime(monkeypatch):
+    import dataclasses
 
+    from glove.doctor import run_doctor
+    from glove.runtimes.podman import PodmanRuntime
+
+    # The untested-warning mechanism fires for any backend with caps.tested=False.
+    monkeypatch.setattr(
+        PodmanRuntime, "caps", dataclasses.replace(PodmanRuntime.caps, tested=False)
+    )
     checks = run_doctor(runtime="podman", enforcer="nono", include_container_probes=False)
     assert any(c.status == "warn" and "UNTESTED" in c.detail for c in checks)
 

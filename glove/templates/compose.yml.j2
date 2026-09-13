@@ -16,6 +16,11 @@ services:
 {% if not allow_root %}
     user: "{{ uid }}:{{ gid }}"
 {% endif %}
+{% if userns_mode %}
+    # rootless podman: map the host uid/gid through so the non-root user owns
+    # (and can write) the bind-mounted home and workdir.
+    userns_mode: "{{ userns_mode }}"
+{% endif %}
     ipc: {{ hardening.ipc }}
     cap_drop:
       - ALL
@@ -27,7 +32,13 @@ services:
 {% endif %}
     security_opt:
       - "no-new-privileges:true"
+{% if emit_seccomp %}
       - "seccomp={{ hardening.seccomp_profile }}"
+{% else %}
+      # podman: the compose provider inlines a referenced seccomp file, which
+      # podman's compat API rejects — rely on podman's built-in default profile
+      # (same moby-derived filter, allows landlock_*).
+{% endif %}
 {% if hardening.systempaths_unconfined %}
       - "systempaths=unconfined"
 {% endif %}
@@ -81,7 +92,7 @@ services:
 {% endfor %}
 {% if harness_host_gateway %}
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "{{ host_gateway_name }}:host-gateway"
 {% endif %}
 {% for s in sidecars %}
 
@@ -101,7 +112,7 @@ services:
 {% endif %}
 {% if s.host_gateway %}
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "{{ host_gateway_name }}:host-gateway"
 {% endif %}
 {% endfor %}
 
