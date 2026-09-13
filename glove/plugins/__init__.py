@@ -19,6 +19,15 @@ def register(plugin: Plugin) -> None:
     _REGISTRY[plugin.name] = plugin
 
 
+def _register_builtins() -> None:
+    """Register the plugins glove ships with. Imported here (not at module top)
+    so the shipped plugin modules can import from this package without a cycle."""
+    from .media import MEDIA
+
+    for plugin in (MEDIA,):
+        register(plugin)
+
+
 def get_plugin(name: str) -> Plugin:
     try:
         return _REGISTRY[name]
@@ -54,3 +63,5 @@ __all__ = [
     "register",
     "resolve_plugins",
 ]
+
+_register_builtins()

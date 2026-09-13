@@ -153,3 +153,23 @@ def test_config_parses_plugins_list_and_options():
 def test_config_parses_plugins_csv_string():
     cfg = _coerce({"plugins": "media, browser"})
     assert cfg.plugins == ["media", "browser"]
+
+
+# --- shipped: media --------------------------------------------------------
+
+def test_media_plugin_registered():
+    assert "media" in plugins.known_plugins()
+    assert resolve_plugins(["media"])[0].name == "media"
+
+
+def test_media_renders_shared_apt_and_per_harness():
+    media = plugins.get_plugin("media")
+    vibe_df = render_dockerfile("base", get_profile("vibe"), [media])
+    assert "ffmpeg imagemagick webp libimage-exiftool-perl" in vibe_df
+    assert "RUN uv pip install --system Pillow" in vibe_df
+    assert "python3-pil" not in vibe_df  # pi-only
+
+    pi_df = render_dockerfile("base", get_profile("pi"), [media])
+    assert "ffmpeg imagemagick webp libimage-exiftool-perl" in pi_df
+    assert "python3 python3-pil" in pi_df
+    assert "Pillow" not in pi_df  # vibe-only

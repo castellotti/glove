@@ -20,9 +20,10 @@ command the agent executes.
 > toolchain and the SearXNG client are no longer baked, and Pi loads only its
 > always-on `enforcer` extension (images bumped to `0.4.0`) (phase 1); the
 > `plugins:` config key + `--with` flag + derived-layer image composition are
-> wired, though no capabilities are registered yet (phase 2). During the
-> migration, Pi search/browser and Vibe search are temporarily unavailable
-> pending their plugin ports; Vibe browser via `host-mcp` is unaffected.
+> wired (phase 2); the **`media`** analysis toolchain is the first shipped plugin
+> (`--with media`) (phase 3). During the migration, Pi search/browser and Vibe
+> search are temporarily unavailable pending their plugin ports; Vibe browser via
+> `host-mcp` is unaffected.
 
 ## How it works - three rings (defense in depth)
 
@@ -103,7 +104,7 @@ workdir: .
 add_dirs:
   - { path: ../shared-lib, mode: ro }
 net: [service]              # none | service | internet | lan | docker:<name>
-plugins: []                 # opt-in capabilities (off by default); also `--with a,b`
+plugins: [media]            # opt-in capabilities (off by default); also `--with a,b`
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
 browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none

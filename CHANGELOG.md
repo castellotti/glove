@@ -9,6 +9,19 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Phase 3 — `media` plugin
+
+- **First shipped plugin: `media`** (`plugins: [media]` / `--with media`) —
+  restores the image/audio/video analysis toolchain that phase 1 removed, now as
+  an opt-in derived layer: `ffmpeg`, `imagemagick`, `webp`, `libimage-exiftool-perl`
+  (shared), Pillow via `uv` on Vibe, `python3`+`python3-pil` on Pi. Pure image
+  contribution — the tools run as shell commands under the existing ring-1 tool
+  policy, so no network/host-service/mount/ring-1 grant is needed.
+- Verified on rootless podman: `media` composes for both Vibe and Pi — ffmpeg /
+  imagemagick / exiftool / cwebp and `import PIL` all present in the derived
+  image, and **absent from the untouched base**. (`fd` is not restored; add it
+  per-session with `apt_packages: [fd-find]` if wanted.)
+
 ### Phase 2 — plugin interface + image plumbing
 
 - **New `glove.plugins` package** — a `Plugin` manifest (capability-centric, with
