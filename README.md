@@ -39,7 +39,7 @@ Docker Desktop macOS blast-radius explanation.
 | Component | Option | Status |
 |---|---|---|
 | Runtime | docker | hardened + doctor probes |
-| Runtime | podman | ships, **untested** (no podman on host) |
+| Runtime | podman | hardened + doctor probes; validated rootless (podman 6, libkrun, Vibe/nono, Landlock ABI 9) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) - default | Pi wired + verified (16-check integration) |
 | Enforcer | srt (bubblewrap) - opt-in | Pi wired + verified (7-check integration); tool commands only |
@@ -85,7 +85,7 @@ uv run glove policy show            # ring-1 policies + ring-0 hardening + gaps
 
 ```yaml
 harness: pi                 # pi | vibe | claude-code (experimental)
-runtime: docker             # docker | podman(untested) | apple-container|gondolin|utm (stub)
+runtime: docker             # docker | podman | apple-container|gondolin|utm (stub)
 enforcer: nono              # nono (Landlock, default) | srt (bubblewrap) | none
 workdir: .
 add_dirs:

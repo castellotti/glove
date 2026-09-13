@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
+# Fully-qualified so podman's short-name resolution never prompts; docker
+# resolves it identically.
+PROBE_IMAGE = "docker.io/library/python:3.12-slim"
+
 # Compact probe run inside a hardened container: reports Landlock ABI, whether
 # an unprivileged user namespace is creatable, /dev/kvm, and the effective caps.
 _PROBE = r"""
@@ -76,6 +80,20 @@ class DockerRuntime:
 
     # --- rendering ---------------------------------------------------------
 
+    def compose_extra(self, plan: SessionPlan) -> dict:
+        """Runtime-specific compose knobs folded into the render context.
+
+        Docker needs none of these; podman overrides to add rootless
+        ``userns_mode: keep-id`` and to skip the inline seccomp profile (the
+        compose provider inlines the file's JSON, which podman's compat API
+        rejects — podman applies its built-in default profile instead).
+        """
+        return {
+            "userns_mode": None,
+            "emit_seccomp": True,
+            "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
+        }
+
     def _jinja(self) -> Environment:
         return Environment(
             loader=FileSystemLoader(str(TEMPLATES_DIR)),
@@ -115,6 +133,7 @@ class DockerRuntime:
             "gid": plan.gid,
             "hardening": plan.hardening,
             "allow_root": plan.allow_root,
+            **self.compose_extra(plan),
         }
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
         return RenderedProject(
@@ -168,27 +187,36 @@ class DockerRuntime:
             checks.append(Check(f"{self.name} cli", "fail", f"{self.cli} not on PATH"))
             return checks
 
+        engine = self._engine_check()
+        checks.append(engine)
+        if engine.status == "fail":
+            return checks
+
+        checks.extend(self._security_checks())
+        checks.append(self._landlock_check())
+        return checks
+
+    def _engine_check(self) -> Check:
         ver = subprocess.run(
             [self.cli, "version", "--format",
              "{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}} kernel={{.Server.KernelVersion}}"],
             capture_output=True, text=True,
         )
         if ver.returncode != 0:
-            checks.append(Check(f"{self.name} engine", "fail", ver.stderr.strip() or "daemon not responding"))
-            return checks
-        checks.append(Check(f"{self.name} engine", "ok", ver.stdout.strip()))
+            return Check(f"{self.name} engine", "fail", ver.stderr.strip() or "daemon not responding")
+        return Check(f"{self.name} engine", "ok", ver.stdout.strip())
 
+    def _security_checks(self) -> list[Check]:
         info = subprocess.run(
             [self.cli, "info", "--format", "{{.SecurityOptions}}"],
             capture_output=True, text=True,
         )
         sec = info.stdout.strip()
-        checks.append(Check("security options", "ok" if "seccomp" in sec else "warn", sec))
         eci = "on" if "userns" in sec and "rootless" not in sec else "off/unknown"
-        checks.append(Check("enhanced container isolation (ECI)", "info", eci))
-
-        checks.append(self._landlock_check())
-        return checks
+        return [
+            Check("security options", "ok" if "seccomp" in sec else "warn", sec),
+            Check("enhanced container isolation (ECI)", "info", eci),
+        ]
 
     def _landlock_check(self) -> Check:
         """Run the hardened-container Landlock/userns/kvm probe.
@@ -198,15 +226,13 @@ class DockerRuntime:
         ``docker run`` would use Docker's built-in default and could report a
         different Landlock/userns result than the hardened container gets.
         """
-        from .seccomp import default_profile_path
-
         proc = subprocess.run(
             [
                 self.cli, "run", "--rm",
                 "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges:true",
-                "--security-opt", f"seccomp={default_profile_path()}",
-                "python:3.12-slim", "python", "-c", _PROBE,
+                *self._probe_seccomp_args(),
+                PROBE_IMAGE, "python", "-c", _PROBE,
             ],
             capture_output=True, text=True,
         )
@@ -223,3 +249,14 @@ class DockerRuntime:
             f"CapEff={data.get('CapEff')}; NoNewPrivs={data.get('NoNewPrivs')}"
         )
         return Check("landlock (hardened container)", status, detail)
+
+    def _probe_seccomp_args(self) -> list[str]:
+        """CLI args applying glove's vendored default seccomp to the probe.
+
+        Docker's CLI reads the file and sends the profile inline; podman's
+        compat path can't, so podman overrides this to rely on its built-in
+        default profile (same moby-derived filter) instead.
+        """
+        from .seccomp import default_profile_path
+
+        return ["--security-opt", f"seccomp={default_profile_path()}"]

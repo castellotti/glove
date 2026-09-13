@@ -23,6 +23,12 @@ class HarnessProfile:
     config_home_path: str  # in-container config dir (on a writable volume)
     context_file: str  # in-container path for the sudo-relay instruction
     default_env: dict[str, str] = field(default_factory=dict)
+    # Read-only paths the harness's own interpreter/runtime needs beyond nono's
+    # default system reads — e.g. the python venv or node prefix the entry binary
+    # execs from. Added to the ring-1 *harness* profile's read list so `nono run`
+    # can actually launch the TUI (its shebang/interpreter lives here). Omitting
+    # them makes the harness exec fail with exit 127 under Landlock.
+    runtime_paths: tuple[str, ...] = ("/usr/local",)
 
     @property
     def dockerfile(self) -> Path:
@@ -40,6 +46,9 @@ _REGISTRY: dict[str, HarnessProfile] = {
         config_home_path="/home/agent/.vibe",
         context_file="/home/agent/.vibe/AGENTS.md",
         default_env={"VIBE_HOME": "/home/agent/.vibe"},
+        # vibe is installed with `uv tool install` under /opt/uv; its shebang
+        # points at that venv's python (→ /usr/local's cpython).
+        runtime_paths=("/opt/uv", "/usr/local"),
     ),
     "pi": HarnessProfile(
         name="pi",

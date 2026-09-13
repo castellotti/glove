@@ -14,7 +14,8 @@
     ],
     "read": [
       "/etc/glove",
-      "/opt/glove"
+      "/opt/glove",
+      "/usr/local"
     ]
   },
   "network": {

@@ -102,7 +102,10 @@ def run_doctor(
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
     checks.extend(_enforcer_checks(enforcer, rt))
     checks.extend(_browser_checks(browser))
-    checks.append(_file_sharing_check())
+    # Docker Desktop's File sharing list is a docker-only concept; podman shares
+    # the whole home via the machine mount, so the hint is misleading there.
+    if runtime == "docker":
+        checks.append(_file_sharing_check())
     checks.extend(_host_tool_checks())
     return checks
 

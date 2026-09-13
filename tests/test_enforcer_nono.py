@@ -65,6 +65,30 @@ def test_harness_policy_grants_home_and_allows_net(tmp_path):
     assert harness["network"]["block"] is False
 
 
+def test_harness_policy_grants_interpreter_runtime_paths(tmp_path):
+    # The harness's own interpreter/runtime must be readable or `nono run` cannot
+    # exec the TUI (Landlock → exit 127). pi (node) needs /usr/local.
+    harness = json.loads(_plan(tmp_path).policies["harness.json"])
+    assert "/usr/local" in harness["filesystem"]["read"]
+    # ...but shell tool commands do NOT get these (tool.json is unaffected).
+    tool = json.loads(_plan(tmp_path).policies["tool.json"])
+    assert "/usr/local" not in tool["filesystem"].get("read", [])
+
+
+def test_vibe_harness_policy_grants_uv_venv(tmp_path):
+    # vibe installs under /opt/uv (uv tool); its interpreter must be readable.
+    from glove.config import Config
+    from glove.plan import build_session_plan
+
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = Config(harness="vibe", workdir=str(work), name="s")
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
+    harness = json.loads(plan.policies["harness.json"])
+    reads = harness["filesystem"]["read"]
+    assert "/opt/uv" in reads and "/usr/local" in reads
+
+
 def test_wrap_and_wrapper_argv(tmp_path):
     plan = _plan(tmp_path)
     enf = get_enforcer("nono")
