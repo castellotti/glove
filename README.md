@@ -12,6 +12,16 @@ security does not rest on the container alone: a kernel-level capability
 sandbox (nono/Landlock by default) runs *inside* the container and wraps every
 command the agent executes.
 
+> **In progress — minimal core + opt-in plugins.** The base image is being
+> stripped to *harness + enforcer only*; every optional capability (web search,
+> browser, media/analysis toolchain) is moving behind an off-by-default plugin
+> system enabled per session (like `net:`). See
+> `docs/planning/minimal-core-plugins-designnote.md`. **Phase 1 (done):** the
+> media toolchain and the SearXNG client are no longer baked, and Pi loads only
+> its always-on `enforcer` extension (images bumped to `0.4.0`). During the
+> migration, Pi search/browser and Vibe search are temporarily unavailable
+> pending their plugin ports; Vibe browser via `host-mcp` is unaffected.
+
 ## How it works - three rings (defense in depth)
 
 The agent and everything it spawns are treated as **untrusted** (the real threat

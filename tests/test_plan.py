@@ -43,7 +43,7 @@ def test_srt_uses_nested_seccomp(tmp_path):
 def test_nono_wraps_harness_command(tmp_path):
     plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), env_id="s", home_dir=str(tmp_path / "h"))
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
-    assert plan.harness_command[-1] == "/opt/glove/pi-extensions/browser"  # original entry preserved
+    assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
     assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json"}
 
 

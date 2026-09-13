@@ -2,6 +2,36 @@
 
 All notable changes to glove are documented here.
 
+## [Unreleased] — minimal core + opt-in plugins (in progress)
+
+Reworking glove into a tight, minimal sandbox with every optional capability
+behind an off-by-default plugin system (design note:
+`docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
+default (no-plugins) path stays fully working at each step.
+
+### Phase 1 — strip the base images
+
+- **The base harness images are now minimal: harness + ring-1 enforcer only.**
+  Removed the unconditionally-baked media/analysis toolchain
+  (`ffmpeg`, `imagemagick`, `webp`, `libimage-exiftool-perl`, `python3-pil` /
+  `Pillow`), the `fd` convenience (Pi), and the SearXNG client
+  (`searxng_mcp.py` + `mcp<2` in Vibe; the `searxng` and `browser` Pi
+  extensions). Pi now loads only its always-on `enforcer` extension
+  (`pi -e …/enforcer`); the `searxng`/`browser` extensions are no longer copied
+  into the image.
+- **Image tags bumped `0.3.0` → `0.4.0`** (Pi and Vibe) so the new minimal base
+  is a distinct tag and existing fat `0.3.0` images aren't silently reused.
+- **Sizes (rootless podman, verified):** Vibe **1.09 GB → 685 MB** (−37%);
+  Pi **963 MB**. Ring-1 enforcement verified intact — both harnesses exec under
+  `nono run` with the rendered harness profile (Pi `pi --version` → 0.85.1;
+  Vibe `vibe --version` → 2.25.4 under a profile granting `runtime_paths`).
+- **Transitional status:** the plugin system does not exist yet, so capabilities
+  that depended on baked code are temporarily unavailable pending their ports —
+  **Pi** web-search + browser (extensions removed) and **Vibe** SearXNG search
+  (client removed). **Vibe browser via `host-mcp` still works** (it uses Vibe's
+  native MCP client + host-side Playwright, nothing baked). No shipped example
+  config uses search; `vibe-local` (browser) is unaffected.
+
 ## [0.2.0] — unreleased
 
 All six implementation phases are complete.

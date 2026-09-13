@@ -38,9 +38,9 @@ class HarnessProfile:
 _REGISTRY: dict[str, HarnessProfile] = {
     "vibe": HarnessProfile(
         name="vibe",
-        # 0.3.0: ring-1 enforcer — baked nono binary + pre_tool hook that routes
-        # every bash tool call through the per-command sandbox policy.
-        image="glove/vibe:0.3.0",
+        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
+        # pre_tool hook) only. Optional capabilities are opt-in plugins.
+        image="glove/vibe:0.4.0",
         entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
         config_home_env="VIBE_HOME",
         config_home_path="/home/agent/.vibe",
@@ -52,23 +52,22 @@ _REGISTRY: dict[str, HarnessProfile] = {
     ),
     "pi": HarnessProfile(
         name="pi",
-        # 0.3.0: ring-1 enforcer — baked nono binary + enforcer extension that
-        # routes every shell command through the per-command sandbox policy.
-        image="glove/pi:0.3.0",
-        # Load glove's baked extensions (deps installed in the image) from system
-        # paths; the user's own extensions still load from the config home. The
-        # `enforcer` extension must load so shell commands are sandboxed.
+        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
+        # enforcer extension) only. Optional capabilities are opt-in plugins.
+        image="glove/pi:0.4.0",
+        # Load only the always-on ring-1 `enforcer` extension (deps are node
+        # builtins) from a system path; the user's own extensions still load from
+        # the config home. Capability extensions (search, browser) are opt-in
+        # plugins added to this entry when enabled — absent by default.
         entry=[
             "pi",
             "-e", "/opt/glove/pi-extensions/enforcer",
-            "-e", "/opt/glove/pi-extensions/searxng",
-            "-e", "/opt/glove/pi-extensions/browser",
         ],
         config_home_env="PI_CODING_AGENT_DIR",
         config_home_path="/home/agent/.pi/agent",
         context_file="/home/agent/.pi/agent/AGENTS.md",
         # PI_OFFLINE stops Pi's startup egress attempts (fd download, version
-        # check, telemetry) that fail in the no-egress sandbox; fd is baked in.
+        # check, telemetry) that fail in the no-egress sandbox.
         default_env={
             "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
             "PI_OFFLINE": "1",

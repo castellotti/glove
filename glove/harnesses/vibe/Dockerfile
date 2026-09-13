@@ -9,12 +9,11 @@ COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Base + media-analysis toolchain so the sandboxed agent can inspect the
-# images/audio/video it collects (webp/png/jpeg, mp4, mp3, metadata) entirely
-# in-box — the sandbox has no egress, so analysis must be local.
+# Minimal base: just what Vibe + the enforcer need. Optional capabilities
+# (search client, browser, media toolchain) are opt-in plugins composed into a
+# per-session image variant when enabled — never baked into this base.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates curl \
-      ffmpeg imagemagick webp libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 # uv, used to install vibe + Python runtime libs into system locations.
@@ -25,11 +24,6 @@ ENV UV_TOOL_DIR=/opt/uv/tools \
 
 RUN uv tool install mistral-vibe
 
-# Runtime libs the agent's python3 uses: Pillow (PIL) for image analysis — its
-# manylinux wheel bundles libjpeg/libwebp so webp/jpeg work out of the box — and
-# the v1 `mcp` SDK for the SearXNG stdio server (v2 renamed FastMCP).
-RUN uv pip install --system "mcp<2" Pillow
-
 # Optional extra packages from glove.yaml (apt_packages / pip_packages),
 # injected as build args so the image stays reproducible per session.
 ARG GLOVE_APT=""
@@ -38,8 +32,6 @@ RUN if [ -n "$GLOVE_APT" ]; then apt-get update \
       && apt-get install -y --no-install-recommends $GLOVE_APT \
       && rm -rf /var/lib/apt/lists/*; fi
 RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
-
-COPY searxng_mcp.py /opt/glove/searxng_mcp.py
 
 # Ring-1 tool hook: rewrites every `bash` tool call to run under the enforcer's
 # per-command sandbox (declared in ~/.vibe/hooks.toml by glove). Baked as an

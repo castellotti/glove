@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 3 integration checks (PLAN §8) — nono enforcer + hook inside the real
-# Vibe image. Confirms (1) the shipping glove/vibe:0.3.0 image enforces the same
+# Vibe image. Confirms (1) the shipping glove/vibe:0.4.0 image enforces the same
 # ring-1 policies as Pi, and (2) the baked /opt/glove/vibe-hook rewrites bash
 # tool calls through the per-command wrapper (what Vibe's pre_tool hook invokes).
 # The full LLM/TUI path (hook firing live, strict denial in the TUI) is manual.
@@ -9,7 +9,7 @@
 # See NOTE in test_pi_nono.sh about `pipefail` and grep closing pipes.
 set -u
 
-IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.3.0}"
+IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.4.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
 export GLOVE_HOME

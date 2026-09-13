@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase 2 integration checks (PLAN §8) — nono enforcer inside the real Pi image.
 #
-# These run against Docker with the shipping `glove/pi:0.3.0` image and the
+# These run against Docker with the shipping `glove/pi:0.4.0` image and the
 # policies glove renders for a session. They exercise ring 1 (the kernel policy)
 # directly via `nono wrap`/`nono run` — i.e. exactly what the Pi enforcer
 # extension prepends to every shell command — WITHOUT needing an LLM or the TUI.
@@ -15,7 +15,7 @@
 # real match. We want the pipeline status to be grep's.
 set -u
 
-IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.3.0}"
+IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.4.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"
 HOMEDIR="$(mktemp -d)"
