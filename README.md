@@ -12,6 +12,15 @@ security does not rest on the container alone: a kernel-level capability
 sandbox (nono/Landlock by default) runs *inside* the container and wraps every
 command the agent executes.
 
+> **Minimal core + opt-in plugins.** The base image is *harness + enforcer only*;
+> every optional capability is an off-by-default plugin enabled per session (like
+> `net:`) — **`media`** (analysis toolchain), **`search`** (private SearXNG), and
+> **`browser`** (host Chromium via Playwright). Enable them with
+> `plugins: [media, search, browser]` (+ `plugin_options:`) or `--with a,b`; each
+> composes as a derived image layer + its wiring only when enabled. See
+> `docs/planning/minimal-core-plugins-designnote.md`. Legacy top-level `browser:`
+> / bare `search` service configs still work with a deprecation warning.
+
 ## How it works - three rings (defense in depth)
 
 The agent and everything it spawns are treated as **untrusted** (the real threat
@@ -91,9 +100,11 @@ workdir: .
 add_dirs:
   - { path: ../shared-lib, mode: ro }
 net: [service]              # none | service | internet | lan | docker:<name>
+plugins: [media, browser]   # opt-in capabilities (off by default); also `--with a,b`
+plugin_options:             # per-plugin config
+  browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
-browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
 model: your-model-id       # must match the endpoint's /v1/models
 llm_api_key: sk-...         # stripped from shell tools' env by ring 1
 tools: { net: block, allow_commands: [cp, mv, rm] }
@@ -107,7 +118,7 @@ Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
 
 ```
 glove init [HARNESS] [--name ENV] [--from FILE]
-glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--browser …]
+glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--with a,b] [--browser …]
                     [--runtime …] [--enforcer …] [--dry-run] [--rebuild]
 glove <harness> …                    # alias of run
 glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]

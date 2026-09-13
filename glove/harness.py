@@ -29,6 +29,10 @@ class HarnessProfile:
     # can actually launch the TUI (its shebang/interpreter lives here). Omitting
     # them makes the harness exec fail with exit 127 under Landlock.
     runtime_paths: tuple[str, ...] = ("/usr/local",)
+    # Command that installs Python packages into the image, for plugin/user `pip`
+    # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
+    # error). Vibe installs via uv; the Node-based harnesses have none.
+    pip_install: tuple[str, ...] | None = None
 
     @property
     def dockerfile(self) -> Path:
@@ -38,9 +42,9 @@ class HarnessProfile:
 _REGISTRY: dict[str, HarnessProfile] = {
     "vibe": HarnessProfile(
         name="vibe",
-        # 0.3.0: ring-1 enforcer — baked nono binary + pre_tool hook that routes
-        # every bash tool call through the per-command sandbox policy.
-        image="glove/vibe:0.3.0",
+        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
+        # pre_tool hook) only. Optional capabilities are opt-in plugins.
+        image="glove/vibe:0.4.0",
         entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
         config_home_env="VIBE_HOME",
         config_home_path="/home/agent/.vibe",
@@ -49,26 +53,27 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # vibe is installed with `uv tool install` under /opt/uv; its shebang
         # points at that venv's python (→ /usr/local's cpython).
         runtime_paths=("/opt/uv", "/usr/local"),
+        # Python packages install system-wide via the baked uv.
+        pip_install=("uv", "pip", "install", "--system"),
     ),
     "pi": HarnessProfile(
         name="pi",
-        # 0.3.0: ring-1 enforcer — baked nono binary + enforcer extension that
-        # routes every shell command through the per-command sandbox policy.
-        image="glove/pi:0.3.0",
-        # Load glove's baked extensions (deps installed in the image) from system
-        # paths; the user's own extensions still load from the config home. The
-        # `enforcer` extension must load so shell commands are sandboxed.
+        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
+        # enforcer extension) only. Optional capabilities are opt-in plugins.
+        image="glove/pi:0.4.0",
+        # Load only the always-on ring-1 `enforcer` extension (deps are node
+        # builtins) from a system path; the user's own extensions still load from
+        # the config home. Capability extensions (search, browser) are opt-in
+        # plugins added to this entry when enabled — absent by default.
         entry=[
             "pi",
             "-e", "/opt/glove/pi-extensions/enforcer",
-            "-e", "/opt/glove/pi-extensions/searxng",
-            "-e", "/opt/glove/pi-extensions/browser",
         ],
         config_home_env="PI_CODING_AGENT_DIR",
         config_home_path="/home/agent/.pi/agent",
         context_file="/home/agent/.pi/agent/AGENTS.md",
         # PI_OFFLINE stops Pi's startup egress attempts (fd download, version
-        # check, telemetry) that fail in the no-egress sandbox; fd is baked in.
+        # check, telemetry) that fail in the no-egress sandbox.
         default_env={
             "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
             "PI_OFFLINE": "1",
@@ -86,19 +91,55 @@ _REGISTRY: dict[str, HarnessProfile] = {
 }
 
 
+def _image_contributing_plugins(plugins: list[str], harness: str) -> list[str]:
+    """Subset of plugin names that add image layers for ``harness``.
+
+    Imported lazily: the plugins package imports ``HarnessProfile`` from here, so
+    a top-level import would cycle. Unknown names are left in place so tag
+    computation stays a pure function and the loud "unknown plugin" error still
+    surfaces where plugins are actually resolved."""
+    if not plugins:
+        return plugins
+    from .plugins import get_plugin
+
+    contributing: list[str] = []
+    for name in plugins:
+        try:
+            plugin = get_plugin(name)
+        except ValueError:
+            contributing.append(name)
+            continue
+        if plugin.layers_for(harness):
+            contributing.append(name)
+    return contributing
+
+
 def effective_image(
     profile: HarnessProfile,
     apt_packages: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    plugins: list[str] | None = None,
 ) -> str:
-    """Image tag for a profile, suffixed with a hash when extra packages are
-    requested so a distinct package set gets its own image (and rebuilds)."""
+    """Image tag for a profile, suffixed with a hash when extra packages or
+    plugins are requested so each distinct set gets its own image (and rebuilds).
+
+    Plugin names are part of the hash: a plugin name deterministically maps to
+    its image contribution, so the set of enabled plugins uniquely identifies the
+    composed image. Only plugins that actually contribute image layers *for this
+    harness* count — one whose contribution is purely runtime wiring (e.g.
+    ``browser`` on Vibe, which adds an MCP server but no layer) leaves the image
+    byte-identical to the base, so it must not force a distinct tag and a
+    redundant derived build. With nothing extra, returns the plain minimal base
+    tag."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    if not apt_packages and not pip_packages:
+    plugins = _image_contributing_plugins(plugins or [], profile.name)
+    if not apt_packages and not pip_packages and not plugins:
         return profile.image
-    payload = "apt:" + ",".join(sorted(apt_packages)) + "|pip:" + ",".join(
-        sorted(pip_packages)
+    payload = (
+        "apt:" + ",".join(sorted(apt_packages))
+        + "|pip:" + ",".join(sorted(pip_packages))
+        + "|plugins:" + ",".join(sorted(plugins))
     )
     digest = hashlib.sha1(payload.encode()).hexdigest()[:10]
     base, sep, tag = profile.image.rpartition(":")

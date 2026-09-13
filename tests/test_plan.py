@@ -43,7 +43,7 @@ def test_srt_uses_nested_seccomp(tmp_path):
 def test_nono_wraps_harness_command(tmp_path):
     plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), env_id="s", home_dir=str(tmp_path / "h"))
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
-    assert plan.harness_command[-1] == "/opt/glove/pi-extensions/browser"  # original entry preserved
+    assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
     assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json"}
 
 
@@ -66,7 +66,7 @@ def test_browser_endpoint_reaches_environment(tmp_path):
     # must still surface BROWSER_MCP_URL to the harness, derived once from that
     # service. Guards against the wiring/plan endpoint duplication being removed
     # without the single remaining source keeping the container wired.
-    from glove.browsers import apply_browser
+    from glove.plugins.browser import apply_browser
 
     cfg = _cfg(tmp_path, browser={"provider": "host-mcp", "port": 8931})
     apply_browser(cfg, "s")

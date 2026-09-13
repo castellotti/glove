@@ -35,11 +35,14 @@ services:
     to: host.docker.internal:8080
     port: 8080
 
-# Compact browser wiring: glove adds the `browser` forwarder plus `chrome` and
-# `playwright` host services, and sets the harness MCP env. This path drives a
-# SYSTEM Google Chrome over CDP; if Chrome isn't installed, use a dedicated
-# Playwright Chrome for Testing instead (see docs/pi-remote-llm.md and the
-# hand-wired pi-remote-llm.glove.yaml example).
-browser:
-  provider: host-mcp
-  port: 8931
+# Opt-in browser capability. Enabling the `browser` plugin composes its wiring:
+# glove adds the `browser` forwarder plus `chrome` and `playwright` host
+# services, sets the harness MCP env, and (for Pi) bakes the browser extension
+# into a per-session image. This path drives a SYSTEM Google Chrome over CDP; if
+# Chrome isn't installed, use a dedicated Playwright Chrome for Testing instead
+# (see docs/pi-remote-llm.md and the hand-wired pi-remote-llm.glove.yaml example).
+plugins: [browser]
+plugin_options:
+  browser:
+    provider: host-mcp
+    port: 8931

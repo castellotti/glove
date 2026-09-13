@@ -89,6 +89,14 @@ class Config:
     name: str | None = None
     add_dirs: list[AddDir] = field(default_factory=list)
     net: list[str] = field(default_factory=lambda: ["none"])
+    # Opt-in capabilities composed into the session, off by default (mirrors
+    # `net`). Each name maps to a plugin in `glove.plugins`; enabling one adds its
+    # image layer (and, in later phases, its network/host-service/ring-1 grants +
+    # per-harness wiring). Default [] ⇒ minimal base, nothing extra.
+    plugins: list[str] = field(default_factory=list)
+    # Per-plugin configuration, keyed by plugin name (e.g.
+    # {browser: {provider: host-mcp}}).
+    plugin_options: dict[str, Any] = field(default_factory=dict)
     allow_root: bool = False
     allow_sensitive: bool = False  # permit mounting / or $HOME
     rebuild: bool = False
@@ -158,6 +166,16 @@ class Config:
         )
 
 
+def split_csv(value: str) -> list[str]:
+    """Split a comma-separated string into stripped, non-empty tokens.
+
+    The one normalization rule for comma-list config/flags (`net`, `plugins`,
+    `--with`), shared by the config coercer, the CLI, and doctor so they can't
+    drift on what a comma-string means.
+    """
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
 def _load_mapping(path: Path) -> dict[str, Any]:
     text = path.read_text()
     data = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
@@ -184,7 +202,11 @@ def _coerce(data: dict[str, Any]) -> Config:
 
     net = data.pop("net", None)
     if isinstance(net, str):
-        net = [p.strip() for p in net.split(",") if p.strip()]
+        net = split_csv(net)
+
+    plugins = data.pop("plugins", None)
+    if isinstance(plugins, str):
+        plugins = split_csv(plugins)
 
     limits_raw = data.pop("limits", None)
 
@@ -199,6 +221,8 @@ def _coerce(data: dict[str, Any]) -> Config:
     cfg.host_services = host_services
     if net is not None:
         cfg.net = net
+    if plugins is not None:
+        cfg.plugins = plugins
     if limits_raw is not None:
         cfg.limits = _coerce_limits(limits_raw)
     return cfg

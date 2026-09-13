@@ -14,13 +14,13 @@ from __future__ import annotations
 import shutil
 from typing import TYPE_CHECKING
 
-from ..config import HostService, Service
+from ...config import HostService, Service
 from .base import BrowserWiring, headed_chrome_service
 from .chrome import discover_chrome
 
 if TYPE_CHECKING:
-    from ..config import Config
-    from ..runtimes.base import Check
+    from ...config import Config
+    from ...runtimes.base import Check
 
 DEFAULT_PORT = 8931
 
@@ -61,7 +61,7 @@ class HostMcpProvider:
         )
 
     def doctor(self, cfg: Config) -> list[Check]:
-        from ..runtimes.base import Check
+        from ...runtimes.base import Check
 
         checks = []
         for tool in ("node", "npx"):
@@ -82,7 +82,7 @@ def _browser_backend_check():
     system Google Chrome. When that is absent, the friction-free path is to point
     ``--executable-path`` at Playwright's own Chrome for Testing; surface it.
     """
-    from ..runtimes.base import Check
+    from ...runtimes.base import Check
 
     path, kind = discover_chrome()
     if kind == "system":

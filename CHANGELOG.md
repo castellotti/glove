@@ -2,6 +2,161 @@
 
 All notable changes to glove are documented here.
 
+## [Unreleased] — minimal core + opt-in plugins (in progress)
+
+Reworking glove into a tight, minimal sandbox with every optional capability
+behind an off-by-default plugin system (design note:
+`docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
+default (no-plugins) path stays fully working at each step.
+
+### Fixes
+
+- **Plugin build contexts no longer collide.** Each plugin's `copy` sources are
+  staged under a plugin-namespaced path (`<plugin>/<name>`) instead of their bare
+  basename, so two plugins shipping a same-named source — e.g. the `search` and
+  `browser` plugins both ship a `pi-extension/` directory — compose cleanly
+  together on Pi instead of overwriting each other in the shared build context.
+- **`fd` restored to the Pi base.** It's a core tool Pi shells out to (and tries
+  to download at startup, which `PI_OFFLINE=1` blocks in the sandbox), so it's
+  baked into the base image rather than dropped with the media toolchain.
+- **No redundant derived image** for a plugin that contributes only runtime
+  wiring on a harness (e.g. `browser` on Vibe adds an MCP server but no image
+  layer): `effective_image` now hashes only layer-contributing plugins, so such
+  a session runs the base image directly instead of building a byte-identical
+  derived tag.
+- **`discover_chrome()` is process-cached**, so repeated plan/doctor calls reuse
+  a single filesystem scan.
+- **`glove doctor --env`** normalizes a comma-string `plugins:` value to a list
+  before the `browser` membership test, matching how config parses it.
+
+### Internal
+
+- **Back-compat shim de-duplicated.** The rule mapping a legacy config to an
+  implied plugin (a `search` service ⇒ `search`; a top-level `browser:` block ⇒
+  `browser`) lives in one `_legacy_bridges` helper, consumed by both the plugin
+  injection and the deprecation warnings so they can't drift.
+- **One comma-list parser.** `config.split_csv` replaces the six hand-inlined
+  copies of the `net`/`plugins`/`--with` comma-split across config, CLI, and
+  doctor.
+
+### Phase 6 — doctor / policy show integration + migration
+
+- **`glove policy show`** now prints a per-plugin section: each enabled plugin's
+  summary, its egress (only via the named forwarder sidecars; shell tools stay
+  `--block-net`), its Pi extensions, and its image layer — plus the host services
+  the plugins add. The composed harness command shows all loaded `-e` extensions.
+- **`glove doctor`** probes the browser provider only when the browser plugin
+  (or a legacy `browser:` block) is enabled for the env, reading the provider
+  from `plugin_options.browser`.
+- **Back-compat shim with deprecation warnings.** A legacy top-level `browser:`
+  block still implies the `browser` plugin, and a declared `search` service still
+  implies the `search` plugin — both now print a `deprecation:` warning on `run`
+  pointing at the `plugins:` form.
+- **Example configs migrated** to `plugins:` + `plugin_options:`
+  (`vibe-local` → `plugins: [browser]`; `pi-remote-llm` → `plugins: [browser]`
+  with `provider: none` for its hand-wired browser; `pi-local` documents
+  `plugins: []`).
+
+### Phase 5 — `browser` plugin
+
+- **`browser` plugin** (`plugins: [browser]` / `--with browser` / `--browser`) —
+  drive a real host Chromium via Playwright, restored as an opt-in capability.
+  The whole browser subsystem is now self-contained under `glove/plugins/browser/`:
+  the provider layer (`registry.py`, `base.py`, `host_mcp.py`, `host_server.py`,
+  `chrome.py`, moved from `glove/browsers/`), the Pi MCP-client extension
+  (`pi-extension/`), and the manifest.
+- **Central enablement:** `build_session_plan` now expands browser wiring
+  (`_apply_plugin_config`) — host services (Chrome + Playwright), the `browser`
+  forwarder sidecar, and harness env — so run, dry-run, `policy show`, and tests
+  all compose the same session (previously only the CLI ran `apply_browser`). A
+  legacy top-level `browser:` block implies the `browser` plugin; canonical
+  options live in `plugin_options.browser`; provider defaults to `host-mcp`.
+- Pi loads the browser extension (`-e`); Vibe reaches the same Playwright MCP via
+  the plugin's `vibe_mcp` entry (no image contribution needed — native MCP
+  client). `_mcp_servers` no longer hardcodes browser; it dispatches to plugins.
+- Verified on rootless podman: `browser` composes for Pi (extension +
+  `@modelcontextprotocol/sdk`; loads under `nono`, exit 0) and is a no-op image
+  layer for Vibe; the extension is absent from the base.
+
+### Phase 4 — `search` plugin
+
+- **`search` plugin** (`plugins: [search]` / `--with search`) — web search via a
+  private SearXNG instance, restored as an opt-in capability. Its sources now
+  live self-contained under `glove/plugins/search/` (moved out of the harness
+  image trees): the Pi extension (`pi-extension/`, loaded via `-e`) and the Vibe
+  stdio MCP server (`searxng_mcp.py`).
+- **Plugin manifest gains runtime-wiring fields:** `pi_extensions` (Pi `-e`
+  paths), `requires_services` (forwarder services the operator must declare —
+  glove now errors early if missing), `env_from_services` (endpoint env like
+  `SEARXNG_URL` from the `search` sidecar), and `vibe_mcp` (Vibe MCP server
+  entries). `build_session_plan` augments the Pi entry, injects the env, and
+  validates required services; `harnessconfig._mcp_servers` dispatches to enabled
+  plugins instead of hardcoding searxng.
+- The `search` wiring is now gated on the **plugin** being enabled, not merely a
+  `search` service being present (which previously produced a broken MCP entry
+  pointing at removed code). Native Vibe `web_search`/`web_fetch` stay blocked by
+  the ring-1 hook; the SearXNG MCP is the search path (unchanged).
+- Verified on rootless podman: `search` composes for both harnesses — Pi carries
+  the extension + its `typebox` npm dep and loads it under `nono` (exit 0); Vibe
+  carries `searxng_mcp.py` with `import mcp` working; both absent from the base.
+
+### Phase 3 — `media` plugin
+
+- **First shipped plugin: `media`** (`plugins: [media]` / `--with media`) —
+  restores the image/audio/video analysis toolchain that phase 1 removed, now as
+  an opt-in derived layer: `ffmpeg`, `imagemagick`, `webp`, `libimage-exiftool-perl`
+  (shared), Pillow via `uv` on Vibe, `python3`+`python3-pil` on Pi. Pure image
+  contribution — the tools run as shell commands under the existing ring-1 tool
+  policy, so no network/host-service/mount/ring-1 grant is needed.
+- Verified on rootless podman: `media` composes for both Vibe and Pi — ffmpeg /
+  imagemagick / exiftool / cwebp and `import PIL` all present in the derived
+  image, and **absent from the untouched base**. (`fd` is not restored; add it
+  per-session with `apt_packages: [fd-find]` if wanted.)
+
+### Phase 2 — plugin interface + image plumbing
+
+- **New `glove.plugins` package** — a `Plugin` manifest (capability-centric, with
+  a per-harness `ImageLayer` map) + registry (`register`/`get_plugin`/
+  `resolve_plugins`). Empty for now; capabilities are ported in later phases.
+- **New config surface:** `plugins: [ … ]` (default `[]`, mirrors `net`) and
+  `plugin_options: { <name>: { … } }`; CLI `--with a,b` on `run`/`build`
+  (replaces the config list). Unknown plugin names fail loudly. Shown in
+  `--dry-run` and `glove policy show`.
+- **Derived-layer image composition.** The minimal base stays built from the
+  harness Dockerfile; enabling plugins composes a *derived* image
+  (`FROM <base>` + one layer set per plugin), tagged with a hash of the enabled
+  set (+ apt/pip). No plugins ⇒ the base *is* the session image (byte-identical
+  to before). `effective_image` folds the plugin set into the tag.
+- Added `HarnessProfile.pip_install` (Vibe → `uv pip install --system`; Node
+  harnesses have none) so plugin `pip` layers render per harness.
+- Verified on rootless podman: a probe plugin composes `FROM glove/vibe:0.4.0`
+  reusing the cached base, tags `glove/vibe:0.4.0-<hash>`, the tool is present in
+  the derived image and **absent from the untouched base**, and a second build
+  short-circuits on the cached tag.
+
+### Phase 1 — strip the base images
+
+- **The base harness images are now minimal: harness + ring-1 enforcer only.**
+  Removed the unconditionally-baked media/analysis toolchain
+  (`ffmpeg`, `imagemagick`, `webp`, `libimage-exiftool-perl`, `python3-pil` /
+  `Pillow`), the `fd` convenience (Pi), and the SearXNG client
+  (`searxng_mcp.py` + `mcp<2` in Vibe; the `searxng` and `browser` Pi
+  extensions). Pi now loads only its always-on `enforcer` extension
+  (`pi -e …/enforcer`); the `searxng`/`browser` extensions are no longer copied
+  into the image.
+- **Image tags bumped `0.3.0` → `0.4.0`** (Pi and Vibe) so the new minimal base
+  is a distinct tag and existing fat `0.3.0` images aren't silently reused.
+- **Sizes (rootless podman, verified):** Vibe **1.09 GB → 685 MB** (−37%);
+  Pi **963 MB**. Ring-1 enforcement verified intact — both harnesses exec under
+  `nono run` with the rendered harness profile (Pi `pi --version` → 0.85.1;
+  Vibe `vibe --version` → 2.25.4 under a profile granting `runtime_paths`).
+- **Transitional status:** the plugin system does not exist yet, so capabilities
+  that depended on baked code are temporarily unavailable pending their ports —
+  **Pi** web-search + browser (extensions removed) and **Vibe** SearXNG search
+  (client removed). **Vibe browser via `host-mcp` still works** (it uses Vibe's
+  native MCP client + host-side Playwright, nothing baked). No shipped example
+  config uses search; `vibe-local` (browser) is unaffected.
+
 ## [0.2.0] — unreleased
 
 All six implementation phases are complete.

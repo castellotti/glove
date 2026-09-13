@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 4 integration checks (PLAN §8) — the opt-in srt enforcer inside the real
-# `glove/pi:0.3.0-srt` image. Reproduces the research §5 matrix and runs the
+# `glove/pi:0.4.0-srt` image. Reproduces the research §5 matrix and runs the
 # tool-command checks: srt wraps tool commands only, under the surgically
 # relaxed nested-userns seccomp. See NOTE in test_pi_nono.sh re: pipefail.
 #
@@ -8,7 +8,7 @@
 # Requires: docker + `glove build pi --enforcer srt`.
 set -u
 
-IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.3.0-srt}"
+IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.4.0-srt}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SECCOMP="$ROOT/glove/runtimes/seccomp/nested-userns.json"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"

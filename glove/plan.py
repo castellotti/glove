@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, replace
 
-from .config import Config
+from .config import Config, ConfigError
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, compute_mounts
@@ -90,12 +90,10 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
     """
     from .harnessconfig import LLM_API_KEY_ENV, service_base
 
-    search = service_base(cfg, session, "search")
-    if search:
-        environment.setdefault("SEARXNG_URL", search)
     # Single construction site for the browser MCP endpoint: derived from the
     # declared `browser` service, whether it came from a browser provider
     # (browsers.apply_browser) or was hand-wired in the config.
+    # (SEARXNG_URL is injected by the `search` plugin; see _plugin_env.)
     browser = service_base(cfg, session, "browser")
     if browser:
         environment.setdefault("BROWSER_MCP_URL", f"{browser}/mcp")
@@ -103,6 +101,102 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
     # injection). Until then it stays in the harness env, as in v1.
     if cfg.llm_api_key:
         environment[LLM_API_KEY_ENV] = str(cfg.llm_api_key)
+
+
+def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str]) -> None:
+    """Inject each enabled plugin's `env_from_services` endpoints (e.g. the
+    `search` plugin's SEARXNG_URL from the `search` sidecar)."""
+    from .harnessconfig import service_base
+
+    for plugin in plugins:
+        for var, service_name in plugin.env_from_services.items():
+            base = service_base(cfg, session, service_name)
+            if base:
+                environment.setdefault(var, base)
+
+
+def _validate_plugin_services(cfg: Config, plugins) -> None:
+    """Fail early when an enabled plugin's required forwarder service is absent —
+    the capability reaches the network only through that sidecar."""
+    declared = {s.name for s in cfg.services}
+    for plugin in plugins:
+        missing = [s for s in plugin.requires_services if s not in declared]
+        if missing:
+            raise ConfigError(
+                f"plugin {plugin.name!r} requires service(s) {missing} that are "
+                "not declared — add them under `services:` and include 'service' "
+                f"in `net` (e.g. services: [{{name: {missing[0]}, to: …}}], "
+                "net: [service])."
+            )
+
+
+def _plugin_entry(cfg: Config, base_entry: list[str], plugins) -> list[str]:
+    """Augment the harness entry with each enabled plugin's contribution.
+
+    Pi loads capability code as extensions (``-e <path>``); other harnesses use
+    MCP wiring instead, so their entry is unchanged."""
+    entry = list(base_entry)
+    if cfg.harness == "pi":
+        for plugin in plugins:
+            for ext in plugin.pi_extensions:
+                entry += ["-e", ext]
+    return entry
+
+
+def _legacy_bridges(cfg: Config) -> list[tuple[str, str]]:
+    """Pre-plugin configs that imply a plugin: `(plugin_name, deprecation)`.
+
+    Single source of truth for the back-compat shim — a declared `search`
+    service implies the `search` plugin; a top-level `browser:` block (provider
+    set) implies `browser`. `_apply_plugin_config` injects the names,
+    `legacy_warnings` surfaces the messages, so the bridge rule and its warning
+    can't drift.
+    """
+    from .plugins.browser import provider_name
+
+    bridges: list[tuple[str, str]] = []
+    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+        bridges.append((
+            "search",
+            "a `search` service without `plugins: [search]` is deprecated — add "
+            "`plugins: [search]` (implied for now).",
+        ))
+    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
+        bridges.append((
+            "browser",
+            "top-level `browser:` is deprecated — use `plugins: [browser]` with "
+            "`plugin_options: {browser: {…}}` (still works for now).",
+        ))
+    return bridges
+
+
+def _apply_plugin_config(cfg: Config, session: str) -> None:
+    """Expand plugin-driven config before the network/plan is built.
+
+    For the browser plugin this means running the provider wiring (host services,
+    the `browser` forwarder sidecar, harness env). Runs here — not in the CLI — so
+    every plan (run, dry-run, `policy show`, tests) composes the same session.
+
+    Back-compat: legacy configs that imply a plugin (see `_legacy_bridges`) get
+    that plugin injected here. Canonical options live in `plugin_options.browser`.
+    """
+    from .plugins.browser import apply_browser
+
+    for plugin_name, _ in _legacy_bridges(cfg):
+        cfg.plugins = [*cfg.plugins, plugin_name]
+    if "browser" in cfg.plugins:
+        opts = cfg.plugin_options.get("browser", {})
+        if opts:
+            # explicit top-level browser:/--browser wins over plugin_options
+            cfg.browser = {**opts, **(cfg.browser or {})}
+        if not (cfg.browser or {}).get("provider"):
+            cfg.browser = {**(cfg.browser or {}), "provider": "host-mcp"}  # v2 default
+        apply_browser(cfg, session)
+
+
+def legacy_warnings(cfg: Config) -> list[str]:
+    """Deprecation notices for pre-plugin config that still works via the shim."""
+    return [msg for _, msg in _legacy_bridges(cfg)]
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
@@ -130,6 +224,10 @@ def build_session_plan(
     uid = uid if uid is not None else os.getuid()
     gid = gid if gid is not None else os.getgid()
 
+    # Expand plugin-driven config (e.g. browser provider wiring) first, so the
+    # mount/network plans and validation below see the composed session.
+    _apply_plugin_config(cfg, session)
+
     mount_plan = compute_mounts(
         cfg.workdir,
         [(a.path, a.mode) for a in cfg.add_dirs],
@@ -138,8 +236,16 @@ def build_session_plan(
     )
     network = build_network_plan(cfg, session)
 
+    # Resolve enabled plugins (fails loudly on an unknown name) and validate that
+    # each one's required forwarder services are declared.
+    from .plugins import resolve_plugins
+
+    plugins = resolve_plugins(cfg.plugins)
+    _validate_plugin_services(cfg, plugins)
+
     environment = _resolve_env(cfg, profile)
     _service_env(cfg, session, environment)
+    _plugin_env(cfg, session, plugins, environment)
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -156,8 +262,9 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
-    # srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix.
-    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
+    # Fold the enabled plugin set into the image tag so it gets its own composed
+    # image. srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix.
+    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, cfg.plugins)
     if cfg.enforcer == "srt":
         image = f"{image}-srt"
 
@@ -180,9 +287,11 @@ def build_session_plan(
         tools=dict(cfg.tools or {}),
     )
 
-    # Ring-1: render policies, wrap the harness entry, collect enforcer env/caps.
+    # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
+    # enforcer env/caps.
+    entry = _plugin_entry(cfg, list(profile.entry), plugins)
     plan.policies = enforcer.render_policies(plan)
-    plan.command = enforcer.wrap_harness(plan, list(profile.entry))
+    plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)
 
     # Fold enforcer-requested caps/tmpfs into the hardening spec in one replace.

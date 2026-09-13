@@ -4,10 +4,21 @@ from __future__ import annotations
 
 import pytest
 
-from glove.browsers import apply_browser, get_provider, known_providers, provider_name
-from glove.browsers.host_server import _minor
 from glove.config import Config, Service
 from glove.harnessconfig import service_base
+from glove.plugins.browser import apply_browser, get_provider, known_providers, provider_name
+from glove.plugins.browser.host_server import _minor
+
+
+@pytest.fixture(autouse=True)
+def _clear_chrome_cache():
+    """discover_chrome() is process-cached; drop it so per-test monkeypatching
+    of the discovery internals isn't shadowed by an earlier test's scan."""
+    from glove.plugins.browser.chrome import discover_chrome
+
+    discover_chrome.cache_clear()
+    yield
+    discover_chrome.cache_clear()
 
 
 def test_registry():
@@ -87,7 +98,7 @@ def test_host_server_wspath_stable_after_apply():
 
 
 def test_chrome_for_testing_path_picks_newest(monkeypatch):
-    import glove.browsers.chrome as chrome
+    import glove.plugins.browser.chrome as chrome
 
     suffix = "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
     fake = {
@@ -103,7 +114,7 @@ def test_chrome_for_testing_path_picks_newest(monkeypatch):
 
 
 def test_host_mcp_doctor_guides_to_chrome_for_testing(monkeypatch):
-    import glove.browsers.chrome as chrome
+    import glove.plugins.browser.chrome as chrome
 
     # No system Chrome, but Chrome for Testing present → ok + actionable guidance.
     monkeypatch.setattr(chrome.os.path, "exists", lambda p: False)
@@ -115,7 +126,7 @@ def test_host_mcp_doctor_guides_to_chrome_for_testing(monkeypatch):
 
 
 def test_host_mcp_doctor_warns_when_no_browser(monkeypatch):
-    import glove.browsers.chrome as chrome
+    import glove.plugins.browser.chrome as chrome
 
     monkeypatch.setattr(chrome.os.path, "exists", lambda p: False)
     monkeypatch.setattr(chrome, "chrome_for_testing_path", lambda: None)

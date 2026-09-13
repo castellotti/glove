@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 from . import __version__
-from .config import ConfigError, parse_add_dir_flag, resolve
+from .config import ConfigError, parse_add_dir_flag, resolve, split_csv
 from .hardening import HardeningError
 from .harness import known_harnesses
 from .harnessconfig import render_home
@@ -174,6 +174,9 @@ def run(
     net: str | None = typer.Option(
         None, "--net", help="comma list: none|internal|internet|lan|docker:<n>|service"
     ),
+    with_plugins: str | None = typer.Option(
+        None, "--with", help="comma list of plugins to enable (replaces glove.yaml plugins)"
+    ),
     allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
     allow_sensitive: bool = typer.Option(
         False, "--allow-sensitive", help="permit mounting / or $HOME"
@@ -214,7 +217,8 @@ def run(
         "enforcer": enforcer or None,
         "workdir": str(workdir) if workdir else None,
         "name": token,
-        "net": [p.strip() for p in net.split(",") if p.strip()] if net else None,
+        "net": split_csv(net) if net else None,
+        "plugins": split_csv(with_plugins) if with_plugins is not None else None,
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
         "rebuild": rebuild or None,
@@ -231,12 +235,15 @@ def run(
                 f"runtime {cfg.runtime!r} is not implemented yet; "
                 "use docker or podman"
             )
-        # Expand the browser provider into services/host_services/env.
-        from .browsers import apply_browser
-
+        # The --browser flag selects the provider; build_session_plan expands the
+        # browser plugin (host services, sidecar, env) via _apply_plugin_config,
+        # so run/dry-run/policy-show all compose the same session.
         if browser is not None:
             cfg.browser = {**(cfg.browser or {}), "provider": browser}
-        cfg = apply_browser(cfg, token)
+        from .plan import legacy_warnings
+
+        for w in legacy_warnings(cfg):
+            err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, edir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
@@ -271,7 +278,8 @@ def run(
         console.print(
             f"[bold]env:[/bold] {env_id}   "
             f"[bold]workdir→[/bold] {plan.working_dir}   "
-            f"[bold]enforcer:[/bold] {cfg.enforcer}"
+            f"[bold]enforcer:[/bold] {cfg.enforcer}   "
+            f"[bold]plugins:[/bold] {', '.join(cfg.plugins) or 'none'}"
         )
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
@@ -466,6 +474,9 @@ def build(
     enforcer: str | None = typer.Option(
         None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
     ),
+    with_plugins: str | None = typer.Option(
+        None, "--with", help="comma list of plugins to compose into the image"
+    ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
     """Build the forwarder and (optionally) a harness image."""
@@ -473,9 +484,16 @@ def build(
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
+    plugins = split_csv(with_plugins) if with_plugins else None
     build_forwarder(prov, force=rebuild)
     if harness:
-        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
+        build_harness(
+            prov,
+            get_profile(harness),
+            plugins=plugins,
+            enforcer=enforcer or "nono",
+            force=rebuild,
+        )
 
 
 @app.command("ls")
@@ -524,7 +542,17 @@ def doctor(
             data = yaml.safe_load(cfg_path.read_text()) or {}
             rt = runtime or data.get("runtime", rt)
             enf = enforcer or data.get("enforcer", enf)
-            brw = browser or (data.get("browser") or {}).get("provider")
+            # Probe the browser only when the browser plugin (or a legacy
+            # `browser:` block) is enabled for this env. `plugins` accepts a
+            # comma-string as well as a list (see config._coerce), so split
+            # before the membership test to avoid a substring false-positive.
+            plugins = data.get("plugins") or []
+            if isinstance(plugins, str):
+                plugins = split_csv(plugins)
+            legacy = (data.get("browser") or {}).get("provider")
+            if "browser" in plugins or legacy:
+                opts = (data.get("plugin_options") or {}).get("browser") or {}
+                brw = browser or legacy or opts.get("provider") or "host-mcp"
 
     try:
         checks = run_doctor(runtime=rt, enforcer=enf, browser=brw, include_container_probes=not no_container)
@@ -577,7 +605,10 @@ def policy_show(
         raise typer.Exit(1) from e
 
     h = plan.hardening
-    console.print(f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}\n")
+    console.print(
+        f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
+        f"plugins={', '.join(cfg.plugins) or 'none'}\n"
+    )
     console.print("[bold]ring 0 — hardening[/bold]")
     console.print(
         f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
@@ -592,6 +623,35 @@ def policy_show(
         console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys "
                       "exposed to the container (srt strong)")
     console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
+
+    # Enabled plugins and exactly what each one grants (reviewable per §6-Q5).
+    from .plugins import resolve_plugins
+
+    enabled = resolve_plugins(cfg.plugins)  # cfg.plugins now includes bridged ones
+    console.print("\n[bold]plugins[/bold]")
+    if not enabled:
+        console.print("  [dim](none — minimal base image)[/dim]")
+    for p in enabled:
+        console.print(f"  [cyan]{p.name}[/cyan] — {p.summary}")
+        if p.requires_services:
+            console.print(
+                f"    egress: only via forwarder sidecar(s) {list(p.requires_services)} "
+                "(network allow-list; shell tools stay --block-net)"
+            )
+        if p.pi_extensions and cfg.harness == "pi":
+            console.print(f"    pi extension(s): {list(p.pi_extensions)}")
+        layers = p.layers_for(cfg.harness)
+        pkgs = {
+            "apt": [x for lyr in layers for x in lyr.apt],
+            "pip": [x for lyr in layers for x in lyr.pip],
+            "npm": [x for lyr in layers for x in lyr.npm],
+        }
+        shown = ", ".join(f"{k}={v}" for k, v in pkgs.items() if v)
+        if shown:
+            console.print(f"    image layer: {shown}")
+    hs = [h.name for h in cfg.host_services]
+    if hs:
+        console.print(f"  [dim]host services (run on host): {hs}[/dim]")
 
     if not plan.policies:
         console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")

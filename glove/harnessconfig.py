@@ -49,7 +49,7 @@ def build_environment_context(
     same one the runtime mounts) so the paths and modes shown to the agent match
     reality even when basenames collide or an add-dir absorbs the workdir.
     """
-    from .browsers import get_provider, provider_name
+    from .plugins.browser import get_provider, provider_name
 
     if mount_plan is None:
         mount_plan = _mount_plan_for(cfg)
@@ -139,10 +139,6 @@ def service_base(cfg: Config, session: str, name: str) -> str | None:
     return None
 
 
-# Backwards-compatible internal alias.
-_service_host = service_base
-
-
 def render_home(
     cfg: Config,
     profile: HarnessProfile,
@@ -175,28 +171,14 @@ def _rel_config_home(profile: HarnessProfile) -> Path:
 
 
 def _mcp_servers(cfg: Config, session: str) -> list[dict[str, Any]]:
-    """Auto-derive Vibe MCP servers from the network allow-list, then extend
-    with any explicit `harness_config.mcp_servers`."""
+    """Assemble Vibe MCP servers: the browser sidecar (when declared), each
+    enabled plugin's contribution, then explicit `harness_config.mcp_servers`."""
+    from .plugins import resolve_plugins
+
     servers: list[dict[str, Any]] = []
-    names = {s.name for s in cfg.services}
-    if "browser" in names:
-        base = _service_host(cfg, session, "browser")
-        # Vibe's "http" transport speaks Streamable HTTP (it has no SSE client),
-        # so point at Playwright MCP's /mcp endpoint, not /sse.
-        servers.append(
-            {"name": "playwright", "transport": "http", "url": f"{base}/mcp"}
-        )
-    if "search" in names:
-        base = _service_host(cfg, session, "search")
-        servers.append(
-            {
-                "name": "searxng",
-                "transport": "stdio",
-                "command": "python3",
-                "args": ["/opt/glove/searxng_mcp.py"],
-                "env": {"SEARXNG_URL": base},
-            }
-        )
+    for plugin in resolve_plugins(cfg.plugins):
+        if plugin.vibe_mcp is not None:
+            servers.extend(plugin.vibe_mcp(cfg, session))
     servers.extend(cfg.harness_config.get("mcp_servers", []))
     return servers
 
@@ -359,9 +341,8 @@ def _render_pi(
         "defaultThinkingLevel": "low",
         "theme": "dark",
     }
-    search_host = _service_host(cfg, session, "search")
-    if search_host:
-        settings_json.setdefault("env", {})["SEARXNG_URL"] = search_host
+    # SEARXNG_URL (when the `search` plugin is enabled) is injected into the
+    # container env by the plan, which the Pi search extension reads directly.
 
     # Let the (git-tracked) glove.yaml `harness_config` override Pi settings and
     # model fields without a code change — e.g. `defaultThinkingLevel: xhigh`, or
@@ -385,9 +366,10 @@ def _render_pi(
         p.write_text(json.dumps(data, indent=2) + "\n")
         written.append(p)
 
-    # glove's extensions (searxng web_search + browser bridge) are baked into the
-    # image and loaded via `pi -e`; nothing to seed here. A user extensions/ dir
-    # in the config home still auto-loads and is left untouched.
+    # glove's always-on enforcer extension (and any enabled capability plugins'
+    # extensions) are baked into the image and loaded via `pi -e`; nothing to
+    # seed here. A user extensions/ dir in the config home still auto-loads and
+    # is left untouched.
     (cfg_dir / "extensions").mkdir(parents=True, exist_ok=True)
     return written
 

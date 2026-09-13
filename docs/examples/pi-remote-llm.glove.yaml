@@ -47,6 +47,19 @@ harness_config:
 net: [service]
 allow_root: false
 
+# --- plugins -----------------------------------------------------------------
+# Enable the browser capability so Pi's browser extension is composed into the
+# per-session image. `provider: none` means glove does NOT auto-wire host
+# services — you hand-wire the `browser` service + `playwright` host service
+# below (a dedicated Chrome for Testing you control), which is what this example
+# demonstrates. (For glove-managed browser wiring instead, use
+# `plugin_options.browser.provider: host-mcp` and drop the manual entries — see
+# vibe-local.glove.yaml.)
+plugins: [browser]
+plugin_options:
+  browser:
+    provider: none
+
 services:
   # LLM bridge: harness → glove-<session>-llm:8080 → host 127.0.0.1:8899 → SSH →
   # <remote-host>:8080. host.docker.internal is how a sidecar reaches a host port.
@@ -54,9 +67,10 @@ services:
     to: host.docker.internal:8899
     port: 8080
   # Browser bridge: harness → glove-<session>-browser:8931 → host :8931 (the
-  # Playwright MCP). Declaring a `browser` service auto-sets BROWSER_MCP_URL for
-  # Pi's baked `browser` extension. Reachable only by the browser_* tools —
-  # shell commands have no network (ring-1 tool policy), so `curl` can't hit it.
+  # Playwright MCP). The `browser` service sets BROWSER_MCP_URL for the Pi
+  # `browser` extension (composed in by `plugins: [browser]` above). Reachable
+  # only by the browser_* tools — shell commands have no network (ring-1 tool
+  # policy), so `curl` can't hit it.
   - name: browser
     to: host.docker.internal:8931
     port: 8931

@@ -79,8 +79,8 @@ def _browser_checks(browser: str | None) -> list[Check]:
     if not browser or browser == "none":
         return []
     try:
-        from .browsers import get_provider
         from .config import Config
+        from .plugins.browser import get_provider
 
         return get_provider(browser).doctor(Config())
     except ValueError as e:

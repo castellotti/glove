@@ -32,6 +32,11 @@ llm_api_key: sk-REPLACE-ME   # or omit if your endpoint needs no key
 net: [service]
 allow_root: false
 
+# No opt-in capabilities: the base image is harness + enforcer only (no web
+# search, no browser, no media toolchain). Add e.g. `plugins: [media]` or
+# `[search]` / `[browser]` to compose them in (see the other examples).
+plugins: []
+
 services:
   # Bridge to an LLM listening on the Docker host itself (127.0.0.1:8080).
   # host.docker.internal is how a sidecar reaches a host port; no SSH tunnel

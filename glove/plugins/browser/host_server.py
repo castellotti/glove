@@ -18,12 +18,12 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from ..config import HostService, Service
+from ...config import HostService, Service
 from .base import BrowserWiring, headed_chrome_service
 
 if TYPE_CHECKING:
-    from ..config import Config
-    from ..runtimes.base import Check
+    from ...config import Config
+    from ...runtimes.base import Check
 
 DEFAULT_PORT = 3000
 # Pin the Playwright version baked into the harness image; the host server must
@@ -69,7 +69,7 @@ class HostServerProvider:
         )
 
     def doctor(self, cfg: Config) -> list[Check]:
-        from ..runtimes.base import Check
+        from ...runtimes.base import Check
 
         checks: list[Check] = []
         npx = shutil.which("npx")
