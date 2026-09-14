@@ -69,11 +69,19 @@ def _env_config_path(env_id: str) -> Path:
     return env_dir(env_id) / "glove.yaml"
 
 
-def _home_dir(cfg, edir: Path) -> Path:
-    """The harness config home: the env's own `home/`, or a power-user override."""
+def _home_dir(cfg, sdir: Path) -> Path:
+    """The harness config home: the session's own `home/`, or a power-user override.
+
+    Per-session, not per-env: the rendered harness config embeds session-scoped
+    values (notably the LLM `baseUrl`, which targets this session's own
+    `glove-<token>-llm` sidecar). Two sessions of one env coexisting must not
+    share one `home/`, or the second render clobbers the first's config.toml /
+    models.json and points it at a sidecar that isn't on its network. Re-running
+    the *same* session reuses its home, so history still persists per session.
+    """
     if cfg.config_home_source:
         return Path(os.path.realpath(cfg.config_home_source))
-    return edir / "home"
+    return sdir / "home"
 
 
 @app.command()
@@ -200,7 +208,6 @@ def run(
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
-    edir = env_dir(env_id)
     env_cfg_path = _env_config_path(env_id)
 
     # The session names this run; its compose project is glove-<env>[-<session>]
@@ -244,7 +251,7 @@ def run(
 
         for w in legacy_warnings(cfg):
             err.print(f"[yellow]deprecation:[/yellow] {w}")
-        home_dir = _home_dir(cfg, edir)
+        home_dir = _home_dir(cfg, sdir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
         )
@@ -265,13 +272,17 @@ def run(
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
-    # The seeded harness home stays at the env level so sessions of one env share
-    # config. Nothing is written to the invocation dir.
+    # The seeded harness home lives under the session dir (see _home_dir);
+    # nothing is written to the invocation dir.
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
     (sdir / "glove.effective.yaml").write_text(cfg.to_yaml(redact_secrets=True))
+    # Render with the resolved session name (== the token used to name the
+    # network sidecars), NOT env_id: a `--name`d session's llm sidecar is
+    # glove-<env>-<name>-llm, so building the harness baseUrl from env_id alone
+    # points Pi at a host that doesn't exist ("Connection error").
     home_files = render_home(
-        cfg, plan.profile, env_id, home_dir, mount_plan=plan.mount_plan
+        cfg, plan.profile, cfg.resolved_name(), home_dir, mount_plan=plan.mount_plan
     )
 
     if dry_run:
@@ -594,11 +605,15 @@ def policy_show(
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
-    edir = env_dir(env_id)
     cfg = resolve(env_config_path=_env_config_path(env_id), overrides={})
     try:
+        # policy_show inspects the default (unnamed) session; it renders no home,
+        # so the path only labels the plan's read-only bind row.
         plan = build_session_plan(
-            cfg, env_id=env_id, home_dir=str(_home_dir(cfg, edir)), cwd=os.getcwd()
+            cfg,
+            env_id=env_id,
+            home_dir=str(_home_dir(cfg, session_dir(env_id, env_id))),
+            cwd=os.getcwd(),
         )
     except (ConfigError, ValueError) as e:
         err.print(f"[red]error:[/red] {e}")

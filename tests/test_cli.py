@@ -60,10 +60,80 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "name: glove-vibe-local" in result.output
     # compose renders under sessions/<session>/ (default session == env-id)
-    compose = home / "envs" / "vibe-local" / "sessions" / "vibe-local" / "docker-compose.yml"
-    assert compose.is_file()
-    # harness home seeded under the env's own home/ (shared across sessions)
-    assert (home / "envs" / "vibe-local" / "home" / ".vibe" / "config.toml").is_file()
+    sdir = home / "envs" / "vibe-local" / "sessions" / "vibe-local"
+    assert (sdir / "docker-compose.yml").is_file()
+    # harness home seeded per-session, under the session dir (not the env root)
+    assert (sdir / "home" / ".vibe" / "config.toml").is_file()
+
+
+def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
+    # Regression: a `--name`d session's llm sidecar is glove-<env>-<name>-llm,
+    # so the Pi baseUrl must be built from the resolved session token, not the
+    # bare env-id — otherwise Pi dials a host that doesn't exist ("Connection
+    # error"). Default (unnamed) sessions happened to match and hid this.
+    import json
+
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(
+        "net: [service]\n"
+        "model: m\n"
+        "services:\n"
+        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
+    )
+    result = runner.invoke(
+        app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    host = "glove-pi-local-feature-llm"
+    # The sidecar is named with the full token in the rendered compose...
+    assert host in result.output
+    # ...and the Pi provider baseUrl must point at that same host. The home is
+    # per-session, so the named session's config lives under sessions/feature/.
+    models = json.loads(
+        (
+            home / "envs" / "pi-local" / "sessions" / "feature"
+            / "home" / ".pi" / "agent" / "models.json"
+        ).read_text()
+    )
+    assert models["providers"]["glove"]["baseUrl"] == f"http://{host}:8080/v1"
+
+
+def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
+    # Regression: the harness home is per-session. Two sessions of one env
+    # coexisting must not share one home/, or the second render clobbers the
+    # first's models.json and repoints it at a sidecar that isn't on its
+    # network (the "Connection error" the baseUrl fix set out to eliminate).
+    import json
+
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(
+        "net: [service]\n"
+        "model: m\n"
+        "services:\n"
+        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
+    )
+    # Default (unnamed) session, then a --name'd one from the same env.
+    assert runner.invoke(
+        app, ["run", "pi", "--config", str(cfg), "--dry-run"]
+    ).exit_code == 0
+    assert runner.invoke(
+        app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
+    ).exit_code == 0
+
+    def base(session):
+        path = (
+            home / "envs" / "pi-local" / "sessions" / session
+            / "home" / ".pi" / "agent" / "models.json"
+        )
+        return json.loads(path.read_text())["providers"]["glove"]["baseUrl"]
+
+    # Each session's config survived the other's render, pointing at its own llm.
+    assert base("pi-local") == "http://glove-pi-local-llm:8080/v1"
+    assert base("feature") == "http://glove-pi-local-feature-llm:8080/v1"
 
 
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
