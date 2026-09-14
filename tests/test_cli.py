@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
 from glove.cli import app
+from glove.registry import session_dir
 
 runner = CliRunner()
 
@@ -21,6 +24,24 @@ def _chdir(monkeypatch, d):
     d.mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(d)
     return d
+
+
+def _write_llm_cfg(tmp_path):
+    """A minimal overlay declaring one `llm` service the harness dials."""
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(
+        "net: [service]\n"
+        "model: m\n"
+        "services:\n"
+        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
+    )
+    return cfg
+
+
+def _pi_llm_base(env_id, session):
+    """The Pi `glove` provider baseUrl from a session's rendered models.json."""
+    models_json = session_dir(env_id, session) / "home" / ".pi" / "agent" / "models.json"
+    return json.loads(models_json.read_text())["providers"]["glove"]["baseUrl"]
 
 
 def test_init_writes_only_under_glove_home(home, tmp_path, monkeypatch):
@@ -71,17 +92,9 @@ def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
     # so the Pi baseUrl must be built from the resolved session token, not the
     # bare env-id — otherwise Pi dials a host that doesn't exist ("Connection
     # error"). Default (unnamed) sessions happened to match and hid this.
-    import json
-
     _chdir(monkeypatch, tmp_path / "pi-local")
     assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    cfg = tmp_path / "over.yaml"
-    cfg.write_text(
-        "net: [service]\n"
-        "model: m\n"
-        "services:\n"
-        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
-    )
+    cfg = _write_llm_cfg(tmp_path)
     result = runner.invoke(
         app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
     )
@@ -91,13 +104,7 @@ def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
     assert host in result.output
     # ...and the Pi provider baseUrl must point at that same host. The home is
     # per-session, so the named session's config lives under sessions/feature/.
-    models = json.loads(
-        (
-            home / "envs" / "pi-local" / "sessions" / "feature"
-            / "home" / ".pi" / "agent" / "models.json"
-        ).read_text()
-    )
-    assert models["providers"]["glove"]["baseUrl"] == f"http://{host}:8080/v1"
+    assert _pi_llm_base("pi-local", "feature") == f"http://{host}:8080/v1"
 
 
 def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
@@ -105,17 +112,9 @@ def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
     # coexisting must not share one home/, or the second render clobbers the
     # first's models.json and repoints it at a sidecar that isn't on its
     # network (the "Connection error" the baseUrl fix set out to eliminate).
-    import json
-
     _chdir(monkeypatch, tmp_path / "pi-local")
     assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    cfg = tmp_path / "over.yaml"
-    cfg.write_text(
-        "net: [service]\n"
-        "model: m\n"
-        "services:\n"
-        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
-    )
+    cfg = _write_llm_cfg(tmp_path)
     # Default (unnamed) session, then a --name'd one from the same env.
     assert runner.invoke(
         app, ["run", "pi", "--config", str(cfg), "--dry-run"]
@@ -124,16 +123,9 @@ def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
         app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
     ).exit_code == 0
 
-    def base(session):
-        path = (
-            home / "envs" / "pi-local" / "sessions" / session
-            / "home" / ".pi" / "agent" / "models.json"
-        )
-        return json.loads(path.read_text())["providers"]["glove"]["baseUrl"]
-
     # Each session's config survived the other's render, pointing at its own llm.
-    assert base("pi-local") == "http://glove-pi-local-llm:8080/v1"
-    assert base("feature") == "http://glove-pi-local-feature-llm:8080/v1"
+    assert _pi_llm_base("pi-local", "pi-local") == "http://glove-pi-local-llm:8080/v1"
+    assert _pi_llm_base("pi-local", "feature") == "http://glove-pi-local-feature-llm:8080/v1"
 
 
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):

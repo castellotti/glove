@@ -277,12 +277,13 @@ def run(
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
     (sdir / "glove.effective.yaml").write_text(cfg.to_yaml(redact_secrets=True))
-    # Render with the resolved session name (== the token used to name the
-    # network sidecars), NOT env_id: a `--name`d session's llm sidecar is
-    # glove-<env>-<name>-llm, so building the harness baseUrl from env_id alone
-    # points Pi at a host that doesn't exist ("Connection error").
+    # Render with the session token (== the name of the network sidecars, and
+    # what describe/start_host_services key on below), NOT env_id: a `--name`d
+    # session's llm sidecar is glove-<env>-<name>-llm, so building the harness
+    # baseUrl from env_id alone points Pi at a host that doesn't exist
+    # ("Connection error").
     home_files = render_home(
-        cfg, plan.profile, cfg.resolved_name(), home_dir, mount_plan=plan.mount_plan
+        cfg, plan.profile, token, home_dir, mount_plan=plan.mount_plan
     )
 
     if dry_run:
