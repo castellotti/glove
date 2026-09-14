@@ -168,6 +168,107 @@ def test_down_name_narrows_to_one_session(home, tmp_path, monkeypatch):
     assert torn == ["pi-local-feat"]
 
 
+def _seed_transcript(home, env_id, session, uuid="01a09d62"):
+    """Seed a fake Pi transcript under a session's persistent home."""
+    tdir = (
+        session_dir(env_id, session)
+        / "home" / ".pi" / "agent" / "sessions" / "--work--"
+    )
+    tdir.mkdir(parents=True, exist_ok=True)
+    f = tdir / f"20240101_{uuid}.jsonl"
+    f.write_text("{}\n")
+    return uuid
+
+
+def test_resume_and_session_mutually_exclusive(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    result = runner.invoke(app, ["run", "pi", "--resume", "--session", "x"])
+    assert result.exit_code == 1
+    assert "not both" in result.output
+
+
+def test_resume_no_prior_session_errors(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
+    assert result.exit_code == 1
+    assert "no previous session to resume" in result.output
+
+
+def _compose_text(home, env_id, session):
+    return (
+        session_dir(env_id, session) / "docker-compose.yml"
+    ).read_text()
+
+
+def test_resume_dry_run_renders_continue(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    _seed_transcript(home, "pi-local", "pi-local")
+    result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    # flag lands inside the nono wrapper, after `pi -e …`
+    compose = _compose_text(home, "pi-local", "pi-local")
+    assert "--continue" in compose
+    assert compose.index("--continue") > compose.index("--")
+
+
+def test_session_dry_run_renders_id(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    uuid = _seed_transcript(home, "pi-local", "pi-local")
+    result = runner.invoke(app, ["run", "pi", "--session", uuid, "--dry-run"])
+    assert result.exit_code == 0, result.output
+    compose = _compose_text(home, "pi-local", "pi-local")
+    assert "--session" in compose and uuid in compose
+
+
+def test_session_missing_lists_available(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    uuid = _seed_transcript(home, "pi-local", "pi-local")
+    result = runner.invoke(app, ["run", "pi", "--session", "nope", "--dry-run"])
+    assert result.exit_code == 1
+    assert "no session matching" in result.output
+    assert uuid in result.output  # available ids listed
+
+
+def test_resume_composes_with_net_change(home, tmp_path, monkeypatch):
+    # Grant change (llm sidecar via --config) composes with the resume flag:
+    # both the sidecar and --session land in the rendered compose command.
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    uuid = _seed_transcript(home, "pi-local", "pi-local")
+    cfg = _write_llm_cfg(tmp_path)
+    result = runner.invoke(
+        app,
+        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    compose = _compose_text(home, "pi-local", "pi-local")
+    assert "glove-pi-local-llm" in compose  # llm sidecar rendered
+    assert "--session" in compose and uuid in compose  # + resume flag
+
+
+def test_resume_grant_widening_warns(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    uuid = _seed_transcript(home, "pi-local", "pi-local")
+    # Prior snapshot ran with no network; resume widening to net: [service].
+    snapshot = session_dir("pi-local", "pi-local") / "glove.effective.yaml"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text("harness: pi\nname: pi-local\nnet: [none]\n")
+    cfg = _write_llm_cfg(tmp_path)
+    result = runner.invoke(
+        app,
+        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "broader access" in result.output
+    assert "net" in result.output
+
+
 def test_ls_lists_registered_envs(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "wd")
     runner.invoke(app, ["init", "pi"])

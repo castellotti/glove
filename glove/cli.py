@@ -193,6 +193,13 @@ def run(
         [], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)"
     ),
     rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the harness image"),
+    resume: bool = typer.Option(
+        False, "--resume", "-r", help="reopen the most recent session for this env"
+    ),
+    session: str | None = typer.Option(
+        None, "--session",
+        help="reopen a specific session by id (full/partial UUID or path)",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="write + print the compose project, don't launch"
     ),
@@ -201,6 +208,14 @@ def run(
     if harness is None and env is None:
         err.print("[red]error:[/red] specify a harness (e.g. `glove vibe`) or --env ID")
         raise typer.Exit(1)
+
+    if resume and session is not None:
+        err.print(
+            "[red]error:[/red] pass either --resume (last) or --session <id> "
+            "(specific), not both."
+        )
+        raise typer.Exit(1)
+    want_resume = resume or session is not None
 
     try:
         env_id = _resolve_run_env(env, harness, has_config=config is not None)
@@ -252,9 +267,33 @@ def run(
         for w in legacy_warnings(cfg):
             err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, sdir)
+        # Resume: pre-flight validate the transcript exists (clear glove-level
+        # error beats the harness silently starting fresh) and capture the prior
+        # security snapshot for the grant-widening warning — both before build.
+        prev_cfg = None
+        if want_resume:
+            from .harness import get_profile
+
+            _validate_resume(get_profile(cfg.harness), home_dir, session, env_id)
+            prev_cfg = _load_prev_effective(sdir)
         plan = build_session_plan(
-            cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
+            cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd(),
+            resume=want_resume, session_id=session,
         )
+        # cfg is now fully expanded (plugin bridges, browser wiring); compare the
+        # security-relevant grants against the resumed session's snapshot.
+        if prev_cfg is not None:
+            from .sessions import widening_warnings
+
+            widened = widening_warnings(prev_cfg, cfg)
+            if widened:
+                err.print(
+                    "[yellow]⚠ resuming with broader access than the original "
+                    "session; prior conversation context will run with the new "
+                    "grants:[/yellow]"
+                )
+                for w in widened:
+                    err.print(f"  [yellow]•[/yellow] {w}")
         # Materialize under ~/.glove/envs/<env>/sessions/<session>/. Ring-1
         # policies are written *before* render so the read-only bind source
         # exists; they live outside /work and are never writable by the agent.
@@ -311,6 +350,7 @@ def run(
     from .session import launch
 
     launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild)
+    _print_resume_hint(plan.profile, home_dir, harness or cfg.harness)
 
 
 def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) -> str:
@@ -333,6 +373,66 @@ def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) 
     raise ConfigError(
         f"no env for ({cwd}, {harness}); run `glove init {harness}` "
         "(or pass --config for a one-off)"
+    )
+
+
+def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: str) -> None:
+    """Fail with a clear message when there's nothing to resume.
+
+    `--resume` (continue-last) needs at least one transcript; `--session <id>`
+    needs one whose filename/id contains `<id>` (substring, honoring partial
+    UUIDs). Raises ConfigError so the caller renders the standard error path."""
+    from .sessions import find_session, list_sessions, sessions_dir
+
+    sdir = sessions_dir(profile, Path(home_dir))
+    refs = list_sessions(sdir)
+    if not refs:
+        raise ConfigError(
+            f"no previous session to resume for env {env_id!r}; run without "
+            "--resume/--session to start one."
+        )
+    if session_id is not None and find_session(sdir, session_id) is None:
+        available = "\n".join(
+            f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs
+        )
+        raise ConfigError(
+            f"no session matching {session_id!r} for env {env_id!r}. "
+            f"available:\n{available}"
+        )
+
+
+def _load_prev_effective(sdir: Path):
+    """The prior session's redacted config snapshot, or None if absent."""
+    from .config import load_config
+
+    snapshot = sdir / "glove.effective.yaml"
+    if not snapshot.is_file():
+        return None
+    try:
+        return load_config(snapshot)
+    except (ConfigError, ValueError):
+        return None
+
+
+def _fmt_mtime(mtime: float) -> str:
+    from datetime import datetime
+
+    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def _print_resume_hint(profile, home_dir: Path, harness: str) -> None:
+    """After the TUI exits, show how to reopen this session next time."""
+    from .sessions import list_sessions, sessions_dir
+
+    refs = list_sessions(sessions_dir(profile, Path(home_dir)))
+    if not refs:
+        return
+    newest = refs[0]
+    console.print(f"\n[bold]session saved:[/bold] {newest.id}")
+    console.print(f"  resume last:     [cyan]glove {harness} <same args> --resume[/cyan]")
+    console.print(
+        f"  resume this one: [cyan]glove {harness} <same args> "
+        f"--session {newest.id}[/cyan]"
     )
 
 

@@ -217,8 +217,16 @@ def build_session_plan(
     uid: int | None = None,
     gid: int | None = None,
     forwarder_image: str = FORWARDER_IMAGE,
+    resume: bool = False,
+    session_id: str | None = None,
 ) -> SessionPlan:
-    """Resolve a ``Config`` into a runtime-agnostic ``SessionPlan``."""
+    """Resolve a ``Config`` into a runtime-agnostic ``SessionPlan``.
+
+    ``resume``/``session_id`` are transient run options: they append the
+    harness's own resume flag to the entry (inside the ring-1 wrapper) and are
+    deliberately *not* stored on ``Config`` — they must never persist into
+    ``glove.effective.yaml`` or the env file. ``session_id`` implies resume;
+    ``resume`` with no id ⇒ continue the most recent session."""
     session = cfg.resolved_name()
     profile = get_profile(cfg.harness)
     uid = uid if uid is not None else os.getuid()
@@ -290,6 +298,10 @@ def build_session_plan(
     # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
     # enforcer env/caps.
     entry = _plugin_entry(cfg, list(profile.entry), plugins)
+    # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
+    # wrapper prefix. session_id=None ⇒ continue-last.
+    if resume or session_id is not None:
+        entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)

@@ -119,13 +119,37 @@ Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
 ```
 glove init [HARNESS] [--name ENV] [--from FILE]
 glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--with a,b] [--browser …]
-                    [--runtime …] [--enforcer …] [--dry-run] [--rebuild]
+                    [--runtime …] [--enforcer …] [--resume|-r] [--session ID] [--dry-run] [--rebuild]
 glove <harness> …                    # alias of run
 glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]
 glove policy show [--env ID]         # rendered ring-1 policies + ring-0 hardening
 glove config  [--env ID] [--edit|--path]
 glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
 ```
+
+### Resuming a session
+
+A harness session's state — its conversation transcript — lives in the
+persistent per-session home glove bind-mounts, **not** in the (ephemeral)
+container. So you can reopen a prior session:
+
+- `glove <harness> … --resume` (`-r`) — reopen the **most recent** session for
+  this env/workdir. Re-run your exact previous command with `--resume` appended.
+- `glove <harness> … --session <id>` — reopen a **specific** session (full or
+  partial UUID, or a transcript path).
+
+Because glove re-renders the whole sandbox from the *current* config on every
+run, **editing the config (or passing flags) before resuming changes the grants
+for the resumed conversation** — e.g. widen `net`/add a `service:` for a LAN host
+you now need, then resume, and pick up where you left off with the new grant
+live. When a resume run grants **broader** access than the session originally ran
+under (net, mounts, plugins, `allow_root`, `allow_sensitive`, services), glove
+prints a prominent warning: the prior conversation context (which may include
+prompt-injected instructions) will run with the wider reach.
+
+> Transcripts and `models.json` (which holds the LLM API key in cleartext) live
+> under `~/.glove/envs/<env-id>/home`. This is durable on-disk state — don't sync
+> that tree to anywhere untrusted.
 
 ## Toolchain
 
