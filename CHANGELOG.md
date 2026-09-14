@@ -16,7 +16,14 @@ default (no-plugins) path stays fully working at each step.
   `glove-<env>-<name>-llm`, so the harness dialed a nonexistent host and every
   turn failed with "Connection error" (the network path itself was fine).
   `render_home` now receives the resolved session token, matching the sidecar.
-  Regression test: `tests/test_cli.py::test_named_session_llm_base_matches_sidecar`.
+  The harness home is now **per-session** (`sessions/<session>/home/`) rather
+  than shared at the env level: it embeds this session-scoped `baseUrl`, so two
+  sessions of one env coexisting would otherwise clobber each other's
+  `config.toml`/`models.json` and repoint one at the wrong sidecar. Re-running
+  the same session reuses its home, so per-session history still persists.
+  A power-user `config_home_source` override is still honored as-is. Regression
+  tests: `tests/test_cli.py::test_named_session_llm_base_matches_sidecar`,
+  `::test_coexisting_sessions_get_isolated_homes`.
 - **Plugin build contexts no longer collide.** Each plugin's `copy` sources are
   staged under a plugin-namespaced path (`<plugin>/<name>`) instead of their bare
   basename, so two plugins shipping a same-named source — e.g. the `search` and
