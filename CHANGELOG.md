@@ -11,6 +11,12 @@ default (no-plugins) path stays fully working at each step.
 
 ### Fixes
 
+- **`--name`d sessions can reach the LLM again.** The Pi/Vibe harness `baseUrl`
+  was built from the bare env-id, but a named session's forwarder sidecar is
+  `glove-<env>-<name>-llm`, so the harness dialed a nonexistent host and every
+  turn failed with "Connection error" (the network path itself was fine).
+  `render_home` now receives the resolved session token, matching the sidecar.
+  Regression test: `tests/test_cli.py::test_named_session_llm_base_matches_sidecar`.
 - **Plugin build contexts no longer collide.** Each plugin's `copy` sources are
   staged under a plugin-namespaced path (`<plugin>/<name>`) instead of their bare
   basename, so two plugins shipping a same-named source — e.g. the `search` and

@@ -270,8 +270,12 @@ def run(
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
     (sdir / "glove.effective.yaml").write_text(cfg.to_yaml(redact_secrets=True))
+    # Use the resolved session name (== the token used to name the network
+    # sidecars), NOT env_id: a `--name`d session's llm sidecar is
+    # glove-<env>-<name>-llm, so building the harness baseUrl from env_id alone
+    # points Pi at a host that doesn't exist ("Connection error").
     home_files = render_home(
-        cfg, plan.profile, env_id, home_dir, mount_plan=plan.mount_plan
+        cfg, plan.profile, cfg.resolved_name(), home_dir, mount_plan=plan.mount_plan
     )
 
     if dry_run:

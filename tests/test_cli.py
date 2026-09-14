@@ -66,6 +66,36 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     assert (home / "envs" / "vibe-local" / "home" / ".vibe" / "config.toml").is_file()
 
 
+def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
+    # Regression: a `--name`d session's llm sidecar is glove-<env>-<name>-llm,
+    # so the Pi baseUrl must be built from the resolved session token, not the
+    # bare env-id — otherwise Pi dials a host that doesn't exist ("Connection
+    # error"). Default (unnamed) sessions happened to match and hid this.
+    import json
+
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(
+        "net: [service]\n"
+        "model: m\n"
+        "services:\n"
+        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
+    )
+    result = runner.invoke(
+        app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    host = "glove-pi-local-feature-llm"
+    # The sidecar is named with the full token in the rendered compose...
+    assert host in result.output
+    # ...and the Pi provider baseUrl must point at that same host.
+    models = json.loads(
+        (home / "envs" / "pi-local" / "home" / ".pi" / "agent" / "models.json").read_text()
+    )
+    assert models["providers"]["glove"]["baseUrl"] == f"http://{host}:8080/v1"
+
+
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
     # Regression: `glove down <env>` must tear down every session, including
     # --name'd ones whose compose project is glove-<env>-<name>, not just the
