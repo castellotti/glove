@@ -31,7 +31,9 @@ def test_resume_args_pi():
 
 def test_resume_args_vibe():
     vibe = get_profile("vibe")
-    assert vibe.resume_args(None) == ["--resume"]
+    # continue-last is vibe's --continue (non-interactive); bare --resume is an
+    # interactive picker, so it must not back glove's deterministic --resume.
+    assert vibe.resume_args(None) == ["--continue"]
     assert vibe.resume_args("abc") == ["--resume", "abc"]
 
 
@@ -124,6 +126,50 @@ def test_list_and_find_sessions(tmp_path):
 
 def test_list_sessions_missing_dir(tmp_path):
     assert list_sessions(tmp_path / "nope") == []
+
+
+# --- post-exit hint attributes only THIS run's transcript -----------------------
+
+def test_resume_hint_ignores_stale_pool_leftover(tmp_path, capsys):
+    # A fresh session quit before any message persists nothing, so the newest
+    # file in the pool is an unrelated earlier session. The hint must not report
+    # it (that id would resume the wrong conversation).
+    import os
+
+    from glove.cli import _print_resume_hint
+
+    pi = get_profile("pi")
+    home = tmp_path / "home"
+    wk = home / ".pi" / "agent" / "sessions" / "--work--"
+    stale = _seed(wk, "20240101_01a09d62.jsonl")
+    os.utime(stale, (1000, 1000))  # long before "now"
+
+    _print_resume_hint(pi, home, "pi", since=time_now())
+    assert "session saved" not in capsys.readouterr().out
+
+
+def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
+    import os
+
+    from glove.cli import _print_resume_hint
+
+    pi = get_profile("pi")
+    home = tmp_path / "home"
+    wk = home / ".pi" / "agent" / "sessions" / "--work--"
+    start = time_now()
+    fresh = _seed(wk, "20240102_deadbeef.jsonl")
+    os.utime(fresh, (start + 5, start + 5))  # written during this run
+
+    _print_resume_hint(pi, home, "pi", since=start)
+    out = capsys.readouterr().out
+    assert "session saved" in out
+    assert "deadbeef" in out
+
+
+def time_now() -> float:
+    import time
+
+    return time.time()
 
 
 # --- grant-widening -------------------------------------------------------------

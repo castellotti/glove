@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -363,8 +364,13 @@ def run(
     # no provider present.
     from .session import launch
 
+    # Timestamp the launch so the post-exit hint reports only a transcript THIS
+    # run actually wrote — not a stale one left in the pool by an earlier session
+    # (all harnesses default to a new session, and a new one quit before any
+    # message leaves no transcript at all, so "newest in the pool" is wrong).
+    launched_at = time.time()
     launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild)
-    _print_resume_hint(plan.profile, home_dir, harness or cfg.harness)
+    _print_resume_hint(plan.profile, home_dir, harness or cfg.harness, since=launched_at)
 
 
 def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) -> str:
@@ -444,11 +450,18 @@ def _fmt_mtime(mtime: float) -> str:
     return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
 
-def _print_resume_hint(profile, home_dir: Path, harness: str) -> None:
-    """After the TUI exits, show how to reopen this session next time."""
+def _print_resume_hint(profile, home_dir: Path, harness: str, *, since: float) -> None:
+    """After the TUI exits, show how to reopen the session THIS run wrote.
+
+    glove never sees the harness's internal session id, so it identifies the
+    run's transcript by mtime: only files written at/after ``since`` (the launch
+    time) belong to this run. If none were (a fresh session quit before any
+    message persists nothing), report no id rather than a stale pool leftover —
+    that leftover is an unrelated earlier session, and pointing ``--session`` at
+    it would resume the wrong conversation."""
     from .sessions import list_sessions, sessions_dir
 
-    refs = list_sessions(sessions_dir(profile, Path(home_dir)))
+    refs = [r for r in list_sessions(sessions_dir(profile, Path(home_dir))) if r.mtime >= since]
     if not refs:
         return
     newest = refs[0]

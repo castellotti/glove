@@ -15,7 +15,7 @@ default (no-plugins) path stays fully working at each step.
   continue-last) or `--session <id>` (a specific full/partial UUID or transcript
   path). A session's transcript lives in the persistent per-session home, not the
   ephemeral container, so resume only appends the harness's own resume flag
-  (`pi --continue`/`--session`, `vibe --resume`, `claude-code --continue`/`--resume`
+  (`pi --continue`/`--session`, `vibe --continue`/`--resume`, `claude-code --continue`/`--resume`
   — modeled declaratively on `HarnessProfile.resume_args`) *inside* the ring-1
   wrapper. The sandbox is re-rendered from the current config every run, so
   **editing config or passing flags before resuming changes the grants** for the

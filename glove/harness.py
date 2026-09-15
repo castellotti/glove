@@ -84,8 +84,11 @@ _REGISTRY: dict[str, HarnessProfile] = {
         runtime_paths=("/opt/uv", "/usr/local"),
         # Python packages install system-wide via the baked uv.
         pip_install=("uv", "pip", "install", "--system"),
-        # Vibe help: `[-c | --resume [SESSION_ID]]` — one flag, optional id.
-        resume_continue=("--resume",),
+        # Vibe: `-c`/`--continue` continues the most recent session
+        # (non-interactive); bare `--resume` opens an interactive picker (and
+        # errors in programmatic mode), so continue-last must map to --continue,
+        # not --resume. A specific id is `--resume <id>`.
+        resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),
     ),
     "pi": HarnessProfile(
