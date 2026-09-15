@@ -399,10 +399,9 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: st
     harness's own project/cwd scoping, so the harness makes the final choice of
     which session to continue. Raises ConfigError (rendered on the standard error
     path) when there is nothing matching to resume."""
-    from .sessions import find_session, list_sessions, sessions_dir
+    from .sessions import list_sessions, match_session, sessions_dir
 
-    sdir = sessions_dir(profile, Path(home_dir))
-    refs = list_sessions(sdir)
+    refs = list_sessions(sessions_dir(profile, Path(home_dir)))
     if not refs:
         raise ConfigError(
             f"no previous session to resume for env {env_id!r}; run without "
@@ -410,7 +409,7 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: st
         )
     if session_id is None:
         return None
-    ref = find_session(sdir, session_id)
+    ref = match_session(refs, session_id)
     if ref is None:
         available = "\n".join(
             f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs

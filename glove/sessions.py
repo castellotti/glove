@@ -15,23 +15,17 @@ from pathlib import Path
 
 from .config import Config
 from .harness import HarnessProfile
-
-# The in-container home the config-home paths are rooted at; sessions_dir maps
-# this prefix onto the host home dir.
-_CONTAINER_HOME = "/home/agent"
+from .harnessconfig import rel_config_home
 
 
 def sessions_dir(profile: HarnessProfile, home_dir: Path) -> Path:
     """Host dir holding this harness's transcripts for the mounted home.
 
-    Derived from `config_home_path` by swapping the in-container `/home/agent`
-    prefix for `home_dir`, then appending the harness's `sessions_subdir`
-    (Pi/Vibe use `sessions/`; Claude Code uses `projects/`)."""
-    config_home = profile.config_home_path
-    rel = config_home[len(_CONTAINER_HOME):].lstrip("/") if config_home.startswith(
-        _CONTAINER_HOME
-    ) else config_home.lstrip("/")
-    return Path(home_dir) / rel / profile.sessions_subdir
+    Maps the in-container config dir onto `home_dir` (via `rel_config_home`,
+    the same mapping `harnessconfig` uses to seed that dir), then appends the
+    harness's `sessions_subdir` (Pi/Vibe use `sessions/`; Claude Code uses
+    `projects/`)."""
+    return Path(home_dir) / rel_config_home(profile) / profile.sessions_subdir
 
 
 @dataclass(frozen=True)
@@ -63,23 +57,27 @@ def list_sessions(directory: Path) -> list[SessionRef]:
     return refs
 
 
-def find_session(directory: Path, session_id: str) -> SessionRef | None:
-    """Newest transcript matching `session_id`.
+def match_session(refs: list[SessionRef], session_id: str) -> SessionRef | None:
+    """First (newest) ref in `refs` matching `session_id`, else None.
 
     Accepts the forms the `--session` help documents: a full/partial UUID
     (substring of the parsed id or filename) or a transcript path (matched by
-    its exact path or basename, so a full `/…/<ts>_<uuid>.jsonl` — longer than
-    any filename, so it never matches as a substring — still resolves)."""
+    its basename, so a full `/…/<ts>_<uuid>.jsonl` still resolves). Takes an
+    already-listed `refs` so callers holding one don't re-walk the dir."""
     needle_name = Path(session_id).name
-    for ref in list_sessions(directory):
+    for ref in refs:
         if (
             session_id in ref.id
             or session_id in ref.path.name
-            or str(ref.path) == session_id
             or ref.path.name == needle_name
         ):
             return ref
     return None
+
+
+def find_session(directory: Path, session_id: str) -> SessionRef | None:
+    """Newest transcript under `directory` matching `session_id` (see match_session)."""
+    return match_session(list_sessions(directory), session_id)
 
 
 def widening_warnings(prev: Config, cur: Config) -> list[str]:
