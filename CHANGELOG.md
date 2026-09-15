@@ -20,11 +20,19 @@ default (no-plugins) path stays fully working at each step.
   wrapper. The sandbox is re-rendered from the current config every run, so
   **editing config or passing flags before resuming changes the grants** for the
   resumed conversation (e.g. widen `net`, then resume). When a resume run grants
-  broader access than the original (`net`, `add_dirs`, `plugins`, `allow_root`,
-  `allow_sensitive`, `services`), glove prints a prominent warning — prior
-  conversation context runs with the new reach. Pre-flight validation gives a
-  clear glove-level error (with available ids) instead of the harness silently
-  starting fresh; `--no`-transcript and unknown-id cases don't crash. New
+  broader access than the **original** session (`net`, `add_dirs`, `plugins`,
+  `allow_root`, `allow_sensitive`, `services`), glove prints a prominent warning —
+  prior conversation context runs with the new reach. The comparison baseline is
+  a `glove.baseline.yaml` snapshot written once at session creation and never
+  overwritten, so it reflects the true original grants, not a drifting previous
+  run (a narrow→wide→narrow sequence never mis-warns). `--session` accepts a
+  full/partial UUID *or* a transcript path and resolves it to that transcript's
+  canonical id before handing it to the harness; `--resume` (continue-last)
+  defers to the harness's own project-scoped choice. Transcript discovery is
+  per-harness (`sessions/` for Pi/Vibe, `projects/` for Claude Code) via
+  `HarnessProfile.sessions_subdir`. Pre-flight validation gives a clear
+  glove-level error (with available ids) instead of the harness silently starting
+  fresh; missing-transcript and unknown-id cases don't crash. New
   `glove/sessions.py` discovery helpers; transient `resume`/`session_id` never
   persist into `Config`/`glove.effective.yaml`. Tests in `tests/test_resume.py`
   and `tests/test_cli.py`. (Pi verified via dry-run render; vibe/claude-code

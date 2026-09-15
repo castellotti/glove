@@ -255,10 +255,10 @@ def test_resume_grant_widening_warns(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
     assert runner.invoke(app, ["init", "pi"]).exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
-    # Prior snapshot ran with no network; resume widening to net: [service].
-    snapshot = session_dir("pi-local", "pi-local") / "glove.effective.yaml"
-    snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.write_text("harness: pi\nname: pi-local\nnet: [none]\n")
+    # Original baseline ran with no network; resume widening to net: [service].
+    baseline = session_dir("pi-local", "pi-local") / "glove.baseline.yaml"
+    baseline.parent.mkdir(parents=True, exist_ok=True)
+    baseline.write_text("harness: pi\nname: pi-local\nnet: [none]\n")
     cfg = _write_llm_cfg(tmp_path)
     result = runner.invoke(
         app,
@@ -267,6 +267,34 @@ def test_resume_grant_widening_warns(home, tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "broader access" in result.output
     assert "net" in result.output
+
+
+def test_resume_widening_compares_original_not_prev_run(home, tmp_path, monkeypatch):
+    # Regression: the baseline is the *original* session config and is not
+    # overwritten by an intervening narrower run, so widening back to the
+    # original's grants must not warn (finding 5).
+    _chdir(monkeypatch, tmp_path / "pi-local")
+    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    uuid = _seed_transcript(home, "pi-local", "pi-local")
+    # Original session already had a network sidecar; a later run narrowed to none
+    # (effective.yaml drifted) but the baseline still records the wide original.
+    sdir = session_dir("pi-local", "pi-local")
+    sdir.mkdir(parents=True, exist_ok=True)
+    original = (
+        "harness: pi\nname: pi-local\nnet: [service]\nmodel: m\n"
+        "services:\n  - { name: llm, to: example.test:8080, port: 8080 }\n"
+    )
+    (sdir / "glove.baseline.yaml").write_text(original)
+    (sdir / "glove.effective.yaml").write_text(
+        "harness: pi\nname: pi-local\nnet: [none]\n"
+    )
+    cfg = _write_llm_cfg(tmp_path)  # net: [service] + llm, == the original
+    result = runner.invoke(
+        app,
+        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "broader access" not in result.output
 
 
 def test_ls_lists_registered_envs(home, tmp_path, monkeypatch):

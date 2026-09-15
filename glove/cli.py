@@ -271,14 +271,20 @@ def run(
         # error beats the harness silently starting fresh) and capture the prior
         # security snapshot for the grant-widening warning — both before build.
         prev_cfg = None
+        resume_id = session
         if want_resume:
             from .harness import get_profile
 
-            _validate_resume(get_profile(cfg.harness), home_dir, session, env_id)
-            prev_cfg = _load_prev_effective(sdir)
+            ref = _validate_resume(get_profile(cfg.harness), home_dir, session, env_id)
+            # Hand the harness the canonical id find_session resolved (a partial
+            # UUID/path the user typed is not something the harness can open), not
+            # the raw string. None ⇒ continue-last, which takes no id.
+            if ref is not None:
+                resume_id = ref.id
+            prev_cfg = _load_baseline(sdir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd(),
-            resume=want_resume, session_id=session,
+            resume=want_resume, session_id=resume_id,
         )
         # cfg is now fully expanded (plugin bridges, browser wiring); compare the
         # security-relevant grants against the resumed session's snapshot.
@@ -315,7 +321,15 @@ def run(
     # nothing is written to the invocation dir.
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
-    (sdir / "glove.effective.yaml").write_text(cfg.to_yaml(redact_secrets=True))
+    effective_yaml = cfg.to_yaml(redact_secrets=True)
+    # effective.yaml tracks the *current* run (used by `glove down` to tear down
+    # this run's host services); baseline.yaml is written once at session creation
+    # and never overwritten, so the grant-widening check always compares against
+    # the original session, not a drifting previous run.
+    (sdir / "glove.effective.yaml").write_text(effective_yaml)
+    baseline = sdir / "glove.baseline.yaml"
+    if not baseline.exists():
+        baseline.write_text(effective_yaml)
     # Render with the session token (== the name of the network sidecars, and
     # what describe/start_host_services key on below), NOT env_id: a `--name`d
     # session's llm sidecar is glove-<env>-<name>-llm, so building the harness
@@ -376,12 +390,15 @@ def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) 
     )
 
 
-def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: str) -> None:
-    """Fail with a clear message when there's nothing to resume.
+def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: str):
+    """Validate a resume request, returning the resolved `SessionRef` or None.
 
-    `--resume` (continue-last) needs at least one transcript; `--session <id>`
-    needs one whose filename/id contains `<id>` (substring, honoring partial
-    UUIDs). Raises ConfigError so the caller renders the standard error path."""
+    `--session <id>` returns the transcript find_session resolved (so the caller
+    can hand the harness its canonical id). `--resume` (continue-last) returns
+    None: glove only confirms *some* transcript exists — it can't replicate the
+    harness's own project/cwd scoping, so the harness makes the final choice of
+    which session to continue. Raises ConfigError (rendered on the standard error
+    path) when there is nothing matching to resume."""
     from .sessions import find_session, list_sessions, sessions_dir
 
     sdir = sessions_dir(profile, Path(home_dir))
@@ -391,7 +408,10 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: st
             f"no previous session to resume for env {env_id!r}; run without "
             "--resume/--session to start one."
         )
-    if session_id is not None and find_session(sdir, session_id) is None:
+    if session_id is None:
+        return None
+    ref = find_session(sdir, session_id)
+    if ref is None:
         available = "\n".join(
             f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs
         )
@@ -399,13 +419,18 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: st
             f"no session matching {session_id!r} for env {env_id!r}. "
             f"available:\n{available}"
         )
+    return ref
 
 
-def _load_prev_effective(sdir: Path):
-    """The prior session's redacted config snapshot, or None if absent."""
+def _load_baseline(sdir: Path):
+    """The session's *original* redacted config snapshot, or None if absent.
+
+    Written once at session creation and never overwritten (see the run body), so
+    the grant-widening check compares against the config the session was born
+    under, not a previous run that may itself have drifted."""
     from .config import load_config
 
-    snapshot = sdir / "glove.effective.yaml"
+    snapshot = sdir / "glove.baseline.yaml"
     if not snapshot.is_file():
         return None
     try:

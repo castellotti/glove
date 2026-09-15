@@ -90,6 +90,12 @@ def test_sessions_dir_derives_from_config_home(tmp_path):
     assert sessions_dir(pi, tmp_path) == tmp_path / ".pi" / "agent" / "sessions"
 
 
+def test_sessions_dir_claude_code_uses_projects(tmp_path):
+    # CC writes transcripts under ~/.claude/projects/<slug>/, not sessions/.
+    cc = get_profile("claude-code")
+    assert sessions_dir(cc, tmp_path) == tmp_path / ".claude" / "projects"
+
+
 def _seed(dir_, name):
     dir_.mkdir(parents=True, exist_ok=True)
     f = dir_ / name
@@ -110,6 +116,10 @@ def test_list_and_find_sessions(tmp_path):
     assert [r.id for r in refs] == ["bbbb2222", "aaaa1111"]  # newest first
     assert find_session(root, "aaaa").id == "aaaa1111"  # partial match
     assert find_session(root, "nope") is None
+    # A full transcript path resolves (documented --session form); its length
+    # exceeds any filename so it can only match via the path/basename branch.
+    assert find_session(root, str(old)).id == "aaaa1111"
+    assert find_session(root, old.name).id == "aaaa1111"  # basename
 
 
 def test_list_sessions_missing_dir(tmp_path):

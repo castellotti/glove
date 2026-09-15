@@ -24,6 +24,10 @@ class HarnessProfile:
     config_home_env: str  # env var pointing the harness at its config dir
     config_home_path: str  # in-container config dir (on a writable volume)
     context_file: str  # in-container path for the sudo-relay instruction
+    # Where this harness writes its `*.jsonl` transcripts, relative to
+    # `config_home_path`. Pi/Vibe nest them under `sessions/<project>/`; Claude
+    # Code uses `projects/<slug>/`. sessions_dir joins this onto the host home.
+    sessions_subdir: str = "sessions"
     default_env: dict[str, str] = field(default_factory=dict)
     # Read-only paths the harness's own interpreter/runtime needs beyond nono's
     # default system reads — e.g. the python venv or node prefix the entry binary
@@ -119,6 +123,8 @@ _REGISTRY: dict[str, HarnessProfile] = {
         config_home_path="/home/agent/.claude",
         context_file="/home/agent/.claude/CLAUDE.md",
         default_env={"CLAUDE_CONFIG_DIR": "/home/agent/.claude"},
+        # CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
+        sessions_subdir="projects",
         # Documented CC flags; image is a stub — wired but untested.
         resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),

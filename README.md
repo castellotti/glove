@@ -135,8 +135,12 @@ container. So you can reopen a prior session:
 
 - `glove <harness> … --resume` (`-r`) — reopen the **most recent** session for
   this env/workdir. Re-run your exact previous command with `--resume` appended.
+  glove checks a transcript exists, then defers to the harness's own
+  continue-last (which picks the last session for its current project), so use
+  `--session <id>` when you need to be sure exactly which one reopens.
 - `glove <harness> … --session <id>` — reopen a **specific** session (full or
-  partial UUID, or a transcript path).
+  partial UUID, or a transcript path). glove resolves it to that transcript's
+  canonical id before handing it to the harness.
 
 Because glove re-renders the whole sandbox from the *current* config on every
 run, **editing the config (or passing flags) before resuming changes the grants

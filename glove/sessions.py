@@ -25,13 +25,13 @@ def sessions_dir(profile: HarnessProfile, home_dir: Path) -> Path:
     """Host dir holding this harness's transcripts for the mounted home.
 
     Derived from `config_home_path` by swapping the in-container `/home/agent`
-    prefix for `home_dir`, then appending `sessions` (Pi/Vibe both nest their
-    transcripts under the config home)."""
+    prefix for `home_dir`, then appending the harness's `sessions_subdir`
+    (Pi/Vibe use `sessions/`; Claude Code uses `projects/`)."""
     config_home = profile.config_home_path
     rel = config_home[len(_CONTAINER_HOME):].lstrip("/") if config_home.startswith(
         _CONTAINER_HOME
     ) else config_home.lstrip("/")
-    return Path(home_dir) / rel / "sessions"
+    return Path(home_dir) / rel / profile.sessions_subdir
 
 
 @dataclass(frozen=True)
@@ -64,9 +64,20 @@ def list_sessions(directory: Path) -> list[SessionRef]:
 
 
 def find_session(directory: Path, session_id: str) -> SessionRef | None:
-    """Newest transcript whose id/filename contains `session_id` (partial UUIDs)."""
+    """Newest transcript matching `session_id`.
+
+    Accepts the forms the `--session` help documents: a full/partial UUID
+    (substring of the parsed id or filename) or a transcript path (matched by
+    its exact path or basename, so a full `/…/<ts>_<uuid>.jsonl` — longer than
+    any filename, so it never matches as a substring — still resolves)."""
+    needle_name = Path(session_id).name
     for ref in list_sessions(directory):
-        if session_id in ref.id or session_id in ref.path.name:
+        if (
+            session_id in ref.id
+            or session_id in ref.path.name
+            or str(ref.path) == session_id
+            or ref.path.name == needle_name
+        ):
             return ref
     return None
 
@@ -74,12 +85,16 @@ def find_session(directory: Path, session_id: str) -> SessionRef | None:
 def widening_warnings(prev: Config, cur: Config) -> list[str]:
     """Human-readable warnings where `cur` grants broader access than `prev`.
 
-    Resuming re-injects the prior conversation (which may carry prompt-injected
-    instructions the model absorbed) into a sandbox the user may have widened, so
-    those instructions would run with more reach. We compare the security-relevant
-    grants and warn — never block; deliberate widening is the whole point of the
-    feature (the §7.3 safeguard). Compares net, add_dirs (added paths + ro→rw
-    upgrades), plugins, allow_root, allow_sensitive, and services."""
+    `prev` is the session's *original* baseline (the config it was first created
+    under — see the persisted baseline snapshot in the CLI), not merely the last
+    run, so a narrow→wide→narrow sequence never emits a spurious warning against a
+    drifted comparison point. Resuming re-injects the prior conversation (which
+    may carry prompt-injected instructions the model absorbed) into a sandbox the
+    user may have widened, so those instructions would run with more reach. We
+    compare the security-relevant grants and warn — never block; deliberate
+    widening is the whole point of the feature (the §7.3 safeguard). Compares net,
+    add_dirs (added paths + ro→rw upgrades), plugins, allow_root, allow_sensitive,
+    and services."""
     warnings: list[str] = []
 
     added_net = [n for n in cur.net if n != "none" and n not in prev.net]
