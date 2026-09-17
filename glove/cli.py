@@ -41,7 +41,7 @@ from .registry import (
     envs_root,
     find_env_id,
     load_registry,
-    save_registry,
+    record_home,
     session_dir,
     session_token,
 )
@@ -84,15 +84,7 @@ def _record_home(env_id: str, home_dir: Path) -> None:
     an env's transcript logs. Stored as an abs realpath (no unresolved symlinks,
     which would not resolve inside a consumer's container).
     """
-    home_real = os.path.realpath(str(home_dir))
-    entries = load_registry()
-    changed = False
-    for e in entries:
-        if e.env_id == env_id and e.home != home_real:
-            e.home = home_real
-            changed = True
-    if changed:
-        save_registry(entries)
+    record_home(env_id, os.path.realpath(str(home_dir)))
 
 
 @app.command()
@@ -264,13 +256,6 @@ def run(
         for w in legacy_warnings(cfg):
             err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, edir)
-        # Persist the run-time-resolved home into the registry as the single
-        # source of truth for external monitors (Layman). This is the only place
-        # the resolved home is known: config_home_source can arrive via --config
-        # at run time. Record it unconditionally (default layout included) as an
-        # abs realpath so a consumer needs no special-casing or symlink
-        # resolution. Path only — never config contents or secrets.
-        _record_home(env_id, home_dir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
         )
@@ -287,7 +272,15 @@ def run(
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
-    except (ConfigError, ValueError, HardeningError) as e:
+        # Persist the run-time-resolved home into the registry as the single
+        # source of truth for external monitors (Layman). This is the only place
+        # the resolved home is known: config_home_source can arrive via --config
+        # at run time. Recorded only after the session renders (not on an aborted
+        # run), for every registered env including the default layout, as an abs
+        # realpath so a consumer needs no special-casing or symlink resolution.
+        # Path only — never config contents or secrets.
+        _record_home(env_id, home_dir)
+    except (ConfigError, ValueError, HardeningError, OSError) as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 

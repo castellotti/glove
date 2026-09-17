@@ -126,3 +126,48 @@ def test_home_round_trips(glove_home, tmp_path):
     assert entry.home == "/resolved/home"
     on_disk = json.loads(registry.registry_path().read_text())
     assert on_disk[0]["home"] == "/resolved/home"
+
+
+def test_record_home_updates_registered_env(glove_home, tmp_path):
+    d = _mkdir(tmp_path, "wd")
+    env_id = registry.create_env(d, "pi")
+    assert registry.record_home(env_id, "/resolved/home") is True
+    (entry,) = registry.load_registry()
+    assert entry.home == "/resolved/home"
+    # An unchanged value is a no-op (no rewrite claimed).
+    assert registry.record_home(env_id, "/resolved/home") is False
+
+
+def test_record_home_noop_for_unregistered_env(glove_home):
+    # An ad-hoc `--config` run keyed by --env has no registry entry to update.
+    assert registry.record_home("ghost", "/resolved/home") is False
+    assert registry.load_registry() == []
+
+
+def test_rebind_preserves_recorded_home(glove_home, tmp_path):
+    # Regression: re-registering the same (dir, harness) — e.g. a second
+    # `glove init --name` — must not null the home an earlier `run` recorded.
+    d = _mkdir(tmp_path, "wd")
+    env_id = registry.create_env(d, "pi")
+    registry.record_home(env_id, "/resolved/home")
+    registry.create_env(d, "pi", name="renamed")
+    (entry,) = registry.load_registry()
+    assert entry.env_id == "renamed"
+    assert entry.home == "/resolved/home"
+
+
+def test_load_drops_unknown_keys_and_bad_entries(glove_home):
+    # A future schema field (or a malformed row) from another glove build must
+    # degrade, not crash every reader.
+    registry.registry_path().write_text(
+        json.dumps(
+            [
+                {"dir": "/x", "harness": "pi", "env_id": "wd", "future_field": 1},
+                {"harness": "pi", "env_id": "broken"},  # missing required `dir`
+            ]
+        )
+        + "\n"
+    )
+    (entry,) = registry.load_registry()
+    assert entry.env_id == "wd"
+    assert not hasattr(entry, "future_field")

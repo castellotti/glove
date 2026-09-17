@@ -15,10 +15,16 @@ default (no-plugins) path stays fully working at each step.
   carries a `home` field — the absolute realpath of the harness home resolved at
   `glove run` time (`envs/<env-id>/home` by default, or the `config_home_source`
   override). It is the single canonical pointer a passive external monitor (e.g.
-  Layman) uses to find an env's transcript logs, so `run` records it
-  unconditionally, including the default layout. Path only — no config contents
-  or secrets. Back-compat: an env registered before this change has `home: null`
-  until its next `run`, and a consumer falls back to `envs/<env-id>/home`.
+  Layman) uses to find an env's transcript logs, so a `run` that renders records
+  it for the registered env, including the default layout. Path only — no config
+  contents or secrets. Back-compat: an env registered before this change has
+  `home: null` until its next `run`, and a consumer falls back to
+  `envs/<env-id>/home`. Registry read-modify-writes are serialized with a file
+  lock so overlapping `run`/`init` invocations can't clobber each other's home
+  updates, a re-bind (e.g. a second `init --name`) carries the recorded home
+  forward instead of nulling it, and `load_registry` drops unknown keys / skips
+  malformed rows so a future schema field from another glove build can't crash
+  readers of the shared `registry.json`.
 
 ### Fixes
 
