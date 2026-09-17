@@ -45,6 +45,11 @@ default (no-plugins) path stays fully working at each step.
   a single filesystem scan.
 - **`glove doctor --env`** normalizes a comma-string `plugins:` value to a list
   before the `browser` membership test, matching how config parses it.
+- **Pi enforcer wraps commands in a non-login shell** (`bash -c`, not `bash -lc`).
+  A login shell sources `/etc/profile`, which nono's default profile denies
+  (`deny_shell_configs`), printing a harmless but noisy
+  `bash: /etc/profile: Permission denied` on every command. PATH is already set by
+  the image env, so login-shell setup was unnecessary.
 
 ### Internal
 
