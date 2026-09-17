@@ -11,6 +11,8 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import ConfigError
+
 HARNESSES_DIR = Path(__file__).parent / "harnesses"
 
 
@@ -22,6 +24,10 @@ class HarnessProfile:
     config_home_env: str  # env var pointing the harness at its config dir
     config_home_path: str  # in-container config dir (on a writable volume)
     context_file: str  # in-container path for the sudo-relay instruction
+    # Where this harness writes its `*.jsonl` transcripts, relative to
+    # `config_home_path`. Pi/Vibe nest them under `sessions/<project>/`; Claude
+    # Code uses `projects/<slug>/`. sessions_dir joins this onto the host home.
+    sessions_subdir: str = "sessions"
     default_env: dict[str, str] = field(default_factory=dict)
     # Read-only paths the harness's own interpreter/runtime needs beyond nono's
     # default system reads — e.g. the python venv or node prefix the entry binary
@@ -33,10 +39,33 @@ class HarnessProfile:
     # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
     # error). Vibe installs via uv; the Node-based harnesses have none.
     pip_install: tuple[str, ...] | None = None
+    # Resume-flag mapping (see resume_args). `resume_continue` re-opens the most
+    # recent session; `resume_session` re-opens a specific id — the literal
+    # "{id}" token is replaced with the requested session id. None ⇒ the harness
+    # can't resume that way, and resume_args raises.
+    resume_continue: tuple[str, ...] | None = None
+    resume_session: tuple[str, ...] | None = None
 
     @property
     def dockerfile(self) -> Path:
         return HARNESSES_DIR / self.name / "Dockerfile"
+
+    def resume_args(self, session_id: str | None) -> list[str]:
+        """Harness flags to resume a session; raises if unsupported.
+
+        `session_id is None` ⇒ continue the most recent session; otherwise
+        re-open that specific id."""
+        if session_id is None:
+            if not self.resume_continue:
+                raise ConfigError(
+                    f"harness {self.name!r} does not support --resume"
+                )
+            return list(self.resume_continue)
+        if not self.resume_session:
+            raise ConfigError(
+                f"harness {self.name!r} does not support --session"
+            )
+        return [session_id if p == "{id}" else p for p in self.resume_session]
 
 
 _REGISTRY: dict[str, HarnessProfile] = {
@@ -55,6 +84,12 @@ _REGISTRY: dict[str, HarnessProfile] = {
         runtime_paths=("/opt/uv", "/usr/local"),
         # Python packages install system-wide via the baked uv.
         pip_install=("uv", "pip", "install", "--system"),
+        # Vibe: `-c`/`--continue` continues the most recent session
+        # (non-interactive); bare `--resume` opens an interactive picker (and
+        # errors in programmatic mode), so continue-last must map to --continue,
+        # not --resume. A specific id is `--resume <id>`.
+        resume_continue=("--continue",),
+        resume_session=("--resume", "{id}"),
     ),
     "pi": HarnessProfile(
         name="pi",
@@ -78,6 +113,10 @@ _REGISTRY: dict[str, HarnessProfile] = {
             "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
             "PI_OFFLINE": "1",
         },
+        # `pi --continue` reopens the last session; `--session <id>` accepts a
+        # path or partial UUID.
+        resume_continue=("--continue",),
+        resume_session=("--session", "{id}"),
     ),
     "claude-code": HarnessProfile(
         name="claude-code",
@@ -87,6 +126,11 @@ _REGISTRY: dict[str, HarnessProfile] = {
         config_home_path="/home/agent/.claude",
         context_file="/home/agent/.claude/CLAUDE.md",
         default_env={"CLAUDE_CONFIG_DIR": "/home/agent/.claude"},
+        # CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
+        sessions_subdir="projects",
+        # Documented CC flags; image is a stub — wired but untested.
+        resume_continue=("--continue",),
+        resume_session=("--resume", "{id}"),
     ),
 }
 

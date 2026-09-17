@@ -166,7 +166,8 @@ def render_home(
     return written
 
 
-def _rel_config_home(profile: HarnessProfile) -> Path:
+def rel_config_home(profile: HarnessProfile) -> Path:
+    """The harness config dir relative to the host home (strips CONTAINER_HOME)."""
     return Path(profile.config_home_path).relative_to(CONTAINER_HOME)
 
 
@@ -186,7 +187,7 @@ def _mcp_servers(cfg: Config, session: str) -> list[dict[str, Any]]:
 def _render_vibe(
     cfg: Config, profile: HarnessProfile, session: str, home_dir: Path
 ) -> list[Path]:
-    cfg_dir = home_dir / _rel_config_home(profile)
+    cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     # Pre-create the session-log dir so an external monitor (e.g. Layman) can
     # bind-mount it read-only before Vibe's first turn writes messages.jsonl.
@@ -284,7 +285,7 @@ def _write_vibe_hooks(cfg_dir: Path) -> Path:
 def _render_pi(
     cfg: Config, profile: HarnessProfile, session: str, home_dir: Path
 ) -> list[Path]:
-    cfg_dir = home_dir / _rel_config_home(profile)
+    cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
 
     llm_base = container_llm_base(cfg, session) or "http://glove-llm:8080/v1"
@@ -377,7 +378,7 @@ def _render_pi(
 def _render_claude(
     cfg: Config, profile: HarnessProfile, session: str, home_dir: Path
 ) -> list[Path]:
-    cfg_dir = home_dir / _rel_config_home(profile)
+    cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     llm_base = container_llm_base(cfg, session) or "http://glove-llm:8080/v1"
     # Claude Code speaks the Anthropic API; point it at an OpenAI-compatible

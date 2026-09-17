@@ -9,17 +9,46 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Features
+
+- **Resume a prior session** with `glove <harness> … --resume` (`-r`,
+  continue-last) or `--session <id>` (a specific full/partial UUID or transcript
+  path). A session's transcript lives in the persistent per-session home, not the
+  ephemeral container, so resume only appends the harness's own resume flag
+  (`pi --continue`/`--session`, `vibe --continue`/`--resume`, `claude-code --continue`/`--resume`
+  — modeled declaratively on `HarnessProfile.resume_args`) *inside* the ring-1
+  wrapper. The sandbox is re-rendered from the current config every run, so
+  **editing config or passing flags before resuming changes the grants** for the
+  resumed conversation (e.g. widen `net`, then resume). When a resume run grants
+  broader access than the **original** session (`net`, `add_dirs`, `plugins`,
+  `allow_root`, `allow_sensitive`, `services`), glove prints a prominent warning —
+  prior conversation context runs with the new reach. The comparison baseline is
+  a `glove.baseline.yaml` snapshot written once at session creation and never
+  overwritten, so it reflects the true original grants, not a drifting previous
+  run (a narrow→wide→narrow sequence never mis-warns). `--session` accepts a
+  full/partial UUID *or* a transcript path and resolves it to that transcript's
+  canonical id before handing it to the harness; `--resume` (continue-last)
+  defers to the harness's own project-scoped choice. Transcript discovery is
+  per-harness (`sessions/` for Pi/Vibe, `projects/` for Claude Code) via
+  `HarnessProfile.sessions_subdir`. Pre-flight validation gives a clear
+  glove-level error (with available ids) instead of the harness silently starting
+  fresh; missing-transcript and unknown-id cases don't crash. New
+  `glove/sessions.py` discovery helpers; transient `resume`/`session_id` never
+  persist into `Config`/`glove.effective.yaml`. Tests in `tests/test_resume.py`
+  and `tests/test_cli.py`. (Pi verified via dry-run render; vibe/claude-code
+  mappings wired but not end-to-end tested.)
+
 ### Added
 
 - **`registry.json` records each env's resolved harness home.** Every entry now
   carries a `home` field — the absolute realpath of the harness home resolved at
-  `glove run` time (`envs/<env-id>/home` by default, or the `config_home_source`
-  override). It is the single canonical pointer a passive external monitor (e.g.
-  Layman) uses to find an env's transcript logs, so a `run` that renders records
-  it for the registered env, including the default layout. Path only — no config
-  contents or secrets. Back-compat: an env registered before this change has
-  `home: null` until its next `run`, and a consumer falls back to
-  `envs/<env-id>/home`. Registry read-modify-writes are serialized with a file
+  `glove run` time (the per-session `envs/<env-id>/sessions/<session>/home` by
+  default, or the `config_home_source` override). It is the single canonical
+  pointer a passive external monitor (e.g. Layman) uses to find an env's
+  transcript logs, so a `run` that renders records it for the registered env,
+  including the default layout. Path only — no config contents or secrets.
+  Back-compat: an env registered before this change has `home: null` until its
+  next `run`. Registry read-modify-writes are serialized with a file
   lock so overlapping `run`/`init` invocations can't clobber each other's home
   updates, a re-bind (e.g. a second `init --name`) carries the recorded home
   forward instead of nulling it, and `load_registry` drops unknown keys / skips
@@ -28,6 +57,19 @@ default (no-plugins) path stays fully working at each step.
 
 ### Fixes
 
+- **`--name`d sessions can reach the LLM again.** The Pi/Vibe harness `baseUrl`
+  was built from the bare env-id, but a named session's forwarder sidecar is
+  `glove-<env>-<name>-llm`, so the harness dialed a nonexistent host and every
+  turn failed with "Connection error" (the network path itself was fine).
+  `render_home` now receives the resolved session token, matching the sidecar.
+  The harness home is now **per-session** (`sessions/<session>/home/`) rather
+  than shared at the env level: it embeds this session-scoped `baseUrl`, so two
+  sessions of one env coexisting would otherwise clobber each other's
+  `config.toml`/`models.json` and repoint one at the wrong sidecar. Re-running
+  the same session reuses its home, so per-session history still persists.
+  A power-user `config_home_source` override is still honored as-is. Regression
+  tests: `tests/test_cli.py::test_named_session_llm_base_matches_sidecar`,
+  `::test_coexisting_sessions_get_isolated_homes`.
 - **Plugin build contexts no longer collide.** Each plugin's `copy` sources are
   staged under a plugin-namespaced path (`<plugin>/<name>`) instead of their bare
   basename, so two plugins shipping a same-named source — e.g. the `search` and
