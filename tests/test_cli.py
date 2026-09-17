@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from typer.testing import CliRunner
 
@@ -64,6 +66,25 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     assert compose.is_file()
     # harness home seeded under the env's own home/ (shared across sessions)
     assert (home / "envs" / "vibe-local" / "home" / ".vibe" / "config.toml").is_file()
+
+
+def test_run_records_resolved_home_in_registry(home, tmp_path, monkeypatch):
+    from glove import registry
+
+    work = tmp_path / "work"
+    work.mkdir()
+    _chdir(monkeypatch, tmp_path / "vibe-local")
+    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
+    # Fresh registration has no home yet.
+    assert registry.load_registry()[0].home is None
+    result = runner.invoke(
+        app, ["run", "vibe", "--workdir", str(work), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    # run records the resolved (default-layout) home as an abs realpath.
+    (entry,) = registry.load_registry()
+    expected = os.path.realpath(str(home / "envs" / "vibe-local" / "home"))
+    assert entry.home == expected
 
 
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):

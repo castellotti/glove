@@ -9,6 +9,17 @@ behind an off-by-default plugin system (design note:
 `docs/planning/minimal-core-plugins-designnote.md`). Landing in phases; the
 default (no-plugins) path stays fully working at each step.
 
+### Added
+
+- **`registry.json` records each env's resolved harness home.** Every entry now
+  carries a `home` field — the absolute realpath of the harness home resolved at
+  `glove run` time (`envs/<env-id>/home` by default, or the `config_home_source`
+  override). It is the single canonical pointer a passive external monitor (e.g.
+  Layman) uses to find an env's transcript logs, so `run` records it
+  unconditionally, including the default layout. Path only — no config contents
+  or secrets. Back-compat: an env registered before this change has `home: null`
+  until its next `run`, and a consumer falls back to `envs/<env-id>/home`.
+
 ### Fixes
 
 - **Plugin build contexts no longer collide.** Each plugin's `copy` sources are

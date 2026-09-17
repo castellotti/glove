@@ -62,6 +62,11 @@ class EnvEntry:
     dir: str  # abs realpath of the invocation dir
     harness: str
     env_id: str
+    # Resolved harness home (abs realpath), written back at `glove run` time.
+    # `None` for envs registered before this field existed (back-compat) or
+    # never yet run. External monitors (e.g. Layman) read this to locate an
+    # env's transcript logs, falling back to `<env-id>/home` when it is None.
+    home: str | None = None
 
 
 def load_registry() -> list[EnvEntry]:

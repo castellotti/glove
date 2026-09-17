@@ -41,6 +41,7 @@ from .registry import (
     envs_root,
     find_env_id,
     load_registry,
+    save_registry,
     session_dir,
     session_token,
 )
@@ -74,6 +75,24 @@ def _home_dir(cfg, edir: Path) -> Path:
     if cfg.config_home_source:
         return Path(os.path.realpath(cfg.config_home_source))
     return edir / "home"
+
+
+def _record_home(env_id: str, home_dir: Path) -> None:
+    """Write the resolved harness home back into the registry entry for `env_id`.
+
+    The registry is the single canonical pointer external monitors use to find
+    an env's transcript logs. Stored as an abs realpath (no unresolved symlinks,
+    which would not resolve inside a consumer's container).
+    """
+    home_real = os.path.realpath(str(home_dir))
+    entries = load_registry()
+    changed = False
+    for e in entries:
+        if e.env_id == env_id and e.home != home_real:
+            e.home = home_real
+            changed = True
+    if changed:
+        save_registry(entries)
 
 
 @app.command()
@@ -245,6 +264,13 @@ def run(
         for w in legacy_warnings(cfg):
             err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, edir)
+        # Persist the run-time-resolved home into the registry as the single
+        # source of truth for external monitors (Layman). This is the only place
+        # the resolved home is known: config_home_source can arrive via --config
+        # at run time. Record it unconditionally (default layout included) as an
+        # abs realpath so a consumer needs no special-casing or symlink
+        # resolution. Path only — never config contents or secrets.
+        _record_home(env_id, home_dir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd()
         )
