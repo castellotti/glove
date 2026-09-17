@@ -42,6 +42,7 @@ from .registry import (
     envs_root,
     find_env_id,
     load_registry,
+    record_home,
     session_dir,
     session_token,
 )
@@ -83,6 +84,16 @@ def _home_dir(cfg, sdir: Path) -> Path:
     if cfg.config_home_source:
         return Path(os.path.realpath(cfg.config_home_source))
     return sdir / "home"
+
+
+def _record_home(env_id: str, home_dir: Path) -> None:
+    """Write the resolved harness home back into the registry entry for `env_id`.
+
+    The registry is the single canonical pointer external monitors use to find
+    an env's transcript logs. Stored as an abs realpath (no unresolved symlinks,
+    which would not resolve inside a consumer's container).
+    """
+    record_home(env_id, os.path.realpath(str(home_dir)))
 
 
 @app.command()
@@ -314,7 +325,15 @@ def run(
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
-    except (ConfigError, ValueError, HardeningError) as e:
+        # Persist the run-time-resolved home into the registry as the single
+        # source of truth for external monitors (Layman). This is the only place
+        # the resolved home is known: config_home_source can arrive via --config
+        # at run time. Recorded only after the session renders (not on an aborted
+        # run), for every registered env including the default layout, as an abs
+        # realpath so a consumer needs no special-casing or symlink resolution.
+        # Path only — never config contents or secrets.
+        _record_home(env_id, home_dir)
+    except (ConfigError, ValueError, HardeningError, OSError) as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 

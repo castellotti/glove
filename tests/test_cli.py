@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from typer.testing import CliRunner
@@ -126,6 +127,28 @@ def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
     # Each session's config survived the other's render, pointing at its own llm.
     assert _pi_llm_base("pi-local", "pi-local") == "http://glove-pi-local-llm:8080/v1"
     assert _pi_llm_base("pi-local", "feature") == "http://glove-pi-local-feature-llm:8080/v1"
+
+
+def test_run_records_resolved_home_in_registry(home, tmp_path, monkeypatch):
+    from glove import registry
+
+    work = tmp_path / "work"
+    work.mkdir()
+    _chdir(monkeypatch, tmp_path / "vibe-local")
+    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
+    # Fresh registration has no home yet.
+    assert registry.load_registry()[0].home is None
+    result = runner.invoke(
+        app, ["run", "vibe", "--workdir", str(work), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    # run records the resolved home as an abs realpath. The home is per-session
+    # (sessions/<session>/home), so the default session records its own home.
+    (entry,) = registry.load_registry()
+    expected = os.path.realpath(
+        str(home / "envs" / "vibe-local" / "sessions" / "vibe-local" / "home")
+    )
+    assert entry.home == expected
 
 
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):

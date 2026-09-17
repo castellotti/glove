@@ -38,6 +38,23 @@ default (no-plugins) path stays fully working at each step.
   and `tests/test_cli.py`. (Pi verified via dry-run render; vibe/claude-code
   mappings wired but not end-to-end tested.)
 
+### Added
+
+- **`registry.json` records each env's resolved harness home.** Every entry now
+  carries a `home` field — the absolute realpath of the harness home resolved at
+  `glove run` time (the per-session `envs/<env-id>/sessions/<session>/home` by
+  default, or the `config_home_source` override). It is the single canonical
+  pointer a passive external monitor (e.g. Layman) uses to find an env's
+  transcript logs, so a `run` that renders records it for the registered env,
+  including the default layout. Path only — no config contents or secrets.
+  Back-compat: an env registered before this change has `home: null` until its
+  next `run`. Registry read-modify-writes are serialized with a file
+  lock so overlapping `run`/`init` invocations can't clobber each other's home
+  updates, a re-bind (e.g. a second `init --name`) carries the recorded home
+  forward instead of nulling it, and `load_registry` drops unknown keys / skips
+  malformed rows so a future schema field from another glove build can't crash
+  readers of the shared `registry.json`.
+
 ### Fixes
 
 - **`--name`d sessions can reach the LLM again.** The Pi/Vibe harness `baseUrl`
@@ -70,6 +87,11 @@ default (no-plugins) path stays fully working at each step.
   a single filesystem scan.
 - **`glove doctor --env`** normalizes a comma-string `plugins:` value to a list
   before the `browser` membership test, matching how config parses it.
+- **Pi enforcer wraps commands in a non-login shell** (`bash -c`, not `bash -lc`).
+  A login shell sources `/etc/profile`, which nono's default profile denies
+  (`deny_shell_configs`), printing a harmless but noisy
+  `bash: /etc/profile: Permission denied` on every command. PATH is already set by
+  the image env, so login-shell setup was unnecessary.
 
 ### Internal
 

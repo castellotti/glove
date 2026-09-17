@@ -22,6 +22,21 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
+# Extra packages requested via session config `apt_packages` / `pip_packages`
+# (glove passes them as build-args). The Vibe base already honoured these; Pi did
+# not, so top-level apt_packages were silently dropped. Mirror Vibe here so e.g.
+# an OCR toolchain (tesseract/poppler/ghostscript/ocrmypdf) actually lands.
+ARG GLOVE_APT=""
+ARG GLOVE_PIP=""
+RUN if [ -n "$GLOVE_APT" ]; then apt-get update \
+      && apt-get install -y --no-install-recommends $GLOVE_APT \
+      && rm -rf /var/lib/apt/lists/*; fi
+RUN if [ -n "$GLOVE_PIP" ]; then \
+      (command -v pip3 >/dev/null 2>&1 || (apt-get update \
+        && apt-get install -y --no-install-recommends python3-pip \
+        && rm -rf /var/lib/apt/lists/*)) \
+      && pip3 install --break-system-packages $GLOVE_PIP; fi
+
 # Opt-in srt enforcer: baked only for the `-srt` image variant
 # (built with --build-arg GLOVE_ENFORCER=srt). Node ≥22 is already present.
 ARG GLOVE_ENFORCER=nono

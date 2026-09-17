@@ -3,7 +3,7 @@
  *
  * The model's `bash` tool and the operator's `!`/`!!` commands are both rewritten
  * to run under the enforcer's per-command wrapper (e.g.
- *   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc <cmd>
+ *   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c <cmd>
  * ), so a prompt-injected command can only touch /work + rw mounts + /tmp, has no
  * network, and cannot read the harness home (extensions, skills, session
  * transcripts) or the LLM key.
@@ -34,14 +34,18 @@ function loadWrapper(): string[] | null {
   return null;
 }
 
-/** POSIX single-quote a string so it survives as one argument to `bash -lc`. */
+/** POSIX single-quote a string so it survives as one argument to `bash -c`. */
 function shq(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
 function wrapCommand(argv: string[], command: string): string {
   // argv already ends with "--"; append the shell that runs the agent's command.
-  return `${argv.join(" ")} bash -lc ${shq(command)}`;
+  // Use a NON-login shell (`-c`, not `-lc`): a login shell sources /etc/profile,
+  // which nono's default profile denies (deny_shell_configs), printing a harmless
+  // but noisy "bash: /etc/profile: Permission denied" on every command. PATH is
+  // already set by the image env, so login-shell setup is unnecessary here.
+  return `${argv.join(" ")} bash -c ${shq(command)}`;
 }
 
 // Reject attempts to neuter the enforcer by overriding its env in the command.
