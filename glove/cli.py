@@ -399,6 +399,29 @@ def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) 
             raise ConfigError(
                 f"no env {env!r} under {envs_root()}; run `glove init` first"
             )
+        # A forced `--env X --config Y` one-off needs no prior `glove init`, but it
+        # must still be *registered*: the registry is the single canonical pointer
+        # external monitors (Layman) read to locate an env's home/transcripts, and
+        # the resolved home is recorded (run → _record_home) only for a registered
+        # env. Without this, `glove <h> --env X --config Y` returned an env-id that
+        # was never in registry.json, so record_home found no row to update and the
+        # session stayed invisible to monitors.
+        #
+        # Register only a genuinely new one-off — a forced env-id absent from the
+        # registry, run from a cwd not already bound for this harness — and bind it
+        # to cwd exactly as the `--config` cwd branch below does. That is the case
+        # that was invisible, and the narrow guard preserves `--env`'s "select an
+        # existing env, ignoring cwd" semantics: an already-registered env-id is
+        # returned untouched (its home records fine), and a cwd already bound to a
+        # different env-id is left alone rather than clobbered. A harness is
+        # required to bind (dir, harness).
+        cwd = os.getcwd()
+        if (
+            harness is not None
+            and not any(e.env_id == env for e in load_registry())
+            and find_env_id(cwd, harness) is None
+        ):
+            create_env(cwd, harness, name=env)
         return env
 
     cwd = os.getcwd()

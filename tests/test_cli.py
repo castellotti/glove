@@ -151,6 +151,52 @@ def test_run_records_resolved_home_in_registry(home, tmp_path, monkeypatch):
     assert entry.home == expected
 
 
+def test_forced_env_with_config_registers_and_records_home(home, tmp_path, monkeypatch):
+    # Regression: `glove <h> --env X --config Y` (no prior `glove init`) forced an
+    # env-id that _resolve_run_env returned without registering, so record_home
+    # found no row to update and the session stayed invisible to external monitors
+    # (Layman). The forced env must now be registered and its resolved (relocated)
+    # home recorded — this is the pi-rag launcher pattern.
+    from glove import registry
+
+    relocated = tmp_path / "relocated-home"
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(f"config_home_source: {relocated}\n")
+    _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
+
+    # No `glove init` first; --env forces the id, --config supplies the overlay.
+    result = runner.invoke(
+        app, ["run", "vibe", "--env", "one-off", "--config", str(cfg), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+
+    (entry,) = registry.load_registry()
+    assert entry.env_id == "one-off"
+    assert entry.harness == "vibe"
+    assert entry.dir == os.path.realpath(str(tmp_path / "proj"))
+    # The home recorded is the relocated one glove resolved from config_home_source.
+    assert entry.home == os.path.realpath(str(relocated))
+
+
+def test_forced_env_selecting_existing_env_is_not_rebound(home, tmp_path, monkeypatch):
+    # `--env` selects an existing env "ignoring cwd"; registering the one-off case
+    # above must not clobber that. Init env `keep` in one dir, then `run --env keep`
+    # from a *different* cwd: the registry entry's dir stays the init dir.
+    from glove import registry
+
+    initdir = _chdir(monkeypatch, tmp_path / "keepdir")
+    assert runner.invoke(app, ["init", "vibe", "--name", "keep"]).exit_code == 0
+
+    _chdir(monkeypatch, tmp_path / "elsewhere")  # a different, unbound cwd
+    result = runner.invoke(app, ["run", "vibe", "--env", "keep", "--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    (entry,) = registry.load_registry()
+    assert entry.env_id == "keep"
+    # Still bound to the init dir, not rebound to `elsewhere`.
+    assert entry.dir == os.path.realpath(str(initdir))
+
+
 def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
     # Regression: `glove down <env>` must tear down every session, including
     # --name'd ones whose compose project is glove-<env>-<name>, not just the
