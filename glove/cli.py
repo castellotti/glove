@@ -97,31 +97,22 @@ def _record_home(env_id: str, home_dir: Path) -> None:
 
 
 def _register_forced_env(env_id: str, harness: str) -> None:
-    """Register a forced `--env X --config Y` one-off so its home is recorded.
+    """Register a genuinely new forced `--env X --config Y` one-off.
 
-    The registry is the single canonical pointer external monitors (Layman) read
-    to locate an env's home/transcripts, and the resolved home is recorded (run →
-    _record_home) only for a *registered* env. Without this, `glove --env X
-    --config Y` returned an env-id that was never in registry.json, so record_home
-    found no row to update and the session stayed invisible to monitors.
-
-    Called after config resolution, once the effective harness is known: it can
-    arrive from `--config` rather than the CLI argument, so binding here (not in
-    _resolve_run_env) is what lets the config-supplied-harness form register too.
-
-    Register only a genuinely new one-off — a forced env-id absent from the
-    registry, run from a cwd not already bound for this harness — and bind it to
-    cwd exactly as the `--config` cwd branch in _resolve_run_env does. That narrow
-    guard preserves `--env`'s "select an existing env, ignoring cwd" semantics: an
-    already-registered env-id is left untouched, and a cwd already bound to a
-    different env-id is not clobbered. One registry read serves both checks (create_env
-    reloads under its own lock, which is what actually guards concurrent writers).
+    Registration (not just `_record_home`) is what makes a session visible to
+    external monitors (see `_record_home`, which no-ops for an unregistered env).
+    Bind only a forced env-id that is absent from the registry, run from a cwd not
+    already bound for this harness — preserving `--env`'s "select an existing env,
+    ignoring cwd" semantics: an already-registered env-id or an already-bound cwd
+    is left untouched. One registry read serves both checks (`create_env` reloads
+    under its own lock, which is what actually guards concurrent writers).
     """
     cwd = os.getcwd()
-    cwd_real = os.path.realpath(cwd)
     entries = load_registry()
     already_registered = any(e.env_id == env_id for e in entries)
-    cwd_bound = any(e.dir == cwd_real and e.harness == harness for e in entries)
+    cwd_bound = any(
+        e.dir == os.path.realpath(cwd) and e.harness == harness for e in entries
+    )
     if not already_registered and not cwd_bound:
         create_env(cwd, harness, name=env_id)
 
@@ -355,11 +346,10 @@ def run(
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
-        # A forced `--env X --config Y` one-off is registered here, now that the
-        # effective harness (cfg.harness — possibly supplied by --config) is known,
-        # so the config-supplied-harness form binds too. Done after a successful
-        # render so an aborted run leaves no phantom row; a forced-env-id clash
-        # raises RegistryError (a ValueError), caught by the handler below.
+        # Register the forced one-off now the effective harness is known: it can
+        # arrive from --config, so cfg.harness — not the CLI arg — is authoritative.
+        # After a successful render so an aborted run leaves no phantom row; a
+        # forced-env-id clash raises RegistryError, caught by the handler below.
         if env is not None:
             _register_forced_env(env_id, cfg.harness)
         # Persist the run-time-resolved home into the registry as the single
