@@ -178,6 +178,30 @@ def test_forced_env_with_config_registers_and_records_home(home, tmp_path, monke
     assert entry.home == os.path.realpath(str(relocated))
 
 
+def test_forced_env_registers_when_harness_comes_from_config(home, tmp_path, monkeypatch):
+    # `glove run --env X --config Y` with no positional harness is a valid
+    # invocation: the harness is resolved from the config. Registration must still
+    # happen — it is deferred until the effective harness is known — so this form
+    # is not left invisible to monitors the way the explicit-harness form was.
+    from glove import registry
+
+    relocated = tmp_path / "relocated-home"
+    cfg = tmp_path / "over.yaml"
+    cfg.write_text(f"harness: vibe\nconfig_home_source: {relocated}\n")
+    _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
+
+    result = runner.invoke(
+        app, ["run", "--env", "one-off", "--config", str(cfg), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+
+    (entry,) = registry.load_registry()
+    assert entry.env_id == "one-off"
+    assert entry.harness == "vibe"
+    assert entry.dir == os.path.realpath(str(tmp_path / "proj"))
+    assert entry.home == os.path.realpath(str(relocated))
+
+
 def test_forced_env_selecting_existing_env_is_not_rebound(home, tmp_path, monkeypatch):
     # `--env` selects an existing env "ignoring cwd"; registering the one-off case
     # above must not clobber that. Init env `keep` in one dir, then `run --env keep`

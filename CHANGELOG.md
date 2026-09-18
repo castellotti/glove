@@ -64,14 +64,23 @@ default (no-plugins) path stays fully working at each step.
   session's resolved home was never recorded. A passive external monitor (Layman)
   that reads the registry to locate an env's transcripts therefore never saw the
   session — it stayed invisible no matter how the monitor was configured.
-  `_resolve_run_env` now registers a *genuinely new* forced env — one whose
-  env-id is absent from the registry, run from a cwd not already bound for this
-  harness — binding it to cwd exactly as the `--config` cwd branch already does,
-  so `record_home` then persists its home. The guard is deliberately narrow to
-  preserve `--env`'s "select an existing env, ignoring cwd" semantics: an
-  already-registered env-id is returned untouched and a cwd bound to a different
-  env-id is never rebound. Regression tests:
+  `run` now registers a *genuinely new* forced env — one whose env-id is absent
+  from the registry, run from a cwd not already bound for this harness — binding
+  it to cwd exactly as the `--config` cwd branch already does, so `record_home`
+  then persists its home. Registration is deferred until after config resolution
+  (`_register_forced_env`, called from `run`) rather than done in
+  `_resolve_run_env`: the harness needed to bind `(dir, harness)` can be supplied
+  by `--config`, so `glove run --env X --config Y` with no positional harness now
+  registers too — the earlier `_resolve_run_env` version, gated on the CLI harness
+  argument, silently skipped that form. Because it runs inside `run`'s render
+  handler and only after a successful render, a forced-env-id clash surfaces as a
+  clean `RegistryError` message instead of a traceback, and an aborted run leaves
+  no phantom registry row. The guard is deliberately narrow to preserve `--env`'s
+  "select an existing env, ignoring cwd" semantics: an already-registered env-id
+  is returned untouched and a cwd bound to a different env-id is never rebound.
+  Regression tests:
   `tests/test_cli.py::test_forced_env_with_config_registers_and_records_home`,
+  `::test_forced_env_registers_when_harness_comes_from_config`,
   `::test_forced_env_selecting_existing_env_is_not_rebound`.
 
 - **`--name`d sessions can reach the LLM again.** The Pi/Vibe harness `baseUrl`
