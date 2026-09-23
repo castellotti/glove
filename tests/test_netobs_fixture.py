@@ -55,7 +55,8 @@ def test_fixture_covers_every_state_a_ui_must_render():
     closes = [r for r in _flows() if r["phase"] == "close"]
     reasons = {r["close_reason"] for r in closes}
     assert {"eof", "blocked", "upstream_unreachable", "gate_shutdown"} <= reasons
-    assert {r["rule"] for r in closes if r["rule"]} == {"builtin:ssrf-guard", "builtin:malformed-request"}
+    assert {r["rule"] for r in closes if r["rule"]} == {
+        "builtin:ssrf-guard", "builtin:malformed-request", "r_01M3FIXTUREADSBLOCK00000000"}
     assert {r["scope"] for r in closes} == {"local", "tunnelled"}
     assert {r["proto"] for r in closes} == {"tcp", "http-connect", "http"}
     assert any(r["dest"]["host"] is None for r in closes)  # the "render as the service endpoint" case
@@ -71,3 +72,14 @@ def test_status_and_session_samples():
     session = json.loads((FIXTURE / "session.json").read_text())
     assert {s["service"] for s in session["services"]} == {"llm", "search", "proxy", "browser"}
     assert any(not s["observed"] for s in session["services"])
+
+
+def test_rules_sample_is_what_the_gate_accepts_and_caused_the_user_block():
+    from glove.netgate.policy import validate
+
+    rules = validate(json.loads((FIXTURE / "rules.json").read_text()), env="pi-search", session="pi-search")
+    rid = rules.rules[0].id
+    blocked = [r for r in _flows() if r["rule"] == rid]
+    assert blocked and all(r["dest"]["host"].endswith(".tracker.example") for r in blocked)
+    status = json.loads((FIXTURE / "status.json").read_text())["rules"]
+    assert status["ok"] is True and status["active_count"] == 1

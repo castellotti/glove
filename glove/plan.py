@@ -56,6 +56,7 @@ class SessionPlan:
     observe: ObserveSettings | None = None
     netgate_image: str | None = None
     net_host_dir: str | None = None
+    control_host_dir: str | None = None  # ~/.glove/control/<env>/<session>, ro into the gate
 
     @property
     def project(self) -> str:

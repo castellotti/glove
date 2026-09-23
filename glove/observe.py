@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import Config, ConfigError, Service
 from .hardening import HardeningError
-from .netgate import EVENTS_DIR, EVENTS_SOCKET, GATE_VERSION, NET_DIR, SCHEMA_VERSION
+from .netgate import CONTROL_DIR, EVENTS_DIR, EVENTS_SOCKET, GATE_VERSION, NET_DIR, RULES_FILE, SCHEMA_VERSION
 from .netgate.records import iso_utc
 from .netgate.writer import write_json_atomic
 
@@ -265,6 +265,7 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
         "--resolve", plan.observe.resolve,
         "--ingress-alias", ingress_alias(plan.session, sidecar.role),
         "--events", EVENTS_SOCKET,
+        "--rules", RULES_FILE,
     ]
     if gate.scope:
         cmd += ["--scope", gate.scope]
@@ -274,7 +275,7 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
 
 
 def collect_command() -> list[str]:
-    return ["collect", "--net-dir", NET_DIR, "--events", EVENTS_SOCKET]
+    return ["collect", "--net-dir", NET_DIR, "--events", EVENTS_SOCKET, "--rules", RULES_FILE]
 
 
 def render_context(plan: SessionPlan) -> dict:
@@ -285,6 +286,8 @@ def render_context(plan: SessionPlan) -> dict:
         "netgate_image": plan.netgate_image,
         "net_host_dir": plan.net_host_dir,
         "net_container_dir": NET_DIR,
+        "control_host_dir": plan.control_host_dir,
+        "control_container_dir": CONTROL_DIR,
         "events_dir": EVENTS_DIR,
         "gate_commands": {s.role: forward_command(plan, s) for s in gated} if plan.observe else {},
         "gate_aliases": {s.role: ingress_alias(plan.session, s.role) for s in gated},
@@ -298,6 +301,14 @@ def render_context(plan: SessionPlan) -> dict:
 def net_dir(session_dir: Path) -> Path:
     """``<session>/net`` — a sibling of ``home/``, never mounted into the harness."""
     return Path(session_dir) / "net"
+
+
+def control_dir(env_id: str, session_name: str) -> Path:
+    """``~/.glove/control/<env>/<session>/`` — where ``rules.json`` lives. Written
+    by Layman or ``glove net block``; mounted read-only into the gate only."""
+    from .registry import glove_home
+
+    return glove_home() / "control" / env_id / session_name
 
 
 def ensure_net_dir(path: Path) -> Path:
@@ -319,21 +330,25 @@ def validate_net_isolation(plan: SessionPlan) -> None:
     record; one inside it would let the agent forge it. Not waivable."""
     if plan.observe is None:
         return
-    if not plan.net_host_dir:
-        raise HardeningError("observe is enabled but the session net/ dir was not materialised")
-    net = os.path.realpath(plan.net_host_dir)
+    if not plan.net_host_dir or not plan.control_host_dir:
+        raise HardeningError("observe is enabled but the session net/ or control/ dir was not materialised")
     binds = [("home", plan.home_dir)]
     binds += [(m.container_path, m.host_path) for m in plan.mounts]
     if plan.policies_host_dir:
         binds.append(("enforcer", plan.policies_host_dir))
-    for label, host_path in binds:
-        rp = os.path.realpath(host_path)
-        if _within(net, rp) or _within(rp, net):
-            raise HardeningError(
-                f"refusing to render: observe net/ dir {net} overlaps the harness mount "
-                f"{rp} ({label}) — the agent could read or forge its own flow record. "
-                "Move the mount (or config_home_source) outside the session's net/."
-            )
+    for what, guarded, harm in (
+        ("observe net/", plan.net_host_dir, "read or forge its own flow record"),
+        ("control/ (rules.json)", plan.control_host_dir, "read or rewrite its own network rules"),
+    ):
+        g = os.path.realpath(guarded)
+        for label, host_path in binds:
+            rp = os.path.realpath(host_path)
+            if _within(g, rp) or _within(rp, g):
+                raise HardeningError(
+                    f"refusing to render: {what} dir {g} overlaps the harness mount "
+                    f"{rp} ({label}) — the agent could {harm}. "
+                    "Move the mount (or config_home_source) outside it."
+                )
 
 
 def session_facts(plan: SessionPlan) -> dict:

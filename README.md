@@ -128,9 +128,12 @@ glove config  [--env ID] [--edit|--path]
 glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
 glove net status [--env ID] [--session NAME] [--json]          # gate health + per-service totals
 glove net flows  [--env ID] [--session NAME] [--follow] [--json] [--tail N]
+glove net block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
+glove net unblock <rule-id|target>
+glove net rules  [--json]                                       # rules + the gate's load result
 ```
 
-### Network observability (milestones M1–M2)
+### Network observability (milestones M1–M3)
 
 With `observe: {enabled: true}`, every service forwarder becomes an instrumented
 **netgate**: a drop-in for the socat forwarder (same container name, networks
@@ -184,8 +187,16 @@ live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`):
 - nothing resolves a destination hostname on the host;
 - telemetry failures drop records, never traffic.
 
-Still to come: `rules.json` blocking (M3), in-tunnel resolution and exit
-identity (M4), and whole-chain SearXNG/Playwright visibility (M5). See
+**Blocking.** `glove net block '*.doubleclick.net'` writes a rule to
+`~/.glove/control/<env>/<session>/rules.json`, the same file Layman writes. The
+gate reloads it within about a second, refuses new matching connections with a
+recorded `verdict: block`, and with `--terminate` also cuts established ones.
+A malformed file is rejected as a whole: the gate keeps the previous rules and
+reports the error in `glove net rules` and `status.json`. The built-in SSRF
+guard always runs first.
+
+Still to come: in-tunnel resolution and exit identity (M4), and whole-chain
+SearXNG/Playwright visibility (M5). See
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
 Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).

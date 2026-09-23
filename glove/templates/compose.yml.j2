@@ -125,6 +125,11 @@ services:
       - type: volume
         source: glove-{{ session }}-netgate-events
         target: {{ events_dir }}
+      # rules.json (directory mount: atomic-rename writes stay visible)
+      - type: bind
+        source: {{ control_host_dir | tojson }}
+        target: {{ control_container_dir }}
+        read_only: true
     depends_on:
       - glove-{{ session }}-netgate
     networks:
@@ -181,6 +186,10 @@ services:
       - type: volume
         source: glove-{{ session }}-netgate-events
         target: {{ events_dir }}
+      - type: bind
+        source: {{ control_host_dir | tojson }}
+        target: {{ control_container_dir }}
+        read_only: true
 {% endif %}
 
 networks:

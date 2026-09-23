@@ -32,11 +32,17 @@ import time
 from dataclasses import dataclass
 
 from . import guard, httpproxy, sni
+from .policy import PolicyWatcher
 from .records import flow_record, ulid
 
 READ_CHUNK = 64 * 1024
 SNI_WAIT = 0.25  # tcp mode: emit `open` without SNI if the client is silent this long
 HEAD_TIMEOUT = 30.0  # client request head / upstream CONNECT response (Tor can be slow)
+POLICY_POLL = 1.0  # seconds between rules.json checks
+
+
+class _Blocked(Exception):
+    """Raised inside the relay when a rule blocks a flow mid-inspection (SNI)."""
 
 
 @dataclass(frozen=True)
@@ -171,6 +177,8 @@ class Forwarder:
         spec: ForwardSpec,
         sink: EventSink,
         *,
+        policy: PolicyWatcher | None = None,
+        policy_poll: float = POLICY_POLL,
         update_interval: float = 1.0,
         connect_timeout: float = 10.0,
         half_close_timeout: float = 60.0,
@@ -178,6 +186,9 @@ class Forwarder:
     ):
         self.spec = spec
         self.sink = sink
+        self.policy = policy
+        self.policy_poll = policy_poll
+        self._policy_task: asyncio.Task | None = None
         self.update_interval = update_interval
         self.connect_timeout = connect_timeout
         self.half_close_timeout = half_close_timeout
@@ -200,6 +211,9 @@ class Forwarder:
             limit=httpproxy.MAX_HEAD,
         )
         self._ticker = asyncio.create_task(self._tick())
+        if self.policy is not None:
+            self.policy.poll()
+            self._policy_task = asyncio.create_task(self._watch_policy())
 
     @property
     def port(self) -> int:
@@ -216,10 +230,11 @@ class Forwarder:
         # only then wait: since 3.12 `wait_closed` waits for open connections.
         if self._server is not None:
             self._server.close()
-        if self._ticker is not None:
-            self._ticker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._ticker
+        for t in (self._ticker, self._policy_task):
+            if t is not None:
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
         tasks = list(self._flows.values())
         for task in tasks:
             task.cancel()
@@ -274,6 +289,40 @@ class Forwarder:
                 if flow.opened and (flow.up, flow.down) != flow.last_emitted:
                     self._emit(flow, "update")
 
+    # --- policy ------------------------------------------------------------
+
+    @staticmethod
+    def _facts(flow: _Flow, spec: ForwardSpec) -> dict:
+        return {"host": flow.host, "ip": flow.ip, "port": flow.port, "service": spec.service,
+                "tool": spec.tool, "scope": flow.scope}
+
+    def _decide(self, flow: _Flow) -> bool:
+        """Apply the operator's rules (after the built-in guard). False ⇒ blocked,
+        with the verdict and rule id recorded on the flow."""
+        if self.policy is None:
+            return True
+        verdict, rule, _ = self.policy.rules.evaluate(self._facts(flow, self.spec))
+        if verdict == "block":
+            flow.verdict, flow.rule = "block", rule
+            return False
+        return True
+
+    async def _watch_policy(self) -> None:
+        """Reload on change; a rule with `terminate: true` also cuts established
+        flows it now blocks. Others only affect new connections."""
+        assert self.policy is not None
+        while True:
+            await asyncio.sleep(self.policy_poll)
+            if not self.policy.poll():
+                continue
+            for flow, task in list(self._flows.items()):
+                if flow.verdict != "allow" or not flow.opened:
+                    continue
+                verdict, rule, terminate = self.policy.rules.evaluate(self._facts(flow, self.spec))
+                if verdict == "block" and terminate:
+                    flow.verdict, flow.rule = "block", rule
+                    task.cancel()
+
     # --- connections -------------------------------------------------------
 
     def _client_label(self, writer: asyncio.StreamWriter) -> str:
@@ -299,7 +348,8 @@ class Forwarder:
             else:
                 up_w = await self._handle_tcp(flow, reader, writer)
         except asyncio.CancelledError:
-            flow.close_reason = "gate_shutdown"
+            # cut by a `terminate: true` rule, or the gate stopping
+            flow.close_reason = "blocked" if flow.verdict == "block" else "gate_shutdown"
         except (ConnectionError, OSError):
             flow.close_reason = "reset"
         finally:
@@ -330,6 +380,9 @@ class Forwarder:
     # --- tcp mode ----------------------------------------------------------
 
     async def _handle_tcp(self, flow, reader, writer):
+        if not self._decide(flow):
+            flow.close_reason = "blocked"
+            return None
         conn = await self._connect(flow)
         if conn is None:
             return None
@@ -346,6 +399,8 @@ class Forwarder:
             )
         finally:
             timer.cancel()
+        if flow.verdict == "block":
+            flow.close_reason = "blocked"
         return up_w
 
     async def _sni_first(self, flow: _Flow, reader: asyncio.StreamReader, data: bytes) -> bytes:
@@ -366,12 +421,15 @@ class Forwarder:
         if name:
             flow.host = name
             flow.ip, flow.resolution = self.spec.display_ip(name)
+            if not self._decide(flow):  # a host rule can only match once the SNI is known
+                self._open(flow)
+                raise _Blocked(flow.rule)
         self._open(flow)
         return data
 
     # --- http-proxy mode ---------------------------------------------------
 
-    async def _refuse(self, flow, writer, status: int, reason: str, rule: str, why: str) -> None:
+    async def _refuse(self, flow, writer, status: int, reason: str, rule: str | None, why: str) -> None:
         flow.verdict = "block"
         flow.rule = rule
         flow.close_reason = "blocked"
@@ -404,6 +462,11 @@ class Forwarder:
         flow.scope = self.spec.flow_scope(is_local)
         if why is not None:
             await self._refuse(flow, writer, 403, "Forbidden", guard.GUARD_RULE, why)
+            return None
+        if not self._decide(flow):
+            # rule is None when `default: block` (no rule matched) decided it
+            await self._refuse(flow, writer, 403, "Forbidden", flow.rule,
+                               f"blocked by rule {flow.rule}" if flow.rule else "blocked by the default policy")
             return None
 
         self._open(flow)

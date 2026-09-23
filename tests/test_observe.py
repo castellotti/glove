@@ -55,6 +55,7 @@ def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, u
     )
     if plan.observe is not None:
         plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
+        plan.control_host_dir = str(ensure_net_dir(tmp_path / "ghome" / "control" / "ps" / "ps"))
     rendered = DockerRuntime().render(plan, sdir, overrides=overrides)
     return plan, yaml.safe_load(rendered.compose_yaml), rendered.compose_yaml
 
@@ -218,7 +219,10 @@ def test_render_adds_collector_and_tmpfs_event_volume(tmp_path):
     assert col["network_mode"] == "none"
     assert "networks" not in col
     binds = [v for v in col["volumes"] if v["type"] == "bind"]
-    assert [(b["source"], b["target"]) for b in binds] == [(plan.net_host_dir, "/var/lib/glove/net")]
+    assert [(b["source"], b["target"], b.get("read_only", False)) for b in binds] == [
+        (plan.net_host_dir, "/var/lib/glove/net", False),
+        (plan.control_host_dir, "/etc/glove/netgate-control", True),
+    ]
     vol = doc["volumes"]["glove-ps-netgate-events"]
     assert vol["driver_opts"]["type"] == "tmpfs"
     assert "uid=501" in vol["driver_opts"]["o"] and "mode=0700" in vol["driver_opts"]["o"]
@@ -310,6 +314,7 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
                               cwd=str(work), uid=501, gid=20)
     sdir = tmp_path / "gh/envs/pi-search/sessions/pi-search"
     plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
+    plan.control_host_dir = str(ensure_net_dir(tmp_path / "gh/control/pi-search/pi-search"))
     doc = yaml.safe_load(DockerRuntime().render(plan, sdir).compose_yaml)
     gated = {k for k, v in doc["services"].items() if v.get("image") == netgate_image()}
     assert gated == {"glove-pi-search-llm", "glove-pi-search-search", "glove-pi-search-proxy",

@@ -11,6 +11,22 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability, milestone M3: policy.** A `rules.json` control
+  channel (`~/.glove/control/<env>/<session>/`, mounted read-only into the gate
+  containers only) with a strict, whole-file validator
+  (`glove/netgate/policy.py`) shared by the gate and the CLI. Rules are evaluated
+  first-match after the built-in guard (then `default`), reloaded about once a
+  second without a restart, and applied to new connections. `terminate: true`
+  also cuts established flows. A rejected file keeps the last known-good set and
+  reports `status.json` `rules.ok: false` with the error. In `tcp` mode a host
+  rule can match the TLS SNI, and blocks before any byte is forwarded. New
+  commands: `glove net block|unblock|rules`. The CLI never writes, or edits, a
+  file the gate would reject. The render refuses any harness mount overlapping
+  the control dir. **Verified on live glove-pi-search**: a blocked host's
+  `web_fetch` failed and was recorded as `verdict: block` with the rule id; a
+  malformed write was rejected while the old rule kept blocking; removing the
+  file restored access live.
+
 - **Network observability, milestone M2: proxy awareness, SSRF guard, SNI**
   (`docs/planning/network-observability.md` §2.5.1, §2.7).
   - New `observe: {mode: http-proxy, route: vpn|tor|direct}` per service. The

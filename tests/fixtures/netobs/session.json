@@ -9,7 +9,7 @@
   "record": "metadata",
   "resolve": "in-tunnel",
   "upstream_kind": "vpn",
-  "rendered_at": "2026-09-23T12:48:40.770Z",
+  "rendered_at": "2026-09-23T13:28:25.527Z",
   "rotate": {
     "max_bytes": 67108864,
     "keep": 8

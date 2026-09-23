@@ -133,7 +133,10 @@ def test_gate_never_mounts_the_harness_home(tmp_path):
             if v["type"] == "bind":
                 src = os.path.realpath(v["source"])
                 assert not (src == home or src.startswith(home + os.sep) or home.startswith(src + os.sep)), name
-                assert src == os.path.realpath(plan.net_host_dir), name  # net/ is the only bind
+                # the only binds: net/ (collector, rw) and the rules dir (read-only)
+                allowed = {os.path.realpath(plan.net_host_dir): False, os.path.realpath(plan.control_host_dir): True}
+                assert src in allowed, name
+                assert v.get("read_only", False) == allowed[src], name
 
 
 def test_relocated_home_is_still_not_mounted_into_the_gate(tmp_path):
@@ -164,6 +167,24 @@ def test_home_overlapping_net_refuses_render(tmp_path, where):
     home = {"session_dir": sdir, "net_dir": sdir / "net", "inside_net": sdir / "net" / "h"}[where]
     with pytest.raises(HardeningError, match="overlaps the harness mount"):
         render(tmp_path, home=home)
+
+
+@pytest.mark.parametrize("where", ["control_root", "rules_dir"])
+def test_home_overlapping_control_refuses_render(tmp_path, where):
+    ctl = tmp_path / "ghome" / "control"
+    home = {"control_root": ctl, "rules_dir": ctl / "ps" / "ps" / "h"}[where]
+    with pytest.raises(HardeningError, match=r"control/ \(rules\.json\).*rewrite its own network rules"):
+        render(tmp_path, home=home)
+
+
+def test_rules_dir_is_never_in_the_harness(tmp_path):
+    plan, doc, _ = render(tmp_path)
+    assert "netgate-control" not in json.dumps(doc["services"]["glove-ps-harness"])
+    ctl = os.path.realpath(plan.control_host_dir)
+    for v in doc["services"]["glove-ps-harness"]["volumes"]:
+        if v["type"] == "bind":
+            src = os.path.realpath(v["source"])
+            assert not (ctl.startswith(src + os.sep) or src == ctl or src.startswith(ctl + os.sep))
 
 
 def test_add_dir_exposing_net_refuses_render(tmp_path):

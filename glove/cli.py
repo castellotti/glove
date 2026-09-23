@@ -347,9 +347,10 @@ def run(
         # the netgate collector only. The render refuses any harness mount that
         # overlaps it (validate_net_isolation).
         if plan.observe is not None:
-            from .observe import ensure_net_dir, net_dir
+            from .observe import control_dir, ensure_net_dir, net_dir
 
             plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
+            plan.control_host_dir = str(ensure_net_dir(control_dir(env_id, session_name)))
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
@@ -981,6 +982,116 @@ def net_flows(
                 emit(rec)
         except KeyboardInterrupt:
             pass
+
+
+def _rules_target(env: str | None, session: str | None) -> tuple[str, str, Path]:
+    """(env_id, session token, rules.json path) for `glove net block|unblock|rules`."""
+    from .observe import control_dir
+
+    env_id = _locate_env(env, None)
+    sname = session or env_id
+    return env_id, session_token(env_id, sname), control_dir(env_id, sname) / "rules.json"
+
+
+@net_app.command("block")
+def net_block(
+    target: str = typer.Argument(..., help="host glob (e.g. '*.doubleclick.net'), IP, or CIDR"),
+    port: int | None = typer.Option(None, "--port", help="only this destination port"),
+    terminate: bool = typer.Option(False, "--terminate", help="also cut matching established flows"),
+    allow: bool = typer.Option(False, "--allow", help="write an allow rule instead (e.g. under default block)"),
+    note: str | None = typer.Option(None, "--note", help="free-text note shown in `glove net rules`"),
+    env: str | None = typer.Option(None, "--env", help="select an env by id"),
+    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+) -> None:
+    """Append a rule to the session's rules.json (the file Layman writes too).
+
+    Rules apply to new connections within ~1s; --terminate also cuts matching
+    established ones. glove's built-in SSRF guard runs first and cannot be
+    overridden by an allow rule."""
+    from .netgate.policy import PolicyError
+    from .netrules import block_rule, load, save
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        rule = block_rule(target, port=port, terminate=terminate, note=note, action="allow" if allow else "block")
+        data["rules"] = [*data.get("rules", []), rule]
+        save(path, data, env_id, token)
+    except (ConfigError, PolicyError, OSError) as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    console.print(f"[green]✓[/green] {rule['action']} {rule['match']} → {rule['id']}  [dim]{path}[/dim]")
+
+
+@net_app.command("unblock")
+def net_unblock(
+    key: str = typer.Argument(..., help="rule id (r_…) or the exact host glob / IP / CIDR it matches"),
+    env: str | None = typer.Option(None, "--env", help="select an env by id"),
+    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+) -> None:
+    """Remove rules by id or by the exact target they match."""
+    from .netgate.policy import PolicyError
+    from .netrules import load, remove, save
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        gone = remove(data, key)
+        if not gone:
+            err.print(f"[yellow]no rule matches {key!r}[/yellow]")
+            raise typer.Exit(1)
+        save(path, data, env_id, token)
+    except (ConfigError, PolicyError, OSError) as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    for r in gone:
+        console.print(f"[green]✓[/green] removed {r['id']} ({r['action']} {r['match']})")
+
+
+@net_app.command("rules")
+def net_rules(
+    env: str | None = typer.Option(None, "--env", help="select an env by id"),
+    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    json_out: bool = typer.Option(False, "--json", help="print the rules document"),
+) -> None:
+    """Show the effective rules, their provenance, and the gate's load result."""
+    import json as _json
+
+    from .netgate.policy import PolicyError
+    from .netrules import load
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        problem = None
+    except PolicyError as e:
+        data, problem = None, str(e)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    if json_out:
+        console.print_json(_json.dumps(data or {"error": problem}))
+        return
+    from .netview import _load_json
+    from .observe import net_dir
+
+    status = _load_json(net_dir(session_dir(env_id, session or env_id)) / "status.json") or {}
+    console.print(f"[bold]{env_id}[/bold] / session [bold]{session or env_id}[/bold]  [dim]{path}[/dim]")
+    if problem:
+        console.print(f"  [red]rules.json is invalid:[/red] {problem}")
+        console.print("  [dim]the gate keeps its last known-good set until this is fixed[/dim]")
+        raise typer.Exit(1)
+    st = status.get("rules") or {}
+    if st:
+        state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
+        console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
+    console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
+    console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
+    if not data["rules"]:
+        console.print("  [dim](no rules)[/dim]")
+    for i, r in enumerate(data["rules"], 1):
+        extra = ("  terminate" if r.get("terminate") else "") + (f"  # {r['note']}" if r.get("note") else "")
+        console.print(f"  {i:>2}. {r['action']:<5} {r['match']}  [dim]{r['id']}[/dim]{extra}", highlight=False)
 
 
 @app.command("ps")

@@ -70,6 +70,15 @@ never what the agent can *reach*:
   is bind-mounted into the collector only. The render refuses (no waiver) any
   harness mount that overlaps `net/`: the agent must neither read its own flow
   record nor forge one.
+- **A control channel that can only say allow/block.** `rules.json`
+  (`~/.glove/control/<env>/<session>/`) is mounted read-only into the gate
+  containers and never into the harness. The same no-waiver render check applies,
+  so the agent cannot read or rewrite its own rules. Its schema has no key for a
+  path, command, mount, image or environment variable. Any unknown key rejects
+  the whole file, and the gate keeps its last known-good set, so a buggy or
+  compromised writer can at worst change which destinations are allowed. The
+  built-in SSRF guard runs before the rules, so no rule can allow an internal
+  destination.
 - **No host DNS.** Nothing on the host resolves a destination. The gate resolves
   only its configured target or upstream (as socat did) and glove's own ingress
   alias. In proxy mode the destination reaches the upstream as text. This was

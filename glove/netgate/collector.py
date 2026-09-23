@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from . import GATE_VERSION, SCHEMA_VERSION
+from .policy import PolicyWatcher
 from .records import iso_utc
 from .writer import NdjsonWriter, write_json_atomic
 
@@ -41,7 +42,14 @@ def load_facts(net_dir: Path) -> dict:
 
 
 class Collector:
-    def __init__(self, net_dir: str | os.PathLike, socket_path: str, *, status_interval: float = 5.0):
+    def __init__(
+        self,
+        net_dir: str | os.PathLike,
+        socket_path: str,
+        *,
+        status_interval: float = 5.0,
+        rules_path: str | os.PathLike | None = None,
+    ):
         self.net_dir = Path(net_dir)
         self.socket_path = socket_path
         self.status_interval = status_interval
@@ -59,6 +67,13 @@ class Collector:
         self._upstream: dict[str, bool] = {}
         self._sock: socket.socket | None = None
         self._failing = False
+        # The collector validates rules.json with the same code the forwarders
+        # use, purely to report the load result in status.json.
+        self.policy = PolicyWatcher(
+            Path(rules_path) if rules_path else None,
+            env=self.facts.get("env"),
+            session=self.facts.get("session"),
+        )
 
     # --- ingest ------------------------------------------------------------
 
@@ -103,14 +118,9 @@ class Collector:
             "upstream": {"kind": self.facts.get("upstream_kind", "tcp"), "healthy": healthy},
             # No in-tunnel resolver exists until M4: `healthy` is null (not in use).
             "resolver": {"mode": self.facts.get("resolve", "in-tunnel"), "healthy": None},
-            # Rules arrive in M3; until then the effective policy is `default: allow`.
-            "rules": {
-                "loaded_at": None,
-                "source_mtime": None,
-                "ok": True,
-                "error": None,
-                "active_count": 0,
-            },
+            # Load result of rules.json: `ok: false` + `error` is how a rejected
+            # write comes back (the gate keeps its last known-good set).
+            "rules": self.policy.status(),
             # Additive (readers ignore unknown fields): heartbeat + drop counters,
             # so a telemetry failure is visible without ever blocking traffic.
             "t": iso_utc(),
@@ -123,6 +133,7 @@ class Collector:
         }
 
     def write_status(self, state: str) -> bool:
+        self.policy.poll()
         return write_json_atomic(self.net_dir / "status.json", self.status(state))
 
     # --- run ---------------------------------------------------------------

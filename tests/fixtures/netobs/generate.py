@@ -6,7 +6,8 @@ Every record is produced by the real gate code (glove.netgate), in-process on
 loopback — nothing is hand-written — covering each state a UI must render:
 an LLM flow over TLS (SNI-derived host, local scope), tunnelled web_fetch
 CONNECTs to several hosts, a plain-http absolute-form fetch, SSRF-guard
-refusals, a malformed request, an upstream that could not reach its
+refusals, a user-rule block (with the rules.json that caused it), a malformed
+request, an upstream that could not reach its
 destination, and a flow cut by gate shutdown. Loopback addresses are then
 rewritten to the service names they stand in for, so the fixture reads like a
 glove-pi-search session. No DNS is performed (names map to loopback in a table).
@@ -27,10 +28,15 @@ sys.path.insert(0, str(ROOT))
 from glove.netgate import GATE_VERSION  # noqa: E402
 from glove.netgate.collector import Collector  # noqa: E402
 from glove.netgate.forward import EventSink, Forwarder, ForwardSpec  # noqa: E402
+from glove.netgate.policy import PolicyWatcher  # noqa: E402
 
 OUT = Path(__file__).parent
 ENV = SESSION = "pi-search"
 HOSTS = ["en.wikipedia.org", "arxiv.org", "www.nature.com", "duckduckgo.com"]
+USER_RULE = "r_01M3FIXTUREADSBLOCK00000000"  # a stable id, as Layman or the CLI would write
+RULES = {"v": 1, "env": ENV, "session": SESSION, "updated_at": "2026-09-23T04:20:00.000Z",
+         "updated_by": "layman", "default": "allow",
+         "rules": [{"id": USER_RULE, "action": "block", "match": {"host": "*.tracker.example"}, "note": "ads"}]}
 
 
 class Capture(EventSink):
@@ -107,7 +113,7 @@ async def talk(port: int, data: bytes, *, hold: float = 0.0) -> None:
     w.close()
 
 
-async def main() -> list[dict]:
+async def main(rules_path: Path) -> list[dict]:
     llm_origin, llm_port = await origin(96 * 1024)
     web_origin, web_port = await origin(160 * 1024)
     proxy, proxy_port = await upstream_proxy(dict.fromkeys([*HOSTS, "example.org"], web_port), {"duckduckgo.com"})
@@ -117,7 +123,7 @@ async def main() -> list[dict]:
                                 upstream_port=llm_port, **base), sink, update_interval=0.5)
     fetch = Forwarder(ForwardSpec(service="proxy", tool="web_fetch", mode="http-proxy", route_kind="vpn",
                                   upstream_host="127.0.0.1", upstream_port=proxy_port, **base),
-                      sink, update_interval=0.5)
+                      sink, update_interval=0.5, policy=PolicyWatcher(rules_path, env=ENV, session=SESSION))
     await llm.start()
     await fetch.start()
     jobs = [talk(llm.port, hello("llm.operator.lan"))]
@@ -128,6 +134,7 @@ async def main() -> list[dict]:
         talk(fetch.port, b"CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n"),
         talk(fetch.port, b"CONNECT gluetun:8000 HTTP/1.1\r\n\r\n"),
         talk(fetch.port, b"GET /not-a-proxy-request HTTP/1.1\r\n\r\n"),
+        talk(fetch.port, b"CONNECT ads.tracker.example:443 HTTP/1.1\r\n\r\n"),
     ]
     await asyncio.gather(*jobs)
     # a long download still running when the gate is stopped
@@ -150,7 +157,9 @@ def rewrite(records: list[dict], llm_port: str, proxy_port: str) -> list[dict]:
 
 
 if __name__ == "__main__":
-    recs = asyncio.run(main())
+    rules_path = OUT / "rules.json"
+    rules_path.write_text(json.dumps(RULES, indent=2) + "\n")  # the control file, as Layman would write it
+    recs = asyncio.run(main(rules_path))
     llm_up = next(r["route"]["upstream"] for r in recs if r["service"] == "llm").rsplit(":", 1)[1]
     proxy_up = next(r["route"]["upstream"] for r in recs if r["service"] == "proxy").rsplit(":", 1)[1]
     recs = rewrite(recs, llm_up, proxy_up)
@@ -182,12 +191,13 @@ if __name__ == "__main__":
     }
     (OUT / "session.json").write_text(json.dumps(session, indent=2) + "\n")
 
-    col = Collector(OUT, "/nonexistent")
+    col = Collector(OUT, "/nonexistent", rules_path=rules_path)
     col.facts = session
     for r in recs:
         col._track_upstream(r)
     col.writer.written = len(recs)
+    col.policy.poll()  # as write_status() does in the running collector
     status = col.status("running")
     status["t"] = recs[-1]["t"]
     (OUT / "status.json").write_text(json.dumps(status, indent=2) + "\n")
-    print(f"wrote {len(recs)} records, session.json, status.json to {OUT}")
+    print(f"wrote {len(recs)} records, session.json, status.json, rules.json to {OUT}")

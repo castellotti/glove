@@ -30,10 +30,12 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--resolve", default="in-tunnel", choices=["in-tunnel", "none"])
     f.add_argument("--ingress-alias", default=None)
     f.add_argument("--events", default=EVENTS_SOCKET)
+    f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
 
     c = sub.add_parser("collect", help="single writer of net/ (network_mode: none)")
     c.add_argument("--net-dir", default=NET_DIR)
     c.add_argument("--events", default=EVENTS_SOCKET)
+    c.add_argument("--rules", default=None, help="rules.json path, for status.json's load result")
     return p
 
 
@@ -65,7 +67,14 @@ async def _run_forward(args) -> None:
         sni=not args.no_sni,
     )
     sink = EventSink(args.events)
-    fwd = Forwarder(spec, sink)
+    policy = None
+    if args.rules:
+        from pathlib import Path
+
+        from .policy import PolicyWatcher
+
+        policy = PolicyWatcher(Path(args.rules), env=args.env, session=args.session)
+    fwd = Forwarder(spec, sink, policy=policy)
     stop = _stop_event()
     await fwd.start()
     print(f"netgate {GATE_VERSION}: forward {args.service} ({args.mode}) :{args.listen} -> {args.upstream}",
@@ -79,7 +88,7 @@ async def _run_collect(args) -> None:
     from .collector import Collector
 
     os.umask(0o077)
-    collector = Collector(args.net_dir, args.events)
+    collector = Collector(args.net_dir, args.events, rules_path=args.rules)
     print(f"netgate {GATE_VERSION}: collect -> {args.net_dir}", flush=True)
     await collector.run(_stop_event())
 

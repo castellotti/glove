@@ -21,3 +21,5 @@ SCHEMA_VERSION = 1
 EVENTS_DIR = "/run/glove-netgate"
 EVENTS_SOCKET = f"{EVENTS_DIR}/events.sock"
 NET_DIR = "/var/lib/glove/net"
+CONTROL_DIR = "/etc/glove/netgate-control"  # rules.json lives here, read-only
+RULES_FILE = f"{CONTROL_DIR}/rules.json"
