@@ -16,6 +16,7 @@ from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, compute_mounts
 from .network import NetworkPlan, build_network_plan
+from .observe import ObserveSettings, netgate_image, parse_observe
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
@@ -49,6 +50,12 @@ class SessionPlan:
     enforcer_env: dict[str, str] = field(default_factory=dict)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
+    # Network observability (glove/observe.py). `observe` is None unless enabled;
+    # `net_host_dir` is the session's net/ (set by the CLI once materialised) —
+    # bind-mounted into the netgate collector only, never into the harness.
+    observe: ObserveSettings | None = None
+    netgate_image: str | None = None
+    net_host_dir: str | None = None
 
     @property
     def project(self) -> str:
@@ -294,6 +301,9 @@ def build_session_plan(
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
     )
+    plan.observe = parse_observe(cfg)
+    if plan.observe is not None and any(s.gate for s in network.sidecars):
+        plan.netgate_image = netgate_image()
 
     # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
     # enforcer env/caps.

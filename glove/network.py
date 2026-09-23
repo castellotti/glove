@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .config import Config, ConfigError, Service
+from .observe import GateSpec, ObserveSettings, gate_spec_for, parse_observe
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,9 @@ class Sidecar:
     target: str  # host:port the sidecar forwards to
     join_network: str | None = None  # external docker network to also join
     host_gateway: bool = False  # needs extra_hosts host.docker.internal:host-gateway
+    # Set when the service is observed: the sidecar runs the netgate `forward`
+    # role instead of socat (same name, networks and port — a drop-in).
+    gate: GateSpec | None = None
 
     @property
     def command(self) -> str:
@@ -43,13 +47,14 @@ class NetworkPlan:
     egress_network: str | None = None
 
 
-def _sidecar_for(svc: Service) -> Sidecar:
+def _sidecar_for(svc: Service, gate: GateSpec | None = None) -> Sidecar:
     return Sidecar(
         role=svc.name,
         listen_port=svc.port,
         target=svc.to,
         join_network=svc.join_network,
         host_gateway=svc.host_gateway,
+        gate=gate,
     )
 
 
@@ -81,9 +86,10 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
             "forwarder sidecars, or remove the services. glove grants no network "
             "unless explicitly requested."
         )
+    settings: ObserveSettings | None = parse_observe(cfg)
     if wants_services:
         for svc in cfg.services:
-            sidecars.append(_sidecar_for(svc))
+            sidecars.append(_sidecar_for(svc, gate_spec_for(svc, cfg, settings)))
             if svc.join_network and svc.join_network not in external:
                 external.append(svc.join_network)
 

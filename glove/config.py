@@ -60,6 +60,10 @@ class Service:
     port: int = 0  # listen port inside the internal net (default: target port)
     join_network: str | None = None  # external docker network to also join
     host_gateway: bool = False  # add extra_hosts host.docker.internal:host-gateway
+    # Network observability (glove/observe.py): None ⇒ gated in tcp mode when the
+    # top-level `observe.enabled` is on; False ⇒ opt out (stays plain socat); a
+    # mapping annotates it ({mode, tool, scope, upstream}).
+    observe: Any = None
 
     def __post_init__(self) -> None:
         if self.port == 0:
@@ -143,6 +147,10 @@ class Config:
     tools: dict[str, Any] = field(default_factory=dict)
     browser: dict[str, Any] = field(default_factory=dict)
     enforcer_options: dict[str, Any] = field(default_factory=dict)
+    # Network observability (docs/planning/network-observability.md): routes the
+    # service forwarders through the instrumented netgate and records flows to
+    # the session's net/ dir. Off by default; validated in glove/observe.py.
+    observe: dict[str, Any] | bool = field(default_factory=dict)
 
     def resolved_name(self) -> str:
         # The name IS the env-id; the CLI always

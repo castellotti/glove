@@ -30,6 +30,33 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 | The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 
+## Network observability (the netgate)
+
+With `observe.enabled`, the service forwarders are replaced by the netgate
+(`docs/planning/network-observability.md`). It changes what glove *records*,
+never what the agent can *reach*:
+
+- **Same reach.** Each gate forwarder has exactly the name, networks, port and
+  target of the socat sidecar it replaces. In M1 it dials only its configured
+  target; there is no general proxy, so no new SSRF surface yet (the SSRF guard
+  lands with `http-proxy` mode in M2).
+- **No new API.** Forwarders listen only on their forward port. The collector
+  has `network_mode: none`, so it has no interface at all. Records travel over
+  a Unix datagram socket on a tmpfs volume that only the gate containers mount.
+- **No new privilege.** Gate containers run as the operator's uid with
+  `cap_drop ALL`, `no-new-privileges`, a read-only rootfs and pids/mem limits.
+  They never get `NET_ADMIN`, never share the harness's network or PID
+  namespace, and never mount its home.
+- **Invisible to the agent.** Telemetry goes to the session's `net/` dir, which
+  is bind-mounted into the collector only. The render refuses (no waiver) any
+  harness mount that overlaps `net/`: the agent must neither read its own flow
+  record nor forge one.
+- **No host DNS.** Nothing on the host resolves a destination, and the gate
+  resolves only the operator-configured target (as socat did) and glove's own
+  ingress alias. A destination IP is either a literal or reported `unavailable`.
+- **Fail open on telemetry.** A stopped, slow or unwritable collector drops
+  records (counted in `status.json`, logged by the collector), never traffic.
+
 ## The Docker Desktop (macOS) blast radius
 
 Be precise about what "container root" means here:

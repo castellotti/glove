@@ -11,6 +11,56 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability, milestone M1: the netgate as a drop-in socat
+  replacement** (`docs/planning/network-observability.md` §8). With
+  `observe: {enabled: true}`, each service forwarder runs the new stdlib-only
+  netgate (`glove/netgate/`, image `glove/netgate:0.1.0-<src-hash>` from
+  `glove/templates/netgate.Dockerfile`) in `forward` mode, with the same
+  container name, networks and port as the socat sidecar it replaces. Each
+  connection produces flow records: `open`, ~1 Hz `update`s while bytes move, and
+  `close` with a `close_reason` of `eof`, `reset`, `timeout`,
+  `upstream_unreachable` or `gate_shutdown`. Byte counts are cumulative, and
+  records carry timing, tool label and scope in the normative handoff §2 schema.
+  They reach a collector, `glove-<session>-netgate`, over a Unix datagram socket
+  on a tmpfs volume. The collector runs with `network_mode: none`, is the only
+  writer of `net/flows.ndjson` (size-rotated to `flows-<ts>.ndjson`, keep-N,
+  0600), and writes `net/status.json`. glove writes `net/session.json` at render
+  time with the declared services (including unobserved ones), tool labels,
+  upstreams and record mode. New commands: `glove net status` and
+  `glove net flows [--follow] [--json] [--tail N]`. The follow mode is a
+  reference reader for Layman: it handles rotation by inode and keys on `id`.
+  Per-service `observe:` sets `tool`/`scope` or opts out with `false`.
+  `record: full`, `http-proxy`/`socks5` modes, and `chain:` upstreams are
+  rejected with the milestone that adds them.
+  - **Design change from the plan:** instead of one `glove-<session>-netgate`
+    container holding every listener, each observed service keeps its own gate
+    container and a separate collector does the writing. glove-pi-search's `llm`
+    and `search` both listen on `:8080`, which one container can't bind twice.
+    The single writer is also what makes the rotation contract hold.
+  - **Invariants, each with tests** (`tests/test_netgate_invariants.py`): the
+    gate exposes no API on any network; gates are non-root, `cap_drop ALL`,
+    `no-new-privileges`, read-only, with no `NET_ADMIN`, no harness
+    network/PID namespace, and no harness-home mount; `net/` is a sibling of
+    `home/`, and any harness mount that overlaps it (home, `/work`, an add-dir,
+    a relocated `config_home_source`) is refused at render with no waiver. Name
+    resolution in the gate is limited, by an AST allow-list, to the configured
+    upstream and glove's own ingress alias. Host-side code never opens a socket,
+    and a monkeypatched resolver proves render and `glove net` never resolve. A
+    missing, stopped or unwritable collector drops records (and logs it), never
+    traffic. Flow and status shapes are checked against the jsonc in the
+    handoff brief itself.
+  - **Verified live on Docker 29.8 / Docker Desktop (arm64)** with
+    `tests/integration/test_netgate_m1.sh` (30/30). The real Pi harness under
+    nono reaches a stub LLM through the gate. `flows.ndjson` records the LLM
+    flow with byte counts equal to what a raw client sent and received (1059 up,
+    5,000,157 down). The same requests through plain socat return byte-identical
+    payloads. Invariants were read back from `docker inspect` and `/proc`, and
+    fail-open, rotation, `--follow` across rotations and SIGTERM →
+    `gate_shutdown` were all exercised. **Untested:** podman, and a live
+    glove-pi-search session (needs its `.env`, Keychain LLM key and VPN
+    credentials); its config renders and passes `docker compose config` in
+    `tests/test_observe.py`.
+
 - **Resume a prior session** with `glove <harness> … --resume` (`-r`,
   continue-last) or `--session <id>` (a specific full/partial UUID or transcript
   path). A session's transcript lives in the persistent per-session home, not the

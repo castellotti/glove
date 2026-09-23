@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ..hardening import HardeningError, validate_hardening
+from ..observe import render_context as observe_context
+from ..observe import validate_net_isolation
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
 
 if TYPE_CHECKING:
@@ -123,6 +125,8 @@ class DockerRuntime:
         overrides: frozenset[str] = frozenset(),
     ) -> RenderedProject:
         validate_hardening(plan, overrides=overrides)
+        # Not waivable: the agent must never see (or forge) its own flow record.
+        validate_net_isolation(plan)
         extra = self.compose_extra(plan)
         # Couple the seccomp hardening row to what actually renders. validate_hardening
         # only checks that the *plan* names a profile; on a runtime that omits the
@@ -163,6 +167,7 @@ class DockerRuntime:
             "gid": plan.gid,
             "hardening": plan.hardening,
             "allow_root": plan.allow_root,
+            **observe_context(plan),
             **extra,
         }
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
