@@ -143,7 +143,7 @@ def test_forward_is_byte_exact_and_records_counts(tmp_path, sockdir):
 def test_periodic_updates_for_a_long_flow(tmp_path, sockdir):
     async def main():
         async def slow(reader, writer):
-            for _ in range(5):
+            for _ in range(12):  # > SNI_WAIT: `open` waits that long for a silent client
                 writer.write(b"x" * 1000)
                 await writer.drain()
                 await asyncio.sleep(0.06)
@@ -162,10 +162,10 @@ def test_periodic_updates_for_a_long_flow(tmp_path, sockdir):
         col.close()
         return got
 
-    assert len(run(main())) == 5000
+    assert len(run(main())) == 12000
     recs = read_records(tmp_path)
     assert sum(r["phase"] == "update" for r in recs) >= 2
-    assert recs[-1]["bytes"]["down"] == 5000
+    assert recs[-1]["bytes"]["down"] == 12000
 
 
 def test_upstream_unreachable_is_recorded_not_blocked(tmp_path, sockdir):

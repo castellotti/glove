@@ -130,7 +130,7 @@ glove net status [--env ID] [--session NAME] [--json]          # gate health + p
 glove net flows  [--env ID] [--session NAME] [--follow] [--json] [--tail N]
 ```
 
-### Network observability (milestone M1)
+### Network observability (milestones M1–M2)
 
 With `observe: {enabled: true}`, every service forwarder becomes an instrumented
 **netgate**: a drop-in for the socat forwarder (same container name, networks
@@ -157,10 +157,26 @@ services:
   - { name: llm, to: host.docker.internal:8080, port: 8080,
       observe: { tool: llm, scope: local } }      # optional per-service labels
   - { name: other, to: x:1, observe: false }      # opt out: stays plain socat
+                                                  # (enabled: false turns all of it off)
+  - { name: proxy, to: egress-proxy:8888, join_network: pi-search-egress,
+      observe: { mode: http-proxy, route: vpn } } # see below
 ```
 
-Guarantees, each covered by a test (`tests/test_netgate_invariants.py`) and by a
-live run (`tests/integration/test_netgate_m1.sh`):
+**Proxy mode.** A service the harness uses as an HTTP proxy (glove-pi-search's
+`proxy`/`web_fetch`) can run with `mode: http-proxy`. The gate then reads the
+destination from each `CONNECT host:port` or `GET http://host/…` and records the
+real hostname and port, not just `egress-proxy`. It chains to the upstream
+(`chain:http://<to>` by default) **by hostname**, so the tunnel, not the gate or
+your host, resolves it. `route: vpn|tor|direct` is required and declares what
+that upstream really is. glove can't verify a tunnel, so it won't assume one, and
+`direct` marks every flow as untunnelled. Before anything goes upstream, a built-in
+**SSRF guard** refuses non-public destinations: private and metadata IPs in any
+notation, container names like `gluetun`, and `.internal`/`localhost` names.
+Refusals are recorded as blocked flows. In `tcp` mode the gate also peeks
+(never terminates) a TLS ClientHello, so an HTTPS flow shows its SNI hostname.
+
+Guarantees, each covered by a test (`tests/test_netgate_invariants.py`) and by
+live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`):
 - the gate exposes no API on any network;
 - it never gains `NET_ADMIN`, joins the harness's network or PID namespace, or
   mounts the harness home;
@@ -168,9 +184,8 @@ live run (`tests/integration/test_netgate_m1.sh`):
 - nothing resolves a destination hostname on the host;
 - telemetry failures drop records, never traffic.
 
-M1 is `tcp` mode only, and the destination is the configured target.
-HTTP-proxy awareness (real hostnames behind `egress-proxy`), the SSRF guard,
-`rules.json` blocking, in-tunnel resolution and exit identity are M2–M4 of
+Still to come: `rules.json` blocking (M3), in-tunnel resolution and exit
+identity (M4), and whole-chain SearXNG/Playwright visibility (M5). See
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
 Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).

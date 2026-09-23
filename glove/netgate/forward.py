@@ -1,17 +1,23 @@
-"""The ``forward`` role: a TCP forwarder that records flows.
+"""The ``forward`` role: an instrumented forwarder, one per observed service.
 
-A drop-in for ``socat TCP4-LISTEN:<port>,fork,reuseaddr TCP4:<host>:<port>``:
-same listen port, same target, same IPv4 pinning. It reads nothing it does not
-forward and forwards every byte unmodified; the only additions are counters and
-datagrams to the collector.
+Two listener modes (plan §2.1):
+
+- ``tcp`` — a drop-in for ``socat TCP4-LISTEN:<port>,fork,reuseaddr
+  TCP4:<host>:<port>``: same port, same target, same IPv4 pinning, every byte
+  forwarded unmodified. The first client bytes are *peeked* (not terminated)
+  for a TLS ClientHello's SNI, which becomes ``dest.host`` when present.
+- ``http-proxy`` — speaks HTTP ``CONNECT`` and absolute-form requests, learns the
+  destination from the request line, applies the SSRF guard, and chains to an
+  upstream HTTP proxy **by hostname** (``chain:http://<host>:<port>``), so the
+  upstream — inside the tunnel — resolves it. The gate never does.
 
 Name resolution happens in exactly two places, both enforced by
 ``tests/test_netgate_invariants.py``:
 
-- ``_dial_upstream`` — the *configured* target (``tcp:<host>:<port>``), resolved
-  by the container's resolver exactly as socat resolved it. A destination the
-  agent chose is never resolved here: in ``tcp`` mode the destination *is* the
-  operator's configured target.
+- ``_dial_upstream`` — the *configured* upstream (the tcp target, or the chained
+  proxy), resolved by the container's resolver exactly as socat resolved it. A
+  destination the agent chose is never resolved: in ``http-proxy`` mode it only
+  ever travels upstream as text.
 - ``_ingress_addresses`` — glove's own per-network ingress alias for this
   container, used only to label the ``client`` of a flow.
 """
@@ -20,46 +26,62 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ipaddress
 import json
 import socket
 import time
 from dataclasses import dataclass
 
+from . import guard, httpproxy, sni
 from .records import flow_record, ulid
 
 READ_CHUNK = 64 * 1024
+SNI_WAIT = 0.25  # tcp mode: emit `open` without SNI if the client is silent this long
+HEAD_TIMEOUT = 30.0  # client request head / upstream CONNECT response (Tor can be slow)
 
 
 @dataclass(frozen=True)
 class ForwardSpec:
     service: str
     listen_port: int
-    upstream_host: str
+    upstream_host: str  # tcp: the target; http-proxy: the chained proxy
     upstream_port: int
     env: str
     session: str
     tool: str | None = None
-    scope: str = "local"
+    scope: str = "local"  # tcp mode only; http-proxy classifies per flow
     resolve: str = "in-tunnel"  # "in-tunnel" | "none"
     listen_host: str = "0.0.0.0"
     ingress_alias: str | None = None
+    mode: str = "tcp"  # "tcp" | "http-proxy"
+    route_kind: str = "tcp"  # "tcp" | "vpn" | "tor" | "direct"
+    sni: bool = True
 
     @property
     def upstream(self) -> str:
+        if self.mode == "http-proxy":
+            return f"http://{self.upstream_host}:{self.upstream_port}"
         return f"tcp:{self.upstream_host}:{self.upstream_port}"
 
-    def dest_ip_and_resolution(self) -> tuple[str | None, str]:
-        """The display IP for the configured target, without ever resolving it.
+    def display_ip(self, host: str | None) -> tuple[str | None, str]:
+        """(dest.ip, dest.resolution) for ``host`` — without ever resolving it.
 
-        An IP-literal target is its own address (``literal``). Otherwise M1 has no
-        in-tunnel resolver, so the IP is ``unavailable`` — or ``disabled`` under
-        ``resolve: none``. There is deliberately no host-resolver fallback.
-        """
-        try:
-            return str(ipaddress.ip_address(self.upstream_host)), "literal"
-        except ValueError:
-            return None, ("disabled" if self.resolve == "none" else "unavailable")
+        An IP literal is its own address (``literal``). Otherwise there is no
+        in-tunnel resolver until M4, so ``unavailable`` — or ``disabled`` under
+        ``resolve: none``. There is deliberately no host-resolver fallback."""
+        ip = guard.ip_literal(host) if host else None
+        if ip is not None:
+            return str(ip), "literal"
+        return None, ("disabled" if self.resolve == "none" else "unavailable")
+
+    def dest_ip_and_resolution(self) -> tuple[str | None, str]:
+        return self.display_ip(self.upstream_host)
+
+    def flow_scope(self, is_local: bool) -> str:
+        """§2.5 scope of a proxied destination: local stays local; anything else
+        is tunnelled only when the operator declared the chain a vpn/tor route."""
+        if is_local:
+            return "local"
+        return "tunnelled" if self.route_kind in ("vpn", "tor") else "direct"
 
 
 class EventSink:
@@ -102,9 +124,15 @@ class EventSink:
 
 
 class _Flow:
-    __slots__ = ("client", "close_reason", "down", "id", "last_emitted", "t_open", "up")
+    """Per-connection state. The destination fields start as the configured
+    target (tcp mode) and are refined by SNI or the proxy request line."""
 
-    def __init__(self, client: str):
+    __slots__ = (
+        "client", "close_reason", "down", "host", "id", "ip", "last_emitted", "opened",
+        "port", "proto", "resolution", "rule", "scope", "t_open", "up", "verdict",
+    )
+
+    def __init__(self, client: str, spec: ForwardSpec):
         self.t_open = time.time()
         self.id = f"f_{ulid(self.t_open)}"
         self.client = client
@@ -112,6 +140,22 @@ class _Flow:
         self.down = 0
         self.last_emitted = (0, 0)
         self.close_reason: str | None = None
+        self.opened = False
+        self.verdict = "allow"
+        self.rule: str | None = None
+        if spec.mode == "tcp":
+            self.proto = "tcp"
+            self.host: str | None = spec.upstream_host
+            self.port: int | None = spec.upstream_port
+            self.scope = spec.scope
+        else:
+            self.proto = "http"
+            self.host = None
+            self.port = None
+            # Until a destination passes the guard nothing has left the gate: never
+            # claim a tunnel for a refused or unparseable request.
+            self.scope = "local"
+        self.ip, self.resolution = spec.display_ip(self.host)
 
 
 def _set_nodelay(writer: asyncio.StreamWriter) -> None:
@@ -130,17 +174,18 @@ class Forwarder:
         update_interval: float = 1.0,
         connect_timeout: float = 10.0,
         half_close_timeout: float = 60.0,
+        head_timeout: float = HEAD_TIMEOUT,
     ):
         self.spec = spec
         self.sink = sink
         self.update_interval = update_interval
         self.connect_timeout = connect_timeout
         self.half_close_timeout = half_close_timeout
+        self.head_timeout = head_timeout
         self._server: asyncio.Server | None = None
         self._ticker: asyncio.Task | None = None
         self._flows: dict[_Flow, asyncio.Task] = {}
         self._ingress: frozenset[str] = frozenset()
-        self._dest_ip, self._resolution = spec.dest_ip_and_resolution()
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -152,6 +197,7 @@ class Forwarder:
             port=self.spec.listen_port,
             family=socket.AF_INET,
             reuse_address=True,
+            limit=httpproxy.MAX_HEAD,
         )
         self._ticker = asyncio.create_task(self._tick())
 
@@ -197,16 +243,18 @@ class Forwarder:
             service=s.service,
             tool=s.tool,
             client=flow.client,
-            proto="tcp",
-            dest_host=s.upstream_host,
-            dest_port=s.upstream_port,
-            dest_ip=self._dest_ip,
-            resolution=self._resolution,
-            scope=s.scope,
-            route_kind="tcp",
+            proto=flow.proto,
+            dest_host=flow.host,
+            dest_port=flow.port,
+            dest_ip=flow.ip,
+            resolution=flow.resolution,
+            scope=flow.scope,
+            route_kind=s.route_kind,
             route_upstream=s.upstream,
             up=flow.up,
             down=flow.down,
+            verdict=flow.verdict,
+            rule=flow.rule,
             close_reason=flow.close_reason if phase == "close" else None,
         )
 
@@ -214,11 +262,16 @@ class Forwarder:
         flow.last_emitted = (flow.up, flow.down)
         self.sink.send(self._record(flow, phase, time.time()))
 
+    def _open(self, flow: _Flow) -> None:
+        if not flow.opened:
+            flow.opened = True
+            self._emit(flow, "open")
+
     async def _tick(self) -> None:
         while True:
             await asyncio.sleep(self.update_interval)
             for flow in list(self._flows):
-                if (flow.up, flow.down) != flow.last_emitted:
+                if flow.opened and (flow.up, flow.down) != flow.last_emitted:
                     self._emit(flow, "update")
 
     # --- connections -------------------------------------------------------
@@ -235,32 +288,37 @@ class Forwarder:
         return "harness" if local in self._ingress else "unknown"
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        flow = _Flow(self._client_label(writer))
+        flow = _Flow(self._client_label(writer), self.spec)
         task = asyncio.current_task()
         assert task is not None
         self._flows[flow] = task
-        self._emit(flow, "open")
         up_w: asyncio.StreamWriter | None = None
         try:
-            try:
-                up_r, up_w = await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
-            except TimeoutError:
-                flow.close_reason = "timeout"
-                return
-            except OSError:
-                flow.close_reason = "upstream_unreachable"
-                return
-            _set_nodelay(writer)
-            _set_nodelay(up_w)
-            flow.close_reason = await self._relay(flow, reader, writer, up_r, up_w)
+            if self.spec.mode == "http-proxy":
+                up_w = await self._handle_proxy(flow, reader, writer)
+            else:
+                up_w = await self._handle_tcp(flow, reader, writer)
         except asyncio.CancelledError:
             flow.close_reason = "gate_shutdown"
+        except (ConnectionError, OSError):
+            flow.close_reason = "reset"
         finally:
             for w in (writer, up_w):
                 if w is not None:
                     w.close()
             self._flows.pop(flow, None)
+            self._open(flow)
             self._emit(flow, "close")
+
+    async def _connect(self, flow: _Flow):
+        """Dial the configured upstream; None (with close_reason set) on failure."""
+        try:
+            return await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
+        except TimeoutError:
+            flow.close_reason = "timeout"
+        except OSError:
+            flow.close_reason = "upstream_unreachable"
+        return None
 
     async def _dial_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         # IPv4 only, like socat's TCP4: host.docker.internal carries an AAAA
@@ -269,10 +327,129 @@ class Forwarder:
             self.spec.upstream_host, self.spec.upstream_port, family=socket.AF_INET
         )
 
-    async def _relay(self, flow, reader, writer, up_r, up_w) -> str:
+    # --- tcp mode ----------------------------------------------------------
+
+    async def _handle_tcp(self, flow, reader, writer):
+        conn = await self._connect(flow)
+        if conn is None:
+            return None
+        up_r, up_w = conn
+        _set_nodelay(writer)
+        _set_nodelay(up_w)
+        # Server-first protocols must not wait on the SNI peek: both directions
+        # relay at once, and `open` goes out on the first client bytes (with the
+        # SNI host, if any) or after SNI_WAIT, whichever comes first.
+        timer = asyncio.get_running_loop().call_later(SNI_WAIT, self._open, flow)
+        try:
+            flow.close_reason = await self._relay(
+                flow, reader, writer, up_r, up_w, first=self._sni_first if self.spec.sni else None
+            )
+        finally:
+            timer.cancel()
+        return up_w
+
+    async def _sni_first(self, flow: _Flow, reader: asyncio.StreamReader, data: bytes) -> bytes:
+        """Inspect the client's first chunk before it is forwarded. A TLS record
+        split across segments is read to completion (bounded) so a large
+        post-quantum ClientHello still yields its SNI. The bytes are returned for
+        forwarding unmodified — a peek, never a termination."""
+        need = sni.record_length(data)
+        while need is not None and len(data) < min(need, sni.MAX_HELLO):
+            try:
+                more = await asyncio.wait_for(reader.read(need - len(data)), SNI_WAIT * 4)
+            except TimeoutError:
+                break
+            if not more:
+                break
+            data += more
+        name = sni.parse_sni(data)
+        if name:
+            flow.host = name
+            flow.ip, flow.resolution = self.spec.display_ip(name)
+        self._open(flow)
+        return data
+
+    # --- http-proxy mode ---------------------------------------------------
+
+    async def _refuse(self, flow, writer, status: int, reason: str, rule: str, why: str) -> None:
+        flow.verdict = "block"
+        flow.rule = rule
+        flow.close_reason = "blocked"
+        self._open(flow)
+        body = httpproxy.response(status, reason, f"glove netgate refused this request: {why}\n")
+        with contextlib.suppress(OSError):
+            writer.write(body)
+            await writer.drain()
+            flow.down += len(body)
+
+    async def _handle_proxy(self, flow, reader, writer):
+        try:
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), self.head_timeout)
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError) as e:
+            partial = getattr(e, "partial", b"") or b""
+            flow.up += len(partial)
+            await self._refuse(flow, writer, 400, "Bad Request", guard.MALFORMED_RULE, "incomplete request head")
+            return None
+        flow.up += len(head)
+        try:
+            req = httpproxy.parse_request_head(head)
+        except httpproxy.BadRequest as e:
+            await self._refuse(flow, writer, 400, "Bad Request", guard.MALFORMED_RULE, str(e))
+            return None
+
+        flow.proto = req.proto
+        flow.host, flow.port = req.host, req.port
+        flow.ip, flow.resolution = self.spec.display_ip(req.host)
+        why, is_local = guard.check(req.host)
+        flow.scope = self.spec.flow_scope(is_local)
+        if why is not None:
+            await self._refuse(flow, writer, 403, "Forbidden", guard.GUARD_RULE, why)
+            return None
+
+        self._open(flow)
+        conn = await self._connect(flow)
+        if conn is None:
+            with contextlib.suppress(OSError):
+                body = httpproxy.response(502, "Bad Gateway", "glove netgate: upstream proxy unreachable\n")
+                writer.write(body)
+                await writer.drain()
+                flow.down += len(body)
+            return None
+        up_r, up_w = conn
+        _set_nodelay(writer)
+        _set_nodelay(up_w)
+        up_w.write(req.upstream_head)
+        await up_w.drain()
+
+        if req.proto == "http-connect":
+            try:
+                resp = await asyncio.wait_for(up_r.readuntil(b"\r\n\r\n"), self.head_timeout)
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
+                flow.close_reason = "upstream_unreachable"
+                return up_w
+            writer.write(resp)
+            await writer.drain()
+            flow.down += len(resp)
+            code = httpproxy.status_code(resp)
+            if code is None or not 200 <= code < 300:
+                # The upstream could not reach the destination (e.g. tunnel down,
+                # 502/503): distinct from a policy block.
+                flow.close_reason = "upstream_unreachable"
+                return up_w
+
+        flow.close_reason = await self._relay(flow, reader, writer, up_r, up_w)
+        return up_w
+
+    # --- relay -------------------------------------------------------------
+
+    async def _relay(self, flow, reader, writer, up_r, up_w, *, first=None) -> str:
         async def pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter, upstream: bool) -> None:
+            inspect = first if upstream else None
             while True:
                 data = await src.read(READ_CHUNK)
+                if inspect is not None and data:
+                    data = await inspect(flow, src, data)
+                    inspect = None
                 if not data:
                     if dst.can_write_eof():
                         with contextlib.suppress(OSError):

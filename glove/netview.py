@@ -235,7 +235,8 @@ def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
         name = svc.get("service")
         stats = flows["by_service"].get(name, {"flows": 0, "active": 0, "up": 0, "down": 0})
         if svc.get("observed"):
-            desc = f"{svc.get('mode')} → {svc.get('upstream')}  tool={svc.get('tool')} scope={svc.get('scope')}"
+            desc = (f"{svc.get('mode')} → {svc.get('upstream')}  tool={svc.get('tool')} "
+                    f"scope={svc.get('scope') or 'per-destination'}")
         else:
             desc = "[dim]not observed (plain socat)[/dim]"
         lines.append(

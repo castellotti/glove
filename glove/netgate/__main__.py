@@ -19,7 +19,10 @@ def _parser() -> argparse.ArgumentParser:
     f = sub.add_parser("forward", help="instrumented TCP forwarder (one per service)")
     f.add_argument("--service", required=True)
     f.add_argument("--listen", type=int, required=True, help="listen port")
-    f.add_argument("--upstream", required=True, help="tcp:<host>:<port>")
+    f.add_argument("--mode", default="tcp", choices=["tcp", "http-proxy"])
+    f.add_argument("--upstream", required=True, help="tcp:<host>:<port> | chain:http://<host>:<port>")
+    f.add_argument("--route", default="tcp", choices=["tcp", "vpn", "tor", "direct"])
+    f.add_argument("--no-sni", action="store_true", help="tcp mode: don't peek the ClientHello")
     f.add_argument("--env", required=True)
     f.add_argument("--session", required=True)
     f.add_argument("--tool", default=None)
@@ -34,18 +37,18 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _parse_upstream(value: str) -> tuple[str, int]:
-    scheme, _, rest = value.partition(":")
-    host, _, port = rest.rpartition(":")
-    if scheme != "tcp" or not host or not port.isdigit():
-        raise SystemExit(f"netgate: unsupported upstream {value!r} (M1 supports tcp:<host>:<port>)")
+def _parse_upstream(value: str, mode: str) -> tuple[str, int]:
+    prefix = "chain:http://" if mode == "http-proxy" else "tcp:"
+    host, _, port = value.removeprefix(prefix).rstrip("/").rpartition(":")
+    if not value.startswith(prefix) or not host or not port.isdigit():
+        raise SystemExit(f"netgate: {mode} mode needs upstream {prefix}<host>:<port>, got {value!r}")
     return host, int(port)
 
 
 async def _run_forward(args) -> None:
     from .forward import EventSink, Forwarder, ForwardSpec
 
-    host, port = _parse_upstream(args.upstream)
+    host, port = _parse_upstream(args.upstream, args.mode)
     spec = ForwardSpec(
         service=args.service,
         listen_port=args.listen,
@@ -57,12 +60,16 @@ async def _run_forward(args) -> None:
         scope=args.scope,
         resolve=args.resolve,
         ingress_alias=args.ingress_alias,
+        mode=args.mode,
+        route_kind=args.route,
+        sni=not args.no_sni,
     )
     sink = EventSink(args.events)
     fwd = Forwarder(spec, sink)
     stop = _stop_event()
     await fwd.start()
-    print(f"netgate {GATE_VERSION}: forward {args.service} :{args.listen} -> {args.upstream}", flush=True)
+    print(f"netgate {GATE_VERSION}: forward {args.service} ({args.mode}) :{args.listen} -> {args.upstream}",
+          flush=True)
     await stop.wait()
     await fwd.stop()
     sink.close()

@@ -37,9 +37,28 @@ With `observe.enabled`, the service forwarders are replaced by the netgate
 never what the agent can *reach*:
 
 - **Same reach.** Each gate forwarder has exactly the name, networks, port and
-  target of the socat sidecar it replaces. In M1 it dials only its configured
-  target; there is no general proxy, so no new SSRF surface yet (the SSRF guard
-  lands with `http-proxy` mode in M2).
+  target of the socat sidecar it replaces. A `tcp` gate dials only its configured
+  target. An `http-proxy` gate dials only its configured upstream proxy; the
+  agent picks the destination, but the upstream was already routable through the
+  socat forwarder, so reach doesn't change. What *is* new is the SSRF surface of a
+  general proxy, handled by the guard below.
+- **SSRF guard (`http-proxy` mode).** Before anything is sent upstream, the gate
+  refuses destinations that are not plainly public: non-global IP literals in any
+  notation (`169.254.169.254`, `2130706433`, `[::ffff:127.0.0.1]`), single-label
+  names (every container on the egress network, including gluetun's control
+  server), and local suffixes (`localhost`, `.local`, `.internal` …). Requests
+  are re-serialised from the parsed destination, never forwarded verbatim, so the
+  upstream acts on exactly the host that was checked. Absolute-form requests are
+  forced to one request per connection. **Known gap:** the guard judges a name
+  by its shape and never resolves it (that would leak it). A public-looking name
+  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the gate,
+  and the upstream proxy's own policy is the backstop until the in-tunnel
+  resolver (M4). Note too that `route: vpn|tor` is the operator's declaration,
+  not a verified fact.
+  Measured on glove-pi-search: gluetun's HTTP proxy forwards to gluetun's own
+  control server (`gluetun:8000`, and `127.0.0.1:8000` inside its namespace),
+  which can reconfigure the VPN. Only gluetun's control-server auth stood in the
+  way. Under the gate, those requests are refused before they reach gluetun.
 - **No new API.** Forwarders listen only on their forward port. The collector
   has `network_mode: none`, so it has no interface at all. Records travel over
   a Unix datagram socket on a tmpfs volume that only the gate containers mount.
@@ -51,9 +70,11 @@ never what the agent can *reach*:
   is bind-mounted into the collector only. The render refuses (no waiver) any
   harness mount that overlaps `net/`: the agent must neither read its own flow
   record nor forge one.
-- **No host DNS.** Nothing on the host resolves a destination, and the gate
-  resolves only the operator-configured target (as socat did) and glove's own
-  ingress alias. A destination IP is either a literal or reported `unavailable`.
+- **No host DNS.** Nothing on the host resolves a destination. The gate resolves
+  only its configured target or upstream (as socat did) and glove's own ingress
+  alias. In proxy mode the destination reaches the upstream as text. This was
+  measured live by sniffing the gate's netns: only the upstream's name was ever
+  queried. A destination IP is either a literal or reported `unavailable`.
 - **Fail open on telemetry.** A stopped, slow or unwritable collector drops
   records (counted in `status.json`, logged by the collector), never traffic.
 

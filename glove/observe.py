@@ -38,10 +38,14 @@ NETGATE_SRC = Path(__file__).parent / "netgate"
 NETGATE_DOCKERFILE = Path(__file__).parent / "templates" / "netgate.Dockerfile"
 
 OBSERVE_KEYS = frozenset({"enabled", "record", "resolve", "rotate_mb", "keep"})
-SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream"})
+SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route"})
 SCOPES = ("local", "tunnelled", "direct")
-# Planned listener modes and the milestone that lands them; only `tcp` is live.
-LATER_MODES = {"http-proxy": "M2", "socks5": "M2"}
+MODES = ("tcp", "http-proxy")
+# What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
+# plain one, so the operator declares it; `direct` makes every flow loud.
+ROUTES = ("vpn", "tor", "direct")
+# Planned modes/upstreams not yet implemented.
+LATER_MODES = {"socks5": "a later milestone"}
 # §2.4 tool labels by conventional service name (the llm service is added from
 # `llm_service`). An explicit `observe.tool` always wins.
 DEFAULT_TOOLS = {"proxy": "web_fetch", "search": "web_search", "browser": "browser"}
@@ -58,22 +62,30 @@ class ObserveSettings:
 
 @dataclass(frozen=True)
 class GateSpec:
-    """How one service's forwarder is instrumented (M1: tcp mode only)."""
+    """How one service's forwarder is instrumented.
+
+    ``tcp`` forwards to the service target; ``http-proxy`` speaks HTTP proxy to
+    the harness and chains to ``upstream_host:upstream_port`` by hostname."""
 
     service: str
     upstream_host: str
     upstream_port: int
-    scope: str
+    scope: str | None  # tcp: fixed; http-proxy: None (classified per flow)
     tool: str | None = None
     mode: str = "tcp"
+    route_kind: str = "tcp"
 
     @property
     def upstream(self) -> str:
+        """The upstream as written in config (``tcp:h:p`` / ``chain:http://h:p``)."""
+        if self.mode == "http-proxy":
+            return f"chain:http://{self.upstream_host}:{self.upstream_port}"
         return f"tcp:{self.upstream_host}:{self.upstream_port}"
 
     @property
-    def route_kind(self) -> str:
-        return "tcp"
+    def route_upstream(self) -> str:
+        """The upstream as flow records carry it in ``route.upstream``."""
+        return self.upstream.removeprefix("chain:")
 
 
 # --- config ----------------------------------------------------------------
@@ -139,15 +151,16 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
     """The gate spec for ``svc``, or None when it stays a plain socat forwarder.
 
     With observation enabled every service is gated in ``tcp`` mode unless it
-    opts out with ``observe: false``; an ``observe:`` mapping annotates it.
+    opts out with ``observe: false``; an ``observe:`` mapping annotates it. With
+    it disabled, every service is plain socat whatever its annotation says.
     """
     raw: Any = svc.observe
     if settings is None:
-        if raw not in (None, False):
-            raise ConfigError(
-                f"service {svc.name!r} has an observe block but observe.enabled is not "
-                "true — enable it at the top level (observe: {enabled: true}) or remove it."
-            )
+        # `observe.enabled` is the master switch: with it off, per-service
+        # annotations are inert (still type-checked), so a config can carry them
+        # and toggle observation with one key.
+        if raw not in (None, False, True) and not isinstance(raw, dict):
+            raise ConfigError(f"service {svc.name!r}: observe must be a mapping or false, got {raw!r}")
         return None
     if raw is False:
         return None
@@ -163,27 +176,67 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
     if mode in LATER_MODES:
         raise ConfigError(
             f"service {svc.name!r}: observe.mode {mode!r} is not implemented yet "
-            f"(milestone {LATER_MODES[mode]}); M1 supports tcp"
+            f"({LATER_MODES[mode]}); supported: {', '.join(MODES)}"
         )
-    if mode != "tcp":
-        raise ConfigError(f"service {svc.name!r}: unknown observe.mode {mode!r}")
+    if mode not in MODES:
+        raise ConfigError(f"service {svc.name!r}: unknown observe.mode {mode!r} (supported: {', '.join(MODES)})")
+
+    tool = raw.get("tool")
+    if tool is None:
+        tool = "llm" if svc.name == cfg.llm_service else DEFAULT_TOOLS.get(svc.name)
+
+    if mode == "http-proxy":
+        return _proxy_gate(svc, raw, tool)
 
     host, port = _split_target(svc.to, svc.name)
     upstream = raw.get("upstream")
     if upstream is not None and upstream != f"tcp:{svc.to}":
         raise ConfigError(
-            f"service {svc.name!r}: observe.upstream {upstream!r} is not supported in M1 — "
-            f"tcp mode forwards to the service target (tcp:{svc.to}); chain:/direct land in M2"
+            f"service {svc.name!r}: observe.upstream {upstream!r} is not valid in tcp mode — "
+            f"tcp mode forwards to the service target (tcp:{svc.to}); use mode: http-proxy "
+            "for a chain: upstream"
         )
-
+    if "route" in raw:
+        raise ConfigError(f"service {svc.name!r}: observe.route applies to http-proxy mode only")
     scope = raw.get("scope") or classify_scope(host, svc.host_gateway)
     if scope not in SCOPES:
         raise ConfigError(f"service {svc.name!r}: observe.scope must be one of {SCOPES}, got {scope!r}")
-
-    tool = raw.get("tool")
-    if tool is None:
-        tool = "llm" if svc.name == cfg.llm_service else DEFAULT_TOOLS.get(svc.name)
     return GateSpec(service=svc.name, upstream_host=host, upstream_port=port, scope=scope, tool=tool)
+
+
+def _proxy_gate(svc: Service, raw: dict, tool: str | None) -> GateSpec:
+    """``http-proxy`` mode: the harness speaks HTTP proxy to the gate, which
+    chains to the upstream proxy — by default the service's own target, so the
+    socat-era ``to:`` keeps meaning "where this service goes"."""
+    upstream = raw.get("upstream") or f"chain:http://{svc.to}"
+    if upstream.startswith("chain:socks5://"):
+        raise ConfigError(f"service {svc.name!r}: chain:socks5:// upstreams are not implemented yet")
+    if upstream == "direct" or upstream.startswith("direct"):
+        raise ConfigError(
+            f"service {svc.name!r}: a `direct` upstream (the gate resolving and dialling itself, "
+            "plan §4.4) is not implemented — it would need host-side resolution of destinations"
+        )
+    if not upstream.startswith("chain:http://"):
+        raise ConfigError(
+            f"service {svc.name!r}: http-proxy mode needs upstream chain:http://<host>:<port>, got {upstream!r}"
+        )
+    host, port = _split_target(upstream.removeprefix("chain:http://").rstrip("/"), svc.name)
+    if "scope" in raw:
+        raise ConfigError(
+            f"service {svc.name!r}: observe.scope is classified per destination in http-proxy mode; "
+            "declare observe.route (vpn|tor|direct) instead"
+        )
+    route = raw.get("route")
+    if route not in ROUTES:
+        raise ConfigError(
+            f"service {svc.name!r}: http-proxy mode needs observe.route — what the chained upstream "
+            f"really is: one of {ROUTES}. glove cannot verify a tunnel exists, so it will not assume "
+            "one; `direct` marks every flow as leaving untunnelled."
+        )
+    return GateSpec(
+        service=svc.name, upstream_host=host, upstream_port=port, scope=None, tool=tool,
+        mode="http-proxy", route_kind=route,
+    )
 
 
 # --- render ----------------------------------------------------------------
@@ -203,15 +256,18 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
     cmd = [
         "forward",
         "--service", gate.service,
+        "--mode", gate.mode,
         "--listen", str(sidecar.listen_port),
         "--upstream", gate.upstream,
+        "--route", gate.route_kind,
         "--env", plan.env_id,
         "--session", plan.session,
-        "--scope", gate.scope,
         "--resolve", plan.observe.resolve,
         "--ingress-alias", ingress_alias(plan.session, sidecar.role),
         "--events", EVENTS_SOCKET,
     ]
+    if gate.scope:
+        cmd += ["--scope", gate.scope]
     if gate.tool:
         cmd += ["--tool", gate.tool]
     return cmd
@@ -295,9 +351,9 @@ def session_facts(plan: SessionPlan) -> dict:
             entry.update(
                 mode=s.gate.mode,
                 tool=s.gate.tool,
-                scope=s.gate.scope,
+                scope=s.gate.scope,  # null in http-proxy mode: classified per flow
                 upstream=s.gate.upstream,
-                route={"kind": s.gate.route_kind, "upstream": s.gate.upstream},
+                route={"kind": s.gate.route_kind, "upstream": s.gate.route_upstream},
             )
         services.append(entry)
     return {
@@ -310,11 +366,22 @@ def session_facts(plan: SessionPlan) -> dict:
         "image": plan.netgate_image,
         "record": plan.observe.record,
         "resolve": plan.observe.resolve,
-        "upstream_kind": "tcp",
+        "upstream_kind": _upstream_kind(plan),
         "rotate": {"max_bytes": plan.observe.rotate_bytes, "keep": plan.observe.keep},
         "rendered_at": iso_utc(),
         "services": services,
     }
+
+
+def _upstream_kind(plan: SessionPlan) -> str:
+    """Session-level upstream kind for ``status.json``: the chained route if any
+    service proxies through one (``direct`` wins — it must never be masked),
+    else ``tcp``."""
+    kinds = {s.gate.route_kind for s in plan.network.sidecars if s.gate and s.gate.mode == "http-proxy"}
+    for k in ("direct", "vpn", "tor"):
+        if k in kinds:
+            return k
+    return "tcp"
 
 
 def write_session_facts(path: Path, facts: dict) -> None:

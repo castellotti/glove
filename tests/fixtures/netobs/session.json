@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "type": "session",
+  "env": "pi-search",
+  "session": "pi-search",
+  "harness": "pi",
+  "gate": "0.1.0",
+  "image": "glove/netgate:0.1.0-0000000000",
+  "record": "metadata",
+  "resolve": "in-tunnel",
+  "upstream_kind": "vpn",
+  "rendered_at": "2026-09-23T12:48:40.770Z",
+  "rotate": {
+    "max_bytes": 67108864,
+    "keep": 8
+  },
+  "services": [
+    {
+      "service": "llm",
+      "listen": "glove-pi-search-llm:8080",
+      "observed": true,
+      "mode": "tcp",
+      "tool": "llm",
+      "scope": "local",
+      "upstream": "tcp:host.docker.internal:8080",
+      "route": {
+        "kind": "tcp",
+        "upstream": "tcp:host.docker.internal:8080"
+      }
+    },
+    {
+      "service": "search",
+      "listen": "glove-pi-search-search:8080",
+      "observed": true,
+      "mode": "tcp",
+      "tool": "web_search",
+      "scope": "local",
+      "upstream": "tcp:searxng:8080",
+      "route": {
+        "kind": "tcp",
+        "upstream": "tcp:searxng:8080"
+      }
+    },
+    {
+      "service": "proxy",
+      "listen": "glove-pi-search-proxy:8888",
+      "observed": true,
+      "mode": "http-proxy",
+      "tool": "web_fetch",
+      "scope": null,
+      "upstream": "chain:http://egress-proxy:8888",
+      "route": {
+        "kind": "vpn",
+        "upstream": "http://egress-proxy:8888"
+      }
+    },
+    {
+      "service": "browser",
+      "listen": "glove-pi-search-browser:3001",
+      "observed": false
+    }
+  ]
+}

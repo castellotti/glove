@@ -44,9 +44,10 @@ def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, u
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     sdir = tmp_path / "ghome" / "envs" / "ps" / "sessions" / "ps"
-    cfg = Config(harness="pi", workdir=str(work), name="ps", net=["service"], plugins=["search"],
+    cfg = Config(harness="pi", workdir=str(work), name="ps", net=["service"],
                  observe={"enabled": True} if observe is None else observe)
     cfg.services = pi_search_services() if services is None else services
+    cfg.plugins = ["search"] if any(s.name == "search" for s in cfg.services) else []
     if add_dirs:
         cfg.add_dirs = add_dirs
     plan = build_session_plan(
@@ -88,18 +89,53 @@ def test_observe_rejects(observe, match):
         parse_observe(Config(observe=observe))
 
 
-def test_service_modes_beyond_m1_are_rejected():
+def _proxy_cfg(**obs) -> Config:
     cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
-    cfg.services = [Service(name="proxy", to="egress-proxy:8888",
-                            observe={"mode": "http-proxy", "upstream": "chain:http://egress-proxy:8888"})]
-    with pytest.raises(ConfigError, match="M2"):
+    cfg.services = [Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
+                            observe={"mode": "http-proxy", **obs})]
+    return cfg
+
+
+def test_http_proxy_mode_chains_to_the_service_target():
+    gate = build_network_plan(_proxy_cfg(route="vpn"), "s").sidecars[0].gate
+    assert (gate.mode, gate.route_kind, gate.tool) == ("http-proxy", "vpn", "web_fetch")
+    assert gate.upstream == "chain:http://egress-proxy:8888"
+    assert gate.route_upstream == "http://egress-proxy:8888"
+    assert gate.scope is None  # classified per destination
+
+
+@pytest.mark.parametrize(
+    ("obs", "match"),
+    [
+        ({}, "needs observe.route"),
+        ({"route": "maybe"}, "needs observe.route"),
+        ({"route": "vpn", "scope": "local"}, "classified per destination"),
+        ({"route": "tor", "upstream": "chain:socks5://tor:9150"}, "socks5"),
+        ({"route": "direct", "upstream": "direct"}, "not implemented"),
+        ({"route": "vpn", "upstream": "tcp:egress-proxy:8888"}, "chain:http://"),
+        ({"mode": "socks5", "route": "tor"}, "not implemented yet"),
+    ],
+)
+def test_http_proxy_mode_rejects(obs, match):
+    with pytest.raises(ConfigError, match=match):
+        build_network_plan(_proxy_cfg(**obs), "s")
+
+
+def test_route_is_only_for_proxy_mode():
+    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
+    cfg.services = [Service(name="llm", to="h:1", observe={"route": "vpn"})]
+    with pytest.raises(ConfigError, match="http-proxy mode only"):
         build_network_plan(cfg, "s")
 
 
-def test_service_observe_block_without_global_enable_errors():
-    cfg = Config(harness="pi", name="s", net=["service"])
-    cfg.services = [Service(name="llm", to="h:1", observe={"tool": "llm"})]
-    with pytest.raises(ConfigError, match=r"observe\.enabled"):
+def test_observe_enabled_is_a_master_switch():
+    # Annotations stay in the config; turning observation off makes them inert.
+    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": False})
+    cfg.services = [Service(name="proxy", to="egress-proxy:8888", join_network="n",
+                            observe={"mode": "http-proxy", "route": "vpn"})]
+    assert build_network_plan(cfg, "s").sidecars[0].gate is None
+    cfg.services[0].observe = "yes"
+    with pytest.raises(ConfigError, match="mapping or false"):
         build_network_plan(cfg, "s")
 
 
@@ -197,6 +233,33 @@ def test_mixed_observed_and_plain_services(tmp_path):
     assert doc["services"]["glove-ps-llm"]["image"] == netgate_image()
 
 
+def test_render_http_proxy_gate(tmp_path):
+    services = pi_search_services()
+    services[2] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
+                          observe={"mode": "http-proxy", "route": "vpn"})
+    plan, doc, _ = render(tmp_path, services=services)
+    cmd = doc["services"]["glove-ps-proxy"]["command"]
+    assert cmd[cmd.index("--mode") + 1] == "http-proxy"
+    assert cmd[cmd.index("--upstream") + 1] == "chain:http://egress-proxy:8888"
+    assert cmd[cmd.index("--route") + 1] == "vpn"
+    assert "--scope" not in cmd
+    facts = session_facts(plan)
+    proxy = next(s for s in facts["services"] if s["service"] == "proxy")
+    assert proxy["route"] == {"kind": "vpn", "upstream": "http://egress-proxy:8888"}
+    assert proxy["scope"] is None and facts["upstream_kind"] == "vpn"
+
+
+def test_direct_route_is_never_masked_in_upstream_kind(tmp_path):
+    services = [
+        Service(name="proxy", to="egress-proxy:8888", join_network="n",
+                observe={"mode": "http-proxy", "route": "vpn"}),
+        Service(name="raw", to="squid:3128", join_network="n",
+                observe={"mode": "http-proxy", "route": "direct", "tool": "other"}),
+    ]
+    plan, _, _ = render(tmp_path, services=services)
+    assert session_facts(plan)["upstream_kind"] == "direct"
+
+
 def test_session_facts(tmp_path):
     plan, _, _ = render(tmp_path)
     facts = session_facts(plan)
@@ -231,9 +294,11 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
     tokens filled with .env.example defaults, plus `observe: {enabled: true}`."""
     text = (PI_SEARCH_TEMPLATE.read_text()
             .replace("__LLM_HOST__", "host.docker.internal").replace("__LLM_PORT__", "8080")
-            .replace("__LLM_MODEL__", "m").replace("__GLOVE_HOME__", str(tmp_path / "gh")))
+            .replace("__LLM_MODEL__", "m").replace("__GLOVE_HOME__", str(tmp_path / "gh"))
+            # tokens the launcher fills on the pi-search network-observability branch
+            .replace("__NET_OBSERVE__", "true").replace("__EGRESS_ROUTE__", "vpn"))
     data = yaml.safe_load(text)
-    data["observe"] = {"enabled": True}
+    data.setdefault("observe", {"enabled": True})
     data["name"] = "pi-search"
     work = tmp_path / "work"
     work.mkdir()
@@ -249,6 +314,10 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
     gated = {k for k, v in doc["services"].items() if v.get("image") == netgate_image()}
     assert gated == {"glove-pi-search-llm", "glove-pi-search-search", "glove-pi-search-proxy",
                      "glove-pi-search-netgate"}
+    proxy_cmd = doc["services"]["glove-pi-search-proxy"]["command"]
+    if "__EGRESS_ROUTE__" in PI_SEARCH_TEMPLATE.read_text():  # the branch template: proxy mode
+        assert proxy_cmd[proxy_cmd.index("--mode") + 1] == "http-proxy"
+        assert proxy_cmd[proxy_cmd.index("--route") + 1] == "vpn"
     # GLOVE_FETCH_PROXY (hand-written in the config) still names a live listener
     h = doc["services"]["glove-pi-search-harness"]["environment"]
     assert h["GLOVE_FETCH_PROXY"] == "http://glove-pi-search-proxy:8888"

@@ -550,7 +550,8 @@ def _print_summary(plan, home_files) -> None:
         console.print("  [dim](none — harness is fully offline)[/dim]")
     for s in plan.network.sidecars:
         gate = (
-            f"  [cyan](netgate {s.gate.mode}, tool={s.gate.tool}, scope={s.gate.scope})[/cyan]"
+            f"  [cyan](netgate {s.gate.mode}, tool={s.gate.tool}, "
+            f"scope={s.gate.scope or 'per-destination'})[/cyan]"
             if s.gate else ""
         )
         console.print(
