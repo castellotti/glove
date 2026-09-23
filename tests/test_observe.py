@@ -78,7 +78,9 @@ def test_observe_true_shorthand_and_defaults():
 @pytest.mark.parametrize(
     ("observe", "match"),
     [
-        ({"enabled": True, "record": "full"}, "M5"),
+        ({"enabled": True, "record_headers": True}, "needs observe.record: full"),
+        ({"enabled": True, "retain": "5s"}, "at least 60s"),
+        ({"enabled": True, "retain": "a week"}, "duration"),
         ({"enabled": True, "resolve": "host"}, "in-tunnel|none"),
         ({"enabled": True, "resolver_namespace": "gluetun"}, "unknown observe keys"),
         ({"enabled": True, "exit_identity": "gluetun://x"}, "control-server credential"),
@@ -344,8 +346,11 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
     plan.control_host_dir = str(ensure_net_dir(tmp_path / "gh/control/pi-search/pi-search"))
     doc = yaml.safe_load(DockerRuntime().render(plan, sdir).compose_yaml)
     gated = {k for k, v in doc["services"].items() if v.get("image") == netgate_image()}
-    assert gated == {"glove-pi-search-llm", "glove-pi-search-search", "glove-pi-search-proxy",
+    assert gated >= {"glove-pi-search-llm", "glove-pi-search-search", "glove-pi-search-proxy",
                      "glove-pi-search-netgate"}
+    if "glove-pi-search-fanout" in doc["services"]:  # M5 branch template: SearXNG's listener
+        assert "glove-pi-search-fanout" in gated
+        assert set(doc["services"]["glove-pi-search-fanout"]["networks"]) == {"pi-search-egress"}
     proxy_cmd = doc["services"]["glove-pi-search-proxy"]["command"]
     if "__EGRESS_ROUTE__" in PI_SEARCH_TEMPLATE.read_text():  # the branch template: proxy mode
         assert proxy_cmd[proxy_cmd.index("--mode") + 1] == "http-proxy"

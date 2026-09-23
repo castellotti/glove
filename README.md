@@ -133,7 +133,7 @@ glove net unblock <rule-id|target>
 glove net rules  [--json]                                       # rules + the gate's load result
 ```
 
-### Network observability (milestones M1–M4)
+### Network observability
 
 With `observe: {enabled: true}`, every service forwarder becomes an instrumented
 **netgate**: a drop-in for the socat forwarder (same container name, networks
@@ -205,7 +205,16 @@ the session's apparent origin (exit IP and location) is fetched *through* the
 tunnel and written to `net/exit.ndjson`. It's opt-in, because the echo service
 (`am.i.mullvad.net` by default) is a third party, though it only sees the exit.
 
-Still to come: whole-chain SearXNG/Playwright visibility (M5). See
+**The whole chain (M5).** A `harness: false` service is a gate listener for
+*egress-stack* components, and the sandbox can't reach it. glove-pi-search points
+SearXNG's outgoing proxy at one (`fanout`), so a single `web_search` shows every
+engine SearXNG contacted (`client: searxng`, `tool: search-engine-fanout`).
+`observe.record: full` (with an explicit warning) adds the method and URL of
+*cleartext* HTTP requests, and `record_headers` adds headers with credentials
+redacted. HTTPS stays opaque. `observe.retain: 12h` expires old records, and
+`glove down --wipe` deletes them.
+
+Design and as-built decisions:
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
 Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).

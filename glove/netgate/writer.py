@@ -50,6 +50,7 @@ class NdjsonWriter:
         self._clock = clock
         self._fd: int | None = None
         self._size = 0
+        self.opened_at: float | None = None  # when the live file's oldest record was written
         self.written = 0
         self.dropped = 0
         self.rotations = 0
@@ -62,7 +63,11 @@ class NdjsonWriter:
         if self._fd is not None:
             return
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, FILE_MODE)
-        self._size = os.fstat(fd).st_size
+        st = os.fstat(fd)
+        self._size = st.st_size
+        # an existing file: its oldest record is at least as old as its creation;
+        # mtime is a safe lower bound on age only if we take the *earlier* of the two
+        self.opened_at = min(self._clock(), st.st_mtime) if st.st_size else None
         self._fd = fd
 
     def _close(self) -> None:
@@ -86,6 +91,8 @@ class NdjsonWriter:
             self._close()  # retry a fresh open on the next record
             return False
         self._size += n
+        if self.opened_at is None:
+            self.opened_at = self._clock()
         if n != len(line):
             self.dropped += 1
             return False
@@ -113,6 +120,7 @@ class NdjsonWriter:
             return
         self.rotations += 1
         self._size = 0
+        self.opened_at = None
         # Open the fresh file now, not on the next record, so a tailer never
         # finds flows.ndjson missing between rotation and the next write.
         with contextlib.suppress(OSError):
@@ -120,6 +128,23 @@ class NdjsonWriter:
         for old in self.rotated_files()[: max(0, len(self.rotated_files()) - self.keep)]:
             with contextlib.suppress(OSError):
                 old.unlink()
+
+    def expire(self, retain_s: float) -> int:
+        """Retention: rotate the live file once its oldest record is retain/4
+        old, and delete rotated files last written more than ``retain_s`` ago —
+        so no record outlives about 1.25x retain. Returns files deleted."""
+        now = self._clock()
+        if self.opened_at is not None and now - self.opened_at >= retain_s / 4:
+            self.rotate()
+        gone = 0
+        for old in self.rotated_files():
+            try:
+                if now - old.stat().st_mtime > retain_s:
+                    old.unlink()
+                    gone += 1
+            except OSError:
+                pass
+        return gone
 
     def close(self) -> None:
         self._close()

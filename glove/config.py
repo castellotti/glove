@@ -64,6 +64,10 @@ class Service:
     # top-level `observe.enabled` is on; False ⇒ opt out (stays plain socat); a
     # mapping annotates it ({mode, tool, scope, upstream}).
     observe: Any = None
+    # False: a listener for egress-stack components (e.g. SearXNG's outbound
+    # proxy), joined only to `join_network` — never to the harness's network and
+    # never offered to the harness. Requires join_network.
+    harness: bool = True
 
     def __post_init__(self) -> None:
         if self.port == 0:
@@ -77,6 +81,11 @@ class Service:
         # host.docker.internal targets imply the host-gateway extra_hosts entry.
         if "host.docker.internal" in self.to:
             self.host_gateway = True
+        if not self.harness and not self.join_network:
+            raise ConfigError(
+                f"service {self.name!r}: harness: false needs join_network — it is a listener "
+                "for components on that network, and is never reachable from the sandbox"
+            )
 
 
 @dataclass

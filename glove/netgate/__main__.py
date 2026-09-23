@@ -33,6 +33,10 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
     f.add_argument("--resolver", default=None, help="in-tunnel resolver: dns://h:p | tor-socks://h:p")
     f.add_argument("--exit-url", default=None, help="https IP-echo URL polled through the chain")
+    f.add_argument("--client", default="unknown", choices=["searxng", "playwright", "unknown"],
+                   help="label for connections that did not arrive on the harness ingress")
+    f.add_argument("--record", default="metadata", choices=["metadata", "full"])
+    f.add_argument("--record-headers", action="store_true")
 
     c = sub.add_parser("collect", help="single writer of net/ (network_mode: none)")
     c.add_argument("--net-dir", default=NET_DIR)
@@ -69,6 +73,9 @@ async def _run_forward(args) -> None:
         sni=not args.no_sni,
         resolver_url=args.resolver,
         exit_url=args.exit_url,
+        client=args.client,
+        record=args.record,
+        record_headers=args.record_headers,
     )
     sink = EventSink(args.events)
     policy = None

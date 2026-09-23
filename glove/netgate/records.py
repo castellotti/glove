@@ -58,6 +58,7 @@ def flow_record(
     verdict: str = "allow",
     rule: str | None = None,
     close_reason: str | None = None,
+    request: dict | None = None,
 ) -> dict:
     return {
         "v": SCHEMA_VERSION,
@@ -80,6 +81,6 @@ def flow_record(
         "verdict": verdict,
         "rule": rule,
         "close_reason": close_reason,
-        # Only populated under `record: full` (M5); metadata mode never records it.
-        "request": None,
+        # Only under `record: full`; metadata mode never records it.
+        "request": request,
     }

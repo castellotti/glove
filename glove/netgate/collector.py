@@ -61,10 +61,13 @@ class Collector:
             max_bytes=int(rotate.get("max_bytes", 64 * 1024 * 1024)),
             keep=int(rotate.get("keep", 8)),
         )
+        self.retain_s = rotate.get("retain_s")
         self.exits = NdjsonWriter(self.net_dir, "exit", max_bytes=1024 * 1024, keep=2)
         self.received = 0
         self.invalid = 0
+        self.expired = 0
         self._resolver: dict[str, bool] = {}  # service -> last reported resolver health
+        self.last_exit: dict | None = None  # current apparent origin, kept across rotation/expiry
         # service -> last known upstream outcome (True ok / False failed)
         self._upstream: dict[str, bool] = {}
         self._sock: socket.socket | None = None
@@ -88,6 +91,7 @@ class Collector:
             return
         kind = record.get("type") if isinstance(record, dict) else None
         if kind == "exit":
+            self.last_exit = record
             self.exits.write(record)
             return
         if kind == "health":
@@ -141,11 +145,18 @@ class Collector:
                 "dropped": self.writer.dropped,
                 "invalid": self.invalid,
                 "rotations": self.writer.rotations,
+                "expired_files": self.expired,
             },
         }
 
     def write_status(self, state: str) -> bool:
         self.policy.poll()
+        if self.retain_s:
+            self.expired += self.writer.expire(float(self.retain_s)) + self.exits.expire(float(self.retain_s))
+            # exit records are written only on change: carry the CURRENT origin
+            # into a fresh file, so retention drops history, never present state
+            if self.last_exit is not None and self.exits.opened_at is None:
+                self.exits.write(self.last_exit)
         return write_json_atomic(self.net_dir / "status.json", self.status(state))
 
     # --- run ---------------------------------------------------------------

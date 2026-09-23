@@ -123,6 +123,30 @@ def parse_request_head(head: bytes) -> ProxyRequest:
     return ProxyRequest(method, host, port, "http", "\r\n".join(up_lines).encode())
 
 
+REDACTED_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"})
+
+
+def request_summary(head: bytes, req: ProxyRequest, *, headers: bool) -> dict:
+    """``record: full`` — what the gate can honestly see. Cleartext HTTP yields
+    the method and absolute URL; a CONNECT tunnel carries only its authority, so
+    ``url`` is null (the path is inside TLS, which glove never intercepts).
+    Headers, when opted in, have credentials redacted."""
+    lines = head.decode("ascii", "replace").split("\r\n")
+    out: dict = {"method": req.method, "url": None}
+    if req.proto == "http":
+        target = lines[0].split(" ")[1]
+        path = "/" + target.split("://", 1)[1].partition("/")[2]
+        out["url"] = f"{target.split('://', 1)[0].lower()}://{req.authority}{path}"
+    if headers:
+        hs = {}
+        for ln in lines[1:]:
+            if ":" in ln:
+                k, _, v = ln.partition(":")
+                hs[k.strip()] = "[redacted]" if k.strip().lower() in REDACTED_HEADERS else v.strip()
+        out["headers"] = hs
+    return out
+
+
 def response(status: int, reason: str, body: str) -> bytes:
     data = body.encode()
     return (

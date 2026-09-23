@@ -294,6 +294,25 @@ def test_ssrf_guard_blocks_before_anything_goes_upstream(target):
     assert recs[-1]["bytes"] == {"up": len(req), "down": len(out)}
 
 
+def test_truncated_request_is_malformed():
+    async def main():
+        up = StubUpstreamProxy({})
+        await up.start()
+        sink = Captured()
+        fwd = Forwarder(_proxy_spec(up.port), sink)
+        await fwd.start()
+        r, w = await asyncio.open_connection("127.0.0.1", fwd.port)
+        w.write(b"CONNECT half")
+        w.write_eof()  # a partial head, then EOF
+        out = await r.read()
+        w.close()
+        await fwd.stop()
+        return out, sink.records
+
+    out, recs = run(main())
+    assert out.startswith(b"HTTP/1.1 400") and recs[-1]["rule"] == "builtin:malformed-request"
+
+
 def test_malformed_request_is_blocked_and_recorded():
     out, recs, heads = _proxy_run(lambda p: _exchange(p, b"GET /not-a-proxy-request HTTP/1.1\r\n\r\n"))
     assert out.startswith(b"HTTP/1.1 400 Bad Request") and heads == []
@@ -335,7 +354,25 @@ def test_direct_route_marks_flows_direct():
     assert recs[-1]["route"]["kind"] == "direct"
 
 
-def test_slowloris_head_times_out_as_malformed():
+def test_empty_connection_is_eof_not_a_block():
+    async def main():
+        up = StubUpstreamProxy({})
+        await up.start()
+        sink = Captured()
+        fwd = Forwarder(_proxy_spec(up.port), sink)
+        await fwd.start()
+        _, w = await asyncio.open_connection("127.0.0.1", fwd.port)
+        w.close()  # connect, send nothing, leave
+        await asyncio.sleep(0.1)
+        await fwd.stop()
+        return sink.records
+
+    recs = run(main())
+    assert recs[-1]["close_reason"] == "eof" and recs[-1]["verdict"] == "allow" and recs[-1]["rule"] is None
+    assert recs[-1]["dest"]["host"] is None and recs[-1]["scope"] == "local"
+
+
+def test_slowloris_head_times_out():
     async def main():
         up = StubUpstreamProxy({})
         await up.start()
@@ -350,8 +387,8 @@ def test_slowloris_head_times_out_as_malformed():
         return out, sink.records, up.heads
 
     out, recs, heads = run(main())
-    assert out.startswith(b"HTTP/1.1 400") and heads == []
-    assert recs[-1]["rule"] == "builtin:malformed-request"
+    assert out == b"" and heads == []  # closed without an answer; nothing reached the upstream
+    assert recs[-1]["close_reason"] == "timeout" and recs[-1]["verdict"] == "allow"
 
 
 # --- tcp mode SNI peek ---------------------------------------------------------

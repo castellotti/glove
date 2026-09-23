@@ -11,6 +11,28 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability, milestone M5: the whole chain, record: full,
+  retention.**
+  - `harness: false` services: a listener joined only to its `join_network`,
+    never the harness's network, and never offered to the harness. Connections
+    are labelled `observe.client` (`searxng | playwright | unknown`).
+    glove-pi-search's branch adds a SearXNG fan-out listener and re-points
+    SearXNG at it, so one `web_search` shows every engine contacted.
+  - `observe.record: full`: `request: {method, url}` for cleartext HTTP
+    (`url: null` for CONNECT). `record_headers` adds headers with credentials
+    redacted. A loud launch warning.
+  - `observe.retain`: time-based rotation (every retain/4) and expiry; the
+    current exit record is carried forward so retention never drops present
+    state. `glove down --wipe` also deletes the flow and exit record.
+  - Empty and idle proxy connections are recorded as `eof`/`timeout` with
+    `verdict: allow`, not as malformed-request blocks.
+  - **Verified on live glove-pi-search** (vpn). One agent `web_search` produced
+    flows to nine distinct engine hosts, all `searxng` / `search-engine-fanout`
+    / `tunnelled` with in-tunnel IPs. SearXNG's only TCP peers were the gate and
+    valkey. Search results and latency through the gate matched direct-to-gluetun,
+    warm and cold. `record: full` captured a cleartext request with `Cookie`
+    redacted. Retention rotated and expired files and kept the current exit.
+
 - **Network observability, milestone M4: in-tunnel resolution and exit
   identity.**
   - `observe.resolver: dns://<h>:<p> | tor-socks://<h>:<p>`. Proxy-mode gates

@@ -126,7 +126,7 @@ def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str])
 def _validate_plugin_services(cfg: Config, plugins) -> None:
     """Fail early when an enabled plugin's required forwarder service is absent —
     the capability reaches the network only through that sidecar."""
-    declared = {s.name for s in cfg.services}
+    declared = {s.name for s in cfg.services if s.harness}
     for plugin in plugins:
         missing = [s for s in plugin.requires_services if s not in declared]
         if missing:

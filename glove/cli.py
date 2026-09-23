@@ -358,6 +358,14 @@ def run(
             from .observe import session_facts, write_session_facts
 
             write_session_facts(Path(plan.net_host_dir), session_facts(plan))
+            if plan.observe.record == "full":
+                err.print(
+                    "[bold red]⚠ observe.record: full[/bold red] — this session writes a browsing log to "
+                    f"{plan.net_host_dir}: the method and URL of every cleartext HTTP request"
+                    + (" and request headers (credentials redacted)" if plan.observe.record_headers else "")
+                    + ". HTTPS paths stay invisible (no TLS interception). This trades the session's "
+                    "privacy for visibility; `glove net status` and Layman badge it."
+                )
         # Register the forced one-off now the effective harness is known: it can
         # arrive from --config, so cfg.harness — not the CLI arg — is authoritative.
         # After a successful render so an aborted run leaves no phantom row; a
@@ -633,7 +641,9 @@ def down(
         None, "--name", help="tear down only this session (default: all sessions of the env)"
     ),
     provider: str | None = typer.Option(None),
-    wipe: bool = typer.Option(False, "--wipe", help="also remove the config volume"),
+    wipe: bool = typer.Option(
+        False, "--wipe", help="also remove the config volume and the network-observability record"
+    ),
 ) -> None:
     """Tear down an env's sessions (compose projects) and their host services.
 
@@ -685,6 +695,12 @@ def down(
             except Exception as e:
                 err.print(f"[yellow]warn:[/yellow] host-service teardown skipped for {sname}: {e}")
         teardown(token, provider=prov, wipe=wipe)
+        if wipe:
+            from .observe import net_dir, wipe_flow_record
+
+            removed = wipe_flow_record(net_dir(sdir))
+            if removed:
+                console.print(f"[dim]removed {removed} network-observability file(s) from {net_dir(sdir)}[/dim]")
 
 
 @app.command()

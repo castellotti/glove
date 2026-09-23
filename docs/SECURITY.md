@@ -59,6 +59,18 @@ never what the agent can *reach*:
   control server (`gluetun:8000`, and `127.0.0.1:8000` inside its namespace),
   which can reconfigure the VPN. Only gluetun's control-server auth stood in the
   way. Under the gate, those requests are refused before they reach gluetun.
+- **Listeners for the egress stack, not the agent (M5).** A `harness: false`
+  service (glove-pi-search's SearXNG fan-out listener) is rendered only on its
+  egress network. The sandbox has no route to it, it is never offered to the
+  harness, and a test asserts both. It chains to the same upstream SearXNG already
+  used, so SearXNG's reach is unchanged, and the SSRF guard now also covers
+  SearXNG's requests.
+- **`record: full` is a deliberate privacy trade.** It writes the method and
+  URL of cleartext HTTP requests (and, opted in, headers with credentials
+  redacted) to disk. HTTPS paths are never visible, because there is no TLS
+  interception. glove warns at launch, and the mode is carried in `session.json`,
+  `status.json` and `glove net status`. `retain` and `glove down --wipe` bound
+  how long any of it stays.
 - **No new API.** Forwarders listen only on their forward port. The collector
   has `network_mode: none`, so it has no interface at all. Records travel over
   a Unix datagram socket on a tmpfs volume that only the gate containers mount.

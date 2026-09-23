@@ -54,7 +54,7 @@ def build_environment_context(
     if mount_plan is None:
         mount_plan = _mount_plan_for(cfg)
 
-    service_names = {s.name for s in cfg.services}
+    service_names = {s.name for s in cfg.services if s.harness}
     browser_provider = provider_name(cfg)
     has_browser = browser_provider is not None or "browser" in service_names
 
@@ -126,15 +126,16 @@ then wait for the operator to run it and paste back the output."""
 def container_llm_base(cfg: Config, session: str) -> str | None:
     """`http://glove-<session>-<llm_service>:<port>/v1`, or None if absent."""
     for svc in cfg.services:
-        if svc.name == cfg.llm_service:
+        if svc.name == cfg.llm_service and svc.harness:
             return f"http://glove-{session}-{svc.name}:{svc.port}/v1"
     return None
 
 
 def service_base(cfg: Config, session: str, name: str) -> str | None:
-    """`http://glove-<session>-<name>:<port>` for a declared service, else None."""
+    """`http://glove-<session>-<name>:<port>` for a declared harness-facing
+    service, else None (a `harness: false` listener is never offered)."""
     for svc in cfg.services:
-        if svc.name == name:
+        if svc.name == name and svc.harness:
             return f"http://glove-{session}-{svc.name}:{svc.port}"
     return None
 

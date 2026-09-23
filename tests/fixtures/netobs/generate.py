@@ -36,9 +36,12 @@ from glove.netgate.policy import PolicyWatcher  # noqa: E402
 OUT = Path(__file__).parent
 ENV = SESSION = "pi-search"
 HOSTS = ["en.wikipedia.org", "arxiv.org", "www.nature.com", "duckduckgo.com"]
+ENGINES = ["html.duckduckgo.com", "search.brave.com", "www.mojeek.com", "api.qwant.com"]  # SearXNG fan-out
 # What the in-tunnel resolver answers (documentation / plausible public addresses).
 IN_TUNNEL = {"en.wikipedia.org": "185.15.59.224", "arxiv.org": "151.101.3.42",
-             "www.nature.com": "151.101.0.95", "example.org": "93.184.215.14"}
+             "www.nature.com": "151.101.0.95", "example.org": "93.184.215.14",
+             "html.duckduckgo.com": "40.114.177.156", "search.brave.com": "143.204.55.93",
+             "www.mojeek.com": "5.102.173.68", "api.qwant.com": "51.91.211.16"}
 EXIT_ECHO = b'{"ip":"195.177.93.17","country":"Switzerland","city":null,"latitude":47.3643,"longitude":8.5437}'
 USER_RULE = "r_01M3FIXTUREADSBLOCK00000000"  # a stable id, as Layman or the CLI would write
 RULES = {"v": 1, "env": ENV, "session": SESSION, "updated_at": "2026-09-23T04:20:00.000Z",
@@ -144,7 +147,7 @@ async def main(rules_path: Path) -> list[dict]:
     llm_origin, llm_port = await origin(96 * 1024)
     web_origin, web_port = await origin(160 * 1024)
     echo, echo_port = await echo_server()
-    table = {**dict.fromkeys([*HOSTS, "example.org"], web_port), "am.i.mullvad.net": echo_port}
+    table = {**dict.fromkeys([*HOSTS, *ENGINES, "example.org"], web_port), "am.i.mullvad.net": echo_port}
     proxy, proxy_port = await upstream_proxy(table, {"duckduckgo.com"})
     sink = Capture()
     base = {"env": ENV, "session": SESSION, "listen_host": "127.0.0.1", "listen_port": 0}
@@ -156,11 +159,16 @@ async def main(rules_path: Path) -> list[dict]:
     from glove.netgate.resolver import InTunnel
 
     fetch.resolver = InTunnel(StubResolver())
+    fanout = Forwarder(ForwardSpec(service="fanout", tool="search-engine-fanout", mode="http-proxy",
+                                   route_kind="vpn", client="searxng", upstream_host="127.0.0.1",
+                                   upstream_port=proxy_port, **base), sink, update_interval=0.5)
+    fanout.resolver = InTunnel(StubResolver())
     exit_poller = ExitPoller(url="https://am.i.mullvad.net/json", kind="vpn", tls=False,
                              dial=lambda: asyncio.open_connection("127.0.0.1", proxy_port),
                              emit=sink.send, env=ENV, session=SESSION)
     await llm.start()
     await fetch.start()
+    await fanout.start()
     await exit_poller.poll_once()
     jobs = [talk(llm.port, hello("llm.operator.lan"))]
     for h in HOSTS:
@@ -171,6 +179,8 @@ async def main(rules_path: Path) -> list[dict]:
         talk(fetch.port, b"CONNECT gluetun:8000 HTTP/1.1\r\n\r\n"),
         talk(fetch.port, b"GET /not-a-proxy-request HTTP/1.1\r\n\r\n"),
         talk(fetch.port, b"CONNECT ads.tracker.example:443 HTTP/1.1\r\n\r\n"),
+        # one web_search: the search service (tcp, local) plus SearXNG's own fan-out
+        *[talk(fanout.port, f"CONNECT {e}:443 HTTP/1.1\r\n\r\n".encode() + hello(e)) for e in ENGINES],
     ]
     await asyncio.gather(*jobs)
     # a long download still running when the gate is stopped
@@ -179,6 +189,7 @@ async def main(rules_path: Path) -> list[dict]:
     await asyncio.sleep(1.2)
     await llm.stop()
     await fetch.stop()
+    await fanout.stop()
     long_job.cancel()
     for s in (llm_origin, web_origin, proxy, echo):
         s.close()
@@ -204,7 +215,8 @@ if __name__ == "__main__":
     for r in recs:
         # In a deployment these arrive on the internal network's ingress alias
         # (labelled `harness`, as the live runs show); in-process there is none.
-        r["client"] = "harness"
+        if r["service"] != "fanout":
+            r["client"] = "harness"
         if r["service"] == "llm":  # the loopback origin's port stands in for the LLM port
             r["dest"]["port"] = 8080
     recs.sort(key=lambda r: (r["t"], r["phase"] != "open"))
@@ -225,6 +237,10 @@ if __name__ == "__main__":
              "route": {"kind": "tcp", "upstream": "tcp:searxng:8080"}},
             {"service": "proxy", "listen": "glove-pi-search-proxy:8888", "observed": True, "mode": "http-proxy",
              "tool": "web_fetch", "scope": None, "upstream": "chain:http://egress-proxy:8888",
+             "route": {"kind": "vpn", "upstream": "http://egress-proxy:8888"}},
+            {"service": "fanout", "listen": "glove-pi-search-fanout:8899", "observed": True, "harness": False,
+             "mode": "http-proxy", "tool": "search-engine-fanout", "scope": None, "client": "searxng",
+             "upstream": "chain:http://egress-proxy:8888",
              "route": {"kind": "vpn", "upstream": "http://egress-proxy:8888"}},
             {"service": "browser", "listen": "glove-pi-search-browser:3001", "observed": False},
         ],

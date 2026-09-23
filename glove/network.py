@@ -24,6 +24,8 @@ class Sidecar:
     # Set when the service is observed: the sidecar runs the netgate `forward`
     # role instead of socat (same name, networks and port — a drop-in).
     gate: GateSpec | None = None
+    # False: joined only to join_network (never the harness's internal net)
+    harness: bool = True
 
     @property
     def command(self) -> str:
@@ -55,6 +57,7 @@ def _sidecar_for(svc: Service, gate: GateSpec | None = None) -> Sidecar:
         join_network=svc.join_network,
         host_gateway=svc.host_gateway,
         gate=gate,
+        harness=svc.harness,
     )
 
 

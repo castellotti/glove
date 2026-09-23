@@ -133,9 +133,11 @@ services:
     depends_on:
       - glove-{{ session }}-netgate
     networks:
+{% if s.harness %}
       glove-{{ session }}-net:
         aliases:
           - {{ gate_aliases[s.role] }}
+{% endif %}
 {% if s.join_network %}
       {{ s.join_network }}: {}
 {% endif %}
@@ -155,7 +157,9 @@ services:
     command: {{ s.command | tojson }}
     restart: unless-stopped
     networks:
+{% if s.harness %}
       - glove-{{ session }}-net
+{% endif %}
 {% if s.join_network %}
       - {{ s.join_network }}
 {% endif %}

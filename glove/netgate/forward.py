@@ -64,6 +64,9 @@ class ForwardSpec:
     mode: str = "tcp"  # "tcp" | "http-proxy"
     route_kind: str = "tcp"  # "tcp" | "vpn" | "tor" | "direct"
     sni: bool = True
+    client: str = "unknown"  # label for peers that did not arrive on the harness ingress
+    record: str = "metadata"  # "metadata" | "full" (adds method/URL for cleartext HTTP)
+    record_headers: bool = False  # record: full only
     resolver_url: str | None = None  # http-proxy mode: dns://h:p | tor-socks://h:p (in-tunnel)
     exit_url: str | None = None  # http-proxy mode: poll the apparent origin through the chain
 
@@ -144,7 +147,7 @@ class _Flow:
 
     __slots__ = (
         "client", "close_reason", "down", "host", "id", "ip", "last_emitted", "opened",
-        "port", "proto", "resolution", "rule", "scope", "t_open", "up", "verdict",
+        "port", "proto", "request", "resolution", "rule", "scope", "t_open", "up", "verdict",
     )
 
     def __init__(self, client: str, spec: ForwardSpec):
@@ -158,6 +161,7 @@ class _Flow:
         self.opened = False
         self.verdict = "allow"
         self.rule: str | None = None
+        self.request: dict | None = None  # record: full only
         if spec.mode == "tcp":
             self.proto = "tcp"
             self.host: str | None = spec.upstream_host
@@ -292,6 +296,7 @@ class Forwarder:
             verdict=flow.verdict,
             rule=flow.rule,
             close_reason=flow.close_reason if phase == "close" else None,
+            request=flow.request,
         )
 
     def _emit(self, flow: _Flow, phase: str) -> None:
@@ -381,7 +386,7 @@ class Forwarder:
         """
         sockname = writer.get_extra_info("sockname")
         local = sockname[0] if sockname else None
-        return "harness" if local in self._ingress else "unknown"
+        return "harness" if local in self._ingress else self.spec.client
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         flow = _Flow(self._client_label(writer), self.spec)
@@ -490,10 +495,20 @@ class Forwarder:
     async def _handle_proxy(self, flow, reader, writer):
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), self.head_timeout)
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError) as e:
-            partial = getattr(e, "partial", b"") or b""
-            flow.up += len(partial)
+        except asyncio.IncompleteReadError as e:
+            if not e.partial:  # connected and closed without a request (a probe, a pool warm-up)
+                flow.close_reason = "eof"
+                return None
+            flow.up += len(e.partial)
             await self._refuse(flow, writer, 400, "Bad Request", guard.MALFORMED_RULE, "incomplete request head")
+            return None
+        except asyncio.LimitOverrunError:
+            await self._refuse(flow, writer, 400, "Bad Request", guard.MALFORMED_RULE, "request head too large")
+            return None
+        except TimeoutError:
+            # Idle or trickling past the head timeout: nothing was refused, the
+            # connection simply produced no request in time.
+            flow.close_reason = "timeout"
             return None
         flow.up += len(head)
         try:
@@ -504,6 +519,8 @@ class Forwarder:
 
         flow.proto = req.proto
         flow.host, flow.port = req.host, req.port
+        if self.spec.record == "full":
+            flow.request = httpproxy.request_summary(head, req, headers=self.spec.record_headers)
         flow.ip, flow.resolution = self.spec.display_ip(req.host)
         why, is_local = guard.check(req.host)
         flow.scope = self.spec.flow_scope(is_local)

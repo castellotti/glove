@@ -20,7 +20,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,10 +38,12 @@ NETGATE_SRC = Path(__file__).parent / "netgate"
 NETGATE_DOCKERFILE = Path(__file__).parent / "templates" / "netgate.Dockerfile"
 
 OBSERVE_KEYS = frozenset({
-    "enabled", "record", "resolve", "rotate_mb", "keep", "resolver", "exit_identity", "exit_identity_url",
+    "enabled", "record", "record_headers", "resolve", "rotate_mb", "keep", "retain",
+    "resolver", "exit_identity", "exit_identity_url",
 })
+CLIENTS = ("searxng", "playwright", "unknown")  # labels for peers off the internal network
 DEFAULT_EXIT_URL = "https://am.i.mullvad.net/json"
-SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route"})
+SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route", "client"})
 SCOPES = ("local", "tunnelled", "direct")
 MODES = ("tcp", "http-proxy")
 # What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
@@ -61,6 +63,8 @@ class ObserveSettings:
     resolve: str = "in-tunnel"
     rotate_bytes: int = 64 * 1024 * 1024
     keep: int = 8
+    record_headers: bool = False  # record: full only — request headers, secrets redacted
+    retain_s: int | None = None  # expire flow/exit files older than this
     resolver: str | None = None  # dns://h:p | tor-socks://h:p — queried in-tunnel by proxy gates
     exit_identity: str = "none"  # "via-proxy" | "none"
     exit_url: str = DEFAULT_EXIT_URL
@@ -80,6 +84,7 @@ class GateSpec:
     tool: str | None = None
     mode: str = "tcp"
     route_kind: str = "tcp"
+    client: str = "unknown"  # label for connections that did not come from the harness
 
     @property
     def upstream(self) -> str:
@@ -112,10 +117,14 @@ def parse_observe(cfg: Config) -> ObserveSettings | None:
     if not raw.get("enabled", False):
         return None
     record = raw.get("record", "metadata")
-    if record == "full":
-        raise ConfigError("observe.record: full is not implemented yet (milestone M5); use metadata")
-    if record != "metadata":
+    if record not in ("metadata", "full"):
         raise ConfigError(f"observe.record must be metadata|full, got {record!r}")
+    record_headers = raw.get("record_headers", False)
+    if not isinstance(record_headers, bool):
+        raise ConfigError("observe.record_headers must be true|false")
+    if record_headers and record != "full":
+        raise ConfigError("observe.record_headers needs observe.record: full")
+    retain_s = _duration(raw["retain"]) if raw.get("retain") not in (None, "none") else None
     resolve = raw.get("resolve", "in-tunnel")
     if resolve not in ("in-tunnel", "none"):
         # There is deliberately no `host`: destinations are never resolved on
@@ -152,7 +161,21 @@ def parse_observe(cfg: Config) -> ObserveSettings | None:
     return ObserveSettings(
         record=record, resolve=resolve, rotate_bytes=int(rotate_mb * 1024 * 1024), keep=keep,
         resolver=resolver, exit_identity=exit_identity, exit_url=exit_url,
+        record_headers=record_headers, retain_s=retain_s,
     )
+
+
+def _duration(v) -> int:
+    """``90s``, ``30m``, ``12h``, ``7d`` (or plain seconds) → seconds (>= 60)."""
+    import re
+
+    m = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", str(v))
+    if not m:
+        raise ConfigError(f"observe.retain must be a duration like 30m, 12h or 7d, got {v!r}")
+    secs = int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    if secs < 60:
+        raise ConfigError("observe.retain must be at least 60s")
+    return secs
 
 
 def classify_scope(host: str, host_gateway: bool) -> str:
@@ -212,9 +235,15 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
     tool = raw.get("tool")
     if tool is None:
         tool = "llm" if svc.name == cfg.llm_service else DEFAULT_TOOLS.get(svc.name)
+    client = raw.get("client", "unknown")
+    if client not in CLIENTS:
+        raise ConfigError(
+            f"service {svc.name!r}: observe.client labels peers that are NOT the harness — one of "
+            f"{CLIENTS}, got {client!r}"
+        )
 
     if mode == "http-proxy":
-        return _proxy_gate(svc, raw, tool)
+        return replace(_proxy_gate(svc, raw, tool), client=client)
 
     host, port = _split_target(svc.to, svc.name)
     upstream = raw.get("upstream")
@@ -229,7 +258,8 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
     scope = raw.get("scope") or classify_scope(host, svc.host_gateway)
     if scope not in SCOPES:
         raise ConfigError(f"service {svc.name!r}: observe.scope must be one of {SCOPES}, got {scope!r}")
-    return GateSpec(service=svc.name, upstream_host=host, upstream_port=port, scope=scope, tool=tool)
+    return GateSpec(service=svc.name, upstream_host=host, upstream_port=port, scope=scope, tool=tool,
+                    client=client)
 
 
 def _proxy_gate(svc: Service, raw: dict, tool: str | None) -> GateSpec:
@@ -291,10 +321,15 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
         "--env", plan.env_id,
         "--session", plan.session,
         "--resolve", plan.observe.resolve,
-        "--ingress-alias", ingress_alias(plan.session, sidecar.role),
         "--events", EVENTS_SOCKET,
         "--rules", RULES_FILE,
+        "--client", gate.client,
+        "--record", plan.observe.record,
     ]
+    if plan.observe.record_headers:
+        cmd.append("--record-headers")
+    if sidecar.harness:
+        cmd += ["--ingress-alias", ingress_alias(plan.session, sidecar.role)]
     if gate.mode == "http-proxy":
         if plan.observe.resolve == "in-tunnel" and plan.observe.resolver:
             cmd += ["--resolver", plan.observe.resolver]
@@ -318,7 +353,7 @@ def collect_command() -> list[str]:
 
 def render_context(plan: SessionPlan) -> dict:
     """Template variables for the gate services (empty-ish when not observing)."""
-    gated = [s for s in plan.network.sidecars if s.gate is not None]
+    gated = [s for s in plan.network.sidecars if s.gate is not None]  # (aliases only for harness-facing)
     return {
         "netgate": bool(gated) and plan.observe is not None,
         "netgate_image": plan.netgate_image,
@@ -399,6 +434,7 @@ def session_facts(plan: SessionPlan) -> dict:
             "service": s.role,
             "listen": f"glove-{plan.session}-{s.role}:{s.listen_port}",
             "observed": s.gate is not None,
+            "harness": s.harness,  # false: a listener for egress-stack components only
         }
         if s.gate is not None:
             entry.update(
@@ -407,6 +443,7 @@ def session_facts(plan: SessionPlan) -> dict:
                 scope=s.gate.scope,  # null in http-proxy mode: classified per flow
                 upstream=s.gate.upstream,
                 route={"kind": s.gate.route_kind, "upstream": s.gate.route_upstream},
+                client=s.gate.client if not s.harness else "harness",
             )
         services.append(entry)
     return {
@@ -423,7 +460,9 @@ def session_facts(plan: SessionPlan) -> dict:
         "exit_identity": (f"via-proxy:{plan.observe.exit_url}"
                           if plan.observe.exit_identity == "via-proxy" else "none"),
         "upstream_kind": _upstream_kind(plan),
-        "rotate": {"max_bytes": plan.observe.rotate_bytes, "keep": plan.observe.keep},
+        "rotate": {"max_bytes": plan.observe.rotate_bytes, "keep": plan.observe.keep,
+                   "retain_s": plan.observe.retain_s},
+        "record_headers": plan.observe.record_headers,
         "rendered_at": iso_utc(),
         "services": services,
     }
@@ -438,6 +477,16 @@ def _upstream_kind(plan: SessionPlan) -> str:
         if k in kinds:
             return k
     return "tcp"
+
+
+def wipe_flow_record(path: Path) -> int:
+    """Delete the flow/exit record and status (not session.json, not rules)."""
+    n = 0
+    for f in [*Path(path).glob("flows*.ndjson"), *Path(path).glob("exit*.ndjson"), Path(path) / "status.json"]:
+        if f.is_file():
+            f.unlink()
+            n += 1
+    return n
 
 
 def write_session_facts(path: Path, facts: dict) -> None:

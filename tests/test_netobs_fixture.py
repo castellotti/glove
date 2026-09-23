@@ -70,7 +70,7 @@ def test_status_and_session_samples():
         if isinstance(sub, dict):
             assert set(sub) <= set(status[key])
     session = json.loads((FIXTURE / "session.json").read_text())
-    assert {s["service"] for s in session["services"]} == {"llm", "search", "proxy", "browser"}
+    assert {s["service"] for s in session["services"]} == {"llm", "search", "proxy", "fanout", "browser"}
     assert any(not s["observed"] for s in session["services"])
 
 
@@ -92,3 +92,10 @@ def test_exit_sample_matches_the_handoff_shape_and_resolutions_are_mixed():
     assert exits[0]["kind"] == "vpn" and exits[0]["source"].startswith("via-proxy:")
     res = {r["dest"]["resolution"] for r in _flows()}
     assert {"in-tunnel", "literal", "unavailable", "disabled"} <= res  # every state a UI must bucket
+
+
+def test_fixture_has_searxng_fanout_flows():
+    fan = [r for r in _flows() if r["service"] == "fanout"]
+    assert fan and {r["client"] for r in fan} == {"searxng"}
+    assert {r["tool"] for r in fan} == {"search-engine-fanout"}
+    assert len({r["dest"]["host"] for r in fan}) >= 4 and all(r["dest"]["resolution"] == "in-tunnel" for r in fan)
