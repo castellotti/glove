@@ -31,6 +31,8 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--ingress-alias", default=None)
     f.add_argument("--events", default=EVENTS_SOCKET)
     f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
+    f.add_argument("--resolver", default=None, help="in-tunnel resolver: dns://h:p | tor-socks://h:p")
+    f.add_argument("--exit-url", default=None, help="https IP-echo URL polled through the chain")
 
     c = sub.add_parser("collect", help="single writer of net/ (network_mode: none)")
     c.add_argument("--net-dir", default=NET_DIR)
@@ -65,6 +67,8 @@ async def _run_forward(args) -> None:
         mode=args.mode,
         route_kind=args.route,
         sni=not args.no_sni,
+        resolver_url=args.resolver,
+        exit_url=args.exit_url,
     )
     sink = EventSink(args.events)
     policy = None

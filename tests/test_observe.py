@@ -80,7 +80,11 @@ def test_observe_true_shorthand_and_defaults():
     [
         ({"enabled": True, "record": "full"}, "M5"),
         ({"enabled": True, "resolve": "host"}, "in-tunnel|none"),
-        ({"enabled": True, "exit_identity": "gluetun://x"}, "unknown observe keys"),
+        ({"enabled": True, "resolver_namespace": "gluetun"}, "unknown observe keys"),
+        ({"enabled": True, "exit_identity": "gluetun://x"}, "control-server credential"),
+        ({"enabled": True, "resolver": "https://dns.example/dns-query"}, "observe.resolver"),
+        ({"enabled": True, "resolver": "dns://gluetun:53", "resolve": "none"}, "pick one"),
+        ({"enabled": True, "exit_identity_url": "http://x/"}, "https"),
         ({"enabled": True, "rotate_mb": 0}, "rotate_mb"),
         ("yes", "mapping"),
     ],
@@ -237,6 +241,28 @@ def test_mixed_observed_and_plain_services(tmp_path):
     assert doc["services"]["glove-ps-llm"]["image"] == netgate_image()
 
 
+def test_resolver_and_exit_identity_render_only_on_proxy_gates(tmp_path):
+    services = pi_search_services()
+    services[2] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
+                          observe={"mode": "http-proxy", "route": "vpn"})
+    obs = {"enabled": True, "resolver": "dns://gluetun:53", "exit_identity": "via-proxy"}
+    plan, doc, _ = render(tmp_path, services=services, observe=obs)
+    proxy = doc["services"]["glove-ps-proxy"]["command"]
+    assert proxy[proxy.index("--resolver") + 1] == "dns://gluetun:53"
+    assert proxy[proxy.index("--exit-url") + 1] == "https://am.i.mullvad.net/json"
+    for tcp in ("glove-ps-llm", "glove-ps-search"):  # tcp gates never resolve, never poll
+        assert "--resolver" not in doc["services"][tcp]["command"]
+        assert "--exit-url" not in doc["services"][tcp]["command"]
+    facts = session_facts(plan)
+    assert facts["resolver"] == "dns://gluetun:53"
+    assert facts["exit_identity"] == "via-proxy:https://am.i.mullvad.net/json"
+
+
+def test_exit_identity_needs_a_proxy_service(tmp_path):
+    with pytest.raises(ConfigError, match="http-proxy mode"):
+        render(tmp_path, observe={"enabled": True, "exit_identity": "via-proxy"})
+
+
 def test_render_http_proxy_gate(tmp_path):
     services = pi_search_services()
     services[2] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
@@ -300,7 +326,8 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
             .replace("__LLM_HOST__", "host.docker.internal").replace("__LLM_PORT__", "8080")
             .replace("__LLM_MODEL__", "m").replace("__GLOVE_HOME__", str(tmp_path / "gh"))
             # tokens the launcher fills on the pi-search network-observability branch
-            .replace("__NET_OBSERVE__", "true").replace("__EGRESS_ROUTE__", "vpn"))
+            .replace("__NET_OBSERVE__", "true").replace("__EGRESS_ROUTE__", "vpn")
+            .replace("__EGRESS_RESOLVER__", "dns://gluetun:53").replace("__NET_EXIT_IDENTITY__", "via-proxy"))
     data = yaml.safe_load(text)
     data.setdefault("observe", {"enabled": True})
     data["name"] = "pi-search"
@@ -323,6 +350,9 @@ def test_real_pi_search_config_renders_with_observe(tmp_path):
     if "__EGRESS_ROUTE__" in PI_SEARCH_TEMPLATE.read_text():  # the branch template: proxy mode
         assert proxy_cmd[proxy_cmd.index("--mode") + 1] == "http-proxy"
         assert proxy_cmd[proxy_cmd.index("--route") + 1] == "vpn"
+    if "__EGRESS_RESOLVER__" in PI_SEARCH_TEMPLATE.read_text():  # M4 branch template
+        assert proxy_cmd[proxy_cmd.index("--resolver") + 1] == "dns://gluetun:53"
+        assert "--exit-url" in proxy_cmd
     # GLOVE_FETCH_PROXY (hand-written in the config) still names a live listener
     h = doc["services"]["glove-pi-search-harness"]["environment"]
     assert h["GLOVE_FETCH_PROXY"] == "http://glove-pi-search-proxy:8888"

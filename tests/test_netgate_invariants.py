@@ -212,6 +212,11 @@ RESOLVERS = {"getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr"
 ALLOWED = {
     ("forward.py", "_dial_upstream"): {"open_connection"},  # the operator-configured target
     ("forward.py", "_ingress_addresses"): {"getaddrinfo"},  # glove's own ingress alias
+    # M4: the configured in-tunnel resolver's OWN name/address (e.g. gluetun:53,
+    # tor:9150) — the destination only ever travels inside the DNS / SOCKS query.
+    ("resolver.py", "_resolver_address"): {"getaddrinfo"},
+    ("resolver.py", "_resolver_tcp"): {"open_connection"},
+    ("resolver.py", "_open_socks"): {"open_connection"},
 }
 
 
@@ -323,12 +328,17 @@ def test_gate_never_resolves_for_an_ip_literal_upstream(no_dns, tmp_path):
 
 
 def test_hostname_target_is_recorded_unresolved():
+    # tcp mode forwards to a configured endpoint: never resolved, by design
     spec = ForwardSpec(service="s", listen_port=1, upstream_host="searxng", upstream_port=8080,
                        env="e", session="e")
-    assert spec.dest_ip_and_resolution() == (None, "unavailable")
-    spec_none = ForwardSpec(service="s", listen_port=1, upstream_host="searxng", upstream_port=8080,
-                            env="e", session="e", resolve="none")
-    assert spec_none.dest_ip_and_resolution() == (None, "disabled")
+    assert spec.dest_ip_and_resolution() == (None, "disabled")
+    # proxy mode: unavailable until the in-tunnel resolver answers; disabled under resolve: none
+    proxy = ForwardSpec(service="p", listen_port=1, upstream_host="egress-proxy", upstream_port=8888,
+                        env="e", session="e", mode="http-proxy", route_kind="vpn")
+    assert proxy.display_ip("en.wikipedia.org") == (None, "unavailable")
+    proxy_none = ForwardSpec(service="p", listen_port=1, upstream_host="egress-proxy", upstream_port=8888,
+                             env="e", session="e", mode="http-proxy", route_kind="vpn", resolve="none")
+    assert proxy_none.display_ip("en.wikipedia.org") == (None, "disabled")
 
 
 # --- 5. telemetry cannot block traffic (structural half) ---------------------

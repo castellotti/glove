@@ -61,8 +61,10 @@ class Collector:
             max_bytes=int(rotate.get("max_bytes", 64 * 1024 * 1024)),
             keep=int(rotate.get("keep", 8)),
         )
+        self.exits = NdjsonWriter(self.net_dir, "exit", max_bytes=1024 * 1024, keep=2)
         self.received = 0
         self.invalid = 0
+        self._resolver: dict[str, bool] = {}  # service -> last reported resolver health
         # service -> last known upstream outcome (True ok / False failed)
         self._upstream: dict[str, bool] = {}
         self._sock: socket.socket | None = None
@@ -84,7 +86,16 @@ class Collector:
         except ValueError:
             self.invalid += 1
             return
-        if not isinstance(record, dict) or record.get("type") != "flow":
+        kind = record.get("type") if isinstance(record, dict) else None
+        if kind == "exit":
+            self.exits.write(record)
+            return
+        if kind == "health":
+            res = record.get("resolver")
+            if isinstance(record.get("service"), str) and isinstance(res, dict):
+                self._resolver[record["service"]] = bool(res.get("healthy"))
+            return
+        if kind != "flow":
             self.invalid += 1
             return
         self._track_upstream(record)
@@ -116,8 +127,9 @@ class Collector:
             "state": state,
             "record": self.facts.get("record", "metadata"),
             "upstream": {"kind": self.facts.get("upstream_kind", "tcp"), "healthy": healthy},
-            # No in-tunnel resolver exists until M4: `healthy` is null (not in use).
-            "resolver": {"mode": self.facts.get("resolve", "in-tunnel"), "healthy": None},
+            # null until a gate has used its in-tunnel resolver (or none is configured)
+            "resolver": {"mode": self.facts.get("resolve", "in-tunnel"),
+                         "healthy": all(self._resolver.values()) if self._resolver else None},
             # Load result of rules.json: `ok: false` + `error` is how a rejected
             # write comes back (the gate keeps its last known-good set).
             "rules": self.policy.status(),
@@ -181,4 +193,5 @@ class Collector:
             with contextlib.suppress(OSError):
                 os.unlink(self.socket_path)
             self.writer.close()
+            self.exits.close()
             self.write_status("stopped")

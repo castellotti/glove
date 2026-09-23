@@ -161,7 +161,7 @@ read -r up down reason client res <<<"$(last_close llm)"
 echo "    llm flow: up=$up down=$down close=$reason client=$client resolution=$res"
 check "flows.ndjson records the LLM connection (client=harness, eof, bytes>0)" \
   "[ '$client' = harness ] && [ '$reason' = eof ] && [ $up -gt 0 ] && [ $down -gt 0 ]"
-check "no host lookup for a display IP (resolution=unavailable, M1 has no resolver)" "[ '$res' = unavailable ]"
+check "no host lookup for a display IP (tcp mode: resolution=disabled, by design)" "[ '$res' = disabled ]"
 
 echo "== byte counts: raw client vs flow record =="
 r="$(in_harness glove-wd "$C" glove-wd-harness node /work/client.js glove-wd-llm 8080 /blob/5000000)"

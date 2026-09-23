@@ -84,6 +84,13 @@ never what the agent can *reach*:
   alias. In proxy mode the destination reaches the upstream as text. This was
   measured live by sniffing the gate's netns: only the upstream's name was ever
   queried. A destination IP is either a literal or reported `unavailable`.
+- **Traffic the gate itself originates (M4, when configured).** A proxy gate
+  sends DNS queries for destination names to the configured *in-tunnel*
+  resolver (gluetun's DNS, which uses DoT through the VPN, or Tor `RESOLVE`), the same resolver the
+  upstream uses anyway. With `exit_identity: via-proxy`, one gate also fetches an
+  IP-echo URL through the tunnel every ~5 min. That service learns the exit IP
+  and nothing about the operator. Neither is agent traffic, so neither appears
+  in `flows.ndjson`.
 - **Fail open on telemetry.** A stopped, slow or unwritable collector drops
   records (counted in `status.json`, logged by the collector), never traffic.
 

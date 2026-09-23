@@ -305,6 +305,12 @@ def build_session_plan(
     plan.observe = parse_observe(cfg)
     if plan.observe is not None and any(s.gate for s in network.sidecars):
         plan.netgate_image = netgate_image()
+    if (plan.observe is not None and plan.observe.exit_identity == "via-proxy"
+            and not any(s.gate and s.gate.mode == "http-proxy" for s in network.sidecars)):
+        raise ConfigError(
+            "observe.exit_identity: via-proxy needs a service in http-proxy mode — the exit is "
+            "fetched through that service's chained upstream"
+        )
 
     # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
     # enforcer env/caps.

@@ -128,6 +128,24 @@ def _parse_ts(value: str | None) -> float | None:
         return None
 
 
+def latest_exit(net_dir: Path) -> dict | None:
+    """The most recent ``exit`` record (apparent origin), if any."""
+    last = None
+    for path in [*sorted(Path(net_dir).glob("exit-*.ndjson")), Path(net_dir) / "exit.ndjson"]:
+        try:
+            lines = path.read_bytes().split(b"\n")[:-1]
+        except OSError:
+            continue
+        for raw in lines:
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("type") == "exit":
+                last = rec
+    return last
+
+
 def summarize(net_dir: Path, *, now: float | None = None) -> dict:
     net_dir = Path(net_dir)
     now = time.time() if now is None else now
@@ -185,6 +203,7 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
             "close_reasons": dict(reasons),
         },
         "files": [p.name for p in flow_files(net_dir)],
+        "exit": latest_exit(net_dir),
     }
 
 
@@ -216,7 +235,17 @@ def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
     upstream = st.get("upstream") or {"kind": facts.get("upstream_kind"), "healthy": None}
     lines.append(f"  upstream  {upstream.get('kind')}  healthy={upstream.get('healthy')}")
     resolver = st.get("resolver") or {"mode": facts.get("resolve"), "healthy": None}
-    lines.append(f"  resolver  {resolver.get('mode')}  healthy={resolver.get('healthy')}")
+    via = f" via {facts['resolver']}" if facts.get("resolver") else ""
+    lines.append(f"  resolver  {resolver.get('mode')}{via}  healthy={resolver.get('healthy')}")
+    ex = s.get("exit")
+    if ex:
+        where = ", ".join(str(x) for x in (ex.get("city"), ex.get("country")) if x) or "location unknown"
+        lines.append(
+            f"  exit      {ex.get('kind')} {ex.get('ip') or '—'} ({where})  healthy={ex.get('healthy')}  "
+            f"[dim]source: {ex.get('source')} at {ex.get('t')}[/dim]"
+        )
+    elif facts.get("exit_identity", "none") != "none":
+        lines.append("  exit      [yellow]no exit record yet[/yellow]")
     rules = st.get("rules") or {}
     lines.append(
         f"  rules     {rules.get('active_count', 0)} active  ok={rules.get('ok', True)}"

@@ -5,7 +5,9 @@
 Every record is produced by the real gate code (glove.netgate), in-process on
 loopback — nothing is hand-written — covering each state a UI must render:
 an LLM flow over TLS (SNI-derived host, local scope), tunnelled web_fetch
-CONNECTs to several hosts, a plain-http absolute-form fetch, SSRF-guard
+CONNECTs to several hosts (with in-tunnel IPs from a stub resolver standing in
+for gluetun's DNS), an exit.ndjson record from the real exit poller, a
+plain-http absolute-form fetch, SSRF-guard
 refusals, a user-rule block (with the rules.json that caused it), a malformed
 request, an upstream that could not reach its
 destination, and a flow cut by gate shutdown. Loopback addresses are then
@@ -27,12 +29,17 @@ sys.path.insert(0, str(ROOT))
 
 from glove.netgate import GATE_VERSION  # noqa: E402
 from glove.netgate.collector import Collector  # noqa: E402
+from glove.netgate.exitid import ExitPoller  # noqa: E402
 from glove.netgate.forward import EventSink, Forwarder, ForwardSpec  # noqa: E402
 from glove.netgate.policy import PolicyWatcher  # noqa: E402
 
 OUT = Path(__file__).parent
 ENV = SESSION = "pi-search"
 HOSTS = ["en.wikipedia.org", "arxiv.org", "www.nature.com", "duckduckgo.com"]
+# What the in-tunnel resolver answers (documentation / plausible public addresses).
+IN_TUNNEL = {"en.wikipedia.org": "185.15.59.224", "arxiv.org": "151.101.3.42",
+             "www.nature.com": "151.101.0.95", "example.org": "93.184.215.14"}
+EXIT_ECHO = b'{"ip":"195.177.93.17","country":"Switzerland","city":null,"latitude":47.3643,"longitude":8.5437}'
 USER_RULE = "r_01M3FIXTUREADSBLOCK00000000"  # a stable id, as Layman or the CLI would write
 RULES = {"v": 1, "env": ENV, "session": SESSION, "updated_at": "2026-09-23T04:20:00.000Z",
          "updated_by": "layman", "default": "allow",
@@ -113,10 +120,32 @@ async def talk(port: int, data: bytes, *, hold: float = 0.0) -> None:
     w.close()
 
 
+class StubResolver:
+    """Stands in for gluetun's DNS: answers from IN_TUNNEL (no network at all)."""
+
+    source = "dns://gluetun:53"
+
+    async def lookup(self, name):
+        return IN_TUNNEL.get(name), 60
+
+
+async def echo_server():
+    async def h(r, w):
+        await r.readuntil(b"\r\n\r\n")
+        w.write(b"HTTP/1.0 200 OK\r\n\r\n" + EXIT_ECHO)
+        await w.drain()
+        w.close()
+
+    s = await asyncio.start_server(h, "127.0.0.1", 0)
+    return s, s.sockets[0].getsockname()[1]
+
+
 async def main(rules_path: Path) -> list[dict]:
     llm_origin, llm_port = await origin(96 * 1024)
     web_origin, web_port = await origin(160 * 1024)
-    proxy, proxy_port = await upstream_proxy(dict.fromkeys([*HOSTS, "example.org"], web_port), {"duckduckgo.com"})
+    echo, echo_port = await echo_server()
+    table = {**dict.fromkeys([*HOSTS, "example.org"], web_port), "am.i.mullvad.net": echo_port}
+    proxy, proxy_port = await upstream_proxy(table, {"duckduckgo.com"})
     sink = Capture()
     base = {"env": ENV, "session": SESSION, "listen_host": "127.0.0.1", "listen_port": 0}
     llm = Forwarder(ForwardSpec(service="llm", tool="llm", scope="local", upstream_host="127.0.0.1",
@@ -124,8 +153,15 @@ async def main(rules_path: Path) -> list[dict]:
     fetch = Forwarder(ForwardSpec(service="proxy", tool="web_fetch", mode="http-proxy", route_kind="vpn",
                                   upstream_host="127.0.0.1", upstream_port=proxy_port, **base),
                       sink, update_interval=0.5, policy=PolicyWatcher(rules_path, env=ENV, session=SESSION))
+    from glove.netgate.resolver import InTunnel
+
+    fetch.resolver = InTunnel(StubResolver())
+    exit_poller = ExitPoller(url="https://am.i.mullvad.net/json", kind="vpn", tls=False,
+                             dial=lambda: asyncio.open_connection("127.0.0.1", proxy_port),
+                             emit=sink.send, env=ENV, session=SESSION)
     await llm.start()
     await fetch.start()
+    await exit_poller.poll_once()
     jobs = [talk(llm.port, hello("llm.operator.lan"))]
     for h in HOSTS:
         jobs.append(talk(fetch.port, f"CONNECT {h}:443 HTTP/1.1\r\nHost: {h}:443\r\n\r\n".encode() + hello(h)))
@@ -144,7 +180,7 @@ async def main(rules_path: Path) -> list[dict]:
     await llm.stop()
     await fetch.stop()
     long_job.cancel()
-    for s in (llm_origin, web_origin, proxy):
+    for s in (llm_origin, web_origin, proxy, echo):
         s.close()
     return sink.records
 
@@ -159,7 +195,9 @@ def rewrite(records: list[dict], llm_port: str, proxy_port: str) -> list[dict]:
 if __name__ == "__main__":
     rules_path = OUT / "rules.json"
     rules_path.write_text(json.dumps(RULES, indent=2) + "\n")  # the control file, as Layman would write it
-    recs = asyncio.run(main(rules_path))
+    captured = asyncio.run(main(rules_path))
+    exits = [r for r in captured if r.get("type") == "exit"]
+    recs = [r for r in captured if r.get("type") == "flow"]
     llm_up = next(r["route"]["upstream"] for r in recs if r["service"] == "llm").rsplit(":", 1)[1]
     proxy_up = next(r["route"]["upstream"] for r in recs if r["service"] == "proxy").rsplit(":", 1)[1]
     recs = rewrite(recs, llm_up, proxy_up)
@@ -171,10 +209,12 @@ if __name__ == "__main__":
             r["dest"]["port"] = 8080
     recs.sort(key=lambda r: (r["t"], r["phase"] != "open"))
     (OUT / "flows.ndjson").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
+    (OUT / "exit.ndjson").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in exits))
 
     session = {
         "v": 1, "type": "session", "env": ENV, "session": SESSION, "harness": "pi", "gate": GATE_VERSION,
         "image": f"glove/netgate:{GATE_VERSION}-0000000000", "record": "metadata", "resolve": "in-tunnel",
+        "resolver": "dns://gluetun:53", "exit_identity": "via-proxy:https://am.i.mullvad.net/json",
         "upstream_kind": "vpn", "rendered_at": recs[0]["t"], "rotate": {"max_bytes": 67108864, "keep": 8},
         "services": [
             {"service": "llm", "listen": "glove-pi-search-llm:8080", "observed": True, "mode": "tcp",
@@ -197,7 +237,8 @@ if __name__ == "__main__":
         col._track_upstream(r)
     col.writer.written = len(recs)
     col.policy.poll()  # as write_status() does in the running collector
+    col._resolver["proxy"] = True  # the gate reported a healthy in-tunnel resolver
     status = col.status("running")
     status["t"] = recs[-1]["t"]
     (OUT / "status.json").write_text(json.dumps(status, indent=2) + "\n")
-    print(f"wrote {len(recs)} records, session.json, status.json, rules.json to {OUT}")
+    print(f"wrote {len(recs)} flow records, {len(exits)} exit, session.json, status.json, rules.json to {OUT}")

@@ -37,7 +37,10 @@ if TYPE_CHECKING:
 NETGATE_SRC = Path(__file__).parent / "netgate"
 NETGATE_DOCKERFILE = Path(__file__).parent / "templates" / "netgate.Dockerfile"
 
-OBSERVE_KEYS = frozenset({"enabled", "record", "resolve", "rotate_mb", "keep"})
+OBSERVE_KEYS = frozenset({
+    "enabled", "record", "resolve", "rotate_mb", "keep", "resolver", "exit_identity", "exit_identity_url",
+})
+DEFAULT_EXIT_URL = "https://am.i.mullvad.net/json"
 SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route"})
 SCOPES = ("local", "tunnelled", "direct")
 MODES = ("tcp", "http-proxy")
@@ -58,6 +61,9 @@ class ObserveSettings:
     resolve: str = "in-tunnel"
     rotate_bytes: int = 64 * 1024 * 1024
     keep: int = 8
+    resolver: str | None = None  # dns://h:p | tor-socks://h:p — queried in-tunnel by proxy gates
+    exit_identity: str = "none"  # "via-proxy" | "none"
+    exit_url: str = DEFAULT_EXIT_URL
 
 
 @dataclass(frozen=True)
@@ -122,8 +128,30 @@ def parse_observe(cfg: Config) -> ObserveSettings | None:
         raise ConfigError(f"observe.rotate_mb/keep must be numbers: {e}") from e
     if rotate_mb <= 0 or keep < 0:
         raise ConfigError("observe.rotate_mb must be > 0 and observe.keep >= 0")
+    resolver = raw.get("resolver")
+    if resolver in ("none", ""):
+        resolver = None
+    if resolver is not None:
+        from .netgate.resolver import from_url
+
+        try:
+            from_url(str(resolver))  # parse only: nothing is resolved here
+        except ValueError as e:
+            raise ConfigError(f"observe.resolver: {e}") from e
+        if resolve == "none":
+            raise ConfigError("observe.resolver is set but observe.resolve is none — pick one")
+    exit_identity = raw.get("exit_identity", "none")
+    if exit_identity not in ("via-proxy", "none"):
+        raise ConfigError(
+            f"observe.exit_identity must be via-proxy|none, got {exit_identity!r} "
+            "(gluetun:// needs a control-server credential and is not wired yet)"
+        )
+    exit_url = raw.get("exit_identity_url", DEFAULT_EXIT_URL)
+    if not isinstance(exit_url, str) or not exit_url.startswith("https://"):
+        raise ConfigError("observe.exit_identity_url must be an https:// URL")
     return ObserveSettings(
-        record=record, resolve=resolve, rotate_bytes=int(rotate_mb * 1024 * 1024), keep=keep
+        record=record, resolve=resolve, rotate_bytes=int(rotate_mb * 1024 * 1024), keep=keep,
+        resolver=resolver, exit_identity=exit_identity, exit_url=exit_url,
     )
 
 
@@ -267,11 +295,21 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
         "--events", EVENTS_SOCKET,
         "--rules", RULES_FILE,
     ]
+    if gate.mode == "http-proxy":
+        if plan.observe.resolve == "in-tunnel" and plan.observe.resolver:
+            cmd += ["--resolver", plan.observe.resolver]
+        if plan.observe.exit_identity == "via-proxy" and _exit_gate(plan) is sidecar:
+            cmd += ["--exit-url", plan.observe.exit_url]
     if gate.scope:
         cmd += ["--scope", gate.scope]
     if gate.tool:
         cmd += ["--tool", gate.tool]
     return cmd
+
+
+def _exit_gate(plan: SessionPlan) -> Sidecar | None:
+    """The one proxy gate that polls exit identity (so records aren't duplicated)."""
+    return next((s for s in plan.network.sidecars if s.gate and s.gate.mode == "http-proxy"), None)
 
 
 def collect_command() -> list[str]:
@@ -381,6 +419,9 @@ def session_facts(plan: SessionPlan) -> dict:
         "image": plan.netgate_image,
         "record": plan.observe.record,
         "resolve": plan.observe.resolve,
+        "resolver": plan.observe.resolver if plan.observe.resolve == "in-tunnel" else None,
+        "exit_identity": (f"via-proxy:{plan.observe.exit_url}"
+                          if plan.observe.exit_identity == "via-proxy" else "none"),
         "upstream_kind": _upstream_kind(plan),
         "rotate": {"max_bytes": plan.observe.rotate_bytes, "keep": plan.observe.keep},
         "rendered_at": iso_utc(),

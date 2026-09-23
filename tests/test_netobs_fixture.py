@@ -83,3 +83,12 @@ def test_rules_sample_is_what_the_gate_accepts_and_caused_the_user_block():
     assert blocked and all(r["dest"]["host"].endswith(".tracker.example") for r in blocked)
     status = json.loads((FIXTURE / "status.json").read_text())["rules"]
     assert status["ok"] is True and status["active_count"] == 1
+
+
+def test_exit_sample_matches_the_handoff_shape_and_resolutions_are_mixed():
+    spec = _shape(_jsonc_blocks("### `exit.ndjson`")[0])
+    exits = [json.loads(line) for line in (FIXTURE / "exit.ndjson").read_text().splitlines() if line]
+    assert exits and all(_shape(e) == spec for e in exits)
+    assert exits[0]["kind"] == "vpn" and exits[0]["source"].startswith("via-proxy:")
+    res = {r["dest"]["resolution"] for r in _flows()}
+    assert {"in-tunnel", "literal", "unavailable", "disabled"} <= res  # every state a UI must bucket

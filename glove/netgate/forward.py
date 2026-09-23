@@ -32,8 +32,11 @@ import time
 from dataclasses import dataclass
 
 from . import guard, httpproxy, sni
+from .exitid import ExitPoller
 from .policy import PolicyWatcher
 from .records import flow_record, ulid
+from .resolver import InTunnel
+from .resolver import from_url as resolver_from_url
 
 READ_CHUNK = 64 * 1024
 SNI_WAIT = 0.25  # tcp mode: emit `open` without SNI if the client is silent this long
@@ -61,6 +64,8 @@ class ForwardSpec:
     mode: str = "tcp"  # "tcp" | "http-proxy"
     route_kind: str = "tcp"  # "tcp" | "vpn" | "tor" | "direct"
     sni: bool = True
+    resolver_url: str | None = None  # http-proxy mode: dns://h:p | tor-socks://h:p (in-tunnel)
+    exit_url: str | None = None  # http-proxy mode: poll the apparent origin through the chain
 
     @property
     def upstream(self) -> str:
@@ -69,15 +74,19 @@ class ForwardSpec:
         return f"tcp:{self.upstream_host}:{self.upstream_port}"
 
     def display_ip(self, host: str | None) -> tuple[str | None, str]:
-        """(dest.ip, dest.resolution) for ``host`` — without ever resolving it.
+        """(dest.ip, dest.resolution) for ``host`` before any in-tunnel lookup.
 
-        An IP literal is its own address (``literal``). Otherwise there is no
-        in-tunnel resolver until M4, so ``unavailable`` — or ``disabled`` under
-        ``resolve: none``. There is deliberately no host-resolver fallback."""
+        An IP literal is its own address (``literal``). A ``tcp``-mode flow goes
+        to a configured endpoint and is never resolved by design (``disabled``),
+        as is everything under ``resolve: none``. A proxy destination starts
+        ``unavailable`` and becomes ``in-tunnel`` if the in-tunnel resolver
+        answers. There is deliberately no host-resolver fallback."""
         ip = guard.ip_literal(host) if host else None
         if ip is not None:
             return str(ip), "literal"
-        return None, ("disabled" if self.resolve == "none" else "unavailable")
+        if self.mode == "tcp" or self.resolve == "none":
+            return None, "disabled"
+        return None, "unavailable"
 
     def dest_ip_and_resolution(self) -> tuple[str | None, str]:
         return self.display_ip(self.upstream_host)
@@ -197,6 +206,16 @@ class Forwarder:
         self._ticker: asyncio.Task | None = None
         self._flows: dict[_Flow, asyncio.Task] = {}
         self._ingress: frozenset[str] = frozenset()
+        proxy = spec.mode == "http-proxy"
+        resolver = resolver_from_url(spec.resolver_url) if proxy and spec.resolve != "none" else None
+        self.resolver = InTunnel(resolver) if resolver is not None else None
+        self._resolver_reported: bool | None = None
+        self.exit = (
+            ExitPoller(url=spec.exit_url, kind=spec.route_kind, dial=self._dial_upstream, emit=sink.send,
+                       env=spec.env, session=spec.session)
+            if proxy and spec.exit_url else None
+        )
+        self._exit_task: asyncio.Task | None = None
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -214,6 +233,8 @@ class Forwarder:
         if self.policy is not None:
             self.policy.poll()
             self._policy_task = asyncio.create_task(self._watch_policy())
+        if self.exit is not None:
+            self._exit_task = asyncio.create_task(self.exit.run())
 
     @property
     def port(self) -> int:
@@ -230,7 +251,7 @@ class Forwarder:
         # only then wait: since 3.12 `wait_closed` waits for open connections.
         if self._server is not None:
             self._server.close()
-        for t in (self._ticker, self._policy_task):
+        for t in (self._ticker, self._policy_task, self._exit_task):
             if t is not None:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -288,6 +309,32 @@ class Forwarder:
             for flow in list(self._flows):
                 if flow.opened and (flow.up, flow.down) != flow.last_emitted:
                     self._emit(flow, "update")
+
+    # --- in-tunnel resolution ------------------------------------------------
+
+    def _report_resolver(self) -> None:
+        """Tell the collector when the resolver's health changes (for status.json)."""
+        assert self.resolver is not None
+        if self.resolver.healthy is not None and self.resolver.healthy != self._resolver_reported:
+            self._resolver_reported = self.resolver.healthy
+            self.sink.send({"v": 1, "type": "health", "service": self.spec.service,
+                            "resolver": {"source": self.resolver.source, "healthy": self.resolver.healthy}})
+
+    async def _resolve(self, flow: _Flow) -> str | None:
+        """Resolve a proxy destination in-tunnel; a refusal reason if it resolves
+        to a non-public address (DNS rebinding past the shape-only guard)."""
+        if self.resolver is None or flow.host is None or guard.ip_literal(flow.host) is not None:
+            return None
+        ip = await self.resolver.resolve(flow.host)
+        self._report_resolver()
+        if ip is None:
+            return None
+        flow.ip, flow.resolution = ip, "in-tunnel"
+        why, is_local = guard.check(ip)
+        if why is not None:
+            flow.scope = self.spec.flow_scope(is_local)
+            return f"{flow.host} resolves in-tunnel to a {why}"
+        return None
 
     # --- policy ------------------------------------------------------------
 
@@ -460,6 +507,10 @@ class Forwarder:
         flow.ip, flow.resolution = self.spec.display_ip(req.host)
         why, is_local = guard.check(req.host)
         flow.scope = self.spec.flow_scope(is_local)
+        if why is not None:
+            await self._refuse(flow, writer, 403, "Forbidden", guard.GUARD_RULE, why)
+            return None
+        why = await self._resolve(flow)
         if why is not None:
             await self._refuse(flow, writer, 403, "Forbidden", guard.GUARD_RULE, why)
             return None
