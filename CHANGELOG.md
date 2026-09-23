@@ -220,6 +220,21 @@ default (no-plugins) path stays fully working at each step.
 
 ### Fixes
 
+- **Network observability review fixes.**
+  - The in-tunnel resolver now fails open when Tor's SOCKS port (or a DNS TCP
+    peer) accepts and then hangs up. The resulting `IncompleteReadError` is an
+    `EOFError`, not an `OSError`, so it escaped `InTunnel.resolve` and failed
+    the whole proxied connection with no backoff. It now counts as a resolver
+    failure: the flow is recorded `unavailable` and traffic is unaffected.
+  - A flow cut mid-relay (a `terminate: true` rule, the gate stopping, or a
+    reset during the proxy handshake) now closes its upstream socket right away.
+    Before, only the client side was closed, and the upstream socket stayed open
+    until the garbage collector reclaimed it.
+  - `glove net flows -f` no longer drops a record written just before a
+    rotation; the old file is read one last time before it is closed.
+  - `glove net rules` no longer crashes on a valid `rules.json` that omits the
+    optional `default` or `rules` keys.
+
 - **A forced `--env X --config Y` one-off is now registered, so its home is
   recorded.** `glove <harness> --env X --config Y` (no prior `glove init` — the
   pattern the pi launcher scripts use) resolved the env-id but never wrote it to

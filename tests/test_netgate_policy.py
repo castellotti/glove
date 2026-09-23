@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import json
 import os
 import socket
+import warnings
 
 import pytest
 from test_netgate_invariants import _jsonc_blocks
@@ -246,6 +248,49 @@ def test_terminate_cuts_established_flows_only_when_asked(tmp_path, terminate):
         assert not cut and close["verdict"] == "allow"
 
 
+
+@pytest.mark.parametrize("mode", ["tcp", "http-proxy"])
+def test_a_cut_flow_closes_its_upstream_too(tmp_path, mode):
+    """Cancelling a live flow (a `terminate` rule, the gate stopping) must close
+    the upstream socket itself, not leave it to the garbage collector (which
+    closes an abandoned StreamWriter late, with a ResourceWarning)."""
+
+    async def main():
+        upstream_eof = asyncio.Event()
+
+        async def upstream(r, w):
+            if mode == "http-proxy":
+                await r.readuntil(b"\r\n\r\n")
+                w.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                await w.drain()
+            while await r.read(65536):
+                pass
+            upstream_eof.set()
+            w.close()
+
+        server = await asyncio.start_server(upstream, "127.0.0.1", 0)
+        spec = ForwardSpec(service="proxy", listen_port=0, upstream_host="127.0.0.1",
+                           upstream_port=server.sockets[0].getsockname()[1], env=ENV, session=SESSION,
+                           listen_host="127.0.0.1", mode=mode)
+        fwd = Forwarder(spec, Captured())
+        await fwd.start()
+        r, w = await asyncio.open_connection("127.0.0.1", fwd.port)
+        w.write(_connect("good.example") if mode == "http-proxy" else b"hello")
+        await w.drain()
+        if mode == "http-proxy":
+            await r.readuntil(b"\r\n\r\n")
+        await asyncio.sleep(0.1)
+        await fwd.stop()  # cancels the flow task mid-relay; the client stays open
+        gc.collect()
+        await asyncio.wait_for(upstream_eof.wait(), 1)
+        w.close()
+        server.close()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        run(main())
+    assert not [x for x in caught if "unclosed" in str(x.message)]
+
 def test_tcp_mode_sni_rule_blocks_before_any_byte_is_forwarded(tmp_path):
     path = tmp_path / "rules.json"
     path.write_text(json.dumps(doc(rule(host="tracker.example"))))
@@ -329,6 +374,15 @@ def test_cli_refuses_to_overwrite_an_invalid_file(ghome):
     assert "exec" in path.read_text()  # untouched
     assert "invalid" in CliRunner().invoke(app, ["net", "rules"]).output
 
+
+
+def test_cli_rules_shows_a_file_without_default_or_rules(ghome):
+    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"v": 1, "env": ENV, "session": SESSION}))  # valid: both optional
+    out = CliRunner().invoke(app, ["net", "rules"])
+    assert out.exit_code == 0, out.output
+    assert "default: allow" in out.output and "(no rules)" in out.output
 
 def test_cli_block_never_resolves(ghome, monkeypatch):
     def boom(*a, **k):

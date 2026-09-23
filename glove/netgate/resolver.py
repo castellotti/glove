@@ -214,7 +214,9 @@ class InTunnel:
             return None
         try:
             ip, ttl = await asyncio.wait_for(self.resolver.lookup(name), TOR_TIMEOUT + TIMEOUT)
-        except (OSError, ResolveError, TimeoutError, UnicodeError, ValueError, IndexError):
+        # IncompleteReadError is an EOFError, not an OSError: a SOCKS/DNS peer
+        # that accepts and then hangs up (Tor still bootstrapping) lands here.
+        except (OSError, EOFError, ResolveError, TimeoutError, UnicodeError, ValueError, IndexError):
             self.failures += 1
             self.healthy = False
             self._down_until = now + BACKOFF

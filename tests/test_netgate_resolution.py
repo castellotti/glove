@@ -156,6 +156,27 @@ def test_in_tunnel_caches_and_backs_off():
     assert Flaky.calls == 3 and t.healthy is True and t.failures == 1
 
 
+
+def test_in_tunnel_survives_a_resolver_that_hangs_up():
+    """A SOCKS port that accepts and closes (Tor bootstrapping) raises
+    IncompleteReadError, an EOFError: still unavailable, never a crash."""
+
+    async def hangup(r, w):
+        await r.readexactly(3)
+        w.write(b"\x05")  # half a greeting, then gone: a short read, not a reset
+        await w.drain()
+        w.close()
+
+    async def main():
+        server = await asyncio.start_server(hangup, "127.0.0.1", 0)
+        t = res.InTunnel(res.TorSocksResolver("127.0.0.1", server.sockets[0].getsockname()[1]))
+        got = await t.resolve("duckduckgo.com")
+        server.close()
+        return got, t
+
+    got, t = run(main())
+    assert got is None and t.healthy is False and t.failures == 1
+
 @pytest.mark.parametrize(
     "url", ["https://x", "dns://gluetun", "dns://:53", "doh://x:1", "tor-socks://tor:x"]
 )

@@ -62,6 +62,13 @@ def read_records(net_dir: Path) -> list[dict]:
     return out
 
 
+def _parse_lines(lines: list[bytes]) -> Iterator[dict]:
+    for raw in lines:
+        rec = _parse_line(raw)
+        if rec is not None:
+            yield rec
+
+
 def follow_records(
     net_dir: Path,
     *,
@@ -91,18 +98,18 @@ def follow_records(
         if chunk:
             buf += chunk
             *lines, buf = buf.split(b"\n")
-            for raw in lines:
-                rec = _parse_line(raw)
-                if rec is not None:
-                    yield rec
+            yield from _parse_lines(lines)
             continue
         try:
             current = os.stat(path).st_ino
         except FileNotFoundError:
             current = None
         if current != ino:
-            # Rotated: the old inode is fully drained (read() hit EOF above);
+            # Rotated. The collector may have written a last record between the
+            # read() above and the rotation, so drain the old inode once more;
             # the next file is new, so read it from its start.
+            *lines, _partial = (buf + fh.read()).split(b"\n")
+            yield from _parse_lines(lines)
             fh.close()
             fh = None
             continue

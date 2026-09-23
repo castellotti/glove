@@ -1101,11 +1101,13 @@ def net_rules(
     if st:
         state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
         console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
-    console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
+    default = data.get("default", "allow")  # both keys are optional in a valid file
+    console.print(f"  default: {default}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
     console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
-    if not data["rules"]:
+    rules = data.get("rules") or []
+    if not rules:
         console.print("  [dim](no rules)[/dim]")
-    for i, r in enumerate(data["rules"], 1):
+    for i, r in enumerate(rules, 1):
         extra = ("  terminate" if r.get("terminate") else "") + (f"  # {r['note']}" if r.get("note") else "")
         console.print(f"  {i:>2}. {r['action']:<5} {r['match']}  [dim]{r['id']}[/dim]{extra}", highlight=False)
 

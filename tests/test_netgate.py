@@ -15,6 +15,7 @@ import os
 import shutil
 import socket
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -352,6 +353,33 @@ def test_follow_survives_rotation(tmp_path):
         next(it)
     assert got == ["f_0000", "f_0001", "f_0002"]
 
+
+
+def test_follow_keeps_a_record_written_just_before_rotation(tmp_path, monkeypatch):
+    # The collector writes a last record and rotates between the follower's
+    # EOF read and its inode check; that record must still be delivered.
+    w = NdjsonWriter(tmp_path, max_bytes=10**9)
+    w.write(_flow(0))
+    real_stat, armed = os.stat, [False]
+
+    def racing_stat(path, *a, **k):
+        if armed[0]:
+            armed[0] = False
+            w.write(_flow(1))
+            w.rotate()
+        return real_stat(path, *a, **k)
+
+    got: list[str] = []
+    deadline = time.monotonic() + 2  # a dropped record ends the follow instead of hanging
+    it = follow_records(tmp_path, from_end=False, poll=0.001,
+                        stop=lambda: len(got) >= 3 or time.monotonic() > deadline)
+    got.append(next(it)["id"])
+    monkeypatch.setattr(os, "stat", racing_stat)
+    armed[0] = True
+    got.append(next(it)["id"])
+    w.write(_flow(2))
+    got.extend(r["id"] for r in it)
+    assert got == ["f_0000", "f_0001", "f_0002"]
 
 def test_torn_trailing_line_is_not_consumed(tmp_path):
     (tmp_path / "flows.ndjson").write_bytes(

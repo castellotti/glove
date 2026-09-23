@@ -147,7 +147,8 @@ class _Flow:
 
     __slots__ = (
         "client", "close_reason", "down", "host", "id", "ip", "last_emitted", "opened",
-        "port", "proto", "request", "resolution", "rule", "scope", "t_open", "up", "verdict",
+        "port", "proto", "request", "resolution", "rule", "scope", "t_open", "up", "upstream",
+        "verdict",
     )
 
     def __init__(self, client: str, spec: ForwardSpec):
@@ -162,6 +163,8 @@ class _Flow:
         self.verdict = "allow"
         self.rule: str | None = None
         self.request: dict | None = None  # record: full only
+        # the dialed upstream writer, closed by _handle however the flow ends
+        self.upstream: asyncio.StreamWriter | None = None
         if spec.mode == "tcp":
             self.proto = "tcp"
             self.host: str | None = spec.upstream_host
@@ -393,19 +396,18 @@ class Forwarder:
         task = asyncio.current_task()
         assert task is not None
         self._flows[flow] = task
-        up_w: asyncio.StreamWriter | None = None
         try:
             if self.spec.mode == "http-proxy":
-                up_w = await self._handle_proxy(flow, reader, writer)
+                await self._handle_proxy(flow, reader, writer)
             else:
-                up_w = await self._handle_tcp(flow, reader, writer)
+                await self._handle_tcp(flow, reader, writer)
         except asyncio.CancelledError:
             # cut by a `terminate: true` rule, or the gate stopping
             flow.close_reason = "blocked" if flow.verdict == "block" else "gate_shutdown"
         except (ConnectionError, OSError):
             flow.close_reason = "reset"
         finally:
-            for w in (writer, up_w):
+            for w in (writer, flow.upstream):
                 if w is not None:
                     w.close()
             self._flows.pop(flow, None)
@@ -415,12 +417,14 @@ class Forwarder:
     async def _connect(self, flow: _Flow):
         """Dial the configured upstream; None (with close_reason set) on failure."""
         try:
-            return await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
+            conn = await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
         except TimeoutError:
             flow.close_reason = "timeout"
         except OSError:
             flow.close_reason = "upstream_unreachable"
-        return None
+            return None
+        flow.upstream = conn[1]
+        return conn
 
     async def _dial_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         # IPv4 only, like socat's TCP4: host.docker.internal carries an AAAA
@@ -453,7 +457,6 @@ class Forwarder:
             timer.cancel()
         if flow.verdict == "block":
             flow.close_reason = "blocked"
-        return up_w
 
     async def _sni_first(self, flow: _Flow, reader: asyncio.StreamReader, data: bytes) -> bytes:
         """Inspect the client's first chunk before it is forwarded. A TLS record
@@ -557,7 +560,7 @@ class Forwarder:
                 resp = await asyncio.wait_for(up_r.readuntil(b"\r\n\r\n"), self.head_timeout)
             except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
                 flow.close_reason = "upstream_unreachable"
-                return up_w
+                return
             writer.write(resp)
             await writer.drain()
             flow.down += len(resp)
@@ -566,10 +569,9 @@ class Forwarder:
                 # The upstream could not reach the destination (e.g. tunnel down,
                 # 502/503): distinct from a policy block.
                 flow.close_reason = "upstream_unreachable"
-                return up_w
+                return
 
         flow.close_reason = await self._relay(flow, reader, writer, up_r, up_w)
-        return up_w
 
     # --- relay -------------------------------------------------------------
 
