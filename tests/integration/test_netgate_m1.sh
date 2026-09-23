@@ -192,8 +192,10 @@ for c in glove-wd-netgate glove-wd-llm glove-wd-docs; do
   check "$c: never on the harness's netns, never mounts /home/agent" \
     "! echo '$insp' | grep -qE 'service:|container:|/home/agent'"
 done
-check "collector: network_mode none, mounts only net/ + the event socket volume" \
-  "docker inspect glove-wd-netgate --format '{{.HostConfig.NetworkMode}} {{range .Mounts}}{{.Destination}} {{end}}' | grep -qx 'none /run/glove-netgate /var/lib/glove/net \|none /var/lib/glove/net /run/glove-netgate '"
+mounts="$(docker inspect glove-wd-netgate --format '{{.HostConfig.NetworkMode}}{{range .Mounts}} {{.Destination}}={{.RW}}{{end}}' | tr ' ' '\n' | sort | tr '\n' ' ')"
+echo "    collector: $mounts"
+check "collector: network_mode none; mounts exactly net/ (rw), event socket (rw), rules dir (READ-ONLY)" \
+  "[ \"$mounts\" = '/etc/glove/netgate-control=false /run/glove-netgate=true /var/lib/glove/net=true none ' ]"
 listens() { docker exec "$1" python -c "
 rows=[l.split() for f in ('/proc/net/tcp','/proc/net/tcp6') for l in open(f).read().splitlines()[1:]]
 # 0100007F / 0B00007F = 127.0.0.x: Docker's embedded-DNS stub (every container), not ours
