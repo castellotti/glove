@@ -11,6 +11,34 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability, milestone M4: in-tunnel resolution and exit
+  identity.**
+  - `observe.resolver: dns://<h>:<p> | tor-socks://<h>:<p>`. Proxy-mode gates
+    resolve each destination through the tunnel's own resolver *before*
+    connecting (cached by TTL, with a 15 s backoff when down), so flows carry
+    `dest.ip` with `resolution: in-tunnel`, and M3 `ip` rules apply to hostnames.
+    A name that resolves to a non-public address is refused (`builtin:ssrf-guard`),
+    which closes the M2 rebinding gap at the gate.
+  - Fail closed: resolver down means `unavailable`, traffic unaffected, and
+    `status.json` `resolver.healthy: false`. `tcp`-mode flows are now
+    `resolution: "disabled"` (configured endpoints are never resolved), instead
+    of `unavailable`.
+  - `observe.exit_identity: via-proxy` (opt-in) polls an IP-echo URL
+    (default am.i.mullvad.net/json) *through* the chain every 5 min and writes
+    `net/exit.ndjson` on change. `glove net status` shows the exit and the
+    resolver.
+  - **Design change from the plan, measured first:** current gluetun serves DNS
+    on all interfaces and its firewall already admits the egress subnet, so no
+    `netdns` sidecar sharing gluetun's namespace is needed. gluetun's control
+    API needs a credential (401), so exit identity goes via the chain instead.
+  - **Verified on live glove-pi-search** (vpn). `web_fetch` destinations got
+    in-tunnel IPs, and `exit.ndjson` recorded the VPN exit. A packet sniffer in
+    the gate's netns showed destination names sent only to gluetun's resolver,
+    with Docker's host-bound DNS asked only for `egress-proxy`/`gluetun`. With
+    the resolver dead: `unavailable`, the fetch still succeeded, and again no
+    host-bound destination query. Tor `RESOLVE` was verified against the stack's
+    `tor` container. The fixture gains in-tunnel IPs and `exit.ndjson`.
+
 - **Network observability, milestone M3: policy.** A `rules.json` control
   channel (`~/.glove/control/<env>/<session>/`, mounted read-only into the gate
   containers only) with a strict, whole-file validator

@@ -133,7 +133,7 @@ glove net unblock <rule-id|target>
 glove net rules  [--json]                                       # rules + the gate's load result
 ```
 
-### Network observability (milestones M1–M3)
+### Network observability (milestones M1–M4)
 
 With `observe: {enabled: true}`, every service forwarder becomes an instrumented
 **netgate**: a drop-in for the socat forwarder (same container name, networks
@@ -195,8 +195,17 @@ A malformed file is rejected as a whole: the gate keeps the previous rules and
 reports the error in `glove net rules` and `status.json`. The built-in SSRF
 guard always runs first.
 
-Still to come: in-tunnel resolution and exit identity (M4), and whole-chain
-SearXNG/Playwright visibility (M5). See
+**Where things are (M4).** With `observe.resolver: dns://gluetun:53` (or
+`tor-socks://tor:9150`), a proxy gate resolves each destination through the
+*tunnel's* resolver, never your host's. Flows then carry `dest.ip` with
+`resolution: in-tunnel`, `ip` rules apply to hostnames, and a name that resolves
+to a private address is refused. If the resolver is down, flows say
+`unavailable` and traffic is unaffected. With `observe.exit_identity: via-proxy`,
+the session's apparent origin (exit IP and location) is fetched *through* the
+tunnel and written to `net/exit.ndjson`. It's opt-in, because the echo service
+(`am.i.mullvad.net` by default) is a third party, though it only sees the exit.
+
+Still to come: whole-chain SearXNG/Playwright visibility (M5). See
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
 Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).
