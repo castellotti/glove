@@ -47,6 +47,17 @@ class NetworkPlan:
     # a route to host.docker.internal. The internal net alone has no such route,
     # so socat would fail with "Network unreachable". The harness never joins it.
     egress_network: str | None = None
+    observe: ObserveSettings | None = None  # set iff observation is enabled
+
+    @property
+    def gated(self) -> list[Sidecar]:
+        """Sidecars running the netgate forwarder (only ever when observing)."""
+        return [s for s in self.sidecars if s.gate is not None]
+
+    @property
+    def exit_gate(self) -> Sidecar | None:
+        """The one proxy gate that polls exit identity (so records aren't duplicated)."""
+        return next((s for s in self.gated if s.gate.mode == "http-proxy"), None)
 
 
 def _sidecar_for(svc: Service, gate: GateSpec | None = None) -> Sidecar:
@@ -110,6 +121,14 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
             # harness to route via a bridge with egress rather than internal-only.
             harness_host_gateway = True
 
+    if settings is not None and settings.exit_identity == "via-proxy" and not any(
+        s.gate and s.gate.mode == "http-proxy" for s in sidecars
+    ):
+        raise ConfigError(
+            "observe.exit_identity: via-proxy needs a service in http-proxy mode — the exit is "
+            "fetched through that service's chained upstream"
+        )
+
     # Any sidecar that reaches host.docker.internal needs a routable bridge.
     egress_network = (
         f"glove-{session}-egress" if any(s.host_gateway for s in sidecars) else None
@@ -122,4 +141,5 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
         harness_extra_networks=harness_extra,
         harness_host_gateway=harness_host_gateway,
         egress_network=egress_network,
+        observe=settings,
     )

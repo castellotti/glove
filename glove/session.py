@@ -135,10 +135,10 @@ def ensure_images(cfg: Config, provider: str, *, rebuild: bool = False) -> None:
     from .observe import build_netgate
 
     profile = get_profile(cfg.harness)
-    sidecars = build_network_plan(cfg, cfg.resolved_name()).sidecars
-    if any(s.gate is None for s in sidecars):
+    network = build_network_plan(cfg, cfg.resolved_name())
+    if len(network.gated) < len(network.sidecars):
         build_forwarder(provider, force=rebuild)
-    if any(s.gate is not None for s in sidecars):
+    if network.gated:
         build_netgate(provider, force=rebuild, console=console)
     build_harness(
         provider,
@@ -164,7 +164,7 @@ def launch(cfg: Config, session_dir: Path, *, provider: str, rebuild: bool) -> N
 
     plan = build_network_plan(cfg, session)
     forwarder_services = [f"glove-{session}-{s.role}" for s in plan.sidecars]
-    if any(s.gate is not None for s in plan.sidecars):
+    if plan.gated:
         # the netgate collector (glove-<session>-netgate) — no network of its own
         forwarder_services.insert(0, f"glove-{session}-netgate")
 

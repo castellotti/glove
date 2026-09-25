@@ -331,7 +331,7 @@ def test_hostname_target_is_recorded_unresolved():
     # tcp mode forwards to a configured endpoint: never resolved, by design
     spec = ForwardSpec(service="s", listen_port=1, upstream_host="searxng", upstream_port=8080,
                        env="e", session="e")
-    assert spec.dest_ip_and_resolution() == (None, "disabled")
+    assert spec.display_ip(spec.upstream_host) == (None, "disabled")
     # proxy mode: unavailable until the in-tunnel resolver answers; disabled under resolve: none
     proxy = ForwardSpec(service="p", listen_port=1, upstream_host="egress-proxy", upstream_port=8888,
                         env="e", session="e", mode="http-proxy", route_kind="vpn")

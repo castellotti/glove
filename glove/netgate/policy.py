@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import SCOPES
 from .records import iso_utc
 
 MAX_BYTES = 1024 * 1024
@@ -29,7 +30,6 @@ MAX_RULES = 10_000
 TOP_KEYS = frozenset({"v", "env", "session", "updated_at", "updated_by", "default", "rules"})
 RULE_KEYS = frozenset({"id", "action", "match", "terminate", "note"})
 MATCH_KEYS = frozenset({"host", "ip", "port", "service", "tool", "scope"})
-SCOPES = frozenset({"local", "tunnelled", "direct"})
 _ID = re.compile(r"r_[0-9A-Za-z_-]{1,64}")  # always fullmatch'd (`$` would admit a trailing newline)
 _GLOB = re.compile(r"[a-z0-9*?._-]{1,253}")
 _LABEL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
@@ -53,17 +53,15 @@ class Rule:
 
     def matches(self, f: dict) -> bool:
         """All present match keys must hold (AND). A key whose flow value is
-        unknown (e.g. ``ip`` before resolution) does not match."""
+        unknown (e.g. ``ip`` before resolution) does not match. ``f`` is
+        normalised by ``RuleSet.evaluate``: lowercase ``host``, parsed ``ip``."""
         if self.host is not None:
             host = f.get("host")
-            if not host or not fnmatch.fnmatchcase(host.lower(), self.host):
+            if not host or not fnmatch.fnmatchcase(host, self.host):
                 return False
         if self.net is not None:
             ip = f.get("ip")
-            try:
-                if ip is None or ipaddress.ip_address(ip) not in self.net:
-                    return False
-            except ValueError:
+            if ip is None or ip not in self.net:
                 return False
         if self.port is not None:
             port = f.get("port")
@@ -82,10 +80,18 @@ class RuleSet:
 
     def evaluate(self, f: dict) -> tuple[str, str | None, bool]:
         """(verdict, rule id, terminate). First match wins; else the default."""
+        f = {**f, "host": (f.get("host") or "").lower() or None, "ip": _parse_ip(f.get("ip"))}
         for rule in self.rules:
             if rule.matches(f):
                 return rule.action, rule.id, rule.terminate
         return self.default, None, False
+
+
+def _parse_ip(ip) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(ip) if ip is not None else None
+    except ValueError:
+        return None
 
 
 def _str(v, what: str, pattern: re.Pattern | None = None) -> str:
@@ -246,7 +252,7 @@ class PolicyWatcher:
             return False
         self.ok, self.error = True, None
         self.loaded_at = iso_utc()
-        self.source_mtime = iso_utc(sig[1] / 1e9) if sig else None
+        self.source_mtime = iso_utc(sig[1] / 1e9)
         changed = new != self.rules
         self.rules = new
         return changed

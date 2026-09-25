@@ -24,21 +24,13 @@ import socket
 import sys
 from pathlib import Path
 
-from . import GATE_VERSION, SCHEMA_VERSION
+from . import GATE_VERSION, ROTATE_BYTES, ROTATE_KEEP, SCHEMA_VERSION
 from .policy import PolicyWatcher
 from .records import iso_utc
-from .writer import NdjsonWriter, write_json_atomic
+from .writer import NdjsonWriter, read_json_dict, write_json_atomic
 
 _UNHEALTHY = {"upstream_unreachable", "timeout"}
 MAX_DATAGRAM = 64 * 1024
-
-
-def load_facts(net_dir: Path) -> dict:
-    try:
-        data = json.loads((net_dir / "session.json").read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 class Collector:
@@ -53,17 +45,16 @@ class Collector:
         self.net_dir = Path(net_dir)
         self.socket_path = socket_path
         self.status_interval = status_interval
-        self.facts = load_facts(self.net_dir)
+        self.facts = read_json_dict(self.net_dir / "session.json") or {}
         rotate = self.facts.get("rotate") or {}
         self.writer = NdjsonWriter(
             self.net_dir,
             "flows",
-            max_bytes=int(rotate.get("max_bytes", 64 * 1024 * 1024)),
-            keep=int(rotate.get("keep", 8)),
+            max_bytes=int(rotate.get("max_bytes", ROTATE_BYTES)),
+            keep=int(rotate.get("keep", ROTATE_KEEP)),
         )
         self.retain_s = rotate.get("retain_s")
         self.exits = NdjsonWriter(self.net_dir, "exit", max_bytes=1024 * 1024, keep=2)
-        self.received = 0
         self.invalid = 0
         self.expired = 0
         self._resolver: dict[str, bool] = {}  # service -> last reported resolver health
@@ -83,7 +74,6 @@ class Collector:
     # --- ingest ------------------------------------------------------------
 
     def ingest(self, data: bytes) -> None:
-        self.received += 1
         try:
             record = json.loads(data)
         except ValueError:
@@ -180,9 +170,7 @@ class Collector:
         for _ in range(256):
             try:
                 data = self._sock.recv(MAX_DATAGRAM)
-            except (BlockingIOError, InterruptedError):
-                return
-            except OSError:
+            except OSError:  # incl. BlockingIOError: drained
                 return
             self.ingest(data)
 

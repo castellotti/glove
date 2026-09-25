@@ -37,14 +37,19 @@ class ProxyRequest:
     port: int
     proto: str  # "http-connect" | "http"
     upstream_head: bytes  # what the gate sends to the chained upstream
+    url: str | None = None  # absolute URL of a cleartext request; None for CONNECT
 
     @property
     def authority(self) -> str:
-        return f"{_bracket(self.host)}:{self.port}"
+        return _authority(self.host, self.port)
 
 
 def _bracket(host: str) -> str:
     return f"[{host}]" if ":" in host else host
+
+
+def _authority(host: str, port: int) -> str:
+    return f"{_bracket(host)}:{port}"
 
 
 def _split_authority(auth: str) -> tuple[str, int | None]:
@@ -92,7 +97,7 @@ def parse_request_head(head: bytes) -> ProxyRequest:
         if port is None:
             raise BadRequest("CONNECT needs host:port")
         host = _host(host)
-        auth = f"{_bracket(host)}:{port}"
+        auth = _authority(host, port)
         up = f"CONNECT {auth} HTTP/1.1\r\nHost: {auth}\r\n\r\n".encode()
         return ProxyRequest(method, host, port, "http-connect", up)
 
@@ -110,17 +115,18 @@ def parse_request_head(head: bytes) -> ProxyRequest:
     path = "/" + path if slash else "/"
     if any(c in path for c in " \r\n"):
         raise BadRequest("invalid path")
-    authority = f"{_bracket(host)}:{port}"
+    authority = _authority(host, port)
+    url = f"{scheme.lower()}://{authority}{path}"
     kept = [ln for ln in headers if ln.split(":", 1)[0].strip().lower() not in HOP_BY_HOP]
     up_lines = [
-        f"{method} {scheme.lower()}://{authority}{path} HTTP/1.1",
+        f"{method} {url} HTTP/1.1",
         f"Host: {authority}",
         *kept,
         "Connection: close",
         "",
         "",
     ]
-    return ProxyRequest(method, host, port, "http", "\r\n".join(up_lines).encode())
+    return ProxyRequest(method, host, port, "http", "\r\n".join(up_lines).encode(), url)
 
 
 REDACTED_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"})
@@ -132,11 +138,7 @@ def request_summary(head: bytes, req: ProxyRequest, *, headers: bool) -> dict:
     ``url`` is null (the path is inside TLS, which glove never intercepts).
     Headers, when opted in, have credentials redacted."""
     lines = head.decode("ascii", "replace").split("\r\n")
-    out: dict = {"method": req.method, "url": None}
-    if req.proto == "http":
-        target = lines[0].split(" ")[1]
-        path = "/" + target.split("://", 1)[1].partition("/")[2]
-        out["url"] = f"{target.split('://', 1)[0].lower()}://{req.authority}{path}"
+    out: dict = {"method": req.method, "url": req.url}
     if headers:
         hs = {}
         for ln in lines[1:]:

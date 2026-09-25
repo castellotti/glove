@@ -197,6 +197,29 @@ def test_upstream_unreachable_is_recorded_not_blocked(tmp_path, sockdir):
     assert status["upstream"]["healthy"] is False
 
 
+def test_upstream_connect_timeout_closes_with_timeout(tmp_path, sockdir):
+    async def main():
+        col = _Running(tmp_path, sockdir / "ev.sock")
+        fwd = Forwarder(_spec(1), EventSink(str(sockdir / "ev.sock")), connect_timeout=0.05)
+
+        async def never():  # a blackholed upstream: the dial never completes
+            await asyncio.sleep(3600)
+
+        fwd._dial_upstream = never
+        await fwd.start()
+        got = await _client(fwd.port, b"hello")
+        await _settle(col.c)
+        await fwd.stop()
+        col.drain()
+        col.close()
+        return got
+
+    assert run(main()) == b""
+    recs = read_records(tmp_path)
+    assert [r["phase"] for r in recs] == ["open", "close"]
+    assert recs[-1]["close_reason"] == "timeout"
+
+
 def test_shutdown_closes_active_flows_with_gate_shutdown(tmp_path, sockdir):
     async def main():
         hold = asyncio.Event()

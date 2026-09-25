@@ -56,6 +56,15 @@ def test_harness_false_plain_socat_also_stays_off_the_internal_net(tmp_path):
     assert doc["services"]["glove-ps-fanout"]["networks"] == ["n"]
 
 
+def test_harness_false_search_listener_does_not_imply_the_search_plugin():
+    from glove.config import Config
+    from glove.plan import _legacy_bridges
+
+    c = Config(harness="pi", name="ps", net=["service"])
+    c.services = [Service(name="search", to="egress-proxy:8888", join_network="n", harness=False)]
+    assert _legacy_bridges(c) == []
+
+
 def test_client_label_validation():
     from glove.network import build_network_plan
 

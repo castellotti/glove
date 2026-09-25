@@ -23,3 +23,17 @@ EVENTS_SOCKET = f"{EVENTS_DIR}/events.sock"
 NET_DIR = "/var/lib/glove/net"
 CONTROL_DIR = "/etc/glove/netgate-control"  # rules.json lives here, read-only
 RULES_FILE = f"{CONTROL_DIR}/rules.json"
+
+# Value sets validated on the host (glove/observe.py) and accepted by the gate.
+SCOPES = ("local", "tunnelled", "direct")
+MODES = ("tcp", "http-proxy")
+# What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
+# plain one, so the operator declares it; `direct` makes every flow loud.
+ROUTES = ("vpn", "tor", "direct")
+CLIENTS = ("searxng", "playwright", "unknown")  # labels for peers off the internal network
+RESOLVE_MODES = ("in-tunnel", "none")
+RECORD_MODES = ("metadata", "full")
+
+# flows.ndjson rotation defaults
+ROTATE_BYTES = 64 * 1024 * 1024
+ROTATE_KEEP = 8

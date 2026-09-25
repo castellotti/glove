@@ -23,6 +23,8 @@ import json
 import ssl
 from urllib.parse import urlsplit
 
+from . import SCHEMA_VERSION
+from .httpproxy import status_code
 from .records import iso_utc
 
 POLL_INTERVAL = 300.0
@@ -51,6 +53,10 @@ def parse_echo(body: bytes) -> dict:
             "lat": _float(lat), "lon": _float(lon)}
 
 
+def _status_line(head: bytes) -> bytes:
+    return head.split(b"\r\n", 1)[0]
+
+
 class ExitPoller:
     def __init__(self, *, url: str, kind: str, dial, emit, env: str, session: str,
                  interval: float = POLL_INTERVAL, retry: float = RETRY_INTERVAL, tls: bool = True):
@@ -62,7 +68,9 @@ class ExitPoller:
         self.path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         self.kind, self.dial, self.emit = kind, dial, emit
         self.env, self.session = env, session
-        self.interval, self.retry, self.tls = interval, retry, tls
+        self.interval, self.retry = interval, retry
+        # built once: loading the CA bundle blocks the event loop
+        self.tls = ssl.create_default_context() if tls else None
         self.source = f"via-proxy:{self.host}"
         self.last: tuple | None = None
 
@@ -71,11 +79,11 @@ class ExitPoller:
         try:
             w.write(f"CONNECT {self.host}:{self.port} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n\r\n".encode())
             await w.drain()
-            status = (await r.readuntil(b"\r\n\r\n")).split(b"\r\n", 1)[0]
-            if b" 200 " not in status + b" ":
-                raise OSError(f"upstream refused CONNECT: {status!r}")
-            if self.tls:
-                await w.start_tls(ssl.create_default_context(), server_hostname=self.host)
+            resp = await r.readuntil(b"\r\n\r\n")
+            if status_code(resp) != 200:
+                raise OSError(f"upstream refused CONNECT: {_status_line(resp)!r}")
+            if self.tls is not None:
+                await w.start_tls(self.tls, server_hostname=self.host)
             w.write(f"GET {self.path} HTTP/1.0\r\nHost: {self.host}\r\nAccept: application/json\r\n"
                     "User-Agent: glove-netgate\r\n\r\n".encode())
             await w.drain()
@@ -85,14 +93,13 @@ class ExitPoller:
         finally:
             w.close()
         head, _, body = raw.partition(b"\r\n\r\n")
-        status = head.split(b"\r\n", 1)[0]
-        if b" 200 " not in status + b" ":
-            raise OSError(f"echo endpoint answered {status!r}")
+        if status_code(head) != 200:
+            raise OSError(f"echo endpoint answered {_status_line(head)!r}")
         return parse_echo(body)
 
     def _record(self, info: dict | None, healthy: bool) -> dict:
         info = info or {}
-        return {"v": 1, "type": "exit", "t": iso_utc(), "env": self.env, "session": self.session,
+        return {"v": SCHEMA_VERSION, "type": "exit", "t": iso_utc(), "env": self.env, "session": self.session,
                 "kind": self.kind, "ip": info.get("ip"), "country": info.get("country"),
                 "city": info.get("city"), "lat": info.get("lat"), "lon": info.get("lon"),
                 "source": self.source, "healthy": healthy}

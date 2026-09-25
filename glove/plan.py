@@ -16,7 +16,7 @@ from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, compute_mounts
 from .network import NetworkPlan, build_network_plan
-from .observe import ObserveSettings, netgate_image, parse_observe
+from .observe import ObserveSettings, netgate_image
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
@@ -126,7 +126,7 @@ def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str])
 def _validate_plugin_services(cfg: Config, plugins) -> None:
     """Fail early when an enabled plugin's required forwarder service is absent —
     the capability reaches the network only through that sidecar."""
-    declared = {s.name for s in cfg.services if s.harness}
+    declared = {s.name for s in cfg.harness_services}
     for plugin in plugins:
         missing = [s for s in plugin.requires_services if s not in declared]
         if missing:
@@ -163,7 +163,7 @@ def _legacy_bridges(cfg: Config) -> list[tuple[str, str]]:
     from .plugins.browser import provider_name
 
     bridges: list[tuple[str, str]] = []
-    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+    if any(s.name == "search" for s in cfg.harness_services) and "search" not in cfg.plugins:
         bridges.append((
             "search",
             "a `search` service without `plugins: [search]` is deprecated — add "
@@ -302,15 +302,9 @@ def build_session_plan(
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
     )
-    plan.observe = parse_observe(cfg)
-    if plan.observe is not None and any(s.gate for s in network.sidecars):
+    plan.observe = network.observe
+    if network.gated:
         plan.netgate_image = netgate_image()
-    if (plan.observe is not None and plan.observe.exit_identity == "via-proxy"
-            and not any(s.gate and s.gate.mode == "http-proxy" for s in network.sidecars)):
-        raise ConfigError(
-            "observe.exit_identity: via-proxy needs a service in http-proxy mode — the exit is "
-            "fetched through that service's chained upstream"
-        )
 
     # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
     # enforcer env/caps.

@@ -34,7 +34,10 @@ def load(path: Path, env_id: str, session: str) -> dict:
         data = json.loads(path.read_text())
     except ValueError as e:
         raise PolicyError(f"{path} is not valid JSON ({e}); fix or remove it first") from e
-    validate(data, env=env_id, session=session)
+    ruleset = validate(data, env=env_id, session=session)
+    # both keys are optional in a valid file; fill them so callers can index
+    data.setdefault("default", ruleset.default)
+    data.setdefault("rules", [])
     return data
 
 
@@ -67,7 +70,7 @@ def block_rule(target: str, *, port: int | None, terminate: bool, note: str | No
 def remove(data: dict, key: str) -> list[dict]:
     """Drop rules whose id equals ``key``, or whose host/ip match equals it."""
     keep, gone = [], []
-    for r in data.get("rules", []):
+    for r in data["rules"]:
         m = r.get("match", {})
         if key in (r.get("id"), m.get("host"), m.get("ip")) or m.get("host") == key.lower():
             gone.append(r)

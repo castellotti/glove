@@ -8,7 +8,7 @@ import os
 import signal
 import sys
 
-from . import EVENTS_SOCKET, GATE_VERSION, NET_DIR
+from . import CLIENTS, EVENTS_SOCKET, GATE_VERSION, MODES, NET_DIR, RECORD_MODES, RESOLVE_MODES, ROUTES, SCOPES
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -19,23 +19,23 @@ def _parser() -> argparse.ArgumentParser:
     f = sub.add_parser("forward", help="instrumented TCP forwarder (one per service)")
     f.add_argument("--service", required=True)
     f.add_argument("--listen", type=int, required=True, help="listen port")
-    f.add_argument("--mode", default="tcp", choices=["tcp", "http-proxy"])
+    f.add_argument("--mode", default="tcp", choices=MODES)
     f.add_argument("--upstream", required=True, help="tcp:<host>:<port> | chain:http://<host>:<port>")
-    f.add_argument("--route", default="tcp", choices=["tcp", "vpn", "tor", "direct"])
+    f.add_argument("--route", default="tcp", choices=("tcp", *ROUTES))
     f.add_argument("--no-sni", action="store_true", help="tcp mode: don't peek the ClientHello")
     f.add_argument("--env", required=True)
     f.add_argument("--session", required=True)
     f.add_argument("--tool", default=None)
-    f.add_argument("--scope", default="local", choices=["local", "tunnelled", "direct"])
-    f.add_argument("--resolve", default="in-tunnel", choices=["in-tunnel", "none"])
+    f.add_argument("--scope", default="local", choices=SCOPES)
+    f.add_argument("--resolve", default="in-tunnel", choices=RESOLVE_MODES)
     f.add_argument("--ingress-alias", default=None)
     f.add_argument("--events", default=EVENTS_SOCKET)
     f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
     f.add_argument("--resolver", default=None, help="in-tunnel resolver: dns://h:p | tor-socks://h:p")
     f.add_argument("--exit-url", default=None, help="https IP-echo URL polled through the chain")
-    f.add_argument("--client", default="unknown", choices=["searxng", "playwright", "unknown"],
+    f.add_argument("--client", default="unknown", choices=CLIENTS,
                    help="label for connections that did not arrive on the harness ingress")
-    f.add_argument("--record", default="metadata", choices=["metadata", "full"])
+    f.add_argument("--record", default="metadata", choices=RECORD_MODES)
     f.add_argument("--record-headers", action="store_true")
 
     c = sub.add_parser("collect", help="single writer of net/ (network_mode: none)")

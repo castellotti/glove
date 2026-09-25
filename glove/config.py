@@ -161,6 +161,11 @@ class Config:
     # the session's net/ dir. Off by default; validated in glove/observe.py.
     observe: dict[str, Any] | bool = field(default_factory=dict)
 
+    @property
+    def harness_services(self) -> list[Service]:
+        """Services offered to the harness (excludes `harness: false` listeners)."""
+        return [s for s in self.services if s.harness]
+
     def resolved_name(self) -> str:
         # The name IS the env-id; the CLI always
         # binds it from the registry before rendering. Resolution no longer

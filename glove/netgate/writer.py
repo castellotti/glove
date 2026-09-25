@@ -25,6 +25,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import ROTATE_BYTES, ROTATE_KEEP
+
 FILE_MODE = 0o600
 
 
@@ -39,8 +41,8 @@ class NdjsonWriter:
         directory: str | os.PathLike,
         name: str = "flows",
         *,
-        max_bytes: int = 64 * 1024 * 1024,
-        keep: int = 8,
+        max_bytes: int = ROTATE_BYTES,
+        keep: int = ROTATE_KEEP,
         clock=time.time,
     ):
         self.directory = Path(directory)
@@ -125,7 +127,8 @@ class NdjsonWriter:
         # finds flows.ndjson missing between rotation and the next write.
         with contextlib.suppress(OSError):
             self._open()
-        for old in self.rotated_files()[: max(0, len(self.rotated_files()) - self.keep)]:
+        files = self.rotated_files()
+        for old in files[: max(0, len(files) - self.keep)]:
             with contextlib.suppress(OSError):
                 old.unlink()
 
@@ -148,6 +151,15 @@ class NdjsonWriter:
 
     def close(self) -> None:
         self._close()
+
+
+def read_json_dict(path: str | os.PathLike) -> dict | None:
+    """A JSON object from ``path``; None if it is missing, unreadable or not a dict."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def write_json_atomic(path: str | os.PathLike, data: dict) -> bool:

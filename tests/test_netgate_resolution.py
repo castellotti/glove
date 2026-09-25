@@ -156,6 +156,27 @@ def test_in_tunnel_caches_and_backs_off():
     assert Flaky.calls == 3 and t.healthy is True and t.failures == 1
 
 
+def test_in_tunnel_shares_one_lookup_across_parallel_flows():
+    """A browser opening several CONNECTs to one host costs one query."""
+
+    class Slow:
+        source = "stub"
+        calls = 0
+
+        async def lookup(self, name):
+            Slow.calls += 1
+            await asyncio.sleep(0.05)
+            return "93.184.216.34", 60
+
+    t = res.InTunnel(Slow())
+
+    async def main():
+        return await asyncio.gather(*(t.resolve("example.com") for _ in range(6)))
+
+    assert run(main()) == ["93.184.216.34"] * 6
+    assert Slow.calls == 1 and not t._inflight
+
+
 
 def test_in_tunnel_survives_a_resolver_that_hangs_up():
     """A SOCKS port that accepts and closes (Tor bootstrapping) raises

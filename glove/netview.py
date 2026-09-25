@@ -26,47 +26,51 @@ from pathlib import Path
 
 from rich.markup import escape
 
+from .netgate.writer import read_json_dict
+
 STALE_AFTER_S = 20.0
 
 
-def _parse_line(raw: bytes) -> dict | None:
+def _parse_line(raw: bytes, kind: str = "flow") -> dict | None:
     try:
         rec = json.loads(raw)
     except ValueError:
         return None
-    if not isinstance(rec, dict) or rec.get("type") != "flow":
+    if not isinstance(rec, dict) or rec.get("type") != kind:
         return None
     return rec
 
 
-def flow_files(net_dir: Path) -> list[Path]:
+def _parse_lines(lines: list[bytes], kind: str = "flow") -> Iterator[dict]:
+    for raw in lines:
+        rec = _parse_line(raw, kind)
+        if rec is not None:
+            yield rec
+
+
+def flow_files(net_dir: Path, name: str = "flows") -> list[Path]:
+    """Rotated ``<name>-<ts>.ndjson`` files in rotation order, then the live one."""
     net_dir = Path(net_dir)
-    files = sorted(net_dir.glob("flows-*.ndjson"))
-    live = net_dir / "flows.ndjson"
+    files = sorted(net_dir.glob(f"{name}-*.ndjson"))
+    live = net_dir / f"{name}.ndjson"
     if live.is_file():
         files.append(live)
     return files
 
 
-def read_records(net_dir: Path) -> list[dict]:
-    out: list[dict] = []
-    for path in flow_files(net_dir):
+def iter_records(net_dir: Path, name: str = "flows", kind: str = "flow") -> Iterator[dict]:
+    """Stream records of ``kind`` across rotated + live files, a line at a time."""
+    for path in flow_files(net_dir, name):
         try:
-            data = path.read_bytes()
+            with open(path, "rb") as fh:
+                # a line without its \n is incomplete (still being written)
+                yield from _parse_lines((raw for raw in fh if raw.endswith(b"\n")), kind)
         except OSError:
             continue
-        for raw in data.split(b"\n")[:-1]:  # the tail after the last \n is incomplete
-            rec = _parse_line(raw)
-            if rec is not None:
-                out.append(rec)
-    return out
 
 
-def _parse_lines(lines: list[bytes]) -> Iterator[dict]:
-    for raw in lines:
-        rec = _parse_line(raw)
-        if rec is not None:
-            yield rec
+def read_records(net_dir: Path) -> list[dict]:
+    return list(iter_records(net_dir))
 
 
 def follow_records(
@@ -118,14 +122,6 @@ def follow_records(
         fh.close()
 
 
-def _load_json(path: Path) -> dict | None:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def _parse_ts(value: str | None) -> float | None:
     if not value:
         return None
@@ -138,26 +134,16 @@ def _parse_ts(value: str | None) -> float | None:
 def latest_exit(net_dir: Path) -> dict | None:
     """The most recent ``exit`` record (apparent origin), if any."""
     last = None
-    for path in [*sorted(Path(net_dir).glob("exit-*.ndjson")), Path(net_dir) / "exit.ndjson"]:
-        try:
-            lines = path.read_bytes().split(b"\n")[:-1]
-        except OSError:
-            continue
-        for raw in lines:
-            try:
-                rec = json.loads(raw)
-            except ValueError:
-                continue
-            if isinstance(rec, dict) and rec.get("type") == "exit":
-                last = rec
+    for last in iter_records(net_dir, "exit", "exit"):  # noqa: B007 - keep the final one
+        pass
     return last
 
 
 def summarize(net_dir: Path, *, now: float | None = None) -> dict:
     net_dir = Path(net_dir)
     now = time.time() if now is None else now
-    facts = _load_json(net_dir / "session.json")
-    status = _load_json(net_dir / "status.json")
+    facts = read_json_dict(net_dir / "session.json")
+    status = read_json_dict(net_dir / "status.json")
 
     gate_state = "absent"
     age = None
@@ -172,7 +158,7 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
             gate_state = "running"
 
     latest: dict[str, dict] = {}
-    for rec in read_records(net_dir):
+    for rec in iter_records(net_dir):
         fid = rec.get("id")
         if isinstance(fid, str):
             latest[fid] = rec
@@ -216,11 +202,13 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
 
 def human_bytes(n: int) -> str:
     size = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{int(size)}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+    if size < 1024:
+        return f"{n}B"
+    for unit in ("KB", "MB"):
         size /= 1024
-    return f"{n}B"  # pragma: no cover
+        if size < 1024:
+            return f"{size:.1f}{unit}"
+    return f"{size / 1024:.1f}GB"
 
 
 def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
@@ -257,7 +245,6 @@ def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
     lines.append(
         f"  rules     {rules.get('active_count', 0)} active  ok={rules.get('ok', True)}"
         + (f"  error={rules.get('error')}" if rules.get("error") else "")
-        + "  [dim](default allow; rules land in M3)[/dim]"
     )
     tel = st.get("telemetry") or {}
     if tel:

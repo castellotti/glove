@@ -26,7 +26,23 @@ from typing import TYPE_CHECKING, Any
 
 from .config import Config, ConfigError, Service
 from .hardening import HardeningError
-from .netgate import CONTROL_DIR, EVENTS_DIR, EVENTS_SOCKET, GATE_VERSION, NET_DIR, RULES_FILE, SCHEMA_VERSION
+from .netgate import (
+    CLIENTS,
+    CONTROL_DIR,
+    EVENTS_DIR,
+    EVENTS_SOCKET,
+    GATE_VERSION,
+    MODES,
+    NET_DIR,
+    RECORD_MODES,
+    RESOLVE_MODES,
+    ROTATE_BYTES,
+    ROTATE_KEEP,
+    ROUTES,
+    RULES_FILE,
+    SCHEMA_VERSION,
+    SCOPES,
+)
 from .netgate.records import iso_utc
 from .netgate.writer import write_json_atomic
 
@@ -41,16 +57,8 @@ OBSERVE_KEYS = frozenset({
     "enabled", "record", "record_headers", "resolve", "rotate_mb", "keep", "retain",
     "resolver", "exit_identity", "exit_identity_url",
 })
-CLIENTS = ("searxng", "playwright", "unknown")  # labels for peers off the internal network
 DEFAULT_EXIT_URL = "https://am.i.mullvad.net/json"
 SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route", "client"})
-SCOPES = ("local", "tunnelled", "direct")
-MODES = ("tcp", "http-proxy")
-# What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
-# plain one, so the operator declares it; `direct` makes every flow loud.
-ROUTES = ("vpn", "tor", "direct")
-# Planned modes/upstreams not yet implemented.
-LATER_MODES = {"socks5": "a later milestone"}
 # §2.4 tool labels by conventional service name (the llm service is added from
 # `llm_service`). An explicit `observe.tool` always wins.
 DEFAULT_TOOLS = {"proxy": "web_fetch", "search": "web_search", "browser": "browser"}
@@ -61,8 +69,8 @@ HOST_GATEWAY_NAMES = frozenset({"host.docker.internal", "host.containers.interna
 class ObserveSettings:
     record: str = "metadata"
     resolve: str = "in-tunnel"
-    rotate_bytes: int = 64 * 1024 * 1024
-    keep: int = 8
+    rotate_bytes: int = ROTATE_BYTES
+    keep: int = ROTATE_KEEP
     record_headers: bool = False  # record: full only — request headers, secrets redacted
     retain_s: int | None = None  # expire flow/exit files older than this
     resolver: str | None = None  # dns://h:p | tor-socks://h:p — queried in-tunnel by proxy gates
@@ -117,7 +125,7 @@ def parse_observe(cfg: Config) -> ObserveSettings | None:
     if not raw.get("enabled", False):
         return None
     record = raw.get("record", "metadata")
-    if record not in ("metadata", "full"):
+    if record not in RECORD_MODES:
         raise ConfigError(f"observe.record must be metadata|full, got {record!r}")
     record_headers = raw.get("record_headers", False)
     if not isinstance(record_headers, bool):
@@ -126,13 +134,13 @@ def parse_observe(cfg: Config) -> ObserveSettings | None:
         raise ConfigError("observe.record_headers needs observe.record: full")
     retain_s = _duration(raw["retain"]) if raw.get("retain") not in (None, "none") else None
     resolve = raw.get("resolve", "in-tunnel")
-    if resolve not in ("in-tunnel", "none"):
+    if resolve not in RESOLVE_MODES:
         # There is deliberately no `host`: destinations are never resolved on
         # the host (§1.2 constraint 2).
         raise ConfigError(f"observe.resolve must be in-tunnel|none, got {resolve!r}")
     try:
-        rotate_mb = float(raw.get("rotate_mb", 64))
-        keep = int(raw.get("keep", 8))
+        rotate_mb = float(raw.get("rotate_mb", ROTATE_BYTES // (1024 * 1024)))
+        keep = int(raw.get("keep", ROTATE_KEEP))
     except (TypeError, ValueError) as e:
         raise ConfigError(f"observe.rotate_mb/keep must be numbers: {e}") from e
     if rotate_mb <= 0 or keep < 0:
@@ -224,10 +232,10 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
         raise ConfigError(f"service {svc.name!r}: unknown observe keys {sorted(unknown)}")
 
     mode = raw.get("mode", "tcp")
-    if mode in LATER_MODES:
+    if mode == "socks5":  # planned, not yet implemented
         raise ConfigError(
             f"service {svc.name!r}: observe.mode {mode!r} is not implemented yet "
-            f"({LATER_MODES[mode]}); supported: {', '.join(MODES)}"
+            f"(a later milestone); supported: {', '.join(MODES)}"
         )
     if mode not in MODES:
         raise ConfigError(f"service {svc.name!r}: unknown observe.mode {mode!r} (supported: {', '.join(MODES)})")
@@ -269,7 +277,7 @@ def _proxy_gate(svc: Service, raw: dict, tool: str | None) -> GateSpec:
     upstream = raw.get("upstream") or f"chain:http://{svc.to}"
     if upstream.startswith("chain:socks5://"):
         raise ConfigError(f"service {svc.name!r}: chain:socks5:// upstreams are not implemented yet")
-    if upstream == "direct" or upstream.startswith("direct"):
+    if upstream.startswith("direct"):
         raise ConfigError(
             f"service {svc.name!r}: a `direct` upstream (the gate resolving and dialling itself, "
             "plan §4.4) is not implemented — it would need host-side resolution of destinations"
@@ -333,7 +341,7 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
     if gate.mode == "http-proxy":
         if plan.observe.resolve == "in-tunnel" and plan.observe.resolver:
             cmd += ["--resolver", plan.observe.resolver]
-        if plan.observe.exit_identity == "via-proxy" and _exit_gate(plan) is sidecar:
+        if plan.observe.exit_identity == "via-proxy" and plan.network.exit_gate is sidecar:
             cmd += ["--exit-url", plan.observe.exit_url]
     if gate.scope:
         cmd += ["--scope", gate.scope]
@@ -342,27 +350,22 @@ def forward_command(plan: SessionPlan, sidecar: Sidecar) -> list[str]:
     return cmd
 
 
-def _exit_gate(plan: SessionPlan) -> Sidecar | None:
-    """The one proxy gate that polls exit identity (so records aren't duplicated)."""
-    return next((s for s in plan.network.sidecars if s.gate and s.gate.mode == "http-proxy"), None)
-
-
 def collect_command() -> list[str]:
     return ["collect", "--net-dir", NET_DIR, "--events", EVENTS_SOCKET, "--rules", RULES_FILE]
 
 
 def render_context(plan: SessionPlan) -> dict:
     """Template variables for the gate services (empty-ish when not observing)."""
-    gated = [s for s in plan.network.sidecars if s.gate is not None]  # (aliases only for harness-facing)
+    gated = plan.network.gated
     return {
-        "netgate": bool(gated) and plan.observe is not None,
+        "netgate": bool(gated),
         "netgate_image": plan.netgate_image,
         "net_host_dir": plan.net_host_dir,
         "net_container_dir": NET_DIR,
         "control_host_dir": plan.control_host_dir,
         "control_container_dir": CONTROL_DIR,
         "events_dir": EVENTS_DIR,
-        "gate_commands": {s.role: forward_command(plan, s) for s in gated} if plan.observe else {},
+        "gate_commands": {s.role: forward_command(plan, s) for s in gated},
         "gate_aliases": {s.role: ingress_alias(plan.session, s.role) for s in gated},
         "collect_command": collect_command(),
     }
@@ -472,7 +475,7 @@ def _upstream_kind(plan: SessionPlan) -> str:
     """Session-level upstream kind for ``status.json``: the chained route if any
     service proxies through one (``direct`` wins — it must never be masked),
     else ``tcp``."""
-    kinds = {s.gate.route_kind for s in plan.network.sidecars if s.gate and s.gate.mode == "http-proxy"}
+    kinds = {s.gate.route_kind for s in plan.network.gated if s.gate.mode == "http-proxy"}
     for k in ("direct", "vpn", "tor"):
         if k in kinds:
             return k
@@ -512,11 +515,10 @@ def netgate_image() -> str:
 
 
 def build_netgate(provider: str, *, force: bool = False, console=None) -> str:
+    from .session import _image_exists
+
     tag = netgate_image()
-    exists = subprocess.run(
-        [provider, "image", "inspect", tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    ).returncode == 0
-    if exists and not force:
+    if _image_exists(provider, tag) and not force:
         return tag
     if console is not None:
         console.print(f"[bold]building netgate image[/bold] {tag}")

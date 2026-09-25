@@ -31,7 +31,7 @@ import socket
 import time
 from dataclasses import dataclass
 
-from . import guard, httpproxy, sni
+from . import SCHEMA_VERSION, guard, httpproxy, sni
 from .exitid import ExitPoller
 from .policy import PolicyWatcher
 from .records import flow_record, ulid
@@ -91,9 +91,6 @@ class ForwardSpec:
             return None, "disabled"
         return None, "unavailable"
 
-    def dest_ip_and_resolution(self) -> tuple[str | None, str]:
-        return self.display_ip(self.upstream_host)
-
     def flow_scope(self, is_local: bool) -> str:
         """§2.5 scope of a proxied destination: local stays local; anything else
         is tunnelled only when the operator declared the chain a vpn/tor route."""
@@ -123,7 +120,7 @@ class EventSink:
                 self._sock = None
 
     def send(self, record: dict) -> bool:
-        if self._sock is None or not self.path:
+        if self._sock is None:
             self.dropped += 1
             return False
         try:
@@ -325,7 +322,7 @@ class Forwarder:
         assert self.resolver is not None
         if self.resolver.healthy is not None and self.resolver.healthy != self._resolver_reported:
             self._resolver_reported = self.resolver.healthy
-            self.sink.send({"v": 1, "type": "health", "service": self.spec.service,
+            self.sink.send({"v": SCHEMA_VERSION, "type": "health", "service": self.spec.service,
                             "resolver": {"source": self.resolver.source, "healthy": self.resolver.healthy}})
 
     async def _resolve(self, flow: _Flow) -> str | None:
@@ -358,9 +355,13 @@ class Forwarder:
             return True
         verdict, rule, _ = self.policy.rules.evaluate(self._facts(flow, self.spec))
         if verdict == "block":
-            flow.verdict, flow.rule = "block", rule
+            self._block(flow, rule)
             return False
         return True
+
+    @staticmethod
+    def _block(flow: _Flow, rule: str | None) -> None:
+        flow.verdict, flow.rule = "block", rule
 
     async def _watch_policy(self) -> None:
         """Reload on change; a rule with `terminate: true` also cuts established
@@ -375,7 +376,7 @@ class Forwarder:
                     continue
                 verdict, rule, terminate = self.policy.rules.evaluate(self._facts(flow, self.spec))
                 if verdict == "block" and terminate:
-                    flow.verdict, flow.rule = "block", rule
+                    self._block(flow, rule)
                     task.cancel()
 
     # --- connections -------------------------------------------------------
@@ -420,6 +421,7 @@ class Forwarder:
             conn = await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
         except TimeoutError:
             flow.close_reason = "timeout"
+            return None
         except OSError:
             flow.close_reason = "upstream_unreachable"
             return None
@@ -478,22 +480,25 @@ class Forwarder:
             flow.ip, flow.resolution = self.spec.display_ip(name)
             if not self._decide(flow):  # a host rule can only match once the SNI is known
                 self._open(flow)
-                raise _Blocked(flow.rule)
+                raise _Blocked
         self._open(flow)
         return data
 
     # --- http-proxy mode ---------------------------------------------------
 
-    async def _refuse(self, flow, writer, status: int, reason: str, rule: str | None, why: str) -> None:
-        flow.verdict = "block"
-        flow.rule = rule
-        flow.close_reason = "blocked"
-        self._open(flow)
-        body = httpproxy.response(status, reason, f"glove netgate refused this request: {why}\n")
+    @staticmethod
+    async def _reply(flow, writer, status: int, reason: str, text: str) -> None:
+        body = httpproxy.response(status, reason, text)
         with contextlib.suppress(OSError):
             writer.write(body)
             await writer.drain()
             flow.down += len(body)
+
+    async def _refuse(self, flow, writer, status: int, reason: str, rule: str | None, why: str) -> None:
+        self._block(flow, rule)
+        flow.close_reason = "blocked"
+        self._open(flow)
+        await self._reply(flow, writer, status, reason, f"glove netgate refused this request: {why}\n")
 
     async def _handle_proxy(self, flow, reader, writer):
         try:
@@ -543,11 +548,7 @@ class Forwarder:
         self._open(flow)
         conn = await self._connect(flow)
         if conn is None:
-            with contextlib.suppress(OSError):
-                body = httpproxy.response(502, "Bad Gateway", "glove netgate: upstream proxy unreachable\n")
-                writer.write(body)
-                await writer.drain()
-                flow.down += len(body)
+            await self._reply(flow, writer, 502, "Bad Gateway", "glove netgate: upstream proxy unreachable\n")
             return None
         up_r, up_w = conn
         _set_nodelay(writer)

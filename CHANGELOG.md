@@ -220,6 +220,13 @@ default (no-plugins) path stays fully working at each step.
 
 ### Fixes
 
+- **netgate: an upstream connect timeout no longer crashes the handler.** The
+  `TimeoutError` branch in `Forwarder._connect` fell through to an unbound
+  `conn`, so the flow raised `UnboundLocalError` instead of closing with
+  `close_reason: timeout` (and an http-proxy client never got its 502).
+- **A `harness: false` service named `search` no longer implies the search
+  plugin.** The legacy bridge now looks only at harness-facing services, via
+  the new `Config.harness_services`.
 - **Network observability review fixes.**
   - The in-tunnel resolver now fails open when Tor's SOCKS port (or a DNS TCP
     peer) accepts and then hangs up. The resulting `IncompleteReadError` is an
@@ -298,6 +305,25 @@ default (no-plugins) path stays fully working at each step.
   the image env, so login-shell setup was unnecessary.
 
 ### Internal
+
+- **Network observability cleanup.**
+  - Value sets (scopes, modes, routes, clients, resolve/record modes) and the
+    rotation defaults are defined once in `glove.netgate` and shared by the
+    host-side validator, the gate's argparse and the rules validator.
+  - `glove net status|flows` stream records line by line (`netview.iter_records`)
+    instead of loading every rotated file into memory; `--tail N` keeps a
+    bounded window. Exit records use the same reader.
+  - Gate facts are derived once on `NetworkPlan` (`observe`, `gated`,
+    `exit_gate`); `parse_observe` runs once per plan.
+  - The in-tunnel resolver shares one lookup across parallel flows to the same
+    host, and fails open on any lookup error rather than a growing list of types.
+  - Rule matching normalises the flow's host and IP once per evaluation, not per
+    rule; the exit poller builds its TLS context once.
+  - `netrules.load` fills the optional `default`/`rules` keys, so the CLI no
+    longer re-applies the gate's defaults; shared `read_json_dict`,
+    `_net_session` and `--env/--session` options replace per-command copies.
+  - Dead code removed (`dest_ip_and_resolution`, `Collector.received`, stale
+    "rules land in M3" hint in `glove net status`).
 
 - **Back-compat shim de-duplicated.** The rule mapping a legacy config to an
   implied plugin (a `search` service ⇒ `search`; a top-level `browser:` block ⇒

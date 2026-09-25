@@ -12,6 +12,7 @@ Subcommands: init, run (default), config, ls, down, build. The bare form
 
 from __future__ import annotations
 
+import collections
 import os
 import shutil
 import sys
@@ -921,20 +922,29 @@ net_app = typer.Typer(
 app.add_typer(net_app, name="net")
 
 
+_NET_ENV_OPT = typer.Option(None, "--env", help="select an env by id")
+_NET_SESSION_OPT = typer.Option(None, "--session", help="session name (default: the env's default)")
+
+
+def _net_session(env: str | None, session: str | None) -> tuple[str, str]:
+    """(env_id, session name) — `--session` is the session *name* (default:
+    the env's default session), not a transcript id."""
+    env_id = _locate_env(env, None)
+    return env_id, session or env_id
+
+
 def _net_dir_for(env: str | None, session: str | None) -> tuple[str, str, Path]:
-    """(env_id, session name, net dir) — `--session` is the session *name*
-    (default: the env's default session), not a transcript id."""
+    """(env_id, session name, net dir)."""
     from .observe import net_dir
 
-    env_id = _locate_env(env, None)
-    sname = session or env_id
+    env_id, sname = _net_session(env, session)
     return env_id, sname, net_dir(session_dir(env_id, sname))
 
 
 @net_app.command("status")
 def net_status(
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
 ) -> None:
     """Gate health, record mode, services, upstream and resolver state."""
@@ -961,8 +971,8 @@ def net_status(
 
 @net_app.command("flows")
 def net_flows(
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
     follow: bool = typer.Option(False, "--follow", "-f", help="keep tailing (survives rotation)"),
     json_out: bool = typer.Option(False, "--json", help="print raw NDJSON records"),
     tail: int | None = typer.Option(None, "--tail", "-n", help="only the last N records"),
@@ -970,7 +980,7 @@ def net_flows(
     """Print the session's flow records (rotated files first, then live)."""
     import json as _json
 
-    from .netview import follow_records, format_record, read_records
+    from .netview import follow_records, format_record, iter_records
 
     try:
         _, _, ndir = _net_dir_for(env, session)
@@ -987,9 +997,10 @@ def net_flows(
         else:
             console.print(format_record(rec), highlight=False)
 
-    records = read_records(ndir)
-    if tail is not None:
-        records = records[-tail:] if tail > 0 else []  # `--tail 0 --follow`: only new records
+    if tail is None:
+        records = iter_records(ndir)
+    else:  # `--tail 0 --follow`: only new records
+        records = collections.deque(iter_records(ndir), maxlen=tail) if tail > 0 else ()
     for rec in records:
         emit(rec)
     if follow:
@@ -1004,8 +1015,7 @@ def _rules_target(env: str | None, session: str | None) -> tuple[str, str, Path]
     """(env_id, session token, rules.json path) for `glove net block|unblock|rules`."""
     from .observe import control_dir
 
-    env_id = _locate_env(env, None)
-    sname = session or env_id
+    env_id, sname = _net_session(env, session)
     return env_id, session_token(env_id, sname), control_dir(env_id, sname) / "rules.json"
 
 
@@ -1016,8 +1026,8 @@ def net_block(
     terminate: bool = typer.Option(False, "--terminate", help="also cut matching established flows"),
     allow: bool = typer.Option(False, "--allow", help="write an allow rule instead (e.g. under default block)"),
     note: str | None = typer.Option(None, "--note", help="free-text note shown in `glove net rules`"),
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
 ) -> None:
     """Append a rule to the session's rules.json (the file Layman writes too).
 
@@ -1031,7 +1041,7 @@ def net_block(
         env_id, token, path = _rules_target(env, session)
         data = load(path, env_id, token)
         rule = block_rule(target, port=port, terminate=terminate, note=note, action="allow" if allow else "block")
-        data["rules"] = [*data.get("rules", []), rule]
+        data["rules"] = [*data["rules"], rule]
         save(path, data, env_id, token)
     except (ConfigError, PolicyError, OSError) as e:
         err.print(f"[red]error:[/red] {e}")
@@ -1042,8 +1052,8 @@ def net_block(
 @net_app.command("unblock")
 def net_unblock(
     key: str = typer.Argument(..., help="rule id (r_…) or the exact host glob / IP / CIDR it matches"),
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
 ) -> None:
     """Remove rules by id or by the exact target they match."""
     from .netgate.policy import PolicyError
@@ -1066,8 +1076,8 @@ def net_unblock(
 
 @net_app.command("rules")
 def net_rules(
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    session: str | None = typer.Option(None, "--session", help="session name (default: the env's default)"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
     json_out: bool = typer.Option(False, "--json", help="print the rules document"),
 ) -> None:
     """Show the effective rules, their provenance, and the gate's load result."""
@@ -1088,11 +1098,11 @@ def net_rules(
     if json_out:
         console.print_json(_json.dumps(data or {"error": problem}))
         return
-    from .netview import _load_json
-    from .observe import net_dir
+    from .netgate.writer import read_json_dict
 
-    status = _load_json(net_dir(session_dir(env_id, session or env_id)) / "status.json") or {}
-    console.print(f"[bold]{env_id}[/bold] / session [bold]{session or env_id}[/bold]  [dim]{path}[/dim]")
+    _, sname, ndir = _net_dir_for(env, session)
+    status = read_json_dict(ndir / "status.json") or {}
+    console.print(f"[bold]{env_id}[/bold] / session [bold]{sname}[/bold]  [dim]{path}[/dim]")
     if problem:
         console.print(f"  [red]rules.json is invalid:[/red] {problem}")
         console.print("  [dim]the gate keeps its last known-good set until this is fixed[/dim]")
@@ -1101,10 +1111,9 @@ def net_rules(
     if st:
         state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
         console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
-    default = data.get("default", "allow")  # both keys are optional in a valid file
-    console.print(f"  default: {default}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
+    console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
     console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
-    rules = data.get("rules") or []
+    rules = data["rules"]
     if not rules:
         console.print("  [dim](no rules)[/dim]")
     for i, r in enumerate(rules, 1):

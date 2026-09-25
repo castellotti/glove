@@ -204,6 +204,8 @@ class InTunnel:
         self._down_until = 0.0
         self.healthy: bool | None = None  # None until the first attempt
         self.failures = 0
+        # one lookup per name at a time: parallel flows to a host share it
+        self._inflight: dict[str, asyncio.Task] = {}
 
     async def resolve(self, name: str) -> str | None:
         now = self._clock()
@@ -212,15 +214,25 @@ class InTunnel:
             return hit[0]
         if now < self._down_until:
             return None
+        task = self._inflight.get(name)
+        if task is None:
+            task = self._inflight[name] = asyncio.ensure_future(self._lookup(name, now))
+        # shielded: one waiter being cancelled must not cancel the others' lookup
+        return await asyncio.shield(task)
+
+    async def _lookup(self, name: str, now: float) -> str | None:
         try:
             ip, ttl = await asyncio.wait_for(self.resolver.lookup(name), TOR_TIMEOUT + TIMEOUT)
-        # IncompleteReadError is an EOFError, not an OSError: a SOCKS/DNS peer
-        # that accepts and then hangs up (Tor still bootstrapping) lands here.
-        except (OSError, EOFError, ResolveError, TimeoutError, UnicodeError, ValueError, IndexError):
+        # Fail open to `unavailable` on any lookup failure (a peer hanging up
+        # mid-reply, a malformed answer, a timeout, …); CancelledError is not an
+        # Exception, so gate shutdown still propagates.
+        except Exception:
             self.failures += 1
             self.healthy = False
             self._down_until = now + BACKOFF
             return None
+        finally:
+            self._inflight.pop(name, None)
         self.healthy = True
         try:
             ip = str(ipaddress.IPv4Address(ip)) if ip is not None else None
