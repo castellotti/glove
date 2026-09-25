@@ -281,7 +281,6 @@ class PolicyWatcher:
         """Re-read on change. True when the *active* rule set changed."""
         if self.path is None:
             return False
-        name = Path(self.path).name
         try:
             sig = self._signature()
         except OSError as e:
@@ -290,7 +289,7 @@ class PolicyWatcher:
             sig = ("error", e.errno)
             if sig != self._sig:
                 self._sig = sig
-                self._reject(read_error(e, name), None, None)
+                self._reject(read_error(e, Path(self.path).name), None, None)
             return False
         if sig == self._sig:
             return False
@@ -302,12 +301,12 @@ class PolicyWatcher:
             return changed
         self._sig = sig
         try:
-            raw = Path(self.path).read_bytes()
-        except OSError as e:
-            if isinstance(e, (FileNotFoundError, NotADirectoryError)):
-                self._sig = ()  # removed between stat and read: settle it next poll
-                return False
-            self._reject(read_error(e, name), sig[1], None)
+            raw = read_file(self.path)
+        except PolicyError as e:
+            self._reject(str(e), sig[1], None)
+            return False
+        if raw is None:
+            self._sig = ()  # removed between stat and read: settle it next poll
             return False
         digest = sha256_hex(raw)
         try:

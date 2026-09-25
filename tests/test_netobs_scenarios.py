@@ -17,7 +17,7 @@ from test_netobs_fixture import ENUMS
 
 from glove.netgate.policy import PolicyError, parse_bytes, sha256_hex
 from glove.netgate.writer import rotated_files, rotation_key
-from glove.netview import ended_runs
+from glove.netview import ended_runs, iter_records
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCENARIOS = FIXTURES / "netobs-scenarios"
@@ -42,9 +42,7 @@ def test_the_original_fixture_is_byte_identical_to_7d8b2c9():
 
 
 def _records(name: str) -> list[dict]:
-    d = SCENARIOS / name
-    files = [*rotated_files(d, "flows"), d / "flows.ndjson"]
-    return [json.loads(line) for f in files if f.exists() for line in f.read_text().splitlines()]
+    return list(iter_records(SCENARIOS / name, kind=("flow", "gate")))
 
 
 def _flows(name: str) -> dict[str, list[dict]]:

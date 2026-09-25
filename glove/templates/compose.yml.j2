@@ -16,6 +16,11 @@ name: glove-{{ session }}
     pids_limit: 64
     mem_limit: 256m
 {% endmacro %}
+{% macro gate_bind_label() %}
+{% if gate_bind_selinux %}
+        bind: { selinux: {{ gate_bind_selinux }} }
+{% endif %}
+{% endmacro %}
 
 services:
 
@@ -130,10 +135,7 @@ services:
         source: {{ control_host_dir | tojson }}
         target: {{ control_container_dir }}
         read_only: true
-{% if gate_bind_selinux %}
-        bind: { selinux: {{ gate_bind_selinux }} }
-{% endif %}
-    depends_on:
+{{ gate_bind_label() }}    depends_on:
       - glove-{{ session }}-netgate
     networks:
 {% if s.harness %}
@@ -190,20 +192,14 @@ services:
       - type: bind
         source: {{ net_host_dir | tojson }}
         target: {{ net_container_dir }}
-{% if gate_bind_selinux %}
-        bind: { selinux: {{ gate_bind_selinux }} }
-{% endif %}
-      - type: volume
+{{ gate_bind_label() }}      - type: volume
         source: glove-{{ session }}-netgate-events
         target: {{ events_dir }}
       - type: bind
         source: {{ control_host_dir | tojson }}
         target: {{ control_container_dir }}
         read_only: true
-{% if gate_bind_selinux %}
-        bind: { selinux: {{ gate_bind_selinux }} }
-{% endif %}
-{% endif %}
+{{ gate_bind_label() }}{% endif %}
 
 networks:
   glove-{{ session }}-net:
@@ -230,6 +226,5 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: {{ ("size=1m,mode=0700,uid=%s,gid=%s" % (events_owner[0], events_owner[1])
-             + (',context="%s"' % events_context if events_context else "")) | tojson }}
+      o: {{ events_tmpfs_opts | tojson }}
 {% endif %}

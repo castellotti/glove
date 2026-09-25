@@ -25,7 +25,7 @@ import json
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -128,7 +128,7 @@ def follow_records(
         fh.close()
 
 
-def ended_runs(records: list[dict]) -> set[str]:
+def ended_runs(records: Iterable[dict]) -> set[str]:
     """Forwarder runs that are over, from ``flows.ndjson`` records in file order.
 
     A run ends at a ``gate`` ``stop`` for it (sent by the forwarder, or
@@ -195,12 +195,16 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
             gate_state = "running"
 
     latest: dict[str, dict] = {}
-    records = list(iter_records(net_dir, kind=("flow", "gate")))
-    ended = ended_runs(records)
-    for rec in records:
-        fid = rec.get("id")
-        if rec.get("type") == "flow" and isinstance(fid, str):
-            latest[fid] = rec
+
+    def keep_latest(records: Iterable[dict]) -> Iterator[dict]:
+        # One streaming pass: history can span every rotated file.
+        for rec in records:
+            fid = rec.get("id")
+            if rec.get("type") == "flow" and isinstance(fid, str):
+                latest[fid] = rec
+            yield rec
+
+    ended = ended_runs(keep_latest(iter_records(net_dir, kind=("flow", "gate"))))
     by_service: dict[str, dict] = {}
     reasons: Counter = Counter()
     up = down = active = cut = 0

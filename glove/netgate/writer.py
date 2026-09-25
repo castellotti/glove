@@ -132,12 +132,12 @@ class NdjsonWriter:
     def rotated_files(self) -> list[Path]:
         return rotated_files(self.directory, self.name)
 
-    def _next_key(self, stamp: str) -> tuple[str, int]:
-        """A rotation key strictly after every existing (and previously issued)
-        one, so rotation order is always ``(stamp, n)`` order and no name is
-        ever reused — not after pruning, and not if the clock steps back."""
-        taken = [k for p in self.directory.glob(f"{self.name}-*.ndjson")
-                 if (k := rotation_key(p.name, self.name)) is not None]
+    def _next_key(self, stamp: str, files: list[Path]) -> tuple[str, int]:
+        """A rotation key strictly after every existing (``files``, in rotation
+        order) and previously issued one, so rotation order is always
+        ``(stamp, n)`` order and no name is ever reused — not after pruning,
+        and not if the clock steps back."""
+        taken = [rotation_key(files[-1].name, self.name)] if files else []
         if self._last_key is not None:
             taken.append(self._last_key)
         newest = max(taken, default=None)
@@ -149,7 +149,8 @@ class NdjsonWriter:
         self._close()
         if not self.path.exists():
             return
-        key = self._next_key(_rotation_stamp(self._clock()))
+        files = self.rotated_files()
+        key = self._next_key(_rotation_stamp(self._clock()), files)
         stamp, n = key
         target = self.directory / (f"{self.name}-{stamp}.ndjson" if n == 0 else f"{self.name}-{stamp}-{n}.ndjson")
         try:
@@ -164,7 +165,7 @@ class NdjsonWriter:
         # finds flows.ndjson missing between rotation and the next write.
         with contextlib.suppress(OSError):
             self._open()
-        files = self.rotated_files()
+        files.append(target)
         for old in files[: max(0, len(files) - self.keep)]:
             with contextlib.suppress(OSError):
                 old.unlink()

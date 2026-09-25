@@ -41,6 +41,7 @@ from glove.netgate.collector import Collector  # noqa: E402
 from glove.netgate.exitid import ExitPoller  # noqa: E402
 from glove.netgate.forward import EventSink, Forwarder, ForwardSpec  # noqa: E402
 from glove.netgate.policy import PolicyWatcher  # noqa: E402
+from glove.netgate.records import iso_utc  # noqa: E402
 from glove.netgate.resolver import InTunnel  # noqa: E402
 
 OUT = Path(__file__).parent
@@ -211,7 +212,7 @@ class Scenario:
             "exit_identity": f"via-proxy:{EXIT_URL}" if exit_identity else "none",
             "upstream_kind": route,
             "rotate": {"max_bytes": 67108864, "keep": 8, "retain_s": None, **(rotate or {})},
-            "record_headers": record_headers, "rendered_at": _now(), "services": services,
+            "record_headers": record_headers, "rendered_at": iso_utc(), "services": services,
         }
         (self.dir / "session.json").write_text(json.dumps(self.facts, indent=2) + "\n")
         self.rules_path = self.dir / "rules.json"
@@ -298,12 +299,6 @@ class Scenario:
             s.close()
 
 
-def _now() -> str:
-    from glove.netgate.records import iso_utc
-
-    return iso_utc()
-
-
 # --- clients ----------------------------------------------------------------------------
 
 
@@ -340,7 +335,7 @@ async def send(port: int, data: bytes, *, then_wait: float = 0.0) -> bytes:
 
 
 def rules_doc(*rules, default: str = "allow") -> dict:
-    return {"v": 1, "env": ENV, "session": SESSION, "updated_at": _now(), "updated_by": "layman",
+    return {"v": 1, "env": ENV, "session": SESSION, "updated_at": iso_utc(), "updated_by": "layman",
             "default": default, "rules": list(rules)}
 
 

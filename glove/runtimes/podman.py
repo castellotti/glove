@@ -42,7 +42,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .base import Check
-from .docker import DockerRuntime
+from .docker import DockerRuntime, events_tmpfs_opts
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -162,21 +162,23 @@ class PodmanRuntime(DockerRuntime):
             raise NotImplementedError(reason)
         rootless = self.is_rootless()
         return {
+            **super().compose_extra(plan),
             # Map the host uid/gid through so bind mounts stay owned by the
             # non-root harness user (rootless only; rootful maps 1:1 already).
             "userns_mode": "keep-id" if rootless else None,
             # Rely on podman's built-in default seccomp (see module docstring).
             "emit_seccomp": False,
-            "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
             # Rootless podman mounts the events tmpfs inside its user namespace,
             # where the host user is uid 0: `uid=<host uid>` would name a subuid
             # (seen as 500:999 under keep-id) and the gate could not create its
             # socket. Namespace root is the host user, i.e. the gate's uid.
-            "events_owner": (0, 0) if rootless else None,
             # ...and on SELinux the shared tmpfs needs a container label too, or
             # container_t may not create the socket in it (tmpfs_t). A bind can
             # say `selinux: z`; a tmpfs volume only takes a mount `context=`.
-            "events_context": "system_u:object_r:container_file_t:s0" if self.selinux_enabled() else None,
+            "events_tmpfs_opts": events_tmpfs_opts(
+                *((0, 0) if rootless else (plan.uid, plan.gid)),
+                context="system_u:object_r:container_file_t:s0" if self.selinux_enabled() else None,
+            ),
             # SELinux-enforcing hosts (Fedora/RHEL) deny containers an unlabelled
             # bind; `z` (shared: the collector and every forwarder mount them)
             # relabels net/ and control/. A no-op where SELinux is off, and on a

@@ -15,9 +15,21 @@ from test_netgate_proxy import Captured, run
 from glove.netgate import forward
 from glove.netgate.collector import Collector
 from glove.netgate.forward import EventSink, Forwarder, ForwardSpec
-from glove.netview import ended_runs, summarize
+from glove.netview import ended_runs, iter_records, summarize
 
 ENV = SESSION = "e"
+
+
+def _flow(fid, run, phase="open", service="proxy"):
+    return {"v": 1, "type": "flow", "phase": phase, "id": fid, "service": service, "run": run}
+
+
+def _gate(event, run, service="proxy", role="forward"):
+    return {"v": 1, "type": "gate", "event": event, "role": role, "run": run, "service": service}
+
+
+def _records(net_dir):
+    return list(iter_records(net_dir, kind=("flow", "gate")))
 
 
 def _spec(port: int) -> ForwardSpec:
@@ -81,13 +93,13 @@ def test_start_is_re_announced_so_one_lost_at_startup_is_recovered(monkeypatch):
 
 def test_collector_writes_each_run_start_once_and_its_own_lifecycle(tmp_path):
     c = Collector(tmp_path, "/tmp/unused.sock")
-    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "run": "g_A", "service": "llm"}
+    start = _gate("start", "g_A", "llm")
     for _ in range(3):
         c.ingest(json.dumps(start).encode())
     c.ingest(json.dumps({**start, "event": "stop"}).encode())
     c.ingest(json.dumps({**start, "event": "restart"}).encode())  # not a gate event
     c.ingest(json.dumps({**start, "role": "collect"}).encode())  # forwarders cannot speak for the collector
-    lines = [json.loads(x) for x in (tmp_path / "flows.ndjson").read_text().splitlines()]
+    lines = _records(tmp_path)
     assert [(r["event"], r["run"]) for r in lines] == [("start", "g_A"), ("stop", "g_A")]
     assert c.invalid == 2
 
@@ -118,7 +130,7 @@ def test_live_shutdown_order_in_flows_ndjson():
 
     with tempfile.TemporaryDirectory(dir="/tmp") as d:  # short path: AF_UNIX limit
         col, fwd = run(main(Path(d)))
-        recs = [json.loads(x) for x in (Path(d) / "flows.ndjson").read_text().splitlines()]
+        recs = _records(Path(d))
         status = json.loads((Path(d) / "status.json").read_text())
     kinds = [(r["type"], r.get("event") or r.get("phase"), r.get("role")) for r in recs]
     assert kinds[0] == ("gate", "start", "collect") and kinds[1] == ("gate", "start", "forward")
@@ -127,12 +139,6 @@ def test_live_shutdown_order_in_flows_ndjson():
     assert recs[0]["run"] == col.run_id != fwd.run_id and status["state"] == "stopped"
 
 
-def _flow(fid, run, phase="open", service="proxy"):
-    return {"v": 1, "type": "flow", "phase": phase, "id": fid, "service": service, "run": run}
-
-
-def _gate(event, run, service="proxy", role="forward"):
-    return {"v": 1, "type": "gate", "event": event, "role": role, "run": run, "service": service}
 
 
 @pytest.mark.parametrize(
@@ -176,7 +182,7 @@ def test_collector_infers_the_stop_of_a_forwarder_that_went_silent(tmp_path):
     now = [100.0]
     c = Collector(tmp_path, "/tmp/unused.sock")
     c._clock = lambda: now[0]
-    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "run": "g_A", "service": "llm"}
+    start = _gate("start", "g_A", "llm")
     c.ingest(json.dumps(start).encode())
     c.ingest(json.dumps({**start, "run": "g_B", "service": "proxy"}).encode())
     now[0] += 25
@@ -185,14 +191,14 @@ def test_collector_infers_the_stop_of_a_forwarder_that_went_silent(tmp_path):
     now[0] += 10  # g_A silent 35 s > RUN_LOST_AFTER; g_B 10 s
     c.write_status("running")
     c.write_status("running")  # reaped once
-    lines = [json.loads(x) for x in (tmp_path / "flows.ndjson").read_text().splitlines()]
+    lines = _records(tmp_path)
     stops = [r for r in lines if r["event"] == "stop"]
     assert [(r["run"], r["service"], r.get("inferred")) for r in stops] == [("g_A", "llm", True)]
     assert ended_runs(lines) == {"g_A"}
 
 
 def test_a_late_inferred_stop_does_not_end_the_restarted_run():
-    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "service": "llm"}
+    start = _gate("start", None, "llm")
     records = [{**start, "run": "g_A"}, {**start, "run": "g_B"},
                {**start, "event": "stop", "run": "g_A", "inferred": True}]
     assert ended_runs(records) == {"g_A"}
@@ -202,14 +208,14 @@ def test_collector_does_not_reap_a_run_replaced_by_a_restart(tmp_path):
     now = [100.0]
     c = Collector(tmp_path, "/tmp/unused.sock")
     c._clock = lambda: now[0]
-    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "run": "g_A", "service": "llm"}
+    start = _gate("start", "g_A", "llm")
     c.ingest(json.dumps(start).encode())
     now[0] += 5  # g_A crashed; the container restarts it as g_B
     c.ingest(json.dumps({**start, "run": "g_B"}).encode())
     now[0] += 35  # past RUN_LOST_AFTER for g_A; g_B heartbeats
     c.ingest(json.dumps({**start, "run": "g_B"}).encode())
     c.write_status("running")
-    lines = [json.loads(x) for x in (tmp_path / "flows.ndjson").read_text().splitlines()]
+    lines = _records(tmp_path)
     assert not [r for r in lines if r.get("event") == "stop"]
     assert ended_runs(lines) == {"g_A"}
 
@@ -218,8 +224,7 @@ def test_a_flow_record_keeps_its_run_alive(tmp_path):
     now = [0.0]
     c = Collector(tmp_path, "/tmp/unused.sock")
     c._clock = lambda: now[0]
-    c.ingest(json.dumps({"v": 1, "type": "gate", "event": "start", "role": "forward", "run": "g_A",
-                         "service": "llm"}).encode())
+    c.ingest(json.dumps(_gate("start", "g_A", "llm")).encode())
     now[0] += 29
     c.ingest(json.dumps({"v": 1, "type": "flow", "phase": "update", "id": "f_1", "service": "llm",
                          "run": "g_A"}).encode())

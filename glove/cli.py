@@ -1096,12 +1096,14 @@ def _rules_file_state(path: Path, st: dict) -> str:
         return "[dim]absent (default allow)[/dim]"
     digest = sha256_hex(raw)
     if "sha256" not in st:
-        return f"sha256 {digest[:12]} [dim](this gate predates write confirmation)[/dim]"
-    if digest == st.get("sha256"):
-        return f"sha256 {digest[:12]} [green]enforced[/green]"
-    if digest == (st.get("last_rejected") or {}).get("sha256"):
-        return f"sha256 {digest[:12]} [red]rejected[/red]"
-    return f"sha256 {digest[:12]} [yellow]pending[/yellow] (not yet read by the gate, or the gate is stopped)"
+        state = "[dim](this gate predates write confirmation)[/dim]"
+    elif digest == st.get("sha256"):
+        state = "[green]enforced[/green]"
+    elif digest == (st.get("last_rejected") or {}).get("sha256"):
+        state = "[red]rejected[/red]"
+    else:
+        state = "[yellow]pending[/yellow] (not yet read by the gate, or the gate is stopped)"
+    return f"sha256 {digest[:12]} {state}"
 
 
 @net_app.command("validate")
@@ -1123,25 +1125,25 @@ def net_validate(
 
     from .netgate.policy import PolicyError, parse_bytes, read_file, sha256_hex
 
-    raw = None
+    raw = rs = error = None
     try:
         raw = sys.stdin.buffer.read() if file == "-" else read_file(file)
         if raw is None:
             raise PolicyError(f"cannot read {Path(file).name}: no such file or directory")
         rs = parse_bytes(raw, env=env, session=session)
-        result = {"ok": True, "error": None, "sha256": sha256_hex(raw), "default": rs.default,
-                  "active_count": len(rs.rules)}
     except PolicyError as e:
-        result = {"ok": False, "error": str(e), "sha256": sha256_hex(raw) if raw is not None else None,
-                  "default": None, "active_count": None}
+        error = str(e)
+    result = {"ok": rs is not None, "error": error, "sha256": sha256_hex(raw) if raw is not None else None,
+              "default": rs.default if rs is not None else None,
+              "active_count": len(rs.rules) if rs is not None else None}
     if json_out:
         print(_json.dumps(result), flush=True)
-    elif result["ok"]:
+    elif rs is not None:
         console.print(f"[green]✓[/green] valid: default {result['default']}, {result['active_count']} rule(s)  "
                       f"[dim]sha256 {result['sha256']}[/dim]", highlight=False)
     else:
-        err.print(f"[red]✗ rejected:[/red] {escape(result['error'])}", highlight=False)
-    if not result["ok"]:
+        err.print(f"[red]✗ rejected:[/red] {escape(error)}", highlight=False)
+    if rs is None:
         raise typer.Exit(1)
 
 

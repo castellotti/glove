@@ -64,6 +64,13 @@ print(json.dumps(info))
 """
 
 
+def events_tmpfs_opts(uid: int, gid: int, context: str | None = None) -> str:
+    """Mount options for the netgate events tmpfs: owned by ``uid``/``gid`` as the
+    mount sees ids, with an optional SELinux ``context=`` label."""
+    opts = f"size=1m,mode=0700,uid={uid},gid={gid}"
+    return f'{opts},context="{context}"' if context else opts
+
+
 class DockerRuntime:
     name = "docker"
     caps = RuntimeCaps(
@@ -106,12 +113,11 @@ class DockerRuntime:
             "userns_mode": None,
             "emit_seccomp": True,
             "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
-            # owner of the netgate events tmpfs, as the mount option sees ids:
-            # None ⇒ the plan's uid/gid (rootful ids are the container's ids)
-            "events_owner": None,
+            # mount options of the netgate events tmpfs, owned by the plan's
+            # uid/gid (rootful ids are the container's ids)
+            "events_tmpfs_opts": events_tmpfs_opts(plan.uid, plan.gid),
             # SELinux relabel for the gate's net/ and control/ binds (None: none)
             "gate_bind_selinux": None,
-            "events_context": None,  # SELinux mount context for the events tmpfs
         }
 
     def _jinja(self) -> Environment:
@@ -176,10 +182,6 @@ class DockerRuntime:
             **observe_context(plan),
             **extra,
         }
-        if ctx.get("events_owner") is None:
-            ctx["events_owner"] = (plan.uid, plan.gid)
-        ctx.setdefault("gate_bind_selinux", None)
-        ctx.setdefault("events_context", None)
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
         return RenderedProject(
             session=plan.session,
