@@ -191,6 +191,29 @@ def test_collector_infers_the_stop_of_a_forwarder_that_went_silent(tmp_path):
     assert ended_runs(lines) == {"g_A"}
 
 
+def test_a_late_inferred_stop_does_not_end_the_restarted_run():
+    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "service": "llm"}
+    records = [{**start, "run": "g_A"}, {**start, "run": "g_B"},
+               {**start, "event": "stop", "run": "g_A", "inferred": True}]
+    assert ended_runs(records) == {"g_A"}
+
+
+def test_collector_does_not_reap_a_run_replaced_by_a_restart(tmp_path):
+    now = [100.0]
+    c = Collector(tmp_path, "/tmp/unused.sock")
+    c._clock = lambda: now[0]
+    start = {"v": 1, "type": "gate", "event": "start", "role": "forward", "run": "g_A", "service": "llm"}
+    c.ingest(json.dumps(start).encode())
+    now[0] += 5  # g_A crashed; the container restarts it as g_B
+    c.ingest(json.dumps({**start, "run": "g_B"}).encode())
+    now[0] += 35  # past RUN_LOST_AFTER for g_A; g_B heartbeats
+    c.ingest(json.dumps({**start, "run": "g_B"}).encode())
+    c.write_status("running")
+    lines = [json.loads(x) for x in (tmp_path / "flows.ndjson").read_text().splitlines()]
+    assert not [r for r in lines if r.get("event") == "stop"]
+    assert ended_runs(lines) == {"g_A"}
+
+
 def test_a_flow_record_keeps_its_run_alive(tmp_path):
     now = [0.0]
     c = Collector(tmp_path, "/tmp/unused.sock")

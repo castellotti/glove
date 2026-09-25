@@ -126,7 +126,14 @@ class Collector:
         run, service = record["run"], record.get("service")
         if record["event"] == "start":
             known = run in self._runs
-            self._runs[run] = (service if isinstance(service, str) else None, self._clock())
+            svc = service if isinstance(service, str) else None
+            if not known and svc is not None:
+                # A new run of the service replaces (ends) the old one: don't
+                # later reap it into a stale inferred stop.
+                for other, (other_svc, _) in list(self._runs.items()):
+                    if other_svc == svc:
+                        del self._runs[other]
+            self._runs[run] = (svc, self._clock())
             if known:
                 return
         else:

@@ -40,7 +40,11 @@ default (no-plugins) path stays fully working at each step.
     silent for 30 s. `glove net status` counts unclosed flows of ended runs as
     cut, not active. Verified live with Docker Compose: `glove down` loses no
     closes; a `docker kill`ed forwarder (not restarted by `unless-stopped`) gets
-    its inferred stop (`tests/integration/test_netgate_shutdown.sh`).
+    its inferred stop (`tests/integration/test_netgate_shutdown.sh`). A `stop`
+    ends only its own run: a crashed forwarder's late inferred stop no longer
+    marks its restarted replacement ended (which misreported the replacement's
+    idle open flows as cut), and the collector stops tracking a run once a new
+    run of the same service starts, so it doesn't write that late stop at all.
   - **`glove net validate <file|-> [--env] [--session TOKEN] [--json]`**: the
     gate's validator, pure, exit 0/1.
   - **Fixtures:** `tests/fixtures/netobs-scenarios/`, 16 complete `net/`

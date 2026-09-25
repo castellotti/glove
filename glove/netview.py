@@ -146,9 +146,11 @@ def ended_runs(records: list[dict]) -> set[str]:
         if is_gate and rec.get("role") != "forward":
             continue
         if is_gate and rec.get("event") == "stop":
+            # Ends only its own run: an inferred stop can land after the
+            # restarted run's start and must not end (or displace) it.
             ended.add(run)
-        else:
-            ended.discard(run)
+            continue
+        ended.discard(run)
         if isinstance(svc, str):
             prev = current.get(svc)
             if prev is not None and prev != run:
