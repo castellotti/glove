@@ -9,7 +9,11 @@ Honours the reader contract in the handoff brief §2:
 - rotation renames ``flows.ndjson`` → ``flows-<ts>.ndjson`` and immediately
   opens a fresh, empty one (new inode), so a tailer detects rotation by inode
   change and never finds the live file missing;
-- rotated names sort lexicographically in rotation order.
+- rotated names are ``<name>-<YYYYmmddTHHMMSSmmm>Z.ndjson``, plus ``-<n>``
+  (1, 2, ...) before ``.ndjson`` when the same millisecond is taken; rotation
+  order is ``(stamp, n)`` with no suffix as 0 (``rotated_files``). Sorting the
+  names as strings is wrong: ``-`` sorts before ``.``, so ``…Z-1.ndjson``
+  would come before the older ``…Z.ndjson``.
 
 Every failure path (unwritable dir, full disk, rename error) counts the record
 as dropped and returns False. The writer never raises — telemetry must not take
@@ -21,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +33,26 @@ from pathlib import Path
 from . import ROTATE_BYTES, ROTATE_KEEP
 
 FILE_MODE = 0o600
+_ROTATED = re.compile(r"-(\d{8}T\d{9}Z)(?:-(\d+))?\.ndjson")
+
+
+def rotation_key(name: str, prefix: str) -> tuple[str, int] | None:
+    """``(stamp, n)`` for a rotated ``<prefix>-<stamp>[-<n>].ndjson``, else None."""
+    if not name.startswith(prefix):
+        return None
+    m = _ROTATED.fullmatch(name[len(prefix):])
+    return (m.group(1), int(m.group(2) or 0)) if m else None
+
+
+def rotated_files(directory: str | os.PathLike, name: str) -> list[Path]:
+    """Rotated files of ``name`` in rotation order (oldest first). Names glove
+    did not produce are ignored, so pruning never deletes them."""
+    keyed = []
+    for p in Path(directory).glob(f"{name}-*.ndjson"):
+        key = rotation_key(p.name, name)
+        if key is not None:
+            keyed.append((key, p))
+    return [p for _, p in sorted(keyed)]
 
 
 def _rotation_stamp(ts: float) -> str:
@@ -56,6 +81,7 @@ class NdjsonWriter:
         self.written = 0
         self.dropped = 0
         self.rotations = 0
+        self._last_key: tuple[str, int] | None = None
 
     @property
     def path(self) -> Path:
@@ -104,22 +130,33 @@ class NdjsonWriter:
         return True
 
     def rotated_files(self) -> list[Path]:
-        return sorted(self.directory.glob(f"{self.name}-*.ndjson"))
+        return rotated_files(self.directory, self.name)
+
+    def _next_key(self, stamp: str) -> tuple[str, int]:
+        """A rotation key strictly after every existing (and previously issued)
+        one, so rotation order is always ``(stamp, n)`` order and no name is
+        ever reused — not after pruning, and not if the clock steps back."""
+        taken = [k for p in self.directory.glob(f"{self.name}-*.ndjson")
+                 if (k := rotation_key(p.name, self.name)) is not None]
+        if self._last_key is not None:
+            taken.append(self._last_key)
+        newest = max(taken, default=None)
+        if newest is None or (stamp, 0) > newest:
+            return stamp, 0
+        return newest[0], newest[1] + 1
 
     def rotate(self) -> None:
         self._close()
         if not self.path.exists():
             return
-        stamp = _rotation_stamp(self._clock())
-        target = self.directory / f"{self.name}-{stamp}.ndjson"
-        n = 1
-        while target.exists():
-            target = self.directory / f"{self.name}-{stamp}-{n}.ndjson"
-            n += 1
+        key = self._next_key(_rotation_stamp(self._clock()))
+        stamp, n = key
+        target = self.directory / (f"{self.name}-{stamp}.ndjson" if n == 0 else f"{self.name}-{stamp}-{n}.ndjson")
         try:
             os.replace(self.path, target)
         except OSError:
             return
+        self._last_key = key
         self.rotations += 1
         self._size = 0
         self.opened_at = None
@@ -163,9 +200,13 @@ def read_json_dict(path: str | os.PathLike) -> dict | None:
 
 
 def write_json_atomic(path: str | os.PathLike, data: dict) -> bool:
-    """Write ``data`` by temp-file + rename, mode 0600. False on any failure."""
+    """Write ``data`` by temp-file + rename, mode 0600. False on any failure.
+
+    The temp name is unique to this process: ``rules.json`` has two writers
+    (the CLI and Layman), and a shared temp name would let one clobber the
+    other's half-written file before its rename."""
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
         try:
@@ -174,5 +215,7 @@ def write_json_atomic(path: str | os.PathLike, data: dict) -> bool:
             os.close(fd)
         os.replace(tmp, path)
     except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
         return False
     return True

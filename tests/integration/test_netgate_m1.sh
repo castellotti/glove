@@ -147,7 +147,7 @@ recs = []
 for p in sorted(pathlib.Path(sys.argv[1]).glob("flows-*.ndjson")) + [pathlib.Path(sys.argv[1]) / "flows.ndjson"]:
     if p.exists():
         recs += [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
-c = [r for r in recs if r["phase"] == "close" and r["service"] == sys.argv[2]][-1]
+c = [r for r in recs if r.get("type") == "flow" and r["phase"] == "close" and r["service"] == sys.argv[2]][-1]
 print(c["bytes"]["up"], c["bytes"]["down"], c["close_reason"], c["client"], c["dest"]["resolution"])
 EOF
 }
@@ -209,8 +209,8 @@ check "harness cannot see net/ or the event socket volume" \
   "echo \"\$vis\" | grep -q 'No such file' && [ \"\$(echo \"\$vis\" | tail -1)\" = 0 ]"
 
 echo "== telemetry fails open =="
-before="$(cat "$N"/flows*.ndjson | wc -l)"
 docker stop glove-wd-netgate >/dev/null
+before="$(cat "$N"/flows*.ndjson | wc -l)"  # after the stop: a clean stop writes the collector's `gate stop`
 r="$(in_harness glove-wd "$C" glove-wd-harness node /work/client.js glove-wd-llm 8080 /blob/200000)"
 check "collector stopped: traffic still flows (200156 bytes)" "[ $(echo "$r" | field received) -eq 200156 ]"
 check "collector stopped: records dropped, not queued" "[ \$(cat '$N'/flows*.ndjson | wc -l) -eq $before ]"

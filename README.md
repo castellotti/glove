@@ -131,6 +131,7 @@ glove net flows  [--env ID] [--session NAME] [--follow] [--json] [--tail N]
 glove net block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
 glove net unblock <rule-id|target>
 glove net rules  [--json]                                       # rules + the gate's load result
+glove net validate <file|-> [--env ID] [--session TOKEN] [--json] # the gate's validator; pure
 ```
 
 ### Network observability
@@ -146,8 +147,11 @@ single collector container that has **no network at all**
 
 ```
 net/session.json    static facts: services, tools, upstreams, record mode (0600)
-net/flows.ndjson    append-only flow stream, size-rotated to flows-<ts>.ndjson
-net/status.json     gate heartbeat, upstream health, dropped-record counters
+net/flows.ndjson    append-only flow stream + gate start/stop records, size-rotated
+                    to flows-<stamp>[-<n>].ndjson (order by (stamp, n), not by name)
+net/exit.ndjson     apparent-origin changes (only with exit identity on)
+net/status.json     gate heartbeat, upstream health, dropped-record counters,
+                    the rules load result (with the enforced file's SHA-256)
 ```
 
 ```yaml
@@ -179,7 +183,8 @@ Refusals are recorded as blocked flows. In `tcp` mode the gate also peeks
 (never terminates) a TLS ClientHello, so an HTTPS flow shows its SNI hostname.
 
 Guarantees, each covered by a test (`tests/test_netgate_invariants.py`) and by
-live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`):
+live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`,
+`test_netgate_shutdown.sh`, `netgate_control_perms.sh`):
 - the gate exposes no API on any network;
 - it never gains `NET_ADMIN`, joins the harness's network or PID namespace, or
   mounts the harness home;
@@ -192,8 +197,22 @@ live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`):
 gate reloads it within about a second, refuses new matching connections with a
 recorded `verdict: block`, and with `--terminate` also cuts established ones.
 A malformed file is rejected as a whole: the gate keeps the previous rules and
-reports the error in `glove net rules` and `status.json`. The built-in SSRF
-guard always runs first.
+reports the error in `glove net rules` and `status.json`. So is a file the gate
+cannot read (e.g. left `root:root 0600` by another writer): it is never taken
+for "no rules". `status.json` names the enforced file and the last rejected one
+by SHA-256, and `glove net rules` says whether the file on disk is `enforced`,
+`rejected` or `pending`. `glove net validate FILE` runs the gate's validator
+without a gate. The gate runs as your uid, so a second writer (Layman) must
+leave `rules.json` owned by you: the contract is in the handoff's §3,
+"Ownership". The built-in SSRF guard always runs first.
+
+**Gate lifecycle.** Every flow record carries its forwarder's `run` id, and
+`flows.ndjson` records each forwarder's and the collector's `start`/`stop`. A
+clean `glove down` stops the forwarders before the collector, so every open
+flow gets its `gate_shutdown` close. A forwarder that dies without one (e.g.
+`docker kill`, which `restart: unless-stopped` does not undo) gets an inferred
+`stop` from the collector after 30 s of silence. `glove net status` then counts
+its unclosed flows as cut, not active.
 
 **Where things are (M4).** With `observe.resolver: dns://gluetun:53` (or
 `tor-socks://tor:9150`), a proxy gate resolves each destination through the
@@ -218,7 +237,11 @@ Design and as-built decisions:
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
 Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).
-Podman: rendered but **untested**.
+Sample data: `tests/fixtures/netobs/` (the original fixture, frozen) and one
+directory per UI state in `tests/fixtures/netobs-scenarios/`.
+Podman, and native Linux Docker's file ownership: **untested** live (the
+ownership probe, `tests/integration/netgate_control_perms.sh`, has run only on
+Docker Desktop for macOS).
 
 ### Resuming a session
 

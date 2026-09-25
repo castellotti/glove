@@ -391,3 +391,265 @@ def test_cli_block_never_resolves(ghome, monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", boom)
     monkeypatch.setattr(socket, "gethostbyname", boom)
     assert CliRunner().invoke(app, ["net", "block", "some.tracker.example"]).exit_code == 0
+
+
+# --- an unreadable rules.json fails closed (followup item 1) ---------------------------
+
+needs_non_root = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+
+
+def _loaded(tmp_path):
+    ctl = tmp_path / "ctl"
+    ctl.mkdir()
+    path = ctl / "rules.json"
+    path.write_text(json.dumps(doc(rule(host="bad.example"))))
+    w = PolicyWatcher(path, env=ENV, session=SESSION)
+    assert w.poll() is True and w.ok
+    return ctl, path, w
+
+
+@needs_non_root
+def test_untraversable_control_dir_is_a_rejection_not_an_absence(tmp_path):
+    ctl, _, w = _loaded(tmp_path)
+    good, loaded_at = w.rules, w.loaded_at
+    ctl.chmod(0o000)  # the gate can no longer stat rules.json
+    try:
+        assert w.poll() is False
+        assert w.rules == good and len(w.rules.rules) == 1  # still enforced
+        assert w.ok is False and w.error == "cannot read rules.json: permission denied"
+        assert w.status()["active_count"] == 1 and w.loaded_at == loaded_at
+        assert w.poll() is False and w.ok is False  # stays rejected, not "removed"
+    finally:
+        ctl.chmod(0o700)
+    assert w.poll() is False and w.ok and w.error is None  # readable again: same file, re-accepted
+
+
+@needs_non_root
+def test_unreadable_file_is_a_rejection_and_a_chmod_repair_is_picked_up(tmp_path):
+    _, path, w = _loaded(tmp_path)
+    path.write_text(json.dumps(doc(rule(host="bad.example"), rule("r_2", host="worse.example"))))
+    path.chmod(0o000)
+    assert w.poll() is False and len(w.rules.rules) == 1
+    assert w.ok is False and w.error == "cannot read rules.json: permission denied"
+    path.chmod(0o600)  # no rewrite: mode is part of the signature
+    assert w.poll() is True and w.ok and len(w.rules.rules) == 2
+
+
+def test_other_stat_errors_fail_closed_too(tmp_path, monkeypatch):
+    import errno
+
+    _, path, w = _loaded(tmp_path)
+    real_stat = os.stat
+
+    def eio(p, *a, **k):
+        if str(p) == str(path):
+            raise OSError(errno.EIO, "Input/output error")
+        return real_stat(p, *a, **k)
+
+    monkeypatch.setattr(os, "stat", eio)
+    assert w.poll() is False and len(w.rules.rules) == 1
+    assert w.ok is False and w.error == "cannot read rules.json: input/output error"
+
+
+def test_only_a_missing_file_or_path_means_no_rules(tmp_path):
+    _, path, w = _loaded(tmp_path)
+    path.unlink()
+    assert w.poll() is True and w.ok and w.rules == RuleSet()
+    blocker = tmp_path / "afile"
+    blocker.write_text("")
+    w2 = PolicyWatcher(blocker / "rules.json", env=ENV, session=SESSION)  # ENOTDIR
+    assert w2.poll() is False and w2.ok and w2.rules == RuleSet()
+
+
+def test_a_directory_named_rules_json_is_a_rejection(tmp_path):
+    (tmp_path / "rules.json").mkdir()
+    w = PolicyWatcher(tmp_path / "rules.json", env=ENV, session=SESSION)
+    w.poll()
+    assert w.ok is False and w.error.startswith("cannot read rules.json:")
+
+
+@needs_non_root
+def test_collector_status_reports_an_unreadable_file(tmp_path):
+    ctl, path, _ = _loaded(tmp_path)
+    (tmp_path / "session.json").write_text(json.dumps({"env": ENV, "session": SESSION}))
+    c = Collector(tmp_path, "/tmp/unused.sock", rules_path=path)
+    c.write_status("running")
+    ctl.chmod(0o000)
+    try:
+        c.write_status("running")
+    finally:
+        ctl.chmod(0o700)
+    st = json.loads((tmp_path / "status.json").read_text())["rules"]
+    assert st["ok"] is False and st["error"] == "cannot read rules.json: permission denied"
+    assert st["active_count"] == 1
+
+
+@needs_non_root
+def test_cli_reports_an_unreadable_file_instead_of_crashing_or_replacing_it(ghome):
+    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(doc(rule(host="kept.example"))))
+    path.chmod(0o000)
+    try:
+        for argv in (["net", "rules"], ["net", "block", "x.example"], ["net", "unblock", "r_1"]):
+            out = CliRunner().invoke(app, argv)
+            assert out.exit_code == 1 and "cannot read rules.json: permission denied" in out.output, argv
+            assert out.exception is None or isinstance(out.exception, SystemExit), argv
+    finally:
+        path.chmod(0o600)
+    assert "kept.example" in path.read_text()
+
+
+# --- confirming a specific write (followup item 3) ---------------------------------------
+
+
+def test_status_names_the_enforced_file_and_the_last_rejected_one_by_hash(tmp_path):
+    import hashlib
+
+    path = tmp_path / "rules.json"
+    w = PolicyWatcher(path, env=ENV, session=SESSION)
+    w.poll()
+    assert w.status()["sha256"] is None and w.status()["last_rejected"] is None  # no file
+
+    good = (json.dumps(doc(rule(host="a.example"))) + "\n").encode()
+    path.write_bytes(good)
+    w.poll()
+    st = w.status()
+    assert st["sha256"] == hashlib.sha256(good).hexdigest() and st["ok"] and st["last_rejected"] is None
+    loaded_at, source_mtime = st["loaded_at"], st["source_mtime"]
+
+    bad = json.dumps(doc(rule(host="a.example"), exec="x")).encode()
+    path.write_bytes(bad)
+    os.utime(path, ns=(1_800_000_000_123_456_789,) * 2)
+    w.poll()
+    st = w.status()
+    # the frozen v1 fields are unchanged in meaning: they still describe the last ACCEPTED file
+    assert st["ok"] is False and "unknown top-level" in st["error"]
+    assert (st["loaded_at"], st["source_mtime"], st["active_count"]) == (loaded_at, source_mtime, 1)
+    assert st["sha256"] == hashlib.sha256(good).hexdigest()  # still enforced
+    rej = st["last_rejected"]
+    assert set(rej) == {"checked_at", "source_mtime", "sha256", "error"}
+    assert rej["sha256"] == hashlib.sha256(bad).hexdigest() and rej["error"] == st["error"]
+    assert rej["source_mtime"] == "2027-01-15T08:00:00.123Z" and rej["checked_at"]
+
+    newer = json.dumps(doc(rule(host="b.example"))).encode()
+    path.write_bytes(newer)
+    w.poll()
+    st = w.status()
+    assert st["ok"] and st["error"] is None and st["sha256"] == hashlib.sha256(newer).hexdigest()
+    assert st["last_rejected"] == rej  # kept: the most recent rejection, not the current state
+
+
+@needs_non_root
+def test_an_unreadable_file_is_rejected_with_no_hash(tmp_path):
+    ctl, _, w = _loaded(tmp_path)
+    enforced = w.sha256
+    ctl.chmod(0o000)
+    try:
+        w.poll()
+    finally:
+        ctl.chmod(0o700)
+    rej = w.status()["last_rejected"]
+    assert rej["sha256"] is None and rej["source_mtime"] is None
+    assert rej["error"] == "cannot read rules.json: permission denied" and w.sha256 == enforced
+
+
+def test_status_json_carries_the_confirmation_fields(tmp_path):
+    (tmp_path / "session.json").write_text(json.dumps({"env": ENV, "session": SESSION}))
+    (tmp_path / "rules.json").write_text(json.dumps(doc(rule(host="a.example"))))
+    Collector(tmp_path, "/tmp/unused.sock", rules_path=tmp_path / "rules.json").write_status("running")
+    st = json.loads((tmp_path / "status.json").read_text())["rules"]
+    assert list(st) == ["loaded_at", "source_mtime", "ok", "error", "active_count", "sha256", "last_rejected"]
+    assert len(st["sha256"]) == 64 and st["last_rejected"] is None
+
+
+def test_cli_rules_says_whether_the_file_on_disk_is_enforced(ghome):
+    from glove.netgate.policy import sha256_hex
+
+    r = CliRunner()
+    assert r.invoke(app, ["net", "block", "a.example"]).exit_code == 0
+    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    net = ghome / "envs" / "pi-search" / "sessions" / "pi-search" / "net"
+    net.mkdir(parents=True, exist_ok=True)
+
+    def status(**rules):
+        (net / "status.json").write_text(json.dumps({"rules": {"ok": True, "active_count": 1, **rules}}))
+        return r.invoke(app, ["net", "rules"]).output
+
+    digest = sha256_hex(path.read_bytes())
+    assert "enforced" in status(sha256=digest)
+    assert "pending" in status(sha256="0" * 64, last_rejected=None)
+    assert "rejected" in status(sha256="0" * 64, last_rejected={"sha256": digest})
+    assert "predates" in status()
+
+
+# --- the ownership contract, glove's side (followup item 2) -----------------------------
+
+
+def test_a_control_dir_glove_cannot_chmod_is_refused_with_the_fix(tmp_path, monkeypatch):
+    from glove.hardening import HardeningError
+    from glove.observe import ensure_net_dir
+
+    d = tmp_path / "control" / "e" / "s"
+    d.mkdir(parents=True)
+
+    def eperm(*a, **k):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "chmod", eperm)
+    with pytest.raises(HardeningError, match=r"not by you .* sudo chown"):
+        ensure_net_dir(d)
+
+
+def test_ensure_net_dir_is_0700_for_the_invoking_user(tmp_path):
+    from glove.observe import ensure_net_dir
+
+    d = ensure_net_dir(tmp_path / "control" / "e" / "s")
+    assert d.stat().st_mode & 0o777 == 0o700 and d.stat().st_uid == os.getuid()
+
+
+@needs_non_root
+def test_launch_warns_about_an_unreadable_rules_file(tmp_path):
+    from glove.observe import rules_file_problem
+
+    assert rules_file_problem(tmp_path) is None  # absent: fine
+    (tmp_path / "rules.json").write_text("{}")
+    assert rules_file_problem(tmp_path) is None  # invalid is the gate's report, not a launch warning
+    (tmp_path / "rules.json").chmod(0o000)
+    try:
+        assert rules_file_problem(tmp_path) == "cannot read rules.json: permission denied"
+    finally:
+        (tmp_path / "rules.json").chmod(0o600)
+
+
+# --- glove net validate (followup item 9) ----------------------------------------------
+
+
+def test_validate_cli_is_the_gates_validator_and_pure(tmp_path, monkeypatch):
+    from glove.netgate.policy import sha256_hex
+
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "nonexistent"))  # never consulted
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: (_ for _ in ()).throw(AssertionError("DNS")))
+    good = tmp_path / "rules.json"
+    good.write_text(json.dumps(doc(rule(host="a.example"))))
+    r = CliRunner()
+    out = r.invoke(app, ["net", "validate", str(good), "--env", ENV, "--session", SESSION, "--json"])
+    assert out.exit_code == 0, out.output
+    assert json.loads(out.stdout) == {"ok": True, "error": None, "sha256": sha256_hex(good.read_bytes()),
+                                      "default": "allow", "active_count": 1}
+    out = r.invoke(app, ["net", "validate", str(good), "--env", ENV, "--session", "pi-search-other", "--json"])
+    res = json.loads(out.stdout)
+    assert out.exit_code == 1 and res["ok"] is False and "file is for 'pi-search'" in res["error"]
+    assert res["sha256"] == sha256_hex(good.read_bytes())
+    assert r.invoke(app, ["net", "validate", str(good)]).exit_code == 0  # env/session optional
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(doc(rule(host="a.example"), exec="x")))
+    out = r.invoke(app, ["net", "validate", str(bad)])
+    assert out.exit_code == 1 and "unknown top-level keys ['exec']" in out.output  # markup escaped
+    out = r.invoke(app, ["net", "validate", "-", "--json"], input=good.read_bytes())
+    assert out.exit_code == 0 and json.loads(out.stdout)["ok"]
+    out = r.invoke(app, ["net", "validate", str(tmp_path / "missing.json"), "--json"])
+    assert out.exit_code == 1 and json.loads(out.stdout) == {
+        "ok": False, "error": "cannot read missing.json: no such file or directory", "sha256": None,
+        "default": None, "active_count": None}

@@ -324,6 +324,7 @@ def test_gate_never_resolves_for_an_ip_literal_upstream(no_dns, tmp_path):
 
     got, records = asyncio.run(asyncio.wait_for(main(), 10))
     assert got == b"hello"
+    records = [r for r in records if r["type"] == "flow"]
     assert records[-1]["dest"]["ip"] == "127.0.0.1" and records[-1]["dest"]["resolution"] == "literal"
 
 
@@ -382,6 +383,45 @@ def test_flow_record_matches_handoff_schema_exactly():
     assert _shape(ours) == _shape(spec_flow)
     assert list(ours) == list(spec_flow)  # same key order as the brief
     assert list(ours["dest"]) == list(spec_flow["dest"])
+
+
+# Additive flow keys (handoff §2, "Additive fields"), after the frozen v1 keys.
+ADDITIVE_FLOW_KEYS = ["run"]
+
+
+def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
+    spec_flow = _jsonc_blocks("## 2. Flow schema")[0]
+
+    async def main():
+        async def up(r, w):
+            await r.read()
+            w.close()
+
+        server = await asyncio.start_server(up, "127.0.0.1", 0)
+        records: list[dict] = []
+        sink = EventSink(None)
+        sink.send = lambda rec: records.append(rec) or True
+        fwd = Forwarder(ForwardSpec(service="s", listen_port=0, upstream_host="127.0.0.1",
+                                    upstream_port=server.sockets[0].getsockname()[1], env="e", session="e",
+                                    listen_host="127.0.0.1"), sink)
+        await fwd.start()
+        _, w = await asyncio.open_connection("127.0.0.1", fwd.port)
+        w.write(b"x")
+        await w.drain()
+        await asyncio.sleep(0.05)
+        await fwd.stop()
+        w.close()
+        server.close()
+        return records
+
+    flows = [r for r in asyncio.run(asyncio.wait_for(main(), 10)) if r["type"] == "flow"]
+    assert flows
+    for rec in flows:
+        assert list(rec) == [*spec_flow, *ADDITIVE_FLOW_KEYS]
+        assert {k: _shape(v) for k, v in rec.items() if k in spec_flow} == _shape(spec_flow)
+    text = HANDOFF.read_text()
+    for key in ADDITIVE_FLOW_KEYS:
+        assert f"`{key}`" in text[text.index("## 2. Flow schema"):text.index("## 3. Rules schema")], key
 
 
 def test_status_json_carries_every_handoff_field(tmp_path):

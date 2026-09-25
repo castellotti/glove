@@ -342,6 +342,43 @@ def test_rotation_renames_and_keeps_newest(tmp_path):
     assert ids == sorted(ids) and ids[-1] == "f_0039"
 
 
+def test_same_millisecond_rotations_order_and_prune_by_stamp_then_n(tmp_path):
+    """Followup item 5: `…Z-1.ndjson` is newer than `…Z.ndjson` though it sorts
+    first as a string, and `-10` is newer than `-2`."""
+    w = NdjsonWriter(tmp_path, max_bytes=1, keep=3, clock=lambda: 1_800_000_000.0)  # one frozen ms
+    for i in range(12):
+        assert w.write(_flow(i))  # each write rotates
+    names = [p.name for p in w.rotated_files()]
+    assert names == ["flows-20270115T080000000Z-9.ndjson", "flows-20270115T080000000Z-10.ndjson",
+                     "flows-20270115T080000000Z-11.ndjson"]  # the three NEWEST survive pruning
+    assert [r["id"] for r in read_records(tmp_path)] == ["f_0009", "f_0010", "f_0011"]
+
+
+def test_rotation_names_stay_in_order_if_the_clock_steps_back(tmp_path):
+    now = [0.0]
+    w = NdjsonWriter(tmp_path, max_bytes=1, keep=8, clock=lambda: now[0])
+    for i, t in enumerate([1_800_000_001.0, 1_800_000_000.0, 1_800_000_000.0]):
+        now[0] = t
+        w.write(_flow(i))
+    assert [r["id"] for r in read_records(tmp_path)] == ["f_0000", "f_0001", "f_0002"]
+    assert [p.name for p in w.rotated_files()][-1] == "flows-20270115T080001000Z-2.ndjson"
+
+
+def test_rotation_order_across_stamps_and_foreign_names(tmp_path):
+    from glove.netgate.writer import rotated_files
+
+    for n in ("flows-20270115T080000000Z-1.ndjson", "flows-20270115T080000000Z.ndjson",
+              "flows-20270115T080000001Z.ndjson", "flows-20270115T075959999Z-2.ndjson",
+              "flows-backup.ndjson", "flowsX-20270115T080000000Z.ndjson"):
+        (tmp_path / n).write_text("")
+    assert [p.name for p in rotated_files(tmp_path, "flows")] == [
+        "flows-20270115T075959999Z-2.ndjson", "flows-20270115T080000000Z.ndjson",
+        "flows-20270115T080000000Z-1.ndjson", "flows-20270115T080000001Z.ndjson"]
+    w = NdjsonWriter(tmp_path, max_bytes=1, keep=0)
+    w.write(_flow(0))
+    assert (tmp_path / "flows-backup.ndjson").exists()  # never pruned: glove did not name it
+
+
 def test_open_and_close_straddling_rotation_join_on_id(tmp_path):
     w = NdjsonWriter(tmp_path, max_bytes=10**9)
     w.write(_flow(1, "open"))

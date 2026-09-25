@@ -214,3 +214,16 @@ def test_retention_keeps_the_current_exit_record(tmp_path):
     c.write_status("running")
     assert not c.exits.rotated_files()  # history expired...
     assert json.loads((tmp_path / "exit.ndjson").read_text())["ip"] == "198.51.100.7"  # ...the present did not
+
+
+def test_size_rotation_of_exit_ndjson_carries_the_current_exit_forward(tmp_path):
+    """Followup item 8: not only retention — a size rotation too."""
+    from glove.netgate.collector import Collector
+
+    c = Collector(tmp_path, "/tmp/unused.sock")
+    c.exits.max_bytes = 200  # a couple of records per file
+    for i in range(7):
+        c.ingest(json.dumps({"v": 1, "type": "exit", "ip": f"198.51.100.{i}", "healthy": True}).encode())
+        live = (tmp_path / "exit.ndjson").read_text().splitlines()
+        assert live and json.loads(live[-1])["ip"] == f"198.51.100.{i}", i  # never an empty live file
+    assert c.exits.rotations >= 2

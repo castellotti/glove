@@ -34,6 +34,11 @@ CLIENTS = ("searxng", "playwright", "unknown")  # labels for peers off the inter
 RESOLVE_MODES = ("in-tunnel", "none")
 RECORD_MODES = ("metadata", "full")
 
+# Forwarders re-announce `gate start` this often (a heartbeat); the collector
+# writes an inferred `stop` for a run silent for RUN_LOST_AFTER.
+ANNOUNCE_EVERY = 10.0
+RUN_LOST_AFTER = 3 * ANNOUNCE_EVERY
+
 # flows.ndjson rotation defaults
 ROTATE_BYTES = 64 * 1024 * 1024
 ROTATE_KEEP = 8

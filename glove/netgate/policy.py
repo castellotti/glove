@@ -15,6 +15,7 @@ reject), so it is stdlib-only and shared.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import ipaddress
 import json
 import os
@@ -192,6 +193,30 @@ def validate(data, *, env: str | None = None, session: str | None = None) -> Rul
     return RuleSet(default=default, rules=rules)
 
 
+def read_error(e: OSError, name: str = "rules.json") -> str:
+    """``cannot read rules.json: permission denied`` — an unreadable file is a
+    rejection, never an absence."""
+    why = e.strerror or type(e).__name__
+    return f"cannot read {name}: {why[:1].lower()}{why[1:]}"
+
+
+def read_file(path: str | os.PathLike) -> bytes | None:
+    """The bytes of ``path``; None only when it does not exist. Any other
+    failure (EACCES on the file or a directory above it, EISDIR, EIO, ...) is a
+    PolicyError: a file the reader cannot see must fail closed, not look like
+    "no rules"."""
+    try:
+        return Path(path).read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as e:
+        raise PolicyError(read_error(e, Path(path).name)) from e
+
+
+def sha256_hex(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
 def parse_bytes(raw: bytes, **kw) -> RuleSet:
     if len(raw) > MAX_BYTES:
         raise PolicyError(f"file larger than {MAX_BYTES} bytes")
@@ -207,10 +232,17 @@ class PolicyWatcher:
     """Polls ``path`` (a file inside a read-only directory mount) and keeps the
     last known-good RuleSet. No file ⇒ the empty default-allow set.
 
+    Only a file that does not exist is "no rules". A file the gate cannot stat
+    or read (EACCES, EIO, ...) is a *rejection*: the last known-good set stays
+    enforced and ``ok`` goes false, so a broken ownership contract fails closed
+    and is visible in status.json.
+
     Polling, not inotify: change events do not cross Docker Desktop's file
     sharing reliably. Nothing here sleeps, since it runs on the gate's event
     loop. A torn read from a non-atomic writer just fails validation (the
     last-good set stays) and is retried when the file's signature next changes.
+    The signature includes mode and owner, so a chmod/chown that repairs an
+    unreadable file is picked up without a rewrite.
     """
 
     path: Path | None
@@ -221,36 +253,69 @@ class PolicyWatcher:
     source_mtime: str | None = None
     ok: bool = True
     error: str | None = None
+    # Additive (handoff §3, "Confirming a write"): the SHA-256 of the bytes now
+    # enforced (None: no file), and the most recent rejected read.
+    sha256: str | None = None
+    last_rejected: dict | None = None
     _sig: tuple | None = None
 
     def _signature(self) -> tuple | None:
+        """None when the file does not exist; OSError for anything else."""
         try:
             st = os.stat(self.path)  # type: ignore[arg-type]
-        except (OSError, TypeError):
+        except (FileNotFoundError, NotADirectoryError):
             return None
-        return (st.st_ino, st.st_mtime_ns, st.st_size)
+        return (st.st_ino, st.st_mtime_ns, st.st_size, st.st_mode, st.st_uid, st.st_gid)
+
+    def _reject(self, error: str, mtime_ns: int | None, digest: str | None) -> None:
+        """Keep the last known-good set; report why this read was refused."""
+        self.ok, self.error = False, error
+        self.last_rejected = {
+            "checked_at": iso_utc(),
+            "source_mtime": iso_utc(mtime_ns / 1e9) if mtime_ns is not None else None,
+            "sha256": digest,
+            "error": error,
+        }
 
     def poll(self) -> bool:
         """Re-read on change. True when the *active* rule set changed."""
         if self.path is None:
             return False
-        sig = self._signature()
+        name = Path(self.path).name
+        try:
+            sig = self._signature()
+        except OSError as e:
+            # e.g. EACCES on the control dir: not an absence. Report once per
+            # distinct failure; the stat is retried every poll.
+            sig = ("error", e.errno)
+            if sig != self._sig:
+                self._sig = sig
+                self._reject(read_error(e, name), None, None)
+            return False
         if sig == self._sig:
             return False
         if sig is None:  # file removed ⇒ back to default allow
             self._sig = None
             changed = self.rules != RuleSet()
-            self.rules, self.ok, self.error = RuleSet(), True, None
+            self.rules, self.ok, self.error, self.sha256 = RuleSet(), True, None, None
             self.loaded_at, self.source_mtime = iso_utc(), None
             return changed
         self._sig = sig
         try:
             raw = Path(self.path).read_bytes()
-            new = parse_bytes(raw, env=self.env, session=self.session)
-        except (OSError, PolicyError) as e:
-            self.ok, self.error = False, str(e)  # keep the last known-good set
+        except OSError as e:
+            if isinstance(e, (FileNotFoundError, NotADirectoryError)):
+                self._sig = ()  # removed between stat and read: settle it next poll
+                return False
+            self._reject(read_error(e, name), sig[1], None)
             return False
-        self.ok, self.error = True, None
+        digest = sha256_hex(raw)
+        try:
+            new = parse_bytes(raw, env=self.env, session=self.session)
+        except PolicyError as e:
+            self._reject(str(e), sig[1], digest)
+            return False
+        self.ok, self.error, self.sha256 = True, None, digest
         self.loaded_at = iso_utc()
         self.source_mtime = iso_utc(sig[1] / 1e9)
         changed = new != self.rules
@@ -264,4 +329,6 @@ class PolicyWatcher:
             "ok": self.ok,
             "error": self.error,
             "active_count": len(self.rules.rules),
+            "sha256": self.sha256,
+            "last_rejected": self.last_rejected,
         }

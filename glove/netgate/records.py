@@ -59,8 +59,9 @@ def flow_record(
     rule: str | None = None,
     close_reason: str | None = None,
     request: dict | None = None,
+    run: str | None = None,
 ) -> dict:
-    return {
+    rec = {
         "v": SCHEMA_VERSION,
         "type": "flow",
         "phase": phase,
@@ -84,3 +85,30 @@ def flow_record(
         # Only under `record: full`; metadata mode never records it.
         "request": request,
     }
+    if run is not None:
+        # Additive (after the frozen v1 keys): the forwarder process that
+        # emitted this record. See gate_record.
+        rec["run"] = run
+    return rec
+
+
+GATE_EVENTS = ("start", "stop")
+
+
+def gate_record(*, event: str, role: str, run: str, env: str | None, session: str | None,
+                t: float, service: str | None = None, inferred: bool = False) -> dict:
+    """A gate process's lifecycle, in flows.ndjson (additive record type).
+
+    ``run`` identifies one process: a forwarder (``role: forward``, one per
+    service) or the collector. Flow records carry their forwarder's ``run``, so
+    a reader can tell that a flow with no ``close`` was cut by a gate that is
+    gone (a ``stop`` for its run, or a newer run for the same service) rather
+    than still pooled. ``t`` is when the process started (``start``) or stopped
+    (``stop``); a ``start`` may be repeated for the same run — key on ``run``.
+    ``inferred: true`` marks a ``stop`` the collector wrote for a forwarder
+    that went silent (killed, crashed without restart), not one it sent."""
+    rec = {"v": SCHEMA_VERSION, "type": "gate", "event": event, "role": role, "run": run,
+           "service": service, "env": env, "session": session, "t": iso_utc(t)}
+    if inferred:
+        rec["inferred"] = True
+    return rec

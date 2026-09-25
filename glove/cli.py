@@ -352,6 +352,15 @@ def run(
 
             plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
             plan.control_host_dir = str(ensure_net_dir(control_dir(env_id, session_name)))
+            from .observe import rules_file_problem
+
+            problem = rules_file_problem(Path(plan.control_host_dir))
+            if problem:
+                err.print(
+                    f"[bold red]⚠ rules.json:[/bold red] {problem} — the gate runs as you, so it will "
+                    "reject this file (status.json rules.ok: false) and enforce no rules until it is "
+                    "readable. A second writer must leave it owned by you (handoff §3, 'Ownership')."
+                )
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
@@ -1074,6 +1083,68 @@ def net_unblock(
         console.print(f"[green]✓[/green] removed {r['id']} ({r['action']} {r['match']})")
 
 
+def _rules_file_state(path: Path, st: dict) -> str:
+    """Whether the gate has enforced or rejected the bytes now on disk, by
+    SHA-256 (status.json `rules.sha256` / `rules.last_rejected.sha256`)."""
+    from .netgate.policy import PolicyError, read_file, sha256_hex
+
+    try:
+        raw = read_file(path)
+    except PolicyError as e:
+        return f"[red]{e}[/red]"
+    if raw is None:
+        return "[dim]absent (default allow)[/dim]"
+    digest = sha256_hex(raw)
+    if "sha256" not in st:
+        return f"sha256 {digest[:12]} [dim](this gate predates write confirmation)[/dim]"
+    if digest == st.get("sha256"):
+        return f"sha256 {digest[:12]} [green]enforced[/green]"
+    if digest == (st.get("last_rejected") or {}).get("sha256"):
+        return f"sha256 {digest[:12]} [red]rejected[/red]"
+    return f"sha256 {digest[:12]} [yellow]pending[/yellow] (not yet read by the gate, or the gate is stopped)"
+
+
+@net_app.command("validate")
+def net_validate(
+    file: str = typer.Argument(..., help="rules.json to check, or - for stdin"),
+    env: str | None = typer.Option(None, "--env", help="the gate's env id: the file's `env` must equal it"),
+    session: str | None = typer.Option(
+        None, "--session",
+        help="the gate's session TOKEN (the file's `session` value: <env> or <env>-<name>), "
+             "not the directory name the other `net` commands take"),
+    json_out: bool = typer.Option(False, "--json", help="one JSON object on stdout"),
+) -> None:
+    """Check a rules file with the gate's own validator. Pure: reads only FILE —
+    no ~/.glove, no Docker, no network. Exit 0 when the gate would accept it,
+    1 when it would reject it."""
+    import json as _json
+
+    from rich.markup import escape
+
+    from .netgate.policy import PolicyError, parse_bytes, read_file, sha256_hex
+
+    raw = None
+    try:
+        raw = sys.stdin.buffer.read() if file == "-" else read_file(file)
+        if raw is None:
+            raise PolicyError(f"cannot read {Path(file).name}: no such file or directory")
+        rs = parse_bytes(raw, env=env, session=session)
+        result = {"ok": True, "error": None, "sha256": sha256_hex(raw), "default": rs.default,
+                  "active_count": len(rs.rules)}
+    except PolicyError as e:
+        result = {"ok": False, "error": str(e), "sha256": sha256_hex(raw) if raw is not None else None,
+                  "default": None, "active_count": None}
+    if json_out:
+        print(_json.dumps(result), flush=True)
+    elif result["ok"]:
+        console.print(f"[green]✓[/green] valid: default {result['default']}, {result['active_count']} rule(s)  "
+                      f"[dim]sha256 {result['sha256']}[/dim]", highlight=False)
+    else:
+        err.print(f"[red]✗ rejected:[/red] {escape(result['error'])}", highlight=False)
+    if not result["ok"]:
+        raise typer.Exit(1)
+
+
 @net_app.command("rules")
 def net_rules(
     env: str | None = _NET_ENV_OPT,
@@ -1111,6 +1182,7 @@ def net_rules(
     if st:
         state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
         console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
+        console.print(f"  this file: {_rules_file_state(path, st)}")
     console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
     console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
     rules = data["rules"]

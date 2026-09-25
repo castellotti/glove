@@ -11,6 +11,41 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability: Layman follow-up** (answers
+  `docs/planning/network-observability-layman-followup.md`; results in
+  `…-followup-results.md`). All changes are additive to the frozen v1 schema,
+  or bug fixes that make glove do what the handoff already said.
+  - **Security fix: an unreadable `rules.json` no longer fails open.** Any
+    `stat`/read error other than "does not exist" (e.g. `EACCES` on the file or
+    its directory) was treated as "no rules", with `ok: true`. It is now a
+    rejection: the last known-good set stays enforced, and `status.json` says
+    `ok: false`, `error: "cannot read rules.json: permission denied"`. A
+    `chmod`/`chown` repair is picked up without a rewrite. `glove net
+    rules|block|unblock` report the same error instead of crashing.
+  - **Ownership contract for `control/`.** The gate already runs as the
+    invoking user's uid:gid; the handoff now says what a second writer must do
+    (chown its temp file to the directory's owner, `0600`, never create the
+    directory). `glove run` refuses, with the fix, a control directory it cannot
+    `chmod`, and warns when an existing `rules.json` is unreadable. Verified
+    live on Docker Desktop (macOS) only; native Linux Docker and rootless Podman
+    are **untested** (`tests/integration/netgate_control_perms.sh` is the probe).
+  - **Confirming a write:** `status.json` `rules.sha256` (the enforced file)
+    and `rules.last_rejected` `{checked_at, source_mtime, sha256, error}`.
+    `glove net rules` shows whether the file on disk is enforced, rejected or
+    pending.
+  - **Gate lifecycle:** flow records carry `run` (the forwarder process), and
+    `flows.ndjson` gets `type: "gate"` start/stop records. Forwarders
+    re-announce every 10 s; the collector writes an inferred `stop` for one
+    silent for 30 s. `glove net status` counts unclosed flows of ended runs as
+    cut, not active. Verified live with Docker Compose: `glove down` loses no
+    closes; a `docker kill`ed forwarder (not restarted by `unless-stopped`) gets
+    its inferred stop (`tests/integration/test_netgate_shutdown.sh`).
+  - **`glove net validate <file|-> [--env] [--session TOKEN] [--json]`**: the
+    gate's validator, pure, exit 0/1.
+  - **Fixtures:** `tests/fixtures/netobs-scenarios/`, 16 complete `net/`
+    directories from the real gate code, one per §6.1 state the original
+    fixture lacks. The original `tests/fixtures/netobs/` is pinned byte-for-byte.
+
 - **Network observability, milestone M5: the whole chain, record: full,
   retention.**
   - `harness: false` services: a listener joined only to its `join_network`,
@@ -219,6 +254,21 @@ default (no-plugins) path stays fully working at each step.
   readers of the shared `registry.json`.
 
 ### Fixes
+
+- Rotated `flows-`/`exit-` files are ordered by `(stamp, n)`, not by name: the
+  same-millisecond collision name `…Z-1.ndjson` sorted before the older
+  `…Z.ndjson`, so pruning could delete the newer file. Rotation also never
+  reuses a pruned name now (it could, and the next prune deleted the file just
+  rotated), and stays ordered if the clock steps back. `glove net flows` had
+  the same ordering bug.
+- A size rotation of `exit.ndjson` now carries the current exit into the fresh
+  file (it did only on retention), so its latest line is always the present
+  origin.
+- The collector drains its whole socket queue at shutdown (it stopped at 256
+  datagrams).
+- JSON state files are written through a per-process temp name
+  (`rules.json.<pid>.tmp`), so the CLI and Layman can't clobber each other's
+  half-written `rules.json`.
 
 - **netgate: an upstream connect timeout no longer crashes the handler.** The
   `TimeoutError` branch in `Forwarder._connect` fell through to an unbound

@@ -9,7 +9,12 @@ follows, so this doubles as the reference reader:
   and flow state keys on ``id`` across files (an ``open`` and its ``close`` may
   straddle a rotation);
 - ``follow`` detects rotation by inode change and drains the renamed file
-  through its still-open descriptor before switching.
+  through its still-open descriptor before switching. That is sound here, on
+  the host, where a rename keeps its inode; a reader behind a bind mount (e.g.
+  Layman in a Docker Desktop container) must identify files by content
+  instead (handoff §2, "Rotation");
+- a flow with no ``close`` whose forwarder ``run`` has ended (``ended_runs``) was
+  cut by a gate that is gone, not still open.
 
 Pure file reads — nothing here touches the network or resolves a name.
 """
@@ -26,22 +31,23 @@ from pathlib import Path
 
 from rich.markup import escape
 
-from .netgate.writer import read_json_dict
+from .netgate.writer import read_json_dict, rotated_files
 
 STALE_AFTER_S = 20.0
 
 
-def _parse_line(raw: bytes, kind: str = "flow") -> dict | None:
+def _parse_line(raw: bytes, kind: str | tuple[str, ...] = "flow") -> dict | None:
     try:
         rec = json.loads(raw)
     except ValueError:
         return None
-    if not isinstance(rec, dict) or rec.get("type") != kind:
+    kinds = (kind,) if isinstance(kind, str) else kind
+    if not isinstance(rec, dict) or rec.get("type") not in kinds:
         return None
     return rec
 
 
-def _parse_lines(lines: list[bytes], kind: str = "flow") -> Iterator[dict]:
+def _parse_lines(lines: list[bytes], kind: str | tuple[str, ...] = "flow") -> Iterator[dict]:
     for raw in lines:
         rec = _parse_line(raw, kind)
         if rec is not None:
@@ -51,14 +57,14 @@ def _parse_lines(lines: list[bytes], kind: str = "flow") -> Iterator[dict]:
 def flow_files(net_dir: Path, name: str = "flows") -> list[Path]:
     """Rotated ``<name>-<ts>.ndjson`` files in rotation order, then the live one."""
     net_dir = Path(net_dir)
-    files = sorted(net_dir.glob(f"{name}-*.ndjson"))
+    files = rotated_files(net_dir, name)
     live = net_dir / f"{name}.ndjson"
     if live.is_file():
         files.append(live)
     return files
 
 
-def iter_records(net_dir: Path, name: str = "flows", kind: str = "flow") -> Iterator[dict]:
+def iter_records(net_dir: Path, name: str = "flows", kind: str | tuple[str, ...] = "flow") -> Iterator[dict]:
     """Stream records of ``kind`` across rotated + live files, a line at a time."""
     for path in flow_files(net_dir, name):
         try:
@@ -122,6 +128,35 @@ def follow_records(
         fh.close()
 
 
+def ended_runs(records: list[dict]) -> set[str]:
+    """Forwarder runs that are over, from ``flows.ndjson`` records in file order.
+
+    A run ends at a ``gate`` ``stop`` for it (sent by the forwarder, or
+    ``inferred`` by the collector after the forwarder went silent), or when a
+    later run appears for the same service (it restarted). Any later record of
+    the run itself revives it (a paused forwarder that resumed). An unclosed
+    flow of an ended run lost its ``close``: it was cut by the gate going away."""
+    ended: set[str] = set()
+    current: dict[str, str] = {}  # service -> its latest run
+    for rec in records:
+        run, svc = rec.get("run"), rec.get("service")
+        if not isinstance(run, str):
+            continue
+        is_gate = rec.get("type") == "gate"
+        if is_gate and rec.get("role") != "forward":
+            continue
+        if is_gate and rec.get("event") == "stop":
+            ended.add(run)
+        else:
+            ended.discard(run)
+        if isinstance(svc, str):
+            prev = current.get(svc)
+            if prev is not None and prev != run:
+                ended.add(prev)
+            current[svc] = run
+    return ended
+
+
 def _parse_ts(value: str | None) -> float | None:
     if not value:
         return None
@@ -158,13 +193,15 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
             gate_state = "running"
 
     latest: dict[str, dict] = {}
-    for rec in iter_records(net_dir):
+    records = list(iter_records(net_dir, kind=("flow", "gate")))
+    ended = ended_runs(records)
+    for rec in records:
         fid = rec.get("id")
-        if isinstance(fid, str):
+        if rec.get("type") == "flow" and isinstance(fid, str):
             latest[fid] = rec
     by_service: dict[str, dict] = {}
     reasons: Counter = Counter()
-    up = down = active = 0
+    up = down = active = cut = 0
     for rec in latest.values():
         b = rec.get("bytes") or {}
         u, d = int(b.get("up") or 0), int(b.get("down") or 0)
@@ -176,6 +213,8 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
         svc["down"] += d
         if rec.get("phase") == "close":
             reasons[str(rec.get("close_reason"))] += 1
+        elif rec.get("run") in ended:
+            cut += 1  # its close was lost with the gate (inferred)
         else:
             active += 1
             svc["active"] += 1
@@ -190,6 +229,7 @@ def summarize(net_dir: Path, *, now: float | None = None) -> dict:
         "flows": {
             "total": len(latest),
             "active": active,
+            "cut_inferred": cut,
             "bytes_up": up,
             "bytes_down": down,
             "by_service": by_service,
@@ -268,7 +308,8 @@ def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
         )
     lines.append(
         f"  totals    flows={flows['total']} active={flows['active']} "
-        f"↑{human_bytes(flows['bytes_up'])} ↓{human_bytes(flows['bytes_down'])}"
+        + (f"cut-by-gate-exit(inferred)={flows['cut_inferred']} " if flows["cut_inferred"] else "")
+        + f"↑{human_bytes(flows['bytes_up'])} ↓{human_bytes(flows['bytes_down'])}"
         + (f"  closes={flows['close_reasons']}" if flows["close_reasons"] else "")
     )
     return lines
