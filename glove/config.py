@@ -60,6 +60,14 @@ class Service:
     port: int = 0  # listen port inside the internal net (default: target port)
     join_network: str | None = None  # external docker network to also join
     host_gateway: bool = False  # add extra_hosts host.docker.internal:host-gateway
+    # Network observability (glove/observe.py): None ⇒ gated in tcp mode when the
+    # top-level `observe.enabled` is on; False ⇒ opt out (stays plain socat); a
+    # mapping annotates it ({mode, tool, scope, upstream}).
+    observe: Any = None
+    # False: a listener for egress-stack components (e.g. SearXNG's outbound
+    # proxy), joined only to `join_network` — never to the harness's network and
+    # never offered to the harness. Requires join_network.
+    harness: bool = True
 
     def __post_init__(self) -> None:
         if self.port == 0:
@@ -73,6 +81,11 @@ class Service:
         # host.docker.internal targets imply the host-gateway extra_hosts entry.
         if "host.docker.internal" in self.to:
             self.host_gateway = True
+        if not self.harness and not self.join_network:
+            raise ConfigError(
+                f"service {self.name!r}: harness: false needs join_network — it is a listener "
+                "for components on that network, and is never reachable from the sandbox"
+            )
 
 
 @dataclass
@@ -143,6 +156,15 @@ class Config:
     tools: dict[str, Any] = field(default_factory=dict)
     browser: dict[str, Any] = field(default_factory=dict)
     enforcer_options: dict[str, Any] = field(default_factory=dict)
+    # Network observability (docs/planning/network-observability.md): routes the
+    # service forwarders through the instrumented netgate and records flows to
+    # the session's net/ dir. Off by default; validated in glove/observe.py.
+    observe: dict[str, Any] | bool = field(default_factory=dict)
+
+    @property
+    def harness_services(self) -> list[Service]:
+        """Services offered to the harness (excludes `harness: false` listeners)."""
+        return [s for s in self.services if s.harness]
 
     def resolved_name(self) -> str:
         # The name IS the env-id; the CLI always

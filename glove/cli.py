@@ -12,6 +12,7 @@ Subcommands: init, run (default), config, ls, down, build. The bare form
 
 from __future__ import annotations
 
+import collections
 import os
 import shutil
 import sys
@@ -56,7 +57,7 @@ app = typer.Typer(
 console = Console()
 err = Console(stderr=True)
 
-SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "policy", "version"}
+SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "policy", "net", "version"}
 
 
 def _autodetect_provider() -> str:
@@ -343,9 +344,29 @@ def run(
             for fname, content in plan.policies.items():
                 (enforcer_dir / fname).write_text(content)
             plan.policies_host_dir = str(enforcer_dir)
+        # Network observability: net/ is a sibling of home/, bind-mounted into
+        # the netgate collector only. The render refuses any harness mount that
+        # overlaps it (validate_net_isolation).
+        if plan.observe is not None:
+            from .observe import control_dir, ensure_net_dir, net_dir
+
+            plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
+            plan.control_host_dir = str(ensure_net_dir(control_dir(env_id, session_name)))
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)
         )
+        if plan.observe is not None:
+            from .observe import session_facts, write_session_facts
+
+            write_session_facts(Path(plan.net_host_dir), session_facts(plan))
+            if plan.observe.record == "full":
+                err.print(
+                    "[bold red]⚠ observe.record: full[/bold red] — this session writes a browsing log to "
+                    f"{plan.net_host_dir}: the method and URL of every cleartext HTTP request"
+                    + (" and request headers (credentials redacted)" if plan.observe.record_headers else "")
+                    + ". HTTPS paths stay invisible (no TLS interception). This trades the session's "
+                    "privacy for visibility; `glove net status` and Layman badge it."
+                )
         # Register the forced one-off now the effective harness is known: it can
         # arrive from --config, so cfg.harness — not the CLI arg — is authoritative.
         # After a successful render so an aborted run leaves no phantom row; a
@@ -538,8 +559,18 @@ def _print_summary(plan, home_files) -> None:
     if not plan.network.sidecars:
         console.print("  [dim](none — harness is fully offline)[/dim]")
     for s in plan.network.sidecars:
+        gate = (
+            f"  [cyan](netgate {s.gate.mode}, tool={s.gate.tool}, "
+            f"scope={s.gate.scope or 'per-destination'})[/cyan]"
+            if s.gate else ""
+        )
         console.print(
-            f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}"
+            f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{gate}"
+        )
+    if plan.observe is not None and plan.net_host_dir:
+        console.print(
+            f"[bold]network observability[/bold] (record={plan.observe.record}): flows → "
+            f"{plan.net_host_dir} [dim](collector only; no harness mount)[/dim]"
         )
     console.print("[bold]harness config seeded[/bold]")
     for f in home_files:
@@ -611,7 +642,9 @@ def down(
         None, "--name", help="tear down only this session (default: all sessions of the env)"
     ),
     provider: str | None = typer.Option(None),
-    wipe: bool = typer.Option(False, "--wipe", help="also remove the config volume"),
+    wipe: bool = typer.Option(
+        False, "--wipe", help="also remove the config volume and the network-observability record"
+    ),
 ) -> None:
     """Tear down an env's sessions (compose projects) and their host services.
 
@@ -663,13 +696,19 @@ def down(
             except Exception as e:
                 err.print(f"[yellow]warn:[/yellow] host-service teardown skipped for {sname}: {e}")
         teardown(token, provider=prov, wipe=wipe)
+        if wipe:
+            from .observe import net_dir, wipe_flow_record
+
+            removed = wipe_flow_record(net_dir(sdir))
+            if removed:
+                console.print(f"[dim]removed {removed} network-observability file(s) from {net_dir(sdir)}[/dim]")
 
 
 @app.command()
 def build(
     harness: str | None = typer.Argument(
         None, help=f"harness image to build ({', '.join(known_harnesses())}); "
-        "omit to build the forwarder only"
+        "omit to build the forwarder + netgate only"
     ),
     provider: str | None = typer.Option(None),
     enforcer: str | None = typer.Option(
@@ -680,13 +719,15 @@ def build(
     ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
-    """Build the forwarder and (optionally) a harness image."""
+    """Build the forwarder + netgate and (optionally) a harness image."""
     from .harness import get_profile
+    from .observe import build_netgate
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
     plugins = split_csv(with_plugins) if with_plugins else None
     build_forwarder(prov, force=rebuild)
+    build_netgate(prov, force=rebuild, console=console)
     if harness:
         build_harness(
             prov,
@@ -872,6 +913,212 @@ def policy_show(
         console.print("\n[bold yellow]documented gaps[/bold yellow]")
         for g in enf.gaps(plan):
             console.print(f"  [yellow]![/yellow] {g}")
+
+
+net_app = typer.Typer(
+    add_completion=False,
+    help="Network observability: gate status and flow records (net/ of a session).",
+)
+app.add_typer(net_app, name="net")
+
+
+_NET_ENV_OPT = typer.Option(None, "--env", help="select an env by id")
+_NET_SESSION_OPT = typer.Option(None, "--session", help="session name (default: the env's default)")
+
+
+def _net_session(env: str | None, session: str | None) -> tuple[str, str]:
+    """(env_id, session name) — `--session` is the session *name* (default:
+    the env's default session), not a transcript id."""
+    env_id = _locate_env(env, None)
+    return env_id, session or env_id
+
+
+def _net_dir_for(env: str | None, session: str | None) -> tuple[str, str, Path]:
+    """(env_id, session name, net dir)."""
+    from .observe import net_dir
+
+    env_id, sname = _net_session(env, session)
+    return env_id, sname, net_dir(session_dir(env_id, sname))
+
+
+@net_app.command("status")
+def net_status(
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
+    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
+) -> None:
+    """Gate health, record mode, services, upstream and resolver state."""
+    import json as _json
+
+    from .netview import summarize
+
+    try:
+        env_id, sname, ndir = _net_dir_for(env, session)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    summary = summarize(ndir)
+    if json_out:
+        console.print_json(_json.dumps(summary))
+        return
+    from .netview import render_status
+
+    for line in render_status(env_id, sname, ndir, summary):
+        console.print(line, highlight=False)
+    if not summary["observed"]:
+        raise typer.Exit(1)
+
+
+@net_app.command("flows")
+def net_flows(
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
+    follow: bool = typer.Option(False, "--follow", "-f", help="keep tailing (survives rotation)"),
+    json_out: bool = typer.Option(False, "--json", help="print raw NDJSON records"),
+    tail: int | None = typer.Option(None, "--tail", "-n", help="only the last N records"),
+) -> None:
+    """Print the session's flow records (rotated files first, then live)."""
+    import json as _json
+
+    from .netview import follow_records, format_record, iter_records
+
+    try:
+        _, _, ndir = _net_dir_for(env, session)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    if not ndir.is_dir():
+        err.print(f"[red]error:[/red] no net/ dir at {ndir} — is `observe.enabled` on for this session?")
+        raise typer.Exit(1)
+
+    def emit(rec: dict) -> None:
+        if json_out:
+            print(_json.dumps(rec, separators=(",", ":")), flush=True)
+        else:
+            console.print(format_record(rec), highlight=False)
+
+    if tail is None:
+        records = iter_records(ndir)
+    else:  # `--tail 0 --follow`: only new records
+        records = collections.deque(iter_records(ndir), maxlen=tail) if tail > 0 else ()
+    for rec in records:
+        emit(rec)
+    if follow:
+        try:
+            for rec in follow_records(ndir, from_end=True):
+                emit(rec)
+        except KeyboardInterrupt:
+            pass
+
+
+def _rules_target(env: str | None, session: str | None) -> tuple[str, str, Path]:
+    """(env_id, session token, rules.json path) for `glove net block|unblock|rules`."""
+    from .observe import control_dir
+
+    env_id, sname = _net_session(env, session)
+    return env_id, session_token(env_id, sname), control_dir(env_id, sname) / "rules.json"
+
+
+@net_app.command("block")
+def net_block(
+    target: str = typer.Argument(..., help="host glob (e.g. '*.doubleclick.net'), IP, or CIDR"),
+    port: int | None = typer.Option(None, "--port", help="only this destination port"),
+    terminate: bool = typer.Option(False, "--terminate", help="also cut matching established flows"),
+    allow: bool = typer.Option(False, "--allow", help="write an allow rule instead (e.g. under default block)"),
+    note: str | None = typer.Option(None, "--note", help="free-text note shown in `glove net rules`"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
+) -> None:
+    """Append a rule to the session's rules.json (the file Layman writes too).
+
+    Rules apply to new connections within ~1s; --terminate also cuts matching
+    established ones. glove's built-in SSRF guard runs first and cannot be
+    overridden by an allow rule."""
+    from .netgate.policy import PolicyError
+    from .netrules import block_rule, load, save
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        rule = block_rule(target, port=port, terminate=terminate, note=note, action="allow" if allow else "block")
+        data["rules"] = [*data["rules"], rule]
+        save(path, data, env_id, token)
+    except (ConfigError, PolicyError, OSError) as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    console.print(f"[green]✓[/green] {rule['action']} {rule['match']} → {rule['id']}  [dim]{path}[/dim]")
+
+
+@net_app.command("unblock")
+def net_unblock(
+    key: str = typer.Argument(..., help="rule id (r_…) or the exact host glob / IP / CIDR it matches"),
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
+) -> None:
+    """Remove rules by id or by the exact target they match."""
+    from .netgate.policy import PolicyError
+    from .netrules import load, remove, save
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        gone = remove(data, key)
+        if not gone:
+            err.print(f"[yellow]no rule matches {key!r}[/yellow]")
+            raise typer.Exit(1)
+        save(path, data, env_id, token)
+    except (ConfigError, PolicyError, OSError) as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    for r in gone:
+        console.print(f"[green]✓[/green] removed {r['id']} ({r['action']} {r['match']})")
+
+
+@net_app.command("rules")
+def net_rules(
+    env: str | None = _NET_ENV_OPT,
+    session: str | None = _NET_SESSION_OPT,
+    json_out: bool = typer.Option(False, "--json", help="print the rules document"),
+) -> None:
+    """Show the effective rules, their provenance, and the gate's load result."""
+    import json as _json
+
+    from .netgate.policy import PolicyError
+    from .netrules import load
+
+    try:
+        env_id, token, path = _rules_target(env, session)
+        data = load(path, env_id, token)
+        problem = None
+    except PolicyError as e:
+        data, problem = None, str(e)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+    if json_out:
+        console.print_json(_json.dumps(data or {"error": problem}))
+        return
+    from .netgate.writer import read_json_dict
+
+    _, sname, ndir = _net_dir_for(env, session)
+    status = read_json_dict(ndir / "status.json") or {}
+    console.print(f"[bold]{env_id}[/bold] / session [bold]{sname}[/bold]  [dim]{path}[/dim]")
+    if problem:
+        console.print(f"  [red]rules.json is invalid:[/red] {problem}")
+        console.print("  [dim]the gate keeps its last known-good set until this is fixed[/dim]")
+        raise typer.Exit(1)
+    st = status.get("rules") or {}
+    if st:
+        state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
+        console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
+    console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
+    console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
+    rules = data["rules"]
+    if not rules:
+        console.print("  [dim](no rules)[/dim]")
+    for i, r in enumerate(rules, 1):
+        extra = ("  terminate" if r.get("terminate") else "") + (f"  # {r['note']}" if r.get("note") else "")
+        console.print(f"  {i:>2}. {r['action']:<5} {r['match']}  [dim]{r['id']}[/dim]{extra}", highlight=False)
 
 
 @app.command("ps")

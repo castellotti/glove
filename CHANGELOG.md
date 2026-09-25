@@ -11,6 +11,169 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **Network observability, milestone M5: the whole chain, record: full,
+  retention.**
+  - `harness: false` services: a listener joined only to its `join_network`,
+    never the harness's network, and never offered to the harness. Connections
+    are labelled `observe.client` (`searxng | playwright | unknown`).
+    glove-pi-search's branch adds a SearXNG fan-out listener and re-points
+    SearXNG at it, so one `web_search` shows every engine contacted.
+  - `observe.record: full`: `request: {method, url}` for cleartext HTTP
+    (`url: null` for CONNECT). `record_headers` adds headers with credentials
+    redacted. A loud launch warning.
+  - `observe.retain`: time-based rotation (every retain/4) and expiry; the
+    current exit record is carried forward so retention never drops present
+    state. `glove down --wipe` also deletes the flow and exit record.
+  - Empty and idle proxy connections are recorded as `eof`/`timeout` with
+    `verdict: allow`, not as malformed-request blocks.
+  - **Verified on live glove-pi-search** (vpn). One agent `web_search` produced
+    flows to nine distinct engine hosts, all `searxng` / `search-engine-fanout`
+    / `tunnelled` with in-tunnel IPs. SearXNG's only TCP peers were the gate and
+    valkey. Search results and latency through the gate matched direct-to-gluetun,
+    warm and cold. `record: full` captured a cleartext request with `Cookie`
+    redacted. Retention rotated and expired files and kept the current exit.
+
+- **Network observability, milestone M4: in-tunnel resolution and exit
+  identity.**
+  - `observe.resolver: dns://<h>:<p> | tor-socks://<h>:<p>`. Proxy-mode gates
+    resolve each destination through the tunnel's own resolver *before*
+    connecting (cached by TTL, with a 15 s backoff when down), so flows carry
+    `dest.ip` with `resolution: in-tunnel`, and M3 `ip` rules apply to hostnames.
+    A name that resolves to a non-public address is refused (`builtin:ssrf-guard`),
+    which closes the M2 rebinding gap at the gate.
+  - Fail closed: resolver down means `unavailable`, traffic unaffected, and
+    `status.json` `resolver.healthy: false`. `tcp`-mode flows are now
+    `resolution: "disabled"` (configured endpoints are never resolved), instead
+    of `unavailable`.
+  - `observe.exit_identity: via-proxy` (opt-in) polls an IP-echo URL
+    (default am.i.mullvad.net/json) *through* the chain every 5 min and writes
+    `net/exit.ndjson` on change. `glove net status` shows the exit and the
+    resolver.
+  - **Design change from the plan, measured first:** current gluetun serves DNS
+    on all interfaces and its firewall already admits the egress subnet, so no
+    `netdns` sidecar sharing gluetun's namespace is needed. gluetun's control
+    API needs a credential (401), so exit identity goes via the chain instead.
+  - **Verified on live glove-pi-search** (vpn). `web_fetch` destinations got
+    in-tunnel IPs, and `exit.ndjson` recorded the VPN exit. A packet sniffer in
+    the gate's netns showed destination names sent only to gluetun's resolver,
+    with Docker's host-bound DNS asked only for `egress-proxy`/`gluetun`. With
+    the resolver dead: `unavailable`, the fetch still succeeded, and again no
+    host-bound destination query. Tor `RESOLVE` was verified against the stack's
+    `tor` container. The fixture gains in-tunnel IPs and `exit.ndjson`.
+
+- **Network observability, milestone M3: policy.** A `rules.json` control
+  channel (`~/.glove/control/<env>/<session>/`, mounted read-only into the gate
+  containers only) with a strict, whole-file validator
+  (`glove/netgate/policy.py`) shared by the gate and the CLI. Rules are evaluated
+  first-match after the built-in guard (then `default`), reloaded about once a
+  second without a restart, and applied to new connections. `terminate: true`
+  also cuts established flows. A rejected file keeps the last known-good set and
+  reports `status.json` `rules.ok: false` with the error. In `tcp` mode a host
+  rule can match the TLS SNI, and blocks before any byte is forwarded. New
+  commands: `glove net block|unblock|rules`. The CLI never writes, or edits, a
+  file the gate would reject. The render refuses any harness mount overlapping
+  the control dir. **Verified on live glove-pi-search**: a blocked host's
+  `web_fetch` failed and was recorded as `verdict: block` with the rule id; a
+  malformed write was rejected while the old rule kept blocking; removing the
+  file restored access live.
+
+- **Network observability, milestone M2: proxy awareness, SSRF guard, SNI**
+  (`docs/planning/network-observability.md` §2.5.1, §2.7).
+  - New `observe: {mode: http-proxy, route: vpn|tor|direct}` per service. The
+    gate speaks HTTP `CONNECT` and absolute-form requests, records the real
+    destination host and port (`proto: http-connect|http`), and chains to the
+    upstream (`chain:http://<to>` by default) by hostname, so the destination is
+    only ever passed upstream as text and never resolved by the gate. Requests
+    are re-serialised canonically, and absolute-form ones are forced to
+    `Connection: close`.
+  - `route` is required for `chain:` upstreams. glove cannot verify a tunnel, so
+    the operator declares it. Scope is classified per flow: refused or unparsed
+    requests are `local`, otherwise `tunnelled` for vpn/tor and `direct` for
+    `direct`. `status.json` `upstream.kind` reports the declared route, and
+    `direct` is never masked.
+  - SSRF guard: non-global IP literals (including IPv4-mapped IPv6 and legacy
+    numeric forms), single-label container names and local suffixes are refused
+    with a 403 before anything reaches the upstream. They are recorded as
+    `verdict: block` with `rule: builtin:ssrf-guard`; unparseable requests get
+    `builtin:malformed-request` and a 400. The DNS-rebinding gap is documented
+    in `docs/SECURITY.md`.
+  - `tcp` mode peeks (never terminates) a TLS ClientHello for its SNI, including
+    ClientHellos split across segments, without delaying server-first protocols.
+  - Sample `net/` fixture for Layman in `tests/fixtures/netobs/`, generated by
+    the real gate code and validated against the handoff schema. The handoff
+    brief documents M1–M2 semantics and a table of UI states, ready for a
+    design review before the Layman plan.
+  - **Verified live** (`tests/integration/test_netgate_m2.sh`, 23/23, on Docker
+    Desktop). A CONNECT/TLS fetch through a stub gluetun-style upstream recorded
+    `www.origin.test:443`, `web_fetch`, `tunnelled`, with bytes equal to the
+    client's raw socket counts (`bytes.down` +1.25% over the body). All 7 SSRF
+    probes were refused, and the upstream saw none of them. A DNS sniffer in the
+    gate's netns saw only `egress-proxy` queried, never the destination. The M1
+    suite still passes (30/30).
+  - **Verified on live glove-pi-search** (vpn profile; the pi-search changes are
+    on that repo's `network-observability` branch). Pi's real `web_fetch` of
+    RFC 9110 recorded `www.rfc-editor.org:443`, `web_fetch`,
+    `tunnelled`/`vpn`, with `bytes.down` +4.2% over the response measured
+    through the same proxy. `web_search` and the LLM showed as `local` tcp
+    flows. The agent's `web_fetch` of `gluetun:8000`, `169.254.169.254` and
+    `127.0.0.1:8000` was refused at the gate and never reached gluetun. That
+    closes a real path: gluetun's proxy does forward to its own control server,
+    whose auth was the only barrier. A DNS sniffer on the proxy gate saw only
+    `egress-proxy` queried. **Untested:** podman.
+  - `observe.enabled` is now a master switch: with it off, per-service
+    `observe:` annotations are inert rather than an error, so a config can carry
+    them and toggle observation with one key.
+
+- **Network observability, milestone M1: the netgate as a drop-in socat
+  replacement** (`docs/planning/network-observability.md` §8). With
+  `observe: {enabled: true}`, each service forwarder runs the new stdlib-only
+  netgate (`glove/netgate/`, image `glove/netgate:0.1.0-<src-hash>` from
+  `glove/templates/netgate.Dockerfile`) in `forward` mode, with the same
+  container name, networks and port as the socat sidecar it replaces. Each
+  connection produces flow records: `open`, ~1 Hz `update`s while bytes move, and
+  `close` with a `close_reason` of `eof`, `reset`, `timeout`,
+  `upstream_unreachable` or `gate_shutdown`. Byte counts are cumulative, and
+  records carry timing, tool label and scope in the normative handoff §2 schema.
+  They reach a collector, `glove-<session>-netgate`, over a Unix datagram socket
+  on a tmpfs volume. The collector runs with `network_mode: none`, is the only
+  writer of `net/flows.ndjson` (size-rotated to `flows-<ts>.ndjson`, keep-N,
+  0600), and writes `net/status.json`. glove writes `net/session.json` at render
+  time with the declared services (including unobserved ones), tool labels,
+  upstreams and record mode. New commands: `glove net status` and
+  `glove net flows [--follow] [--json] [--tail N]`. The follow mode is a
+  reference reader for Layman: it handles rotation by inode and keys on `id`.
+  Per-service `observe:` sets `tool`/`scope` or opts out with `false`.
+  `record: full`, `http-proxy`/`socks5` modes, and `chain:` upstreams are
+  rejected with the milestone that adds them.
+  - **Design change from the plan:** instead of one `glove-<session>-netgate`
+    container holding every listener, each observed service keeps its own gate
+    container and a separate collector does the writing. glove-pi-search's `llm`
+    and `search` both listen on `:8080`, which one container can't bind twice.
+    The single writer is also what makes the rotation contract hold.
+  - **Invariants, each with tests** (`tests/test_netgate_invariants.py`): the
+    gate exposes no API on any network; gates are non-root, `cap_drop ALL`,
+    `no-new-privileges`, read-only, with no `NET_ADMIN`, no harness
+    network/PID namespace, and no harness-home mount; `net/` is a sibling of
+    `home/`, and any harness mount that overlaps it (home, `/work`, an add-dir,
+    a relocated `config_home_source`) is refused at render with no waiver. Name
+    resolution in the gate is limited, by an AST allow-list, to the configured
+    upstream and glove's own ingress alias. Host-side code never opens a socket,
+    and a monkeypatched resolver proves render and `glove net` never resolve. A
+    missing, stopped or unwritable collector drops records (and logs it), never
+    traffic. Flow and status shapes are checked against the jsonc in the
+    handoff brief itself.
+  - **Verified live on Docker 29.8 / Docker Desktop (arm64)** with
+    `tests/integration/test_netgate_m1.sh` (30/30). The real Pi harness under
+    nono reaches a stub LLM through the gate. `flows.ndjson` records the LLM
+    flow with byte counts equal to what a raw client sent and received (1059 up,
+    5,000,157 down). The same requests through plain socat return byte-identical
+    payloads. Invariants were read back from `docker inspect` and `/proc`, and
+    fail-open, rotation, `--follow` across rotations and SIGTERM →
+    `gate_shutdown` were all exercised. **Untested:** podman, and a live
+    glove-pi-search session (needs its `.env`, Keychain LLM key and VPN
+    credentials); its config renders and passes `docker compose config` in
+    `tests/test_observe.py`.
+
 - **Resume a prior session** with `glove <harness> … --resume` (`-r`,
   continue-last) or `--session <id>` (a specific full/partial UUID or transcript
   path). A session's transcript lives in the persistent per-session home, not the
@@ -56,6 +219,28 @@ default (no-plugins) path stays fully working at each step.
   readers of the shared `registry.json`.
 
 ### Fixes
+
+- **netgate: an upstream connect timeout no longer crashes the handler.** The
+  `TimeoutError` branch in `Forwarder._connect` fell through to an unbound
+  `conn`, so the flow raised `UnboundLocalError` instead of closing with
+  `close_reason: timeout` (and an http-proxy client never got its 502).
+- **A `harness: false` service named `search` no longer implies the search
+  plugin.** The legacy bridge now looks only at harness-facing services, via
+  the new `Config.harness_services`.
+- **Network observability review fixes.**
+  - The in-tunnel resolver now fails open when Tor's SOCKS port (or a DNS TCP
+    peer) accepts and then hangs up. The resulting `IncompleteReadError` is an
+    `EOFError`, not an `OSError`, so it escaped `InTunnel.resolve` and failed
+    the whole proxied connection with no backoff. It now counts as a resolver
+    failure: the flow is recorded `unavailable` and traffic is unaffected.
+  - A flow cut mid-relay (a `terminate: true` rule, the gate stopping, or a
+    reset during the proxy handshake) now closes its upstream socket right away.
+    Before, only the client side was closed, and the upstream socket stayed open
+    until the garbage collector reclaimed it.
+  - `glove net flows -f` no longer drops a record written just before a
+    rotation; the old file is read one last time before it is closed.
+  - `glove net rules` no longer crashes on a valid `rules.json` that omits the
+    optional `default` or `rules` keys.
 
 - **A forced `--env X --config Y` one-off is now registered, so its home is
   recorded.** `glove <harness> --env X --config Y` (no prior `glove init` — the
@@ -120,6 +305,25 @@ default (no-plugins) path stays fully working at each step.
   the image env, so login-shell setup was unnecessary.
 
 ### Internal
+
+- **Network observability cleanup.**
+  - Value sets (scopes, modes, routes, clients, resolve/record modes) and the
+    rotation defaults are defined once in `glove.netgate` and shared by the
+    host-side validator, the gate's argparse and the rules validator.
+  - `glove net status|flows` stream records line by line (`netview.iter_records`)
+    instead of loading every rotated file into memory; `--tail N` keeps a
+    bounded window. Exit records use the same reader.
+  - Gate facts are derived once on `NetworkPlan` (`observe`, `gated`,
+    `exit_gate`); `parse_observe` runs once per plan.
+  - The in-tunnel resolver shares one lookup across parallel flows to the same
+    host, and fails open on any lookup error rather than a growing list of types.
+  - Rule matching normalises the flow's host and IP once per evaluation, not per
+    rule; the exit poller builds its TLS context once.
+  - `netrules.load` fills the optional `default`/`rules` keys, so the CLI no
+    longer re-applies the gate's defaults; shared `read_json_dict`,
+    `_net_session` and `--env/--session` options replace per-command copies.
+  - Dead code removed (`dest_ip_and_resolution`, `Collector.received`, stale
+    "rules land in M3" hint in `glove net status`).
 
 - **Back-compat shim de-duplicated.** The rule mapping a legacy config to an
   implied plugin (a `search` service ⇒ `search`; a top-level `browser:` block ⇒

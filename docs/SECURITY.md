@@ -30,6 +30,82 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 | The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 
+## Network observability (the netgate)
+
+With `observe.enabled`, the service forwarders are replaced by the netgate
+(`docs/planning/network-observability.md`). It changes what glove *records*,
+never what the agent can *reach*:
+
+- **Same reach.** Each gate forwarder has exactly the name, networks, port and
+  target of the socat sidecar it replaces. A `tcp` gate dials only its configured
+  target. An `http-proxy` gate dials only its configured upstream proxy; the
+  agent picks the destination, but the upstream was already routable through the
+  socat forwarder, so reach doesn't change. What *is* new is the SSRF surface of a
+  general proxy, handled by the guard below.
+- **SSRF guard (`http-proxy` mode).** Before anything is sent upstream, the gate
+  refuses destinations that are not plainly public: non-global IP literals in any
+  notation (`169.254.169.254`, `2130706433`, `[::ffff:127.0.0.1]`), single-label
+  names (every container on the egress network, including gluetun's control
+  server), and local suffixes (`localhost`, `.local`, `.internal` …). Requests
+  are re-serialised from the parsed destination, never forwarded verbatim, so the
+  upstream acts on exactly the host that was checked. Absolute-form requests are
+  forced to one request per connection. **Known gap:** the guard judges a name
+  by its shape and never resolves it (that would leak it). A public-looking name
+  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the gate,
+  and the upstream proxy's own policy is the backstop until the in-tunnel
+  resolver (M4). Note too that `route: vpn|tor` is the operator's declaration,
+  not a verified fact.
+  Measured on glove-pi-search: gluetun's HTTP proxy forwards to gluetun's own
+  control server (`gluetun:8000`, and `127.0.0.1:8000` inside its namespace),
+  which can reconfigure the VPN. Only gluetun's control-server auth stood in the
+  way. Under the gate, those requests are refused before they reach gluetun.
+- **Listeners for the egress stack, not the agent (M5).** A `harness: false`
+  service (glove-pi-search's SearXNG fan-out listener) is rendered only on its
+  egress network. The sandbox has no route to it, it is never offered to the
+  harness, and a test asserts both. It chains to the same upstream SearXNG already
+  used, so SearXNG's reach is unchanged, and the SSRF guard now also covers
+  SearXNG's requests.
+- **`record: full` is a deliberate privacy trade.** It writes the method and
+  URL of cleartext HTTP requests (and, opted in, headers with credentials
+  redacted) to disk. HTTPS paths are never visible, because there is no TLS
+  interception. glove warns at launch, and the mode is carried in `session.json`,
+  `status.json` and `glove net status`. `retain` and `glove down --wipe` bound
+  how long any of it stays.
+- **No new API.** Forwarders listen only on their forward port. The collector
+  has `network_mode: none`, so it has no interface at all. Records travel over
+  a Unix datagram socket on a tmpfs volume that only the gate containers mount.
+- **No new privilege.** Gate containers run as the operator's uid with
+  `cap_drop ALL`, `no-new-privileges`, a read-only rootfs and pids/mem limits.
+  They never get `NET_ADMIN`, never share the harness's network or PID
+  namespace, and never mount its home.
+- **Invisible to the agent.** Telemetry goes to the session's `net/` dir, which
+  is bind-mounted into the collector only. The render refuses (no waiver) any
+  harness mount that overlaps `net/`: the agent must neither read its own flow
+  record nor forge one.
+- **A control channel that can only say allow/block.** `rules.json`
+  (`~/.glove/control/<env>/<session>/`) is mounted read-only into the gate
+  containers and never into the harness. The same no-waiver render check applies,
+  so the agent cannot read or rewrite its own rules. Its schema has no key for a
+  path, command, mount, image or environment variable. Any unknown key rejects
+  the whole file, and the gate keeps its last known-good set, so a buggy or
+  compromised writer can at worst change which destinations are allowed. The
+  built-in SSRF guard runs before the rules, so no rule can allow an internal
+  destination.
+- **No host DNS.** Nothing on the host resolves a destination. The gate resolves
+  only its configured target or upstream (as socat did) and glove's own ingress
+  alias. In proxy mode the destination reaches the upstream as text. This was
+  measured live by sniffing the gate's netns: only the upstream's name was ever
+  queried. A destination IP is either a literal or reported `unavailable`.
+- **Traffic the gate itself originates (M4, when configured).** A proxy gate
+  sends DNS queries for destination names to the configured *in-tunnel*
+  resolver (gluetun's DNS, which uses DoT through the VPN, or Tor `RESOLVE`), the same resolver the
+  upstream uses anyway. With `exit_identity: via-proxy`, one gate also fetches an
+  IP-echo URL through the tunnel every ~5 min. That service learns the exit IP
+  and nothing about the operator. Neither is agent traffic, so neither appears
+  in `flows.ndjson`.
+- **Fail open on telemetry.** A stopped, slow or unwritable collector drops
+  records (counted in `status.json`, logged by the collector), never traffic.
+
 ## The Docker Desktop (macOS) blast radius
 
 Be precise about what "container root" means here:

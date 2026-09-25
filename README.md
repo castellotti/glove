@@ -110,6 +110,7 @@ llm_api_key: sk-...         # stripped from shell tools' env by ring 1
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
+observe: { enabled: true }  # network observability (off by default) — see below
 ```
 
 Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
@@ -125,7 +126,99 @@ glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]
 glove policy show [--env ID]         # rendered ring-1 policies + ring-0 hardening
 glove config  [--env ID] [--edit|--path]
 glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
+glove net status [--env ID] [--session NAME] [--json]          # gate health + per-service totals
+glove net flows  [--env ID] [--session NAME] [--follow] [--json] [--tail N]
+glove net block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
+glove net unblock <rule-id|target>
+glove net rules  [--json]                                       # rules + the gate's load result
 ```
+
+### Network observability
+
+With `observe: {enabled: true}`, every service forwarder becomes an instrumented
+**netgate**: a drop-in for the socat forwarder (same container name, networks
+and port, so the harness config is unchanged) that records every connection:
+open, ~1 Hz updates while bytes move, and close, with cumulative byte counts,
+timing, tool label and scope. Records go to the session's `net/` directory
+(`~/.glove/envs/<env>/sessions/<session>/net/`, a sibling of `home/`) through a
+single collector container that has **no network at all**
+(`network_mode: none`):
+
+```
+net/session.json    static facts: services, tools, upstreams, record mode (0600)
+net/flows.ndjson    append-only flow stream, size-rotated to flows-<ts>.ndjson
+net/status.json     gate heartbeat, upstream health, dropped-record counters
+```
+
+```yaml
+observe:
+  enabled: true
+  resolve: in-tunnel        # in-tunnel | none — there is deliberately no `host`
+  rotate_mb: 64             # rotate flows.ndjson at this size…
+  keep: 8                   # …keeping this many rotated files
+services:
+  - { name: llm, to: host.docker.internal:8080, port: 8080,
+      observe: { tool: llm, scope: local } }      # optional per-service labels
+  - { name: other, to: x:1, observe: false }      # opt out: stays plain socat
+                                                  # (enabled: false turns all of it off)
+  - { name: proxy, to: egress-proxy:8888, join_network: pi-search-egress,
+      observe: { mode: http-proxy, route: vpn } } # see below
+```
+
+**Proxy mode.** A service the harness uses as an HTTP proxy (glove-pi-search's
+`proxy`/`web_fetch`) can run with `mode: http-proxy`. The gate then reads the
+destination from each `CONNECT host:port` or `GET http://host/…` and records the
+real hostname and port, not just `egress-proxy`. It chains to the upstream
+(`chain:http://<to>` by default) **by hostname**, so the tunnel, not the gate or
+your host, resolves it. `route: vpn|tor|direct` is required and declares what
+that upstream really is. glove can't verify a tunnel, so it won't assume one, and
+`direct` marks every flow as untunnelled. Before anything goes upstream, a built-in
+**SSRF guard** refuses non-public destinations: private and metadata IPs in any
+notation, container names like `gluetun`, and `.internal`/`localhost` names.
+Refusals are recorded as blocked flows. In `tcp` mode the gate also peeks
+(never terminates) a TLS ClientHello, so an HTTPS flow shows its SNI hostname.
+
+Guarantees, each covered by a test (`tests/test_netgate_invariants.py`) and by
+live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`):
+- the gate exposes no API on any network;
+- it never gains `NET_ADMIN`, joins the harness's network or PID namespace, or
+  mounts the harness home;
+- `net/` has no harness mount, and a render that would expose it is refused;
+- nothing resolves a destination hostname on the host;
+- telemetry failures drop records, never traffic.
+
+**Blocking.** `glove net block '*.doubleclick.net'` writes a rule to
+`~/.glove/control/<env>/<session>/rules.json`, the same file Layman writes. The
+gate reloads it within about a second, refuses new matching connections with a
+recorded `verdict: block`, and with `--terminate` also cuts established ones.
+A malformed file is rejected as a whole: the gate keeps the previous rules and
+reports the error in `glove net rules` and `status.json`. The built-in SSRF
+guard always runs first.
+
+**Where things are (M4).** With `observe.resolver: dns://gluetun:53` (or
+`tor-socks://tor:9150`), a proxy gate resolves each destination through the
+*tunnel's* resolver, never your host's. Flows then carry `dest.ip` with
+`resolution: in-tunnel`, `ip` rules apply to hostnames, and a name that resolves
+to a private address is refused. If the resolver is down, flows say
+`unavailable` and traffic is unaffected. With `observe.exit_identity: via-proxy`,
+the session's apparent origin (exit IP and location) is fetched *through* the
+tunnel and written to `net/exit.ndjson`. It's opt-in, because the echo service
+(`am.i.mullvad.net` by default) is a third party, though it only sees the exit.
+
+**The whole chain (M5).** A `harness: false` service is a gate listener for
+*egress-stack* components, and the sandbox can't reach it. glove-pi-search points
+SearXNG's outgoing proxy at one (`fanout`), so a single `web_search` shows every
+engine SearXNG contacted (`client: searxng`, `tool: search-engine-fanout`).
+`observe.record: full` (with an explicit warning) adds the method and URL of
+*cleartext* HTTP requests, and `record_headers` adds headers with credentials
+redacted. HTTPS stays opaque. `observe.retain: 12h` expires old records, and
+`glove down --wipe` deletes them.
+
+Design and as-built decisions:
+[docs/planning/network-observability.md](docs/planning/network-observability.md).
+Layman consumes `net/` read-only; the contract is
+[the handoff brief](docs/planning/network-observability-layman-handoff.md).
+Podman: rendered but **untested**.
 
 ### Resuming a session
 

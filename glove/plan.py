@@ -16,6 +16,7 @@ from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, compute_mounts
 from .network import NetworkPlan, build_network_plan
+from .observe import ObserveSettings, netgate_image
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
@@ -49,6 +50,13 @@ class SessionPlan:
     enforcer_env: dict[str, str] = field(default_factory=dict)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
+    # Network observability (glove/observe.py). `observe` is None unless enabled;
+    # `net_host_dir` is the session's net/ (set by the CLI once materialised) —
+    # bind-mounted into the netgate collector only, never into the harness.
+    observe: ObserveSettings | None = None
+    netgate_image: str | None = None
+    net_host_dir: str | None = None
+    control_host_dir: str | None = None  # ~/.glove/control/<env>/<session>, ro into the gate
 
     @property
     def project(self) -> str:
@@ -118,7 +126,7 @@ def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str])
 def _validate_plugin_services(cfg: Config, plugins) -> None:
     """Fail early when an enabled plugin's required forwarder service is absent —
     the capability reaches the network only through that sidecar."""
-    declared = {s.name for s in cfg.services}
+    declared = {s.name for s in cfg.harness_services}
     for plugin in plugins:
         missing = [s for s in plugin.requires_services if s not in declared]
         if missing:
@@ -155,7 +163,7 @@ def _legacy_bridges(cfg: Config) -> list[tuple[str, str]]:
     from .plugins.browser import provider_name
 
     bridges: list[tuple[str, str]] = []
-    if any(s.name == "search" for s in cfg.services) and "search" not in cfg.plugins:
+    if any(s.name == "search" for s in cfg.harness_services) and "search" not in cfg.plugins:
         bridges.append((
             "search",
             "a `search` service without `plugins: [search]` is deprecated — add "
@@ -294,6 +302,9 @@ def build_session_plan(
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
     )
+    plan.observe = network.observe
+    if network.gated:
+        plan.netgate_image = netgate_image()
 
     # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
     # enforcer env/caps.

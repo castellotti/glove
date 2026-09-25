@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .config import Config, ConfigError, Service
+from .observe import GateSpec, ObserveSettings, gate_spec_for, parse_observe
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,11 @@ class Sidecar:
     target: str  # host:port the sidecar forwards to
     join_network: str | None = None  # external docker network to also join
     host_gateway: bool = False  # needs extra_hosts host.docker.internal:host-gateway
+    # Set when the service is observed: the sidecar runs the netgate `forward`
+    # role instead of socat (same name, networks and port — a drop-in).
+    gate: GateSpec | None = None
+    # False: joined only to join_network (never the harness's internal net)
+    harness: bool = True
 
     @property
     def command(self) -> str:
@@ -41,15 +47,28 @@ class NetworkPlan:
     # a route to host.docker.internal. The internal net alone has no such route,
     # so socat would fail with "Network unreachable". The harness never joins it.
     egress_network: str | None = None
+    observe: ObserveSettings | None = None  # set iff observation is enabled
+
+    @property
+    def gated(self) -> list[Sidecar]:
+        """Sidecars running the netgate forwarder (only ever when observing)."""
+        return [s for s in self.sidecars if s.gate is not None]
+
+    @property
+    def exit_gate(self) -> Sidecar | None:
+        """The one proxy gate that polls exit identity (so records aren't duplicated)."""
+        return next((s for s in self.gated if s.gate.mode == "http-proxy"), None)
 
 
-def _sidecar_for(svc: Service) -> Sidecar:
+def _sidecar_for(svc: Service, gate: GateSpec | None = None) -> Sidecar:
     return Sidecar(
         role=svc.name,
         listen_port=svc.port,
         target=svc.to,
         join_network=svc.join_network,
         host_gateway=svc.host_gateway,
+        gate=gate,
+        harness=svc.harness,
     )
 
 
@@ -81,9 +100,10 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
             "forwarder sidecars, or remove the services. glove grants no network "
             "unless explicitly requested."
         )
+    settings: ObserveSettings | None = parse_observe(cfg)
     if wants_services:
         for svc in cfg.services:
-            sidecars.append(_sidecar_for(svc))
+            sidecars.append(_sidecar_for(svc, gate_spec_for(svc, cfg, settings)))
             if svc.join_network and svc.join_network not in external:
                 external.append(svc.join_network)
 
@@ -101,6 +121,14 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
             # harness to route via a bridge with egress rather than internal-only.
             harness_host_gateway = True
 
+    if settings is not None and settings.exit_identity == "via-proxy" and not any(
+        s.gate and s.gate.mode == "http-proxy" for s in sidecars
+    ):
+        raise ConfigError(
+            "observe.exit_identity: via-proxy needs a service in http-proxy mode — the exit is "
+            "fetched through that service's chained upstream"
+        )
+
     # Any sidecar that reaches host.docker.internal needs a routable bridge.
     egress_network = (
         f"glove-{session}-egress" if any(s.host_gateway for s in sidecars) else None
@@ -113,4 +141,5 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
         harness_extra_networks=harness_extra,
         harness_host_gateway=harness_host_gateway,
         egress_network=egress_network,
+        observe=settings,
     )
