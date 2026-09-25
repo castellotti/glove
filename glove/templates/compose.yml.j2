@@ -130,6 +130,9 @@ services:
         source: {{ control_host_dir | tojson }}
         target: {{ control_container_dir }}
         read_only: true
+{% if gate_bind_selinux %}
+        bind: { selinux: {{ gate_bind_selinux }} }
+{% endif %}
     depends_on:
       - glove-{{ session }}-netgate
     networks:
@@ -187,6 +190,9 @@ services:
       - type: bind
         source: {{ net_host_dir | tojson }}
         target: {{ net_container_dir }}
+{% if gate_bind_selinux %}
+        bind: { selinux: {{ gate_bind_selinux }} }
+{% endif %}
       - type: volume
         source: glove-{{ session }}-netgate-events
         target: {{ events_dir }}
@@ -194,6 +200,9 @@ services:
         source: {{ control_host_dir | tojson }}
         target: {{ control_container_dir }}
         read_only: true
+{% if gate_bind_selinux %}
+        bind: { selinux: {{ gate_bind_selinux }} }
+{% endif %}
 {% endif %}
 
 networks:
@@ -212,13 +221,15 @@ networks:
 {% if netgate %}
 
 volumes:
-  # tmpfs-backed and owned by the operator uid: holds only the collector's
-  # datagram socket. Mounted by the gate containers, never by the harness.
+  # tmpfs-backed and owned by the operator uid (as the mount sees ids: 0 under
+  # rootless podman, whose namespace root is the operator): holds only the
+  # collector's datagram socket. Mounted by the gate containers, never by the harness.
   glove-{{ session }}-netgate-events:
     name: glove-{{ session }}-netgate-events
     driver: local
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "size=1m,mode=0700,uid={{ uid }},gid={{ gid }}"
+      o: {{ ("size=1m,mode=0700,uid=%s,gid=%s" % (events_owner[0], events_owner[1])
+             + (',context="%s"' % events_context if events_context else "")) | tojson }}
 {% endif %}

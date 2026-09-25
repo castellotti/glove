@@ -133,11 +133,12 @@ def test_host_info_does_not_cache_transient_failure(monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:  # first probe fails (machine not ready)
             return types.SimpleNamespace(returncode=1, stdout="", stderr="not ready")
-        return types.SimpleNamespace(returncode=0, stdout="false|true|6.1.0\n", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="false|true|false|6.1.0\n", stderr="")
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     assert mod._host_info("podman") == {}  # failure, uncached
-    assert mod._host_info("podman") == {"rootless": "false", "seccomp": "true", "kernel": "6.1.0"}
+    assert mod._host_info("podman") == {"rootless": "false", "seccomp": "true", "selinux": "false",
+                                        "kernel": "6.1.0"}
     mod._host_info.cache_clear()
 
 
@@ -152,13 +153,13 @@ def test_host_info_tolerates_pipe_in_kernel(monkeypatch):
         import types
 
         return types.SimpleNamespace(
-            returncode=0, stdout="false|true|6.1.0 weird|build\n", stderr=""
+            returncode=0, stdout="false|true|true|6.1.0 weird|build\n", stderr=""
         )
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     info = mod._host_info("podman")
     assert info["rootless"] == "false"
-    assert info["seccomp"] == "true"
+    assert info["seccomp"] == "true" and info["selinux"] == "true"
     assert info["kernel"] == "6.1.0 weird|build"
     mod._host_info.cache_clear()
 

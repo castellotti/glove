@@ -239,9 +239,12 @@ Layman consumes `net/` read-only; the contract is
 [the handoff brief](docs/planning/network-observability-layman-handoff.md).
 Sample data: `tests/fixtures/netobs/` (the original fixture, frozen) and one
 directory per UI state in `tests/fixtures/netobs-scenarios/`.
-Podman, and native Linux Docker's file ownership: **untested** live (the
-ownership probe, `tests/integration/netgate_control_perms.sh`, has run only on
-Docker Desktop for macOS).
+Verified live on Docker Desktop (macOS) and on rootless and rootful Podman,
+including an SELinux-enforcing Fedora host. On Podman the gate's `net/` and
+`control/` binds are labelled `selinux: z`, and its socket tmpfs gets a
+container SELinux context when SELinux is on. Rootful Docker on Linux:
+**untested**. On a native SELinux host, the *harness's* own binds are not
+labelled yet: **untested**, and probably broken there.
 
 ### Resuming a session
 

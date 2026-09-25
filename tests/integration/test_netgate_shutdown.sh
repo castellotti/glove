@@ -14,13 +14,16 @@
 #      inferred `gate stop`, so `glove net status`'s reader counts the flow as
 #      cut (inferred), not active — and still does once the forwarder is back.
 #
-# Usage:  bash tests/integration/test_netgate_shutdown.sh      (docker; podman untested)
+# Usage:  [RT=podman] bash tests/integration/test_netgate_shutdown.sh
+# With RT=podman the gate stanzas mirror glove's podman render (userns keep-id,
+# events tmpfs owned by namespace root with a container SELinux context, and
+# `selinux: z` on binds), and state lives under $HOME (a podman machine shares it).
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 IMG="$(cd "$ROOT" && uv run python -c 'from glove.observe import build_netgate; print(build_netgate("'"$RT"'"))' | tail -1)"
-T="$(mktemp -d /tmp/ngsd.XXXXXX)"
+if [ "$RT" = podman ]; then T="$(mktemp -d "$HOME/.ngsd.XXXXXX")"; else T="$(mktemp -d /tmp/ngsd.XXXXXX)"; fi
 P="ngsd$$"
 PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -33,11 +36,20 @@ mkdir -p "$T/net" "$T/control"
 chmod 700 "$T/net" "$T/control"
 echo '{"v":1,"type":"session","env":"sd","session":"sd"}' > "$T/net/session.json"
 U="$(id -u)" G="$(id -g)"
+USERNS="" EV_OPTS="size=1m,mode=0700,uid=$U,gid=$G" SEL=""
+if [ "$RT" = podman ]; then
+  [ "$(podman info --format '{{.Host.Security.Rootless}}')" = true ] && USERNS='userns_mode: "keep-id"' \
+    && EV_OPTS="size=1m,mode=0700,uid=0,gid=0"
+  [ "$(podman info --format '{{.Host.Security.SELinuxEnabled}}')" = true ] \
+    && EV_OPTS="$EV_OPTS,context=\\\"system_u:object_r:container_file_t:s0\\\""
+  SEL=", bind: {selinux: z}"
+fi
 cat > "$T/compose.yml" <<EOF
 name: $P
 x-gate: &gate
   image: $IMG
   user: "$U:$G"
+  $USERNS
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
   read_only: true
@@ -65,7 +77,7 @@ services:
               "--rules", "/etc/glove/netgate-control/rules.json", "--scope", "local", "--tool", "llm"]
     volumes:
       - {type: volume, source: events, target: /run/glove-netgate}
-      - {type: bind, source: "$T/control", target: /etc/glove/netgate-control, read_only: true}
+      - {type: bind, source: "$T/control", target: /etc/glove/netgate-control, read_only: true$SEL}
     depends_on: [col]
     networks: [n]
   col:
@@ -74,9 +86,9 @@ services:
               "--rules", "/etc/glove/netgate-control/rules.json"]
     network_mode: none
     volumes:
-      - {type: bind, source: "$T/net", target: /var/lib/glove/net}
+      - {type: bind, source: "$T/net", target: /var/lib/glove/net$SEL}
       - {type: volume, source: events, target: /run/glove-netgate}
-      - {type: bind, source: "$T/control", target: /etc/glove/netgate-control, read_only: true}
+      - {type: bind, source: "$T/control", target: /etc/glove/netgate-control, read_only: true$SEL}
   client:
     image: $IMG
     entrypoint: ["python", "-c"]
@@ -95,7 +107,7 @@ networks:
 volumes:
   events:
     driver: local
-    driver_opts: {type: tmpfs, device: tmpfs, o: "size=1m,mode=0700,uid=$U,gid=$G"}
+    driver_opts: {type: tmpfs, device: tmpfs, o: "$EV_OPTS"}
 EOF
 
 recs() { cat "$T"/net/flows*.ndjson 2>/dev/null; }

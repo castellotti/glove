@@ -23,6 +23,12 @@ diverge:
   (10.88.0.x) — so it reaches the host rather than shadowing it. Verified with
   ``podman run --add-host host.docker.internal:host-gateway`` on this machine.
 
+- **Netgate (observe).** The events tmpfs volume's ``uid=``/``gid=`` are
+  interpreted in the rootless user namespace, so they are ``0`` (the host user)
+  there; and the gate's ``net/``/``control/`` binds carry ``selinux: z``, since
+  an SELinux-enforcing host denies containers an unlabelled bind. Verified in a
+  podman machine VM (Fedora, SELinux enforcing) on its own filesystem.
+
 Validated on rootless podman 6 (libkrun machine, Fedora VM, Landlock ABI 9).
 ``srt`` is not supported on podman yet: its relaxed nested-userns profile can't
 be applied through the inlining compose provider.
@@ -49,12 +55,12 @@ _HOST_INFO_CACHE: dict[str, dict[str, str]] = {}
 
 def _probe_host_info(cli: str) -> dict[str, str]:
     """One `podman info` call for the Host fields doctor + rootless detection
-    need (kernel, rootless, seccomp). ``{}`` when podman is absent or the probe
+    need (kernel, rootless, seccomp, selinux). ``{}`` when podman is absent or the probe
     fails, so callers fall back to safe defaults and ``--dry-run`` on a host
     without podman never shells out.
 
-    Field order matters: the two boolean security flags come first and the
-    free-text kernel string last, split with ``maxsplit=2`` so a kernel
+    Field order matters: the boolean security flags come first and the
+    free-text kernel string last, split with ``maxsplit=3`` so a kernel
     description containing ``|`` lands wholly in the trailing field instead of
     shifting rootless/seccomp onto a kernel fragment.
     """
@@ -62,13 +68,14 @@ def _probe_host_info(cli: str) -> dict[str, str]:
         return {}
     proc = subprocess.run(
         [cli, "info", "--format",
-         "{{.Host.Security.Rootless}}|{{.Host.Security.SECCOMPEnabled}}|{{.Host.Kernel}}"],
+         "{{.Host.Security.Rootless}}|{{.Host.Security.SECCOMPEnabled}}|{{.Host.Security.SELinuxEnabled}}"
+         "|{{.Host.Kernel}}"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
         return {}
-    parts = [*proc.stdout.strip().split("|", 2), "", "", ""]
-    return {"rootless": parts[0], "seccomp": parts[1], "kernel": parts[2]}
+    parts = [*proc.stdout.strip().split("|", 3), "", "", "", ""]
+    return {"rootless": parts[0], "seccomp": parts[1], "selinux": parts[2], "kernel": parts[3]}
 
 
 def _host_info(cli: str) -> dict[str, str]:
@@ -129,6 +136,12 @@ class PodmanRuntime(DockerRuntime):
         self._rootless = _host_info(self.cli).get("rootless", "") != "false"
         return self._rootless
 
+    def selinux_enabled(self) -> bool:
+        """Whether the podman host enforces SELinux labels. False when unknown:
+        a ``context=`` mount option on a kernel without SELinux fails the mount,
+        while a missing label on an SELinux host fails visibly at gate start."""
+        return _host_info(self.cli).get("selinux", "") == "true"
+
     # --- compatibility -----------------------------------------------------
 
     def unsupported_enforcer_reason(self, enforcer: str) -> str | None:
@@ -147,13 +160,28 @@ class PodmanRuntime(DockerRuntime):
         reason = self.unsupported_enforcer_reason(plan.enforcer)
         if reason:
             raise NotImplementedError(reason)
+        rootless = self.is_rootless()
         return {
             # Map the host uid/gid through so bind mounts stay owned by the
             # non-root harness user (rootless only; rootful maps 1:1 already).
-            "userns_mode": "keep-id" if self.is_rootless() else None,
+            "userns_mode": "keep-id" if rootless else None,
             # Rely on podman's built-in default seccomp (see module docstring).
             "emit_seccomp": False,
             "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
+            # Rootless podman mounts the events tmpfs inside its user namespace,
+            # where the host user is uid 0: `uid=<host uid>` would name a subuid
+            # (seen as 500:999 under keep-id) and the gate could not create its
+            # socket. Namespace root is the host user, i.e. the gate's uid.
+            "events_owner": (0, 0) if rootless else None,
+            # ...and on SELinux the shared tmpfs needs a container label too, or
+            # container_t may not create the socket in it (tmpfs_t). A bind can
+            # say `selinux: z`; a tmpfs volume only takes a mount `context=`.
+            "events_context": "system_u:object_r:container_file_t:s0" if self.selinux_enabled() else None,
+            # SELinux-enforcing hosts (Fedora/RHEL) deny containers an unlabelled
+            # bind; `z` (shared: the collector and every forwarder mount them)
+            # relabels net/ and control/. A no-op where SELinux is off, and on a
+            # podman machine's virtiofs share.
+            "gate_bind_selinux": "z",
         }
 
     # --- doctor ------------------------------------------------------------

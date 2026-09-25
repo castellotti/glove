@@ -14,6 +14,8 @@
 # Each line is `RESULT <id> <value>`; the contract checks at the end PASS/FAIL.
 #
 # Usage:  RT=docker|podman GATE_IMAGE=glove/netgate:<tag> bash tests/integration/netgate_control_perms.sh
+#         RT may be a wrapper (e.g. a script running `sudo podman "$@"` for rootful podman).
+#         On an SELinux-enforcing host, binds get `:z`, as glove renders them on podman.
 # Requires: python3, the runtime, GATE_IMAGE present locally. Throwaway state only.
 # On Linux, run it on the host itself (rootful docker; rootless podman as the user).
 set -u
@@ -38,13 +40,18 @@ hostpy() { PYTHONPATH="$ROOT" python3 -c "$@"; }
 owner() { stat -c '%u:%g %a' "$1" 2>/dev/null || stat -f '%u:%g %Lp' "$1"; }
 
 USERNS=()
-if [ "$RT" = podman ] && [ "$(podman info --format '{{.Host.Security.Rootless}}')" = true ]; then
+EU="$U" EG="$G"                      # the events tmpfs owner, as the mount option sees ids
+if "$RT" --version 2>/dev/null | grep -qi podman \
+   && [ "$("$RT" info --format '{{.Host.Security.Rootless}}')" = true ]; then
   USERNS=(--userns keep-id)          # what glove renders for rootless podman
+  EU=0 EG=0                          # ...and namespace root is the host user
 fi
+Z=""
+[ "$(getenforce 2>/dev/null)" = Enforcing ] && Z=":z"   # glove renders `selinux: z` on podman
 GATE=("$RT" run --user "$U:$G" ${USERNS[@]+"${USERNS[@]}"} --cap-drop ALL --security-opt no-new-privileges
       --read-only --pids-limit 64 --memory 256m)
 # "Layman": root in its container, control/ rw, the rest of ~/.glove ro.
-LAYMAN=("$RT" run --rm --user 0 -v "$H:/root/.glove:ro" -v "$H/control:/root/.glove/control"
+LAYMAN=("$RT" run --rm --user 0 -v "$H:/root/.glove:ro${Z:+,z}" -v "$H/control:/root/.glove/control$Z"
         --entrypoint sh "$IMG" -c)
 
 cleanup() {
@@ -56,7 +63,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== platform: $RT on $(uname -s) $(uname -r); host user $U:$G; gate image $IMG"
-res platform "$RT/$(uname -s)/uid=$U/userns=${USERNS[*]+${USERNS[*]}}"
+res platform "$RT/$(uname -s)/uid=$U/userns=${USERNS[*]+${USERNS[*]}}/selinux=${Z:-off}"
 
 # --- glove's render-time layout, by glove's own code paths -----------------------
 hostpy "
@@ -93,10 +100,11 @@ H0="$(sha "$CTL/rules.json")"
 res cli-file "$(owner "$CTL/rules.json")"
 
 "$RT" volume create --driver local --opt type=tmpfs --opt device=tmpfs \
-  --opt o="size=1m,mode=0700,uid=$U,gid=$G" "$TAG-events" >/dev/null
+  --opt o="size=1m,mode=0700,uid=$EU,gid=$EG${Z:+,context=\"system_u:object_r:container_file_t:s0\"}" \
+  "$TAG-events" >/dev/null
 "${GATE[@]}" -d --name "$TAG-col" --network none \
-  -v "$NET:/var/lib/glove/net" -v "$TAG-events:/run/glove-netgate" \
-  -v "$CTL:/etc/glove/netgate-control:ro" \
+  -v "$NET:/var/lib/glove/net$Z" -v "$TAG-events:/run/glove-netgate" \
+  -v "$CTL:/etc/glove/netgate-control:ro${Z:+,z}" \
   "$IMG" collect --net-dir /var/lib/glove/net --events /run/glove-netgate/events.sock \
   --rules /etc/glove/netgate-control/rules.json >/dev/null
 for _ in $(seq 20); do [ -s "$NET/status.json" ] && break; sleep 0.5; done
@@ -139,13 +147,16 @@ for mode in 0600 0644 chown; do
   res "layman-$mode-file" "$(owner "$CTL/rules.json") host-sha=$H1"
   wait_poll
   res "layman-$mode-gate" "$(status_rules) layman-sha=$H1"
+  ok_write=no
+  [ -z "$out" ] && case "$(status_rules)" in "True $H1 None") ok_write=yes ;; esac
   c="$(cli "$CTL" "$E" "cli-after-$mode.example")"
   res "layman-$mode-cli-edit" "$(echo "$c" | tr '\n' ' ')"
-  eval "CLI_$mode=\$c"
+  eval "CLI_$mode=\$c WROTE_$mode=\$ok_write"
   rm -f "$CTL/rules.json"   # the host user owns the dir, so it can always remove the file
 done
-check "contract (Layman chowns to the dir's owner, 0600): CLI can edit Layman's file" '[ "$CLI_chown" = OK ]'
-check "contract (0644 without chown): CLI can edit Layman's file" '[ "$CLI_0644" = OK ]'
+check "contract (Layman chowns to the dir's owner, 0600): the gate enforces Layman's write, the CLI can edit it" \
+  '[ "$WROTE_chown" = yes ] && [ "$CLI_chown" = OK ]'
+res "without-chown" "0600: gate-enforced=$WROTE_0600 cli=$CLI_0600 | 0644: gate-enforced=$WROTE_0644 cli=$CLI_0644"
 
 # --- 3. "Layman" creates a missing control/<env>/<name>/ ------------------------------
 "${LAYMAN[@]}" "mkdir -p /root/.glove/control/$E/other" 2>&1

@@ -40,7 +40,7 @@ def pi_search_services() -> list[Service]:
 
 
 def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, uid=501, gid=20,
-           overrides=frozenset()):
+           overrides=frozenset(), runtime=None):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     sdir = tmp_path / "ghome" / "envs" / "ps" / "sessions" / "ps"
@@ -56,7 +56,7 @@ def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, u
     if plan.observe is not None:
         plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
         plan.control_host_dir = str(ensure_net_dir(tmp_path / "ghome" / "control" / "ps" / "ps"))
-    rendered = DockerRuntime().render(plan, sdir, overrides=overrides)
+    rendered = (runtime or DockerRuntime()).render(plan, sdir, overrides=overrides)
     return plan, yaml.safe_load(rendered.compose_yaml), rendered.compose_yaml
 
 
@@ -436,3 +436,37 @@ def test_cli_net_status_unobserved_session(ghome, tmp_path, monkeypatch):
     result = runner.invoke(app, ["net", "status"])
     assert result.exit_code == 1
     assert "not observed" in result.output
+
+
+# --- netgate on podman (followup item 2, found testing rootless podman) -------------
+
+
+def _gate_binds(doc):
+    gates = {k: v for k, v in doc["services"].items() if "netgate" in str(v.get("image", ""))}
+    return [m for v in gates.values() for m in v["volumes"] if m["type"] == "bind"]
+
+
+@pytest.mark.parametrize(("rootless", "selinux", "opts"), [
+    (True, False, "size=1m,mode=0700,uid=0,gid=0"),
+    (False, False, "size=1m,mode=0700,uid=501,gid=20"),
+    (True, True, 'size=1m,mode=0700,uid=0,gid=0,context="system_u:object_r:container_file_t:s0"'),
+])
+def test_podman_events_tmpfs_owner_and_selinux_labels(tmp_path, monkeypatch, rootless, selinux, opts):
+    from glove.runtimes.podman import PodmanRuntime
+
+    rt = PodmanRuntime()
+    rt._rootless = rootless
+    monkeypatch.setattr(PodmanRuntime, "selinux_enabled", lambda self: selinux)
+    _, doc, _ = render(tmp_path, runtime=rt)
+    vol = next(iter(doc["volumes"].values()))
+    assert vol["driver_opts"]["o"] == opts
+    binds = _gate_binds(doc)
+    assert binds and all(m["bind"] == {"selinux": "z"} for m in binds)
+    harness = doc["services"]["glove-ps-harness"]
+    assert all("bind" not in m for m in harness["volumes"] if m["type"] == "bind")  # unchanged here
+
+
+def test_docker_events_tmpfs_owner_and_no_selinux_labels(tmp_path):
+    _, doc, _ = render(tmp_path)
+    assert next(iter(doc["volumes"].values()))["driver_opts"]["o"] == "size=1m,mode=0700,uid=501,gid=20"
+    assert all("bind" not in m for m in _gate_binds(doc))

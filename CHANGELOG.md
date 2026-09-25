@@ -27,8 +27,9 @@ default (no-plugins) path stays fully working at each step.
     (chown its temp file to the directory's owner, `0600`, never create the
     directory). `glove run` refuses, with the fix, a control directory it cannot
     `chmod`, and warns when an existing `rules.json` is unreadable. Verified
-    live on Docker Desktop (macOS) only; native Linux Docker and rootless Podman
-    are **untested** (`tests/integration/netgate_control_perms.sh` is the probe).
+    live on Docker Desktop (macOS) and on rootless and rootful Podman (SELinux
+    enforcing); rootful Docker on Linux is untested
+    (`tests/integration/netgate_control_perms.sh` is the probe).
   - **Confirming a write:** `status.json` `rules.sha256` (the enforced file)
     and `rules.last_rejected` `{checked_at, source_mtime, sha256, error}`.
     `glove net rules` shows whether the file on disk is enforced, rejected or
@@ -255,6 +256,16 @@ default (no-plugins) path stays fully working at each step.
 
 ### Fixes
 
+- **Network observation now starts under Podman.** Found by the follow-up's
+  Podman runs; both bugs predate it:
+  - the gate's events tmpfs is owned `uid=0,gid=0` under rootless Podman
+    (namespace root is the user). `uid=<host uid>` named a subuid, so the
+    collector could not create its socket;
+  - on SELinux-enforcing hosts, the gate's `net/`/`control/` binds carry
+    `selinux: z`, and the tmpfs gets a `container_file_t` context (only when
+    `podman info` reports SELinux).
+  Verified on rootless and rootful Podman 6.1.2 (Fedora 44, enforcing) and from
+  macOS via `podman compose`.
 - Rotated `flows-`/`exit-` files are ordered by `(stamp, n)`, not by name: the
   same-millisecond collision name `…Z-1.ndjson` sorted before the older
   `…Z.ndjson`, so pruning could delete the newer file. Rotation also never
