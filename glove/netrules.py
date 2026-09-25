@@ -13,7 +13,7 @@ import ipaddress
 import json
 from pathlib import Path
 
-from .netgate.policy import PolicyError, validate
+from .netgate.policy import PolicyError, read_file, validate
 from .netgate.records import iso_utc, ulid
 from .netgate.writer import write_json_atomic
 
@@ -26,12 +26,14 @@ def empty(env_id: str, session: str) -> dict:
 def load(path: Path, env_id: str, session: str) -> dict:
     """The current rules document (an empty one if the file is absent).
 
-    Raises PolicyError when the existing file is invalid, rather than silently
-    replacing someone else's (e.g. Layman's) broken write."""
-    if not path.is_file():
+    Raises PolicyError when the existing file is invalid or unreadable (e.g.
+    another writer left it owned by root, mode 0600), rather than silently
+    replacing someone else's (e.g. Layman's) write."""
+    raw = read_file(path)
+    if raw is None:
         return empty(env_id, session)
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(raw)
     except ValueError as e:
         raise PolicyError(f"{path} is not valid JSON ({e}); fix or remove it first") from e
     ruleset = validate(data, env=env_id, session=session)

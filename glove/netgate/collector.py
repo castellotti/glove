@@ -22,11 +22,12 @@ import json
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
-from . import GATE_VERSION, ROTATE_BYTES, ROTATE_KEEP, SCHEMA_VERSION
+from . import GATE_VERSION, ROTATE_BYTES, ROTATE_KEEP, RUN_LOST_AFTER, SCHEMA_VERSION
 from .policy import PolicyWatcher
-from .records import iso_utc
+from .records import GATE_EVENTS, gate_record, iso_utc, ulid
 from .writer import NdjsonWriter, read_json_dict, write_json_atomic
 
 _UNHEALTHY = {"upstream_unreachable", "timeout"}
@@ -63,6 +64,10 @@ class Collector:
         self._upstream: dict[str, bool] = {}
         self._sock: socket.socket | None = None
         self._failing = False
+        self.run_id = f"g_{ulid()}"
+        # live forwarder runs: run -> (service, monotonic time last heard from)
+        self._runs: dict[str, tuple[str | None, float]] = {}
+        self._clock = time.monotonic
         # The collector validates rules.json with the same code the forwarders
         # use, purely to report the load result in status.json.
         self.policy = PolicyWatcher(
@@ -83,6 +88,10 @@ class Collector:
         if kind == "exit":
             self.last_exit = record
             self.exits.write(record)
+            self._carry_exit()  # this write may have size-rotated exit.ndjson
+            return
+        if kind == "gate":
+            self._ingest_gate(record)
             return
         if kind == "health":
             res = record.get("resolver")
@@ -93,6 +102,12 @@ class Collector:
             self.invalid += 1
             return
         self._track_upstream(record)
+        run = record.get("run")
+        if isinstance(run, str) and run in self._runs:
+            self._runs[run] = (self._runs[run][0], self._clock())
+        self._write(record)
+
+    def _write(self, record: dict) -> None:
         ok = self.writer.write(record)
         if ok == self._failing:
             # Log transitions only: status.json may itself be unwritable, so the
@@ -100,6 +115,53 @@ class Collector:
             self._failing = not ok
             msg = "cannot write flows; DROPPING records (traffic unaffected)" if not ok else "flow writes recovered"
             print(f"netgate: {msg} (dropped so far: {self.writer.dropped})", file=sys.stderr, flush=True)
+
+    def _ingest_gate(self, record: dict) -> None:
+        """A forwarder's start/stop. Starts are re-sent periodically (so one
+        lost at startup is recovered); write each run's first one only."""
+        if (record.get("event") not in GATE_EVENTS or record.get("role") != "forward"
+                or not isinstance(record.get("run"), str)):
+            self.invalid += 1
+            return
+        run, service = record["run"], record.get("service")
+        if record["event"] == "start":
+            known = run in self._runs
+            svc = service if isinstance(service, str) else None
+            if not known and svc is not None:
+                # A new run of the service replaces (ends) the old one: don't
+                # later reap it into a stale inferred stop.
+                for other, (other_svc, _) in list(self._runs.items()):
+                    if other_svc == svc:
+                        del self._runs[other]
+            self._runs[run] = (svc, self._clock())
+            if known:
+                return
+        else:
+            self._runs.pop(run, None)
+        self._write(record)
+
+    def _reap_lost_runs(self) -> None:
+        """A forwarder silent for RUN_LOST_AFTER is gone (SIGKILL, a crash with
+        no restart): write the `stop` it never sent, marked inferred, so a
+        reader can end its unclosed flows."""
+        now = self._clock()
+        for run, (service, last) in list(self._runs.items()):
+            if now - last > RUN_LOST_AFTER:
+                del self._runs[run]
+                self._write(gate_record(event="stop", role="forward", run=run, service=service,
+                                        env=self.facts.get("env"), session=self.facts.get("session"),
+                                        t=time.time(), inferred=True))
+
+    def _write_own(self, event: str) -> None:
+        self._write(gate_record(event=event, role="collect", run=self.run_id, env=self.facts.get("env"),
+                                session=self.facts.get("session"), t=time.time()))
+
+    def _carry_exit(self) -> None:
+        """Exit records are written only on change, so after ANY rotation (size
+        or retention) the current origin is re-written as the first line of the
+        fresh exit.ndjson: its latest line is always the present origin."""
+        if self.last_exit is not None and self.exits.opened_at is None:
+            self.exits.write(self.last_exit)
 
     def _track_upstream(self, record: dict) -> None:
         service = record.get("service")
@@ -141,12 +203,11 @@ class Collector:
 
     def write_status(self, state: str) -> bool:
         self.policy.poll()
+        if state == "running":
+            self._reap_lost_runs()
         if self.retain_s:
             self.expired += self.writer.expire(float(self.retain_s)) + self.exits.expire(float(self.retain_s))
-            # exit records are written only on change: carry the CURRENT origin
-            # into a fresh file, so retention drops history, never present state
-            if self.last_exit is not None and self.exits.opened_at is None:
-                self.exits.write(self.last_exit)
+            self._carry_exit()
         return write_json_atomic(self.net_dir / "status.json", self.status(state))
 
     # --- run ---------------------------------------------------------------
@@ -165,20 +226,27 @@ class Collector:
         sock.setblocking(False)
         self._sock = sock
 
-    def _on_readable(self) -> None:
+    def _on_readable(self, limit: int | None = 256) -> None:
         assert self._sock is not None
-        for _ in range(256):
+        n = 0
+        while limit is None or n < limit:
             try:
                 data = self._sock.recv(MAX_DATAGRAM)
             except OSError:  # incl. BlockingIOError: drained
                 return
             self.ingest(data)
+            n += 1
+
+    def _drain(self) -> None:
+        """Everything already queued, however much (not the 256-per-wakeup cap)."""
+        self._on_readable(limit=None)
 
     async def run(self, stop: asyncio.Event) -> None:
         loop = asyncio.get_running_loop()
         self._bind()
         assert self._sock is not None
         loop.add_reader(self._sock.fileno(), self._on_readable)
+        self._write_own("start")
         self.write_status("running")
         try:
             while not stop.is_set():
@@ -187,10 +255,11 @@ class Collector:
                 self.write_status("running")
         finally:
             loop.remove_reader(self._sock.fileno())
-            self._on_readable()  # drain what is already queued
+            self._drain()
             self._sock.close()
             with contextlib.suppress(OSError):
                 os.unlink(self.socket_path)
+            self._write_own("stop")
             self.writer.close()
             self.exits.close()
             self.write_status("stopped")

@@ -202,7 +202,8 @@ import json, pathlib, sys
 recs = []
 for p in sorted(pathlib.Path(sys.argv[1]).glob("flows*.ndjson")):
     recs += [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
-c = [r for r in recs if r["phase"] == "close" and r["dest"]["host"] == sys.argv[2] and r["dest"]["port"] == int(sys.argv[3])]
+c = [r for r in recs if r.get("type") == "flow" and r["phase"] == "close"
+     and r["dest"]["host"] == sys.argv[2] and r["dest"]["port"] == int(sys.argv[3])]
 print(json.dumps(c[-1] if c else {}))
 EOF
 }
@@ -259,7 +260,8 @@ check "the upstream proxy never saw any refused destination" \
 blocked="$(cat "$N"/flows*.ndjson | python3 -c "
 import sys, json
 rs=[json.loads(l) for l in sys.stdin if l.strip()]
-print(sum(1 for r in rs if r['phase']=='close' and r['verdict']=='block' and r['rule']=='builtin:ssrf-guard' and r['close_reason']=='blocked'))")"
+print(sum(1 for r in rs if r.get('type')=='flow' and r['phase']=='close' and r['verdict']=='block'
+          and r['rule']=='builtin:ssrf-guard' and r['close_reason']=='blocked'))")"
 check "each refusal is recorded (verdict block, rule builtin:ssrf-guard): $blocked/7" "[ $blocked -eq 7 ]"
 
 echo "== invariant 4, measured: DNS queries leaving the gate's netns =="

@@ -213,12 +213,15 @@ def _proxy_spec(upstream_port: int, route: str = "vpn") -> ForwardSpec:
 
 
 class Captured(EventSink):
+    """Records the gate would send; gate lifecycle records go to ``gates``."""
+
     def __init__(self):
         super().__init__(None)
         self.records: list[dict] = []
+        self.gates: list[dict] = []
 
     def send(self, record):
-        self.records.append(record)
+        (self.gates if record.get("type") == "gate" else self.records).append(record)
         return True
 
 

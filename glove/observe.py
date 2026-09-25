@@ -388,9 +388,35 @@ def control_dir(env_id: str, session_name: str) -> Path:
 
 
 def ensure_net_dir(path: Path) -> Path:
+    """Create ``path`` as the invoking user, mode 0700. The gate runs as this
+    same uid:gid, so this is what lets it write ``net/`` and read ``control/``.
+
+    A directory someone else created (e.g. a root-run Layman on native Linux
+    Docker, which the ownership contract forbids) cannot be chmod'ed back; say
+    so rather than fail with a bare EPERM."""
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
+    try:
+        os.chmod(path, 0o700)
+    except PermissionError as e:
+        st = path.stat()
+        raise HardeningError(
+            f"{path} is owned by uid {st.st_uid}, not by you (uid {os.getuid()}): glove creates it, and "
+            f"the netgate runs as your uid and needs it. Fix with: sudo chown {os.getuid()}:{os.getgid()} "
+            f"{path} (handoff §3, 'Ownership')"
+        ) from e
     return path
+
+
+def rules_file_problem(control: Path) -> str | None:
+    """Why the gate would reject ``control/rules.json`` as unreadable, or None.
+    Checked at launch because the gate runs as this same user."""
+    from .netgate.policy import PolicyError, read_file
+
+    try:
+        read_file(Path(control) / "rules.json")
+    except PolicyError as e:
+        return str(e)
+    return None
 
 
 def _within(child: str, parent: str) -> bool:

@@ -31,10 +31,10 @@ import socket
 import time
 from dataclasses import dataclass
 
-from . import SCHEMA_VERSION, guard, httpproxy, sni
+from . import ANNOUNCE_EVERY, SCHEMA_VERSION, guard, httpproxy, sni
 from .exitid import ExitPoller
 from .policy import PolicyWatcher
-from .records import flow_record, ulid
+from .records import flow_record, gate_record, ulid
 from .resolver import InTunnel
 from .resolver import from_url as resolver_from_url
 
@@ -208,6 +208,9 @@ class Forwarder:
         self.head_timeout = head_timeout
         self._server: asyncio.Server | None = None
         self._ticker: asyncio.Task | None = None
+        # One id per forwarder process; every flow record carries it.
+        self.run_id = f"g_{ulid()}"
+        self.started_at: float | None = None
         self._flows: dict[_Flow, asyncio.Task] = {}
         self._ingress: frozenset[str] = frozenset()
         proxy = spec.mode == "http-proxy"
@@ -233,6 +236,8 @@ class Forwarder:
             reuse_address=True,
             limit=httpproxy.MAX_HEAD,
         )
+        self.started_at = time.time()
+        self._announce("start")
         self._ticker = asyncio.create_task(self._tick())
         if self.policy is not None:
             self.policy.poll()
@@ -267,6 +272,10 @@ class Forwarder:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._server is not None:
             await self._server.wait_closed()
+        if self.started_at is not None:
+            # after every cut flow's close, on the same socket: the collector
+            # receives them in order
+            self._announce("stop")
 
     # --- records -----------------------------------------------------------
 
@@ -297,6 +306,7 @@ class Forwarder:
             rule=flow.rule,
             close_reason=flow.close_reason if phase == "close" else None,
             request=flow.request,
+            run=self.run_id,
         )
 
     def _emit(self, flow: _Flow, phase: str) -> None:
@@ -308,9 +318,21 @@ class Forwarder:
             flow.opened = True
             self._emit(flow, "open")
 
+    def _announce(self, event: str) -> None:
+        s = self.spec
+        t = self.started_at if event == "start" else time.time()
+        self.sink.send(gate_record(event=event, role="forward", run=self.run_id, service=s.service,
+                                   env=s.env, session=s.session, t=t or time.time()))
+
     async def _tick(self) -> None:
+        last_announce = time.monotonic()
         while True:
             await asyncio.sleep(self.update_interval)
+            # re-announce: recovers a `start` lost at startup, and is the
+            # heartbeat the collector uses to notice a forwarder that died
+            if time.monotonic() - last_announce >= ANNOUNCE_EVERY:
+                last_announce = time.monotonic()
+                self._announce("start")
             for flow in list(self._flows):
                 if flow.opened and (flow.up, flow.down) != flow.last_emitted:
                     self._emit(flow, "update")
