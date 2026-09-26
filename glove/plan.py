@@ -111,14 +111,23 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
         environment.setdefault("BROWSER_MCP_URL", f"{browser}/mcp")
 
 
-def secret_env(cfg: Config) -> dict[str, str]:
-    """The harness's secret env vars and their values, passed to compose at run
-    time only (``SessionPlan.passthrough_env``). The LLM key lives in the user's
-    config and nowhere else on disk. NOTE: in Phase 2 it moves into nono's proxy
-    (credential injection) and leaves the harness env too."""
+def secret_env_names(cfg: Config) -> list[str]:
+    """The harness's secret env var names (``SessionPlan.passthrough_env``).
+    Planning needs only the names, so it never resolves a secret reference."""
     from .harnessconfig import LLM_API_KEY_ENV
 
-    return {LLM_API_KEY_ENV: str(cfg.llm_api_key)} if cfg.llm_api_key else {}
+    return [LLM_API_KEY_ENV] if cfg.llm_api_key else []
+
+
+def secret_env(cfg: Config) -> dict[str, str]:
+    """The harness's secret env vars and their values, passed to compose at run
+    time only. A `keychain:`/`env:` reference is resolved here, in memory, so
+    the key need not be in any file. NOTE: in Phase 2 it moves into nono's
+    proxy (credential injection) and leaves the harness env too."""
+    from .config import resolve_secret
+
+    names = secret_env_names(cfg)
+    return {names[0]: resolve_secret(cfg.llm_api_key)} if names else {}
 
 
 def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str]) -> None:
@@ -311,7 +320,7 @@ def build_session_plan(
         enforcer=cfg.enforcer,
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
-        passthrough_env=list(secret_env(cfg)),
+        passthrough_env=secret_env_names(cfg),
     )
     plan.observe = network.observe
     if network.gated:

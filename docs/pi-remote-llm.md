@@ -55,8 +55,10 @@ glove synthesises Pi's `models.json`/`settings.json` from the config:
 
 ## API key handling
 
-`llm_api_key` lives in `~/.glove/envs/<env-id>/glove.yaml` (outside the repo,
-readable only by you) and glove injects it inline into Pi's `models.json`. The
+Set `llm_api_key` in `~/.glove/envs/<env-id>/glove.yaml` to a reference,
+`keychain:<service>` or `env:<VAR>`, so no file holds the key. glove resolves it
+in memory at launch and passes it to the harness as `GLOVE_LLM_API_KEY`; Pi's
+`models.json` refers to `"$GLOVE_LLM_API_KEY"` and never contains the key. The
 sandboxed shell **cannot** read it: ring 1 hides the config home and strips
 secret-shaped env vars from every command.
 

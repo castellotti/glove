@@ -11,6 +11,9 @@ reproducible.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -124,8 +127,10 @@ class Config:
     llm_service: str = "llm"
     # API key for the LLM endpoint, if it requires one. glove injects it into the
     # container env as GLOVE_LLM_API_KEY and points the harness provider's
-    # api_key_env_var at it — so the secret lives in this (git-ignorable) file,
-    # never hand-edited into the generated harness config.
+    # api_key_env_var at it, never into the generated harness config. Prefer a
+    # reference, resolved in memory at launch (resolve_secret), so no file holds
+    # the key: `keychain:<service>` (macOS Keychain) or `env:<VAR>`. A bare
+    # value is used literally.
     llm_api_key: str | None = None
     # Host dir bind-mounted as the harness config home (/home/agent). Defaults
     # to the environment's own `home/` under ~/.glove/envs/<env-id>/ (persistent,
@@ -175,10 +180,9 @@ class Config:
     def to_dict(self, *, redact_secrets: bool = False) -> dict[str, Any]:
         d = asdict(self)
         # The effective config is persisted to ~/.glove as a reproducibility
-        # artifact; don't leave the LLM key in cleartext there. The real key
-        # stays in the (git-ignorable) env glove.yaml source and is injected
-        # into the harness config/env at render time.
-        if redact_secrets and d.get("llm_api_key"):
+        # artifact; don't leave the LLM key in cleartext there. A reference
+        # (keychain:/env:) names where the key lives, not the key, so it stays.
+        if redact_secrets and d.get("llm_api_key") and not is_secret_ref(d["llm_api_key"]):
             d["llm_api_key"] = None
         return d
 
@@ -186,6 +190,46 @@ class Config:
         return yaml.safe_dump(
             self.to_dict(redact_secrets=redact_secrets), sort_keys=False
         )
+
+
+SECRET_REF_PREFIXES = ("keychain:", "env:")
+
+
+def is_secret_ref(value: str) -> bool:
+    """True if `value` names where a secret lives rather than holding it."""
+    return str(value).startswith(SECRET_REF_PREFIXES)
+
+
+def resolve_secret(value: str) -> str:
+    """Resolve a secret setting to its value, in memory only.
+
+    `keychain:<service>` reads the macOS Keychain generic password for that
+    service; `env:<VAR>` reads the process environment; anything else is the
+    literal value. Called at launch, never while planning or rendering, so a
+    dry-run never touches the Keychain and nothing is written to disk.
+    """
+    value = str(value)
+    if value.startswith("keychain:"):
+        service = value.removeprefix("keychain:")
+        if not service:
+            raise ConfigError("keychain: reference needs a service name (keychain:<service>)")
+        if not shutil.which("security"):
+            raise ConfigError(f"{value}: the macOS `security` tool is not available on this host")
+        r = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True, text=True, check=False,
+        )
+        secret = r.stdout.rstrip("\n")
+        if r.returncode != 0 or not secret:
+            raise ConfigError(f"{value}: no Keychain generic password for service {service!r}")
+        return secret
+    if value.startswith("env:"):
+        var = value.removeprefix("env:")
+        secret = os.environ.get(var, "")
+        if not var or not secret:
+            raise ConfigError(f"{value}: environment variable {var!r} is not set")
+        return secret
+    return value
 
 
 def split_csv(value: str) -> list[str]:

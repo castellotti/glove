@@ -158,7 +158,15 @@ def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
     return [provider, "compose", "-p", project, "-f", str(compose_file)]
 
 
-def launch(cfg: Config, session_dir: Path, *, provider: str, rebuild: bool) -> None:
+def launch(
+    cfg: Config,
+    session_dir: Path,
+    *,
+    provider: str,
+    rebuild: bool,
+    secrets: dict[str, str] | None = None,
+) -> None:
+    """`secrets`: the already-resolved secret_env(cfg), if the caller has it."""
     session = cfg.resolved_name()
     project = f"glove-{session}"
     compose_file = session_dir / "docker-compose.yml"
@@ -172,7 +180,7 @@ def launch(cfg: Config, session_dir: Path, *, provider: str, rebuild: bool) -> N
 
     ensure_images(cfg, provider, rebuild=rebuild)
     # the compose file names the secret vars without values (plan.passthrough_env)
-    env = {**os.environ, **secret_env(cfg)}
+    env = {**os.environ, **(secret_env(cfg) if secrets is None else secrets)}
 
     if forwarder_services:
         console.print("[bold]starting forwarders…[/bold] " + ", ".join(forwarder_services))
