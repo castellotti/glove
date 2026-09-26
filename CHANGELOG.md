@@ -11,6 +11,13 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **`llm_api_key` can reference the key instead of containing it.**
+  `keychain:<service>` reads a macOS Keychain generic password and
+  `env:<VAR>` reads the environment. glove resolves the reference in memory at
+  launch, before any host service starts, so a missing key fails early. Planning
+  and `--dry-run` use only the variable name and never read the Keychain. The
+  effective config keeps the reference (it is not a secret); a literal key is
+  still redacted there. With a reference, no file on disk holds the LLM key.
 - **The LLM API key is stored only in your config.** It was also written in
   cleartext into each session's `docker-compose.yml` and Pi's `models.json`. The
   compose file now declares `GLOVE_LLM_API_KEY` with no value, glove passes the

@@ -435,3 +435,41 @@ def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, 
     session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
     assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
     assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)
+
+
+def test_a_keychain_reference_is_not_resolved_by_a_dry_run(home, tmp_path, monkeypatch):
+    """Planning needs only the env var name, so a dry-run never reads the
+    Keychain, and the effective config records the reference, not a key."""
+    from glove import config as config_mod
+
+    def boom(*a, **k):
+        raise AssertionError("dry-run must not resolve the key")
+
+    monkeypatch.setattr(config_mod, "resolve_secret", boom)
+    _chdir(monkeypatch, tmp_path / "wd")
+    work = tmp_path / "work"
+    work.mkdir()
+    over = _write_llm_cfg(tmp_path)
+    over.write_text(over.read_text() + "llm_api_key: keychain:my-llm\n")
+    result = runner.invoke(
+        app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    effective = next(home.rglob("glove.effective.yaml")).read_text()
+    assert "llm_api_key: keychain:my-llm" in effective
+    compose = next(home.rglob("docker-compose.yml")).read_text()
+    assert "GLOVE_LLM_API_KEY: null" in compose
+
+
+def test_launch_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
+    from glove import session as session_mod
+    from glove.config import Config, Service
+
+    calls = []
+    monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
+    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
+    monkeypatch.setenv("MY_LLM_KEY", "sk-env")
+    cfg = Config(harness="pi", name="s", llm_api_key="env:MY_LLM_KEY", net=["service"],
+                 services=[Service(name="llm", to="example.test:8080")])
+    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
+    assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-env" for _, k in calls)

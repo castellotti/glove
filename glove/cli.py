@@ -440,6 +440,16 @@ def run(
         print_host_setup(cfg)
         return
 
+    # Resolve secret references (keychain:/env:) now, in memory, so a missing
+    # key fails before anything starts.
+    from .plan import secret_env
+
+    try:
+        secrets = secret_env(cfg)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
+
     # Start host-side helpers (SSH tunnel, Chrome, Playwright MCP) before the
     # harness, then print anything left for the operator to run by hand. Key them
     # by the session token (== compose project suffix) so `glove down` can find
@@ -455,7 +465,7 @@ def run(
     # (all harnesses default to a new session, and a new one quit before any
     # message leaves no transcript at all, so "newest in the pool" is wrong).
     launched_at = time.time()
-    launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild)
+    launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild, secrets=secrets)
     _print_resume_hint(plan.profile, home_dir, harness or cfg.harness, since=launched_at)
 
 

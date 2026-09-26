@@ -106,7 +106,7 @@ plugin_options:             # per-plugin config
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
 model: your-model-id       # must match the endpoint's /v1/models
-llm_api_key: sk-...         # kept only here; passed to the harness env at run time
+llm_api_key: keychain:my-llm  # a reference (keychain:<service> | env:<VAR>), resolved at launch; a literal also works
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
@@ -305,9 +305,12 @@ prompt-injected instructions) will run with the wider reach.
 > Transcripts live under the session's `home/` (`~/.glove/envs/<env-id>/sessions/<name>/home`).
 > This is durable on-disk state — don't sync that tree to anywhere untrusted.
 >
-> **The LLM API key is stored in one place: your config** (`llm_api_key` in the
-> env's `glove.yaml` or your `--config` file). glove writes it nowhere else. The
-> compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
+> **Keep the LLM API key out of every file: reference it.** Set `llm_api_key` to
+> `keychain:<service>` (a macOS Keychain generic password) or `env:<VAR>`. glove
+> resolves the reference in memory when the session launches (never during
+> `--dry-run`), and the effective config records only the reference. A literal
+> key still works, but then your config file holds it. glove writes the key
+> nowhere else either way. The compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
 > the environment of `compose` when it starts the session, and Pi's `models.json`
 > refers to it as `"$GLOVE_LLM_API_KEY"`. Inside the sandbox only the harness
 > process sees it; ring 1 strips it from every shell command. Sessions rendered by
