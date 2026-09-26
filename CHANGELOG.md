@@ -11,6 +11,30 @@ default (no-plugins) path stays fully working at each step.
 
 ### Features
 
+- **The LLM API key is stored only in your config.** It was also written in
+  cleartext into each session's `docker-compose.yml` and Pi's `models.json`. The
+  compose file now declares `GLOVE_LLM_API_KEY` with no value, glove passes the
+  key in the environment of `compose up`/`run`, and `models.json` says
+  `"apiKey": "$GLOVE_LLM_API_KEY"` (resolved by Pi). This also removes a latent
+  bug: Pi runs an `apiKey` that starts with `!` as a command and expands one
+  that starts with `$`. Verified live on Docker Desktop: Pi under nono sent
+  `Authorization: Bearer <key>` through the `llm` sidecar. The next `glove run`
+  of an existing session rewrites both files.
+- **glove owns its home's layout; Layman creates nothing** (answers
+  `docs/planning/layman-independence.md`; results in `…-results.md`).
+  - **`~/.glove/control/` always exists with the home.** Whenever glove
+    creates its home (`glove init`, `glove run`, any registry write) it also
+    creates `control/` as the invoking user (`0777 & ~umask`), and `glove
+    init`/`run` add it to an older home. glove warns, with the `sudo chown`
+    fix, when `control/` is someone else's, and a gated render names the
+    foreign parent directory it cannot create a rules directory in.
+  - **Ownership contract simplified:** a second writer sets its `rules.json`
+    temp file to `0644` and does not `chown` it. The directory is `0700`, so
+    nobody else can reach it. The chown-and-`0600` form still works. The
+    launch warning now says "readable by you: mode 0644, or owned by you".
+  - SELinux hosts remain unsupported, for glove sessions and for Layman; the
+    README says so.
+
 - **Network observability: Layman follow-up** (answers
   `docs/planning/network-observability-layman-followup.md`; results in
   `…-followup-results.md`). All changes are additive to the frozen v1 schema,

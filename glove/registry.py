@@ -27,6 +27,28 @@ def glove_home() -> Path:
     return Path(root) if root else Path.home() / ".glove"
 
 
+def ensure_home() -> list[str]:
+    """Create the glove home and its ``control/`` as the invoking user
+    (idempotent). Returns warnings for the caller to print.
+
+    ``control/`` always exists alongside the home, because Layman decides when it
+    starts whether to mount it, and must never create it itself (a missing bind
+    source is created root-owned by Docker on Linux). Mode ``0777 & ~umask``, as
+    parents created at render always had; only the per-session leaf is 0700
+    (``observe.ensure_net_dir``)."""
+    home = glove_home()
+    home.mkdir(parents=True, exist_ok=True)
+    control = home / "control"
+    control.mkdir(exist_ok=True)
+    st = control.stat()
+    if st.st_uid != os.getuid():
+        return [
+            f"{control} is owned by uid {st.st_uid}, not by you (uid {os.getuid()}): glove creates it, "
+            f"and cannot create sessions' rules directories in it. Fix with: "
+            f"sudo chown {os.getuid()}:{os.getgid()} {control}"]
+    return []
+
+
 def envs_root() -> Path:
     """`<glove_home>/envs` — one dir per `(invocation_dir, harness)` env."""
     return glove_home() / "envs"
@@ -111,7 +133,7 @@ def _registry_lock():
     exist yet) is held exclusively for the whole critical section.
     """
     path = registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_home()
     lock_path = path.with_name(path.name + ".lock")
     with open(lock_path, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)

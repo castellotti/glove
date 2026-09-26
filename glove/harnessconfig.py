@@ -297,10 +297,11 @@ def _render_pi(
         "api": "openai-completions",
     }
     # Pi treats a provider with no credential as unconfigured ("No models
-    # available"). Supply the key inline (provider.apiKey) when the endpoint
-    # needs one — sent as Authorization: Bearer by the openai-completions adapter.
+    # available"). When the endpoint needs a key, name the env var glove passes
+    # the harness (Pi resolves "$VAR" in apiKey), so the key itself is never
+    # written into the home; sent as Authorization: Bearer by the adapter.
     if cfg.llm_api_key:
-        glove_provider["apiKey"] = str(cfg.llm_api_key)
+        glove_provider["apiKey"] = f"${LLM_API_KEY_ENV}"
 
     models_json = {
         "providers": {
