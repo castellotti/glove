@@ -398,8 +398,10 @@ def ensure_net_dir(path: Path) -> Path:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(path, 0o700)
     except PermissionError as e:
-        # the leaf, or the nearest existing parent we could not create it in
-        owned = path if path.exists() else next(p for p in path.parents if p.exists())
+        # the leaf, or the nearest existing parent we could not create it in.
+        # os.path.exists, not Path.exists: on 3.11/3.12 the latter re-raises
+        # EACCES when a foreign 0700 parent can't be searched.
+        owned = next(p for p in (path, *path.parents) if os.path.exists(p))
         st = owned.stat()
         raise HardeningError(
             f"{owned} is owned by uid {st.st_uid}, not by you (uid {os.getuid()}): glove creates it, and "

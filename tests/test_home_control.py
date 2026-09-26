@@ -91,3 +91,21 @@ def test_a_rules_dir_whose_parent_is_foreign_names_the_parent(tmp_path, monkeypa
     monkeypatch.setattr(Path, "mkdir", eacces)
     with pytest.raises(HardeningError, match=rf"{tmp_path / 'control'} is owned by .* sudo chown"):
         ensure_net_dir(tmp_path / "control" / "e" / "s")
+
+
+def test_an_unsearchable_foreign_parent_still_gets_the_fix(tmp_path, monkeypatch):
+    """A root-run Layman's 0700 ``control/<env>/``: on Python 3.11/3.12
+    ``Path.exists`` raises EACCES for the rules directory beneath it, which must
+    not replace the HardeningError with a bare Permission denied."""
+    from glove.hardening import HardeningError
+    from glove.observe import ensure_net_dir
+
+    (tmp_path / "control" / "e").mkdir(parents=True)
+
+    def eacces(self, *a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "mkdir", eacces)
+    monkeypatch.setattr(Path, "exists", eacces)  # the 3.11/3.12 behaviour
+    with pytest.raises(HardeningError, match=rf"{tmp_path / 'control' / 'e'} is owned by .* sudo chown"):
+        ensure_net_dir(tmp_path / "control" / "e" / "s")
