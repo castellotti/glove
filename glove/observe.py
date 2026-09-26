@@ -394,15 +394,19 @@ def ensure_net_dir(path: Path) -> Path:
     A directory someone else created (e.g. a root-run Layman on native Linux
     Docker, which the ownership contract forbids) cannot be chmod'ed back; say
     so rather than fail with a bare EPERM."""
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(path, 0o700)
     except PermissionError as e:
-        st = path.stat()
+        # the leaf, or the nearest existing parent we could not create it in.
+        # os.path.exists, not Path.exists: on 3.11/3.12 the latter re-raises
+        # EACCES when a foreign 0700 parent can't be searched.
+        owned = next(p for p in (path, *path.parents) if os.path.exists(p))
+        st = owned.stat()
         raise HardeningError(
-            f"{path} is owned by uid {st.st_uid}, not by you (uid {os.getuid()}): glove creates it, and "
+            f"{owned} is owned by uid {st.st_uid}, not by you (uid {os.getuid()}): glove creates it, and "
             f"the netgate runs as your uid and needs it. Fix with: sudo chown {os.getuid()}:{os.getgid()} "
-            f"{path} (handoff §3, 'Ownership')"
+            f"{owned} (handoff §3, 'Ownership')"
         ) from e
     return path
 

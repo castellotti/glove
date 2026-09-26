@@ -39,6 +39,7 @@ from .plan import build_session_plan
 from .registry import (
     RegistryError,
     create_env,
+    ensure_home,
     env_dir,
     envs_root,
     find_env_id,
@@ -58,6 +59,12 @@ console = Console()
 err = Console(stderr=True)
 
 SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "policy", "net", "version"}
+
+
+def _ensure_home() -> None:
+    """``registry.ensure_home``, printing its warnings (see there)."""
+    for w in ensure_home():
+        err.print(f"[yellow]⚠[/yellow] {w}")
 
 
 def _autodetect_provider() -> str:
@@ -153,6 +160,7 @@ def init(
         )
         raise typer.Exit(1)
 
+    _ensure_home()
     cwd = os.getcwd()
     existing = None if name else find_env_id(cwd, resolved_harness)
     if existing is not None:
@@ -337,6 +345,7 @@ def run(
         # Materialize under ~/.glove/envs/<env>/sessions/<session>/. Ring-1
         # policies are written *before* render so the read-only bind source
         # exists; they live outside /work and are never writable by the agent.
+        _ensure_home()
         sdir.mkdir(parents=True, exist_ok=True)
         if plan.policies:
             enforcer_dir = sdir / "enforcer"
@@ -359,7 +368,8 @@ def run(
                 err.print(
                     f"[bold red]⚠ rules.json:[/bold red] {problem} — the gate runs as you, so it will "
                     "reject this file (status.json rules.ok: false) and enforce no rules until it is "
-                    "readable. A second writer must leave it owned by you (handoff §3, 'Ownership')."
+                    "readable. A second writer must leave it readable by you: mode 0644, or owned by you "
+                    "(handoff §3, 'Ownership')."
                 )
         rendered = get_runtime(cfg.runtime).render(
             plan, sdir, overrides=frozenset(iknow)

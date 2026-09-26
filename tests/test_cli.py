@@ -397,3 +397,41 @@ def test_ls_lists_registered_envs(home, tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "wd" in result.output
     assert "pi" in result.output
+
+
+@pytest.mark.parametrize("harness", ["pi", "vibe"])
+def test_the_llm_key_is_written_nowhere_under_the_glove_home(home, tmp_path, monkeypatch, harness):
+    """The key stays in the user's config: the compose file names the var with no
+    value, and Pi's models.json references it ("$VAR"), never contains it."""
+    secret = "sk-test-0123456789abcdef"
+    _chdir(monkeypatch, tmp_path / "wd")
+    work = tmp_path / "work"
+    work.mkdir()
+    over = _write_llm_cfg(tmp_path)
+    over.write_text(over.read_text() + f"llm_api_key: {secret}\n")
+    result = runner.invoke(
+        app, ["run", harness, "--config", str(over), "--workdir", str(work), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    hits = [p for p in home.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()]
+    assert hits == []
+    compose = next(home.rglob("docker-compose.yml")).read_text()
+    assert "GLOVE_LLM_API_KEY: null" in compose
+    if harness == "pi":
+        models = next(home.rglob("models.json"))
+        assert json.loads(models.read_text())["providers"]["glove"]["apiKey"] == "$GLOVE_LLM_API_KEY"
+
+
+def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, monkeypatch):
+    from glove import session as session_mod
+    from glove.config import Config, Service
+
+    calls = []
+    monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
+    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
+    cfg = Config(harness="pi", name="s", llm_api_key="sk-x", net=["service"],
+                 services=[Service(name="llm", to="example.test:8080")])
+    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
+    assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
+    assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)

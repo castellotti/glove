@@ -48,6 +48,10 @@ class SessionPlan:
     command: list[str] = field(default_factory=list)
     policies: dict[str, str] = field(default_factory=dict)
     enforcer_env: dict[str, str] = field(default_factory=dict)
+    # Harness env vars the compose file declares *without a value*: compose takes
+    # them from the environment of the `compose` process, which session.launch
+    # fills from secret_env(cfg). So a secret is never written to disk by glove.
+    passthrough_env: list[str] = field(default_factory=list)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
     # Network observability (glove/observe.py). `observe` is None unless enabled;
@@ -96,7 +100,7 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
     Mirrors v1's compose logic; imported lazily to avoid an import cycle with
     harnessconfig (which imports config/harness).
     """
-    from .harnessconfig import LLM_API_KEY_ENV, service_base
+    from .harnessconfig import service_base
 
     # Single construction site for the browser MCP endpoint: derived from the
     # declared `browser` service, whether it came from a browser provider
@@ -105,10 +109,16 @@ def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None
     browser = service_base(cfg, session, "browser")
     if browser:
         environment.setdefault("BROWSER_MCP_URL", f"{browser}/mcp")
-    # NOTE: in Phase 2 the LLM key moves into nono's proxy (credential
-    # injection). Until then it stays in the harness env, as in v1.
-    if cfg.llm_api_key:
-        environment[LLM_API_KEY_ENV] = str(cfg.llm_api_key)
+
+
+def secret_env(cfg: Config) -> dict[str, str]:
+    """The harness's secret env vars and their values, passed to compose at run
+    time only (``SessionPlan.passthrough_env``). The LLM key lives in the user's
+    config and nowhere else on disk. NOTE: in Phase 2 it moves into nono's proxy
+    (credential injection) and leaves the harness env too."""
+    from .harnessconfig import LLM_API_KEY_ENV
+
+    return {LLM_API_KEY_ENV: str(cfg.llm_api_key)} if cfg.llm_api_key else {}
 
 
 def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str]) -> None:
@@ -301,6 +311,7 @@ def build_session_plan(
         enforcer=cfg.enforcer,
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
+        passthrough_env=list(secret_env(cfg)),
     )
     plan.observe = network.observe
     if network.gated:

@@ -167,6 +167,7 @@ class DockerRuntime:
             "mounts": plan.mounts,
             "environment": plan.environment,
             "enforcer_env": plan.enforcer_env,
+            "passthrough_env": plan.passthrough_env,
             "policies_host_dir": plan.policies_host_dir,
             "policies_container_dir": plan.policies_container_dir,
             "sidecars": plan.network.sidecars,

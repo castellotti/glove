@@ -7,6 +7,7 @@ path; this module only shells out to the provider's compose CLI.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,6 +18,7 @@ from .compose import FORWARDER_IMAGE, TEMPLATES_DIR
 from .config import Config
 from .harness import HarnessProfile, effective_image, get_profile
 from .network import build_network_plan
+from .plan import secret_env
 
 console = Console()
 
@@ -169,15 +171,17 @@ def launch(cfg: Config, session_dir: Path, *, provider: str, rebuild: bool) -> N
         forwarder_services.insert(0, f"glove-{session}-netgate")
 
     ensure_images(cfg, provider, rebuild=rebuild)
+    # the compose file names the secret vars without values (plan.passthrough_env)
+    env = {**os.environ, **secret_env(cfg)}
 
     if forwarder_services:
         console.print("[bold]starting forwarders…[/bold] " + ", ".join(forwarder_services))
-        subprocess.run([*base, "up", "-d", *forwarder_services], check=True)
+        subprocess.run([*base, "up", "-d", *forwarder_services], check=True, env=env)
 
     console.print("[bold]launching harness (Ctrl-D to exit)…[/bold]")
     try:
         subprocess.run(
-            [*base, "run", "--rm", "-it", f"glove-{session}-harness"], check=False
+            [*base, "run", "--rm", "-it", f"glove-{session}-harness"], check=False, env=env
         )
     finally:
         console.print(

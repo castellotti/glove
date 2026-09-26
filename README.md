@@ -106,7 +106,7 @@ plugin_options:             # per-plugin config
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
 model: your-model-id       # must match the endpoint's /v1/models
-llm_api_key: sk-...         # stripped from shell tools' env by ring 1
+llm_api_key: sk-...         # kept only here; passed to the harness env at run time
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
@@ -203,8 +203,8 @@ for "no rules". `status.json` names the enforced file and the last rejected one
 by SHA-256, and `glove net rules` says whether the file on disk is `enforced`,
 `rejected` or `pending`. `glove net validate FILE` runs the gate's validator
 without a gate. The gate runs as your uid, so a second writer (Layman) must
-leave `rules.json` owned by you: the contract is in the handoff's §3,
-"Ownership". The built-in SSRF guard always runs first.
+leave `rules.json` readable by you (mode `0644`); see "Layman" below. The
+built-in SSRF guard always runs first.
 
 **Gate lifecycle.** Every flow record carries its forwarder's `run` id, and
 `flows.ndjson` records each forwarder's and the collector's `start`/`stop`. A
@@ -235,8 +235,6 @@ redacted. HTTPS stays opaque. `observe.retain: 12h` expires old records, and
 
 Design and as-built decisions:
 [docs/planning/network-observability.md](docs/planning/network-observability.md).
-Layman consumes `net/` read-only; the contract is
-[the handoff brief](docs/planning/network-observability-layman-handoff.md).
 Sample data: `tests/fixtures/netobs/` (the original fixture, frozen) and one
 directory per UI state in `tests/fixtures/netobs-scenarios/`.
 Verified live on Docker Desktop (macOS) and on rootless and rootful Podman,
@@ -244,7 +242,41 @@ including an SELinux-enforcing Fedora host. On Podman the gate's `net/` and
 `control/` binds are labelled `selinux: z`, and its socket tmpfs gets a
 container SELinux context when SELinux is on. Rootful Docker on Linux:
 **untested**. On a native SELinux host, the *harness's* own binds are not
-labelled yet: **untested**, and probably broken there.
+labelled: **unsupported** (see "Layman" below).
+
+### Layman
+
+[Layman](docs/planning/network-observability-layman-handoff.md) shows glove's
+sessions and traffic, and edits their rules. The two projects are independent:
+Layman touches glove's folders only if they already exist, and glove owns
+every folder, owner and mode under `~/.glove`.
+
+- **What Layman mounts.** `~/.glove` read-only, and `~/.glove/control`
+  read-write over it, each only if it exists when Layman starts. Layman follows `~/.glove` only, not
+  `$GLOVE_HOME`. A `control/` that appears later is picked up when Layman
+  restarts.
+- **What glove guarantees.** Whenever glove creates its home (`glove init`,
+  `glove run`, any registry write), it also creates `control/`, and `glove
+  init`/`glove run` add it to an older home that lacks it. Both are yours, mode
+  `0777 & ~umask` (`0755` usually). The rest of the layout is as before:
+  `control/<env>/<session>/` (`0700`) is created when a session with a gate is
+  rendered, and `net/` is `0700` with files `0600`. glove warns, with the
+  `sudo chown` that fixes it, when `control/` belongs to someone else.
+- **What Layman writes.** Only `control/<env>/<session>/rules.json`, only if
+  that directory exists, and by atomic rename: a temp file unique to Layman
+  in the same directory, `fsync`, `chmod 0644` (explicitly, not through the
+  umask), rename. No `chown`, no new directories. The directory is `0700` and
+  yours, so the file is readable by the gate (which runs as you) and by nobody
+  else. The contract is the handoff's §3, "Ownership".
+- **SELinux hosts (Fedora, RHEL) are not supported yet**, for glove sessions
+  or for Layman. On an enforcing host a container is denied files under your
+  home unless they carry a container label, and glove sets none on its home or
+  on `/work`. Supporting it is a separate piece of work that must decide how
+  harness homes are isolated from each other and what Layman may read
+  (`docs/planning/layman-independence-results.md`).
+
+Verified by `netgate_control_perms.sh` on Docker Desktop and on rootless and
+rootful Podman.
 
 ### Resuming a session
 
@@ -270,9 +302,17 @@ under (net, mounts, plugins, `allow_root`, `allow_sensitive`, services), glove
 prints a prominent warning: the prior conversation context (which may include
 prompt-injected instructions) will run with the wider reach.
 
-> Transcripts and `models.json` (which holds the LLM API key in cleartext) live
-> under `~/.glove/envs/<env-id>/home`. This is durable on-disk state — don't sync
-> that tree to anywhere untrusted.
+> Transcripts live under the session's `home/` (`~/.glove/envs/<env-id>/sessions/<name>/home`).
+> This is durable on-disk state — don't sync that tree to anywhere untrusted.
+>
+> **The LLM API key is stored in one place: your config** (`llm_api_key` in the
+> env's `glove.yaml` or your `--config` file). glove writes it nowhere else. The
+> compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
+> the environment of `compose` when it starts the session, and Pi's `models.json`
+> refers to it as `"$GLOVE_LLM_API_KEY"`. Inside the sandbox only the harness
+> process sees it; ring 1 strips it from every shell command. Sessions rendered by
+> an older glove held copies in `docker-compose.yml` and `models.json`: the next
+> `glove run` of the session rewrites both.
 
 ## Toolchain
 

@@ -74,6 +74,9 @@ services:
 {% for k, v in enforcer_env.items() %}
       {{ k }}: {{ v | tojson }}
 {% endfor %}
+{% for k in passthrough_env %}
+      {{ k }}: null  # from glove's environment at run time; never stored here
+{% endfor %}
     volumes:
       - type: bind
         source: {{ home_dir | tojson }}
