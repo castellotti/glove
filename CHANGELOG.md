@@ -2,7 +2,18 @@
 
 All notable changes to glove are documented here.
 
-## [Unreleased] — minimal core + opt-in plugins (in progress)
+## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
+
+### Development
+
+- **Core/extension import boundary (v3 M0).** New top-level `extensions/`
+  package for in-tree extensions, and an [import-linter](https://import-linter.readthedocs.io/)
+  contract (`[tool.importlinter]` in `pyproject.toml`) forbidding `glove` from
+  importing `extensions`. Run it with `uv run lint-imports`; `tests/test_layering.py`
+  runs it in the unit suite and checks that the contract really catches a
+  forbidden import. Lint now covers `glove extensions tests`.
+
+## minimal core + opt-in plugins
 
 Reworking glove into a tight, minimal sandbox with every optional capability
 behind an off-by-default plugin system (design note:

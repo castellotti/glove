@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.16"]
+dev = [
+    "import-linter>=2.15",
+    "pytest>=8.0",
+    "ruff>=0.16",
+]
 
 [project.scripts]
 glove = "glove.cli:main"
@@ -46,3 +50,12 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
 # B008: Typer's API *requires* `= typer.Option(...)` / `typer.Argument(...)` in
 # defaults — the whole CLI relies on it, so it is not a smell here.
 ignore = ["B008"]
+
+[tool.importlinter]
+root_packages = ["glove", "extensions"]
+
+[[tool.importlinter.contracts]]
+name = "Core does not import extensions"
+type = "forbidden"
+source_modules = ["glove"]
+forbidden_modules = ["extensions"]

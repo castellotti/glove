@@ -323,10 +323,16 @@ Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
-uv run ruff check glove tests        # lint
-uv run pytest -q                     # unit suite
+uv run ruff check glove extensions tests   # lint
+uv run pytest -q                           # unit suite (includes the layering check)
+uv run lint-imports                        # core (glove/) must not import extensions/
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (7 checks)
 ```
+
+glove is being restructured (v3) into a minimal core in `glove/` plus in-tree
+extensions in `extensions/`. The import boundary is enforced by
+[import-linter](https://import-linter.readthedocs.io/): `glove` must never import
+`extensions`, the same way a kernel never depends on its modules.
