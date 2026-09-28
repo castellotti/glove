@@ -26,6 +26,10 @@ from pathlib import Path
 from . import SCOPES
 from .records import iso_utc
 
+# rules.json v1 is frozen (Layman mirrors its validator): the llm forwarder's
+# record-only scopes lan/cloud are not rule-matchable values.
+RULE_SCOPES = tuple(s for s in SCOPES if s not in ("lan", "cloud"))
+
 MAX_BYTES = 1024 * 1024
 MAX_RULES = 10_000
 TOP_KEYS = frozenset({"v", "env", "session", "updated_at", "updated_by", "default", "rules"})
@@ -153,8 +157,8 @@ def _rule(i: int, raw) -> Rule:
         if key in m:
             kw[key] = _str(m[key], f"{where}.match.{key}", _LABEL)
     if "scope" in m:
-        if m["scope"] not in SCOPES:
-            raise PolicyError(f"{where}.match.scope: must be one of {sorted(SCOPES)}")
+        if m["scope"] not in RULE_SCOPES:
+            raise PolicyError(f"{where}.match.scope: must be one of {sorted(RULE_SCOPES)}")
         kw["scope"] = m["scope"]
     return Rule(id=rid, action=action, terminate=term, **kw)
 

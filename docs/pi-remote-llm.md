@@ -2,165 +2,101 @@
 
 A complete, reproducible setup for the **Pi** harness that:
 
-- talks to a **remote OpenAI-compatible LLM** (e.g. llama.cpp on another machine)
-  over an SSH tunnel,
+- talks to a **remote OpenAI-compatible LLM** (e.g. llama.cpp on another machine),
 - sees **only its own working directory**,
 - reaches the web solely through a **dedicated headed Playwright browser** on the
   host that you can watch.
 
 Copy **[`docs/examples/pi-remote-llm.glove.yaml`](examples/pi-remote-llm.glove.yaml)**
-as your starting config; this doc explains the pieces and the non-obvious bits.
+as your starting config; this doc explains the pieces.
 
 ```sh
 cd ~/path/to/your/project
 glove init pi --from <glove-repo>/docs/examples/pi-remote-llm.glove.yaml
-$EDITOR ~/.glove/envs/<env-id>/glove.yaml     # set host, model, API key
-glove doctor --env <env-id> --browser host-mcp
+$EDITOR ~/.glove/envs/<env-id>/glove.yaml     # remote host, model, key reference
+glove doctor --env <env-id>                   # includes the extensions' checks
 glove pi --dry-run                            # preview
 glove pi                                      # launch
 ```
 
-`init` copies the example into `~/.glove/envs/<env-id>/glove.yaml` (outside your
-repo). Put the **real API key there**, never in the repo.
-
-## The LLM over an SSH tunnel
+## The LLM (`llm` extension)
 
 The harness container is attached only to an `internal: true` bridge: no route
-off the host, and it can't resolve mDNS (`.local`) or reach the LAN. So the LLM
-is bridged in through a single host-loopback port:
+off the host, no LAN, no mDNS. It reaches its model through **one forwarder**,
+`glove-<session>-llm`, which the `llm` extension renders from `location:`:
 
-- a **host service** runs `ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 <remote>`,
-  forwarding a local port to the model's port on the remote (needs passwordless
-  SSH to the remote);
-- an **`llm` forwarder sidecar** targets `host.docker.internal:8899`, so the
-  harness reaches `http://glove-<session>-llm:8080/v1`.
+- **`lan`**: the server is directly reachable on your network. Set
+  `endpoint: <host>:<port>`; the forwarder dials exactly that address (over a
+  session network the harness never joins).
+- **`host`** with an SSH tunnel: when the server is only reachable over SSH, the
+  example's `model-tunnel` host service runs
+  `ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 <remote>` in tmux, and the model is
+  then at `location: host, endpoint: 127.0.0.1:8899`.
 
-glove starts the tunnel in a detached tmux session, waits for the port, and
-reuses a live one. Nothing about the remote host leaks into the harness config.
+`model: auto` takes the single model the server lists at `/v1/models`, and
+`capabilities: auto` asks the server for vision and context size (llama.cpp:
+`/props`). Both run at launch from a throwaway container on the harness network,
+never from the host. glove then renders Pi's `models.json`: vision →
+`input: ["text","image"]`, plus `contextWindow` and `maxTokens`. Set them
+explicitly with `capabilities: {vision: true, context_window: 131072}` when the
+server can't be probed.
 
-## Model, thinking, images, context
-
-glove synthesises Pi's `models.json`/`settings.json` from the config:
-
-- `model:` — must match what the endpoint advertises at
-  `curl http://<remote>:8080/v1/models`.
-- `contextWindow` is pinned to **262144** and images are enabled
-  (`input: ["text","image"]`) for the generated model entry.
 - Raise the default reasoning effort with
   `harness_config.settings.defaultThinkingLevel` (`off|low|medium|xhigh`).
-- Override any generated model field via `harness_config.model` (e.g.
-  `contextWindow`, `maxTokens`).
-- **Sampling** (`temperature`, `top_p`, `top_k`, `min_p`, penalties) is **not**
-  sent by Pi — pin it **server-side** where the model runs (e.g. llama.cpp flags).
+- Override any generated model field via `harness_config.model`.
+- **Sampling** (`temperature`, `top_p`, …) is **not** sent by Pi; pin it
+  **server-side** (e.g. llama.cpp flags).
 
 ## API key handling
 
-Set `llm_api_key` in `~/.glove/envs/<env-id>/glove.yaml` to a reference,
-`keychain:<service>` or `env:<VAR>`, so no file holds the key. glove resolves it
-in memory at launch and passes it to the harness as `GLOVE_LLM_API_KEY`; Pi's
-`models.json` refers to `"$GLOVE_LLM_API_KEY"` and never contains the key. The
-sandboxed shell **cannot** read it: ring 1 hides the config home and strips
-secret-shaped env vars from every command.
+`extensions.llm.api_key` must be a reference: `keychain:<service>` or
+`env:<VAR>`. A literal key is refused. glove resolves it in memory at launch
+and passes it to the harness as `GLOVE_LLM_API_KEY`; Pi's `models.json` refers
+to `"$GLOVE_LLM_API_KEY"` and never contains the key. The sandboxed shell
+**cannot** read it: ring 1 hides the config home and strips secret-shaped env
+vars from every command. Store the key once with
+`security add-generic-password -U -a "$USER" -s <service> -w` (it prompts; the
+key never appears in argv).
 
 ## Docker Desktop (macOS/Windows)
 
-Supported out of the box. Note that the `/home/agent` bind mount is a
-virtiofs/gRPC-FUSE share which cannot host a Unix-domain socket; glove backs the
-nono enforcer's state roots with tmpfs so its control socket works there (no
-action needed on your part).
+Supported out of the box. The `/home/agent` bind mount is a virtiofs/gRPC-FUSE
+share that can't host a Unix-domain socket, so glove backs the nono enforcer's
+state roots with tmpfs.
 
-## Browser (`host-mcp`, the default)
+## Browser (`playwright` extension, `mode: host`)
 
-The harness can't open a browser itself (it's offline). `host-mcp` runs a
-**Playwright MCP server on the host**, drives a real headed browser you can
-watch, and bridges the harness to it through one forwarder sidecar. The agent's
-`browser_*` tools speak to that endpoint; shell commands can't (ring 1 blocks
-their network), so a prompt-injected `curl` can't reach the browser or the web.
+The harness can't open a browser itself (it's offline). Host mode runs a
+**Playwright MCP server on the host** (`playwright-core@1.63.0 mcp`, pinned),
+attached over CDP to a **headed Chrome you can watch**, and bridges the harness
+to it through one forwarder:
 
 ```
  harness container ──internal net──▶ glove-<session>-browser (forwarder)
-   pi `browser` extension                   │ socat
+   pi browser extension                     │
    (reads BROWSER_MCP_URL)                  ▼
-                                    host 127.0.0.1:8931  (Playwright MCP, npx)
-                                           │ launches / drives
+                                    host 127.0.0.1:8931  (Playwright MCP)
+                                           │ CDP :9222
                                            ▼
-                                    headed browser on your desktop (you watch)
-                                    screenshots ─▶ returned to the agent inline
+                                    headed Chrome on your desktop (you watch)
 ```
 
-Declaring a `browser` service makes glove set `BROWSER_MCP_URL` for Pi's baked
-`browser` extension. `--allowed-hosts` on the MCP is pinned to the sidecar
-hostname, so only requests arriving through the forwarder are accepted.
+- **Which Chrome.** glove uses a system Google Chrome/Chromium if installed,
+  else Playwright's **Chrome for Testing** (`npx playwright install chromium`,
+  once). `glove doctor --env <env-id>` reports which it found.
+- **Per session.** The Chrome profile and MCP output live in the session's
+  extension state, never in your repo and never shared between sessions. Chrome
+  stops on `glove down` unless `keep_browser: true`.
+- **Pinned to the forwarder.** `--allowed-hosts` accepts only requests arriving
+  through `glove-<session>-browser`. Shell commands can't reach it (ring 1 blocks
+  their network).
+- **Tools.** Pi exposes only the `tools:` setting's list, and never
+  `browser_run_code_unsafe` in host mode (it runs arbitrary code in the MCP
+  process, on your Mac). Vibe cannot filter MCP tools, so glove refuses
+  `vibe` + host mode unless you set `i_accept_host_rce: true`.
+- **No anonymity.** The browser uses your Mac's network directly.
 
-### Host prerequisites
-
-- **Node + npx** (`glove doctor` checks these).
-- **A Chromium-family browser for Playwright to drive** — the step that trips
-  people up, because of how `@playwright/mcp` picks a browser.
-
-### The `--browser` gotcha
-
-`@playwright/mcp`'s `--browser` accepts only **channels** — `chrome`, `msedge`,
-`firefox`, `webkit` — with **no `chromium` value**, and it **defaults to the
-`chrome` channel** (a *system* Google Chrome). With no Chrome installed you get:
-
-```
-Chromium distribution 'chrome' is not found at /Applications/Google Chrome.app/...
-Run "npx playwright install chrome"
-```
-
-Three ways to satisfy it:
-
-1. **Dedicated Playwright Chromium — recommended, no branded browser.** Use
-   Playwright's own **Chrome for Testing** (a Chromium build Playwright manages,
-   isolated from your daily browser). Install once (persists):
-
-   ```sh
-   npx playwright install chromium
-   ```
-
-   Then point the MCP at it with `--executable-path`, resolved by glob so it
-   survives revision bumps (macOS shown; on Linux the binary is
-   `~/.cache/ms-playwright/chromium-<rev>/chrome-linux/chrome`):
-
-   ```yaml
-   host_services:
-     - name: playwright
-       command: >-
-         npx -y playwright-core@1.63.0 mcp --host 127.0.0.1 --port 8931
-         --allowed-hosts glove-{session}-browser:8931 --shared-browser-context
-         --output-dir {media_dir}
-         --executable-path "$(ls -d ~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/* 2>/dev/null | grep -i 'for Testing' | sort -V | tail -1)"
-       ready_port: 8931
-   ```
-
-   `glove doctor --browser host-mcp` prints the detected Chrome for Testing path
-   when no system Chrome is present.
-
-2. **A system Chrome/Brave via CDP.** Launch it headed with
-   `--remote-debugging-port=9222` and let the MCP attach with
-   `--cdp-endpoint http://127.0.0.1:9222`. This is what the built-in provider
-   block (`browser: { provider: host-mcp }`, or `glove pi --browser host-mcp`)
-   does — it adds a `chrome` host service (Google Chrome) plus a `playwright`
-   host service. Override the `chrome` command to use a different Chromium
-   browser (e.g. Brave). See `docs/examples/vibe-local.glove.yaml`.
-
-3. **Install Google Chrome.** `npx playwright install chrome`, or install Chrome
-   normally, so the default `chrome` channel resolves.
-
-### Enabling it
-
-- **Provider block:** `browser: { provider: host-mcp, port: 8931 }` — auto-wires
-  the forwarder + `chrome` + `playwright` host services (assumes a system Chrome,
-  option 2/3).
-- **Hand-wired** (recommended for the dedicated Chrome-for-Testing setup, option
-  1): declare the `browser` service and a `playwright` host service yourself, as
-  in `docs/examples/pi-remote-llm.glove.yaml`.
-
-`browser_take_screenshot` returns the image to the agent inline. Playwright's
-`--output-dir` (the `{media_dir}` placeholder) is a glove-managed dir under the
-session state (`~/.glove/envs/<env-id>/sessions/<session>/media`) — **never** your
-project working tree, so glove leaves no files behind in the repo you launch it on.
+`browser_take_screenshot` returns the image to the agent inline.
 
 ## Security recap
 

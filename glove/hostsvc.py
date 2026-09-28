@@ -42,32 +42,8 @@ def _tokens(
     return {
         "session": session,
         "workdir": os.path.realpath(cfg.workdir),
-        # Host-side dir for browser output (e.g. Playwright screenshots). It lives
-        # in glove's OWN session state, never inside the project working tree —
-        # glove is a generic sandbox and must not litter the repo it is launched
-        # on. When no session dir is known (bare expansion), fall back under
-        # ~/.glove. The agent still receives screenshots inline from the browser
-        # tool; it does not read them from this path.
-        "media_dir": str(
-            (session_dir / "media")
-            if session_dir is not None
-            else Path.home() / ".glove" / "media" / session
-        ),
-        # Per session, beside media_dir: a shared profile would link sessions
-        # through cookies and logins.
-        "chrome_profile": str(
-            (session_dir / "chrome-profile")
-            if session_dir is not None
-            else Path.home() / ".glove" / "chrome-profile" / session
-        ),
         "home": str(Path.home()),
     }
-
-
-def media_dir_for(
-    cfg: Config, session: str, session_dir: Path | None = None
-) -> Path:
-    return Path(_tokens(cfg, session, session_dir)["media_dir"])
 
 
 def _port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -95,10 +71,6 @@ def start_host_services(cfg: Config, session: str, session_dir: Path) -> None:
     """Start each host service that isn't already up; wait for readiness."""
     if not cfg.host_services:
         return
-
-    # Ensure the screenshot output dir exists so Playwright's --output-dir is
-    # valid. This lives under glove's session state, not the project working tree.
-    media_dir_for(cfg, session, session_dir).mkdir(parents=True, exist_ok=True)
 
     have_tmux = shutil.which("tmux") is not None
     log_dir = session_dir / "host-logs"

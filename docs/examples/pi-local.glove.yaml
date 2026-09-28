@@ -1,47 +1,14 @@
-# glove preset — Pi against a local OpenAI-compatible LLM, no browser.
-#
-# The simplest useful setup: the agent works in its own directory, talks to an
-# LLM already running on THIS machine, and has no web access at all. Good for
-# working on a code repo offline.
-#
-# Use it:
-#   cd ~/path/to/your/project           # the dir the agent should work in
-#   glove init pi --from <glove-repo>/docs/examples/pi-local.glove.yaml
-#   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the model + API key
-#   glove pi --dry-run                  # preview
-#   glove pi                            # launch
-#
-# `init` copies this file into ~/.glove/envs/<env-id>/glove.yaml (outside your
-# repo). Put the real API key THERE, never in the repo.
-
+# Pi against an LLM server on this Mac (llama.cpp, ollama, LM Studio, …).
+# Copy to ~/.glove/envs/<env-id>/glove.yaml after `glove init pi`.
 harness: pi
 runtime: docker
 enforcer: nono          # ring-1 kernel sandbox wrapping the agent + every command
-
-# The agent's /work — its only writable mount. `.` = the dir you launch from.
-# No `add_dirs` → nothing else on the host is mounted or reachable.
 workdir: .
-
-# The LLM. `model` must match what the endpoint advertises at
-#   curl http://127.0.0.1:8080/v1/models
-model: your-model-id
-llm_service: llm
-llm_api_key: sk-REPLACE-ME   # or omit if your endpoint needs no key
-
-# Internal-only container; the `llm` forwarder is the only routable host.
-net: [service]
-allow_root: false
-
-# No opt-in capabilities: the base image is harness + enforcer only (no web
-# search, no browser, no media toolchain). Add e.g. `plugins: [media]` or
-# `[search]` / `[browser]` to compose them in (see the other examples).
-plugins: []
-
-services:
-  # Bridge to an LLM listening on the Docker host itself (127.0.0.1:8080).
-  # host.docker.internal is how a sidecar reaches a host port; no SSH tunnel
-  # needed when the model runs on the same machine. (For a REMOTE model over an
-  # SSH tunnel, plus a browser, see pi-remote-llm.glove.yaml.)
-  - name: llm
-    to: host.docker.internal:8080
-    port: 8080
+extensions:
+  llm:
+    provider: llama.cpp          # see extensions/llm/providers/
+    location: host               # the server listens on this Mac
+    endpoint: 127.0.0.1:8080
+    model: auto                  # the single model /v1/models lists
+    capabilities: auto           # vision/context probed from the server
+    # api_key: keychain:my-llm   # only if the server needs a key (a reference, never the key)

@@ -275,8 +275,9 @@ def test_render_and_cli_never_resolve(no_dns, tmp_path, monkeypatch):
     assert runner.invoke(app, ["init", "pi"]).exit_code == 0
     over = tmp_path / "o.yaml"
     over.write_text(
-        "net: [service]\nmodel: m\nobserve: {enabled: true}\nservices:\n"
-        "  - { name: llm, to: llm.example.com:8080, port: 8080 }\n"
+        "net: [service]\nobserve: {enabled: true}\n"
+        "extensions: {llm: {provider: llama.cpp, location: lan, endpoint: \"llm.example.com:8080\", model: m}}\n"
+        "services:\n"
         "  - { name: proxy, to: egress-proxy:8888, join_network: pi-search-egress }\n"
     )
     r = runner.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run"])
@@ -290,9 +291,11 @@ def test_render_and_cli_never_resolve(no_dns, tmp_path, monkeypatch):
         res = runner.invoke(app, args)
         assert res.exception is None or isinstance(res.exception, SystemExit), (args, res.output)
     facts = json.loads((ndir / "session.json").read_text())
-    # the dotted target is recorded as written, and classified `direct` by shape
-    assert facts["services"][0]["upstream"] == "tcp:llm.example.com:8080"
-    assert facts["services"][0]["scope"] == "direct"
+    # the dotted LAN target is recorded as written (never resolved on the host),
+    # and the llm extension labels it `lan`
+    llm = next(s for s in facts["services"] if s["service"] == "llm")
+    assert llm["upstream"] == "tcp:llm.example.com:8080"
+    assert llm["scope"] == "lan"
 
 
 def test_gate_never_resolves_for_an_ip_literal_upstream(no_dns, tmp_path):

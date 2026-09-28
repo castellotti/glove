@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 
 import pytest
+from helpers import make_cfg
 
-from glove.config import AddDir, Config
+from glove.config import AddDir
 from glove.enforcers import get_enforcer
 from glove.enforcers.base import ENFORCER_DIR
 from glove.plan import build_session_plan
@@ -23,7 +24,7 @@ GOLDEN = Path(__file__).parent / "golden" / "nono"
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = Config(harness="pi", workdir=str(work), name="s", **kw)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="s", **kw)
     return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
 
 
@@ -83,12 +84,11 @@ def test_both_policies_grant_interpreter_runtime_paths(tmp_path):
 
 def test_vibe_harness_policy_grants_uv_venv(tmp_path):
     # vibe installs under /opt/uv (uv tool); its interpreter must be readable.
-    from glove.config import Config
     from glove.plan import build_session_plan
 
     work = tmp_path / "work"
     work.mkdir()
-    cfg = Config(harness="vibe", workdir=str(work), name="s")
+    cfg = make_cfg(harness="vibe", workdir=str(work), name="s")
     plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
     harness = json.loads(plan.policies["harness.json"])
     reads = harness["filesystem"]["read"]

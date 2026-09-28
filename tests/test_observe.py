@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from helpers import make_cfg
 from typer.testing import CliRunner
 
 from glove.cli import app
@@ -30,10 +31,9 @@ runner = CliRunner()
 
 
 def pi_search_services() -> list[Service]:
-    """The glove-pi-search service set (configs/pi-search.glove.yaml, tokens filled
-    with the .env.example defaults: LLM_HOST=host.docker.internal, LLM_PORT=8080)."""
+    """The glove-pi-search service set, minus `llm` (the llm extension's endpoint,
+    added by `render` via the stub inference provider: host.docker.internal:8080)."""
     return [
-        Service(name="llm", to="host.docker.internal:8080", port=8080, host_gateway=True),
         Service(name="search", to="searxng:8080", port=8080, join_network="pi-search-egress"),
         Service(name="proxy", to="egress-proxy:8888", port=8888, join_network="pi-search-egress"),
     ]
@@ -44,14 +44,14 @@ def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, u
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     sdir = tmp_path / "ghome" / "envs" / "ps" / "sessions" / "ps"
-    cfg = Config(harness="pi", workdir=str(work), name="ps", net=["service"],
-                 observe={"enabled": True} if observe is None else observe)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="ps", net=["service"],
+                   observe={"enabled": True} if observe is None else observe)
     cfg.services = pi_search_services() if services is None else services
-    cfg.plugins = ["search"] if any(s.name == "search" for s in cfg.services) else []
     if add_dirs:
         cfg.add_dirs = add_dirs
     plan = build_session_plan(
-        cfg, env_id="ps", home_dir=str(home or sdir / "home"), cwd=str(work), uid=uid, gid=gid
+        cfg, env_id="ps", home_dir=str(home or sdir / "home"), cwd=str(work), uid=uid, gid=gid,
+        state_dir=str(sdir / "ext"),
     )
     if plan.observe is not None:
         plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
@@ -65,7 +65,7 @@ def render(tmp_path, *, observe=None, services=None, home=None, add_dirs=None, u
 
 def test_observe_off_by_default():
     assert parse_observe(Config()) is None
-    cfg = Config(harness="pi", name="s", net=["service"])
+    cfg = make_cfg(harness="pi", name="s", net=["service"])
     cfg.services = pi_search_services()
     assert all(s.gate is None for s in build_network_plan(cfg, "s").sidecars)
 
@@ -97,7 +97,7 @@ def test_observe_rejects(observe, match):
 
 
 def _proxy_cfg(**obs) -> Config:
-    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
+    cfg = make_cfg(harness="pi", name="s", net=["service"], observe={"enabled": True})
     cfg.services = [Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
                             observe={"mode": "http-proxy", **obs})]
     return cfg
@@ -129,7 +129,7 @@ def test_http_proxy_mode_rejects(obs, match):
 
 
 def test_route_is_only_for_proxy_mode():
-    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
+    cfg = make_cfg(harness="pi", name="s", net=["service"], observe={"enabled": True})
     cfg.services = [Service(name="llm", to="h:1", observe={"route": "vpn"})]
     with pytest.raises(ConfigError, match="http-proxy mode only"):
         build_network_plan(cfg, "s")
@@ -137,7 +137,7 @@ def test_route_is_only_for_proxy_mode():
 
 def test_observe_enabled_is_a_master_switch():
     # Annotations stay in the config; turning observation off makes them inert.
-    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": False})
+    cfg = make_cfg(harness="pi", name="s", net=["service"], observe={"enabled": False})
     cfg.services = [Service(name="proxy", to="egress-proxy:8888", join_network="n",
                             observe={"mode": "http-proxy", "route": "vpn"})]
     assert build_network_plan(cfg, "s").sidecars[0].gate is None
@@ -146,10 +146,17 @@ def test_observe_enabled_is_a_master_switch():
         build_network_plan(cfg, "s")
 
 
+def _netplan(cfg):
+    from glove.extensions import compose
+
+    comp = compose(cfg.extensions, harness=cfg.harness, session="s", state_root=Path("/nonexistent"))
+    return build_network_plan(cfg, "s", comp)
+
+
 def test_gate_specs_for_pi_search():
-    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
+    cfg = make_cfg(harness="pi", name="s", net=["service"], observe={"enabled": True})
     cfg.services = pi_search_services()
-    gates = {s.role: s.gate for s in build_network_plan(cfg, "s").sidecars}
+    gates = {s.role: s.gate for s in _netplan(cfg).sidecars}
     assert gates["llm"].tool == "llm" and gates["llm"].scope == "local"
     assert gates["search"].tool == "web_search"
     assert gates["proxy"].tool == "web_fetch"
@@ -157,7 +164,7 @@ def test_gate_specs_for_pi_search():
 
 
 def test_per_service_opt_out_and_annotations():
-    cfg = Config(harness="pi", name="s", net=["service"], observe={"enabled": True})
+    cfg = make_cfg(harness="pi", name="s", net=["service"], observe={"enabled": True})
     cfg.services = [
         Service(name="llm", to="host.docker.internal:8080", observe=False),
         Service(name="api", to="api.example.com:443", join_network="n",
@@ -185,7 +192,7 @@ def test_classify_scope_by_shape(host, gw, scope):
 
 
 def test_service_observe_round_trips_through_effective_yaml(tmp_path):
-    cfg = Config(harness="pi", observe={"enabled": True})
+    cfg = make_cfg(harness="pi", observe={"enabled": True})
     cfg.services = [Service(name="llm", to="h:1", observe={"tool": "llm"})]
     p = tmp_path / "eff.yaml"
     p.write_text(cfg.to_yaml())
@@ -198,7 +205,7 @@ def test_service_observe_round_trips_through_effective_yaml(tmp_path):
 
 
 def test_render_replaces_socat_with_gate_dropin(tmp_path):
-    plan, doc, _ = render(tmp_path)
+    _, doc, _ = render(tmp_path)
     svcs = doc["services"]
     for role, port, target in [("llm", 8080, "tcp:host.docker.internal:8080"),
                                ("search", 8080, "tcp:searxng:8080"),
@@ -211,12 +218,10 @@ def test_render_replaces_socat_with_gate_dropin(tmp_path):
         assert cmd[cmd.index("--listen") + 1] == str(port)
         assert cmd[cmd.index("--upstream") + 1] == target
     # networks match what the socat sidecar joined
-    assert set(svcs["glove-ps-llm"]["networks"]) == {"glove-ps-net", "glove-ps-egress"}
+    assert set(svcs["glove-ps-llm"]["networks"]) == {"glove-ps-net", "glove-ps-hostgw"}
     assert svcs["glove-ps-llm"]["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert set(svcs["glove-ps-search"]["networks"]) == {"glove-ps-net", "pi-search-egress"}
     assert svcs["glove-ps-search"]["networks"]["glove-ps-net"]["aliases"] == ["glove-ps-search-ingress"]
-    # the harness still dials the same endpoints
-    assert plan.environment.get("SEARXNG_URL") == "http://glove-ps-search:8080"
 
 
 def test_render_adds_collector_and_tmpfs_event_volume(tmp_path):
@@ -236,7 +241,7 @@ def test_render_adds_collector_and_tmpfs_event_volume(tmp_path):
 
 def test_mixed_observed_and_plain_services(tmp_path):
     services = pi_search_services()
-    services[1] = Service(name="search", to="searxng:8080", join_network="pi-search-egress", observe=False)
+    services[0] = Service(name="search", to="searxng:8080", join_network="pi-search-egress", observe=False)
     _, doc, _ = render(tmp_path, services=services)
     assert doc["services"]["glove-ps-search"]["image"] == "glove/forwarder:0.2.0"
     assert doc["services"]["glove-ps-search"]["command"].startswith("TCP4-LISTEN:8080")
@@ -245,7 +250,7 @@ def test_mixed_observed_and_plain_services(tmp_path):
 
 def test_resolver_and_exit_identity_render_only_on_proxy_gates(tmp_path):
     services = pi_search_services()
-    services[2] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
+    services[1] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
                           observe={"mode": "http-proxy", "route": "vpn"})
     obs = {"enabled": True, "resolver": "dns://gluetun:53", "exit_identity": "via-proxy"}
     plan, doc, _ = render(tmp_path, services=services, observe=obs)
@@ -267,7 +272,7 @@ def test_exit_identity_needs_a_proxy_service(tmp_path):
 
 def test_render_http_proxy_gate(tmp_path):
     services = pi_search_services()
-    services[2] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
+    services[1] = Service(name="proxy", to="egress-proxy:8888", join_network="pi-search-egress",
                           observe={"mode": "http-proxy", "route": "vpn"})
     plan, doc, _ = render(tmp_path, services=services)
     cmd = doc["services"]["glove-ps-proxy"]["command"]
@@ -317,50 +322,6 @@ def test_rendered_project_passes_docker_compose_config(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-PI_SEARCH_TEMPLATE = Path.home() / "development/castellotti/glove-pi-search/configs/pi-search.glove.yaml"
-
-
-@pytest.mark.skipif(not PI_SEARCH_TEMPLATE.is_file(), reason="glove-pi-search checkout not present")
-def test_real_pi_search_config_renders_with_observe(tmp_path):
-    """The first test configuration, read from the sibling repo (never modified),
-    tokens filled with .env.example defaults, plus `observe: {enabled: true}`."""
-    text = (PI_SEARCH_TEMPLATE.read_text()
-            .replace("__LLM_HOST__", "host.docker.internal").replace("__LLM_PORT__", "8080")
-            .replace("__LLM_MODEL__", "m").replace("__GLOVE_HOME__", str(tmp_path / "gh"))
-            # tokens the launcher fills on the pi-search network-observability branch
-            .replace("__NET_OBSERVE__", "true").replace("__EGRESS_ROUTE__", "vpn")
-            .replace("__EGRESS_RESOLVER__", "dns://gluetun:53").replace("__NET_EXIT_IDENTITY__", "via-proxy"))
-    data = yaml.safe_load(text)
-    data.setdefault("observe", {"enabled": True})
-    data["name"] = "pi-search"
-    work = tmp_path / "work"
-    work.mkdir()
-    data["workdir"] = str(work)
-    cfg_path = tmp_path / "eff.yaml"
-    cfg_path.write_text(yaml.safe_dump(data))
-    cfg = load_config(cfg_path)
-    plan = build_session_plan(cfg, env_id="pi-search", home_dir=str(tmp_path / "gh/homes/pi-search"),
-                              cwd=str(work), uid=501, gid=20)
-    sdir = tmp_path / "gh/envs/pi-search/sessions/pi-search"
-    plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
-    plan.control_host_dir = str(ensure_net_dir(tmp_path / "gh/control/pi-search/pi-search"))
-    doc = yaml.safe_load(DockerRuntime().render(plan, sdir).compose_yaml)
-    gated = {k for k, v in doc["services"].items() if v.get("image") == netgate_image()}
-    assert gated >= {"glove-pi-search-llm", "glove-pi-search-search", "glove-pi-search-proxy",
-                     "glove-pi-search-netgate"}
-    if "glove-pi-search-fanout" in doc["services"]:  # M5 branch template: SearXNG's listener
-        assert "glove-pi-search-fanout" in gated
-        assert set(doc["services"]["glove-pi-search-fanout"]["networks"]) == {"pi-search-egress"}
-    proxy_cmd = doc["services"]["glove-pi-search-proxy"]["command"]
-    if "__EGRESS_ROUTE__" in PI_SEARCH_TEMPLATE.read_text():  # the branch template: proxy mode
-        assert proxy_cmd[proxy_cmd.index("--mode") + 1] == "http-proxy"
-        assert proxy_cmd[proxy_cmd.index("--route") + 1] == "vpn"
-    if "__EGRESS_RESOLVER__" in PI_SEARCH_TEMPLATE.read_text():  # M4 branch template
-        assert proxy_cmd[proxy_cmd.index("--resolver") + 1] == "dns://gluetun:53"
-        assert "--exit-url" in proxy_cmd
-    # GLOVE_FETCH_PROXY (hand-written in the config) still names a live listener
-    h = doc["services"]["glove-pi-search-harness"]["environment"]
-    assert h["GLOVE_FETCH_PROXY"] == "http://glove-pi-search-proxy:8888"
 
 
 # --- CLI -------------------------------------------------------------------
@@ -382,8 +343,8 @@ def _observed_run(tmp_path, monkeypatch, *extra) -> tuple:
     assert runner.invoke(app, ["init", "pi"]).exit_code == 0
     over = tmp_path / "over.yaml"
     over.write_text(
-        "net: [service]\nmodel: m\nobserve: {enabled: true}\n"
-        "services:\n  - { name: llm, to: host.docker.internal:8080, port: 8080 }\n"
+        "net: [service]\nobserve: {enabled: true}\n"
+        "extensions: {llm: {provider: llama.cpp, location: host, endpoint: \"127.0.0.1:8080\", model: m}}\n"
     )
     return runner.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run", *extra])
 

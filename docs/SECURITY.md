@@ -32,6 +32,32 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 | Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
 | Other sessions' browser state | the host browser | host services | the host Chrome profile is per session (`<session>/chrome-profile`), and Chrome stops on `glove down` unless `browser.keep_browser: true` |
 
+## Extensions (what a capability pack may and may not do)
+
+Every capability (the model, search, the browser, …) is an extension in
+`extensions/<name>/`. Core, not the extension, decides how its containers run:
+
+- A fragment can declare only images, commands, env, volumes, networks and
+  healthchecks. Core adds the hardening set to every sidecar (non-root,
+  `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, seccomp, private IPC,
+  pids/memory limits). Exceptions come only from the manifest's `privileges:`,
+  from an allowlist, and `glove policy show` lists them.
+- Never: published ports, `privileged`, host network/PID/IPC namespaces, the
+  docker socket, host binds outside the extension's own session state, or a
+  sidecar on the harness network. The harness reaches extensions only through
+  single-purpose forwarders. Only the active egress provider joins the routable
+  `wan` network.
+- Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
+  containers as compose secrets from glove's environment; a literal secret in a
+  setting is refused.
+- Out-of-tree extensions (`extension_paths`) are labelled as such and get no
+  privilege exceptions, host ports or host services unless trusted.
+- `glove/` never imports `extensions/` (`uv run lint-imports`).
+
+The inference server is reached the same way: one `glove-<id>-llm` forwarder
+that dials exactly the configured host (or the host gateway, or a cloud API on
+443). The harness never gets a LAN or internet route of its own.
+
 ## Planted host-trusted files (ring 0)
 
 `/work` is writable, and some files in it are later *executed or trusted by the

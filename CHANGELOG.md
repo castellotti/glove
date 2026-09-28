@@ -4,6 +4,62 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### Extensions and the `llm` inference slot (v3 M2)
+
+- **Extension API (`api: 1`).** Capabilities are directories under
+  `extensions/<name>/` with a declarative `extension.yml`, selected per session
+  in `extensions:` (name → settings). Core (`glove/extensions.py`,
+  `glove/compose.py`) validates typed settings (unknown keys, `<set-me>`
+  placeholders and literal secrets are errors), fills exclusive slots
+  (`inference` required, `egress`, `browser`), expands `requires` (auto-adding
+  `auto: true` libraries), checks `conflicts` and `validate` rules, orders
+  extensions topologically, and renders every contribution through a sandboxed
+  Jinja context that sees only `settings`, `session`, `slot`, `endpoint`,
+  `names`, the extension's own `state` dir and `assets`.
+- **Sidecar invariants (§3.4), enforced by core.** A fragment may only hold
+  `services`/`volumes` with allowlisted keys; core injects the hardening set
+  (non-root, `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, seccomp,
+  `ipc: private`, pids/memory limits) and applies only `privileges:` drawn from
+  an allowlist (`NET_ADMIN`, `NET_RAW`, `CHOWN`, `SETUID`, `SETGID`,
+  `DAC_OVERRIDE`; `/dev/net/tun`; core-owned seccomp profiles by name). Images
+  must be pinned by digest or built by the extension. No ports, no host
+  namespaces, no `docker.sock`, no host binds outside the extension's session
+  state (assets read-only), never the harness network; only the egress provider
+  joins `wan`. The merged project is re-validated before it is written.
+- **Out-of-tree extensions** load from `extension_paths` in the new
+  `~/.glove/config.yml`, are labelled out-of-tree, cannot shadow an in-tree
+  name, and get no privilege exceptions, host ports or host services unless
+  listed in `trusted_extensions`.
+- **`llm` extension** (required `inference` slot) with a provider catalog
+  (`openai-compatible` as the default for any OpenAI-API server, plus llama.cpp,
+  ollama and LM Studio for their native capability probes, and openai, anthropic,
+  mistral and openrouter as cloud endpoints) and `location: host | lan | internet` routing, each
+  rendering exactly one `glove-<id>-llm` forwarder. Core keeps only a
+  provider-neutral `ModelDescriptor` rendered into Pi `models.json` (vision →
+  `input: ["text","image"]`, `contextWindow`, `maxTokens`, `reasoning`) and Vibe
+  `config.toml`. `model: auto` / `capabilities: auto` are resolved at launch
+  from a throwaway hardened container on the harness network. Explicit
+  `capabilities:` keys merge with the probe (explicit wins); a capability the
+  server doesn't report prints a warning naming the default used. Verified
+  live: `location: host` against a stub llama-server (`model: auto`, vision and
+  `n_ctx` resolved), and `location: lan` against a real NInfer server as
+  `openai-compatible` with `capabilities: {vision: true}` (`model: auto` →
+  the served model, key passed by Keychain reference, Pi answered through the
+  forwarder under nono).
+- **Pi with a keyless server works.** Pi refuses a provider with no `apiKey`;
+  keyless servers now get the fixed non-secret placeholder `glove-no-key`.
+- **Ported to extensions:** `media` (image layers), `search` (harness side:
+  Pi extension, Vibe MCP, `SEARXNG_URL`; SearXNG itself is still external until
+  M4) and `playwright` `mode: host` (from `plugins/browser`). Extension image
+  layers and Pi extensions compose into a content-addressed derived image.
+- **Removed (clean break, D6):** `glove/plugins/`, `plugins:`/`plugin_options:`,
+  top-level `browser:`, `--with`, `--browser`, `model`, `llm_service`,
+  `llm_api_key`, `host-server`, the `render_compose` shim, the
+  `{media_dir}`/`{chrome_profile}` host-service tokens, and the legacy
+  plugin bridges. `docs/examples/` are rewritten for `extensions:`.
+- The netgate records the llm forwarder's scopes `lan`/`cloud`; `rules.json`
+  v1 still accepts only `local|tunnelled|direct` (unchanged for Layman).
+
 ### Security (v3 M1 — also applicable to v2)
 
 - **srt no longer leaks the LLM key to tool commands.** The srt settings had no

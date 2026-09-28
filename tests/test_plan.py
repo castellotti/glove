@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from glove.config import AddDir, Config
+from helpers import make_cfg
+
+from glove.config import AddDir
 from glove.hardening import Limits
 from glove.plan import build_session_plan
 from glove.runtimes.seccomp import DEFAULT_PROFILE, NESTED_USERNS_PROFILE
@@ -11,7 +13,7 @@ from glove.runtimes.seccomp import DEFAULT_PROFILE, NESTED_USERNS_PROFILE
 def _cfg(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    return Config(harness="pi", workdir=str(work), name="s", **kw)
+    return make_cfg(harness="pi", workdir=str(work), name="s", **kw)
 
 
 def test_plan_basic_shape(tmp_path):
@@ -62,14 +64,7 @@ def test_limits_flow_through(tmp_path):
 
 
 def test_browser_endpoint_reaches_environment(tmp_path):
-    # apply_browser declares the `browser` service (no env of its own); the plan
-    # must still surface BROWSER_MCP_URL to the harness, derived once from that
-    # service. Guards against the wiring/plan endpoint duplication being removed
-    # without the single remaining source keeping the container wired.
-    from glove.plugins.browser import apply_browser
-
-    cfg = _cfg(tmp_path, browser={"provider": "host-mcp", "port": 8931})
-    apply_browser(cfg, "s")
+    cfg = _cfg(tmp_path, extensions={"playwright": {"port": 8931}})
     plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
     assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
 

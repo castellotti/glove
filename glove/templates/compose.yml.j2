@@ -159,12 +159,18 @@ services:
       glove-{{ session }}-net:
         aliases:
           - {{ gate_aliases[s.role] }}
+{% for a in s.aliases %}
+          - {{ a }}
+{% endfor %}
 {% endif %}
 {% if s.join_network %}
       {{ s.join_network }}: {}
 {% endif %}
-{% if s.host_gateway and egress_network %}
-      {{ egress_network }}: {}
+{% for n in s.networks %}
+      {{ n }}: {}
+{% endfor %}
+{% if s.host_gateway and hostgw_network %}
+      {{ hostgw_network }}: {}
 {% endif %}
 {% if s.host_gateway %}
     extra_hosts:
@@ -180,14 +186,23 @@ services:
     restart: unless-stopped
 {{ gate_hardening() }}
     networks:
-{% if s.harness %}
-      - glove-{{ session }}-net
+{% if s.harness and s.aliases %}
+      glove-{{ session }}-net:
+        aliases:
+{% for a in s.aliases %}
+          - {{ a }}
+{% endfor %}
+{% elif s.harness %}
+      glove-{{ session }}-net: {}
 {% endif %}
 {% if s.join_network %}
-      - {{ s.join_network }}
+      {{ s.join_network }}: {}
 {% endif %}
-{% if s.host_gateway and egress_network %}
-      - {{ egress_network }}
+{% for n in s.networks %}
+      {{ n }}: {}
+{% endfor %}
+{% if s.host_gateway and hostgw_network %}
+      {{ hostgw_network }}: {}
 {% endif %}
 {% if s.host_gateway %}
     extra_hosts:
@@ -218,23 +233,38 @@ services:
         target: {{ control_container_dir }}
         read_only: true
 {{ gate_bind_label() }}{% endif %}
+{% if extension_services %}
+
+  # --- extension sidecars (validated + hardened by glove/compose.py) ---------
+{{ extension_services }}{% endif %}
 
 networks:
   glove-{{ session }}-net:
     name: glove-{{ session }}-net
     internal: true
-{% if egress_network %}
-  {{ egress_network }}:
-    name: {{ egress_network }}
+{% if hostgw_network %}
+  {{ hostgw_network }}:
+    name: {{ hostgw_network }}
 {% endif %}
+{% for net, internal in session_networks.items() %}
+  {{ net }}:
+    name: {{ net }}
+{% if internal %}
+    internal: true
+{% endif %}
+{% endfor %}
 {% for net in external_networks %}
   {{ net }}:
     external: true
     name: {{ net }}
 {% endfor %}
-{% if netgate %}
+{% if netgate or extension_volumes %}
 
 volumes:
+{% endif %}
+{% if extension_volumes %}
+{{ extension_volumes }}{% endif %}
+{% if netgate %}
   # tmpfs-backed and owned by the operator uid (as the mount sees ids: 0 under
   # rootless podman, whose namespace root is the operator): holds only the
   # collector's datagram socket. Mounted by the gate containers, never by the harness.
@@ -246,3 +276,8 @@ volumes:
       device: tmpfs
       o: {{ events_tmpfs_opts | tojson }}
 {% endif %}
+{% if extension_secrets %}
+
+secrets:
+  # values come from glove's environment at `compose up`; never stored here
+{{ extension_secrets }}{% endif %}

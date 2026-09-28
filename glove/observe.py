@@ -59,9 +59,9 @@ OBSERVE_KEYS = frozenset({
 })
 DEFAULT_EXIT_URL = "https://am.i.mullvad.net/json"
 SERVICE_OBSERVE_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route", "client"})
-# §2.4 tool labels by conventional service name (the llm service is added from
-# `llm_service`). An explicit `observe.tool` always wins.
-DEFAULT_TOOLS = {"proxy": "web_fetch", "search": "web_search", "browser": "browser"}
+# §2.4 tool labels by conventional endpoint name. An explicit `observe.tool`
+# (e.g. the llm extension's annotation) always wins.
+DEFAULT_TOOLS = {"proxy": "web_fetch", "search": "web_search", "browser": "browser", "llm": "llm"}
 HOST_GATEWAY_NAMES = frozenset({"host.docker.internal", "host.containers.internal"})
 
 
@@ -240,9 +240,7 @@ def gate_spec_for(svc: Service, cfg: Config, settings: ObserveSettings | None) -
     if mode not in MODES:
         raise ConfigError(f"service {svc.name!r}: unknown observe.mode {mode!r} (supported: {', '.join(MODES)})")
 
-    tool = raw.get("tool")
-    if tool is None:
-        tool = "llm" if svc.name == cfg.llm_service else DEFAULT_TOOLS.get(svc.name)
+    tool = raw.get("tool") or DEFAULT_TOOLS.get(svc.name)
     client = raw.get("client", "unknown")
     if client not in CLIENTS:
         raise ConfigError(

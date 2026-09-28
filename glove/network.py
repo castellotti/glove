@@ -9,9 +9,13 @@ may reach is bridged in by single-purpose `socat` forwarder sidecars, making the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .config import Config, ConfigError, Service
 from .observe import GateSpec, ObserveSettings, gate_spec_for, parse_observe
+
+if TYPE_CHECKING:
+    from .extensions import Composition, Endpoint
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,11 @@ class Sidecar:
     gate: GateSpec | None = None
     # False: joined only to join_network (never the harness's internal net)
     harness: bool = True
+    # Session-scoped networks it also joins (extension endpoints: the network
+    # its target is on, extra listen networks) — full names.
+    networks: tuple[str, ...] = ()
+    # Extra names on the harness network (e.g. a cloud API hostname).
+    aliases: tuple[str, ...] = ()
 
     @property
     def command(self) -> str:
@@ -46,7 +55,9 @@ class NetworkPlan:
     # A normal (non-internal) bridge that host-gateway sidecars join so they have
     # a route to host.docker.internal. The internal net alone has no such route,
     # so socat would fail with "Network unreachable". The harness never joins it.
-    egress_network: str | None = None
+    hostgw_network: str | None = None
+    # Session-owned networks from extensions: full name → internal?
+    session_networks: dict[str, bool] = field(default_factory=dict)
     observe: ObserveSettings | None = None  # set iff observation is enabled
 
     @property
@@ -72,8 +83,19 @@ def _sidecar_for(svc: Service, gate: GateSpec | None = None) -> Sidecar:
     )
 
 
-def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
-    """Translate net profiles + services into concrete sidecars and networks."""
+def endpoint_service(ep: Endpoint) -> Service:
+    """An extension endpoint as the forwarder spec the render path consumes."""
+    return Service(
+        name=ep.name, to=f"{ep.target.host}:{ep.target.port}", port=ep.port,
+        host_gateway=ep.target.kind == "host", observe=ep.observe,
+    )
+
+
+def build_network_plan(cfg: Config, session: str, comp: Composition | None = None) -> NetworkPlan:
+    """Translate net profiles, services and extension endpoints into concrete
+    sidecars and networks."""
+    from .extensions import network_name
+
     internal_net = f"glove-{session}-net"
     profiles = cfg.net or ["none"]
 
@@ -106,6 +128,23 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
             sidecars.append(_sidecar_for(svc, gate_spec_for(svc, cfg, settings)))
             if svc.join_network and svc.join_network not in external:
                 external.append(svc.join_network)
+    session_networks: dict[str, bool] = {}
+    for ep in comp.endpoints if comp else []:
+        if any(s.role == ep.name for s in sidecars):
+            raise ConfigError(f"endpoint {ep.name!r} (extension {ep.extension!r}) clashes with a declared service")
+        nets = []
+        for logical in (ep.target.network, *ep.listen_networks):
+            if logical and logical not in ("net", "hostgw") and network_name(session, logical) not in nets:
+                nets.append(network_name(session, logical))
+        svc = endpoint_service(ep)
+        sidecars.append(Sidecar(
+            role=ep.name, listen_port=ep.port, target=svc.to, host_gateway=svc.host_gateway,
+            gate=gate_spec_for(svc, cfg, settings), harness=ep.harness, networks=tuple(nets),
+            aliases=ep.aliases,
+        ))
+    for logical, spec in (comp.networks if comp else {}).items():
+        if logical not in ("net", "hostgw"):
+            session_networks[network_name(session, logical)] = bool(spec.get("internal", True))
 
     for p in profiles:
         if p.startswith("docker:"):
@@ -130,8 +169,8 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
         )
 
     # Any sidecar that reaches host.docker.internal needs a routable bridge.
-    egress_network = (
-        f"glove-{session}-egress" if any(s.host_gateway for s in sidecars) else None
+    hostgw_network = (
+        f"glove-{session}-hostgw" if any(s.host_gateway for s in sidecars) else None
     )
 
     return NetworkPlan(
@@ -140,6 +179,7 @@ def build_network_plan(cfg: Config, session: str) -> NetworkPlan:
         external_networks=external,
         harness_extra_networks=harness_extra,
         harness_host_gateway=harness_host_gateway,
-        egress_network=egress_network,
+        hostgw_network=hostgw_network,
+        session_networks=session_networks,
         observe=settings,
     )

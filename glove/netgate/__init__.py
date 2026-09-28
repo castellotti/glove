@@ -25,7 +25,7 @@ CONTROL_DIR = "/etc/glove/netgate-control"  # rules.json lives here, read-only
 RULES_FILE = f"{CONTROL_DIR}/rules.json"
 
 # Value sets validated on the host (glove/observe.py) and accepted by the gate.
-SCOPES = ("local", "tunnelled", "direct")
+SCOPES = ("local", "tunnelled", "direct", "lan", "cloud")  # lan/cloud: the llm forwarder
 MODES = ("tcp", "http-proxy")
 # What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
 # plain one, so the operator declares it; `direct` makes every flow loud.

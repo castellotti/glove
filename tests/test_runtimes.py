@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from helpers import make_cfg
 
-from glove.config import Config
 from glove.doctor import run_doctor
 from glove.plan import build_session_plan
 from glove.runtimes import get_runtime, known_runtimes
@@ -16,7 +16,7 @@ from glove.runtimes.stubs import AppleContainerRuntime
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = Config(harness="pi", workdir=str(work), name="s", **kw)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="s", **kw)
     return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=501, gid=20)
 
 

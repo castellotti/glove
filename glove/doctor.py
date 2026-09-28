@@ -75,26 +75,28 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
-def _browser_checks(browser: str | None) -> list[Check]:
-    if not browser or browser == "none":
-        return []
-    try:
-        from .config import Config
-        from .plugins.browser import get_provider
+def extension_checks(requested: dict, *, harness: str) -> list[Check]:
+    """Selection/settings validation plus each extension's own `doctor` hook."""
+    from .extensions import base_context, compose
 
-        return get_provider(browser).doctor(Config())
+    try:
+        comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"))
     except ValueError as e:
-        return [Check(f"browser: {browser}", "warn", str(e))]
+        return [Check("extensions", "fail", str(e))]
+    checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
+    for a in comp.active:
+        if a.hooks is not None and hasattr(a.hooks, "doctor"):
+            checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(base_context(comp, a))]
+    return checks
 
 
 def run_doctor(
     *,
     runtime: str = "docker",
     enforcer: str = "nono",
-    browser: str | None = None,
     include_container_probes: bool = True,
 ) -> list[Check]:
-    """Full doctor report for the given runtime/enforcer/browser selection."""
+    """Full doctor report for the given runtime/enforcer selection."""
     checks: list[Check] = [Check("os", "info", f"{os.uname().sysname} {os.uname().release} {os.uname().machine}")]
     rt = get_runtime(runtime)
     if not rt.caps.tested:
@@ -107,7 +109,6 @@ def run_doctor(
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
     checks.extend(_enforcer_checks(enforcer, rt))
-    checks.extend(_browser_checks(browser))
     # Docker Desktop's File sharing list is a docker-only concept; podman shares
     # the whole home via the machine mount, so the hint is misleading there.
     if runtime == "docker":

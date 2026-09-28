@@ -1,0 +1,8 @@
+name: anthropic
+api: anthropic-messages
+host: api.anthropic.com
+base_path: ""
+locations: [internet]
+auth: { header: x-api-key, scheme: "", required: true }
+models_endpoint: /v1/models
+defaults: { vision: true, context_window: 200000, max_tokens: 8192, reasoning: false }

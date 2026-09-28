@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
+from helpers import STUB_LLM_YAML
 from typer.testing import CliRunner
 
 from glove.cli import app
@@ -27,14 +29,25 @@ def _chdir(monkeypatch, d):
     return d
 
 
+def _init(*args):
+    """`glove init …`, then select the stub inference provider in the new env's
+    glove.yaml (every harness session needs the `inference` slot filled)."""
+    result = runner.invoke(app, ["init", *args])
+    if result.exit_code == 0:
+        envs = Path(os.environ["GLOVE_HOME"]) / "envs"
+        newest = max(envs.glob("*/glove.yaml"), key=lambda p: p.stat().st_mtime_ns)
+        if "extensions" not in newest.read_text():
+            newest.write_text(newest.read_text() + STUB_LLM_YAML)
+    return result
+
+
 def _write_llm_cfg(tmp_path):
-    """A minimal overlay declaring one `llm` service the harness dials."""
+    """A minimal overlay selecting the `llm` extension (its `llm` endpoint is
+    what the harness dials)."""
     cfg = tmp_path / "over.yaml"
     cfg.write_text(
-        "net: [service]\n"
-        "model: m\n"
-        "services:\n"
-        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
+        "extensions:\n"
+        "  llm: {provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m}\n"
     )
     return cfg
 
@@ -47,7 +60,7 @@ def _pi_llm_base(env_id, session):
 
 def test_init_writes_only_under_glove_home(home, tmp_path, monkeypatch):
     wd = _chdir(monkeypatch, tmp_path / "pi-local")
-    result = runner.invoke(app, ["init", "pi"])
+    result = _init("pi")
     assert result.exit_code == 0, result.output
     # cwd untouched
     assert list(wd.iterdir()) == []
@@ -58,8 +71,8 @@ def test_init_writes_only_under_glove_home(home, tmp_path, monkeypatch):
 
 def test_two_harnesses_one_dir_distinct_envs(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
+    assert _init("pi").exit_code == 0
+    assert _init("vibe").exit_code == 0
     ids = {d.name for d in (home / "envs").iterdir()}
     assert ids == {"pi-local", "pi-local-vibe"}
 
@@ -75,7 +88,7 @@ def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     _chdir(monkeypatch, tmp_path / "vibe-local")
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
+    assert _init("vibe").exit_code == 0
     result = runner.invoke(
         app, ["run", "vibe", "--workdir", str(work), "--dry-run"]
     )
@@ -94,7 +107,7 @@ def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
     # bare env-id — otherwise Pi dials a host that doesn't exist ("Connection
     # error"). Default (unnamed) sessions happened to match and hid this.
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     cfg = _write_llm_cfg(tmp_path)
     result = runner.invoke(
         app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
@@ -114,7 +127,7 @@ def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
     # first's models.json and repoints it at a sidecar that isn't on its
     # network (the "Connection error" the baseUrl fix set out to eliminate).
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     cfg = _write_llm_cfg(tmp_path)
     # Default (unnamed) session, then a --name'd one from the same env.
     assert runner.invoke(
@@ -135,7 +148,7 @@ def test_run_records_resolved_home_in_registry(home, tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     _chdir(monkeypatch, tmp_path / "vibe-local")
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
+    assert _init("vibe").exit_code == 0
     # Fresh registration has no home yet.
     assert registry.load_registry()[0].home is None
     result = runner.invoke(
@@ -161,7 +174,7 @@ def test_forced_env_with_config_registers_and_records_home(home, tmp_path, monke
 
     relocated = tmp_path / "relocated-home"
     cfg = tmp_path / "over.yaml"
-    cfg.write_text(f"config_home_source: {relocated}\n")
+    cfg.write_text(f"config_home_source: {relocated}\n" + STUB_LLM_YAML)
     _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
 
     # No `glove init` first; --env forces the id, --config supplies the overlay.
@@ -187,7 +200,7 @@ def test_forced_env_registers_when_harness_comes_from_config(home, tmp_path, mon
 
     relocated = tmp_path / "relocated-home"
     cfg = tmp_path / "over.yaml"
-    cfg.write_text(f"harness: vibe\nconfig_home_source: {relocated}\n")
+    cfg.write_text(f"harness: vibe\nconfig_home_source: {relocated}\n" + STUB_LLM_YAML)
     _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
 
     result = runner.invoke(
@@ -209,7 +222,7 @@ def test_forced_env_selecting_existing_env_is_not_rebound(home, tmp_path, monkey
     from glove import registry
 
     initdir = _chdir(monkeypatch, tmp_path / "keepdir")
-    assert runner.invoke(app, ["init", "vibe", "--name", "keep"]).exit_code == 0
+    assert _init("vibe", "--name", "keep").exit_code == 0
 
     _chdir(monkeypatch, tmp_path / "elsewhere")  # a different, unbound cwd
     result = runner.invoke(app, ["run", "vibe", "--env", "keep", "--dry-run"])
@@ -226,7 +239,7 @@ def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
     # --name'd ones whose compose project is glove-<env>-<name>, not just the
     # default unnamed session.
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
 
     sessions = home / "envs" / "pi-local" / "sessions"
     for sname, token in (("pi-local", "pi-local"), ("feat", "pi-local-feat")):
@@ -246,7 +259,7 @@ def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
 
 def test_down_name_narrows_to_one_session(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     sdir = home / "envs" / "pi-local" / "sessions" / "feat"
     sdir.mkdir(parents=True)
     (sdir / "glove.effective.yaml").write_text("harness: pi\nname: pi-local-feat\n")
@@ -275,7 +288,7 @@ def _seed_transcript(home, env_id, session, uuid="01a09d62"):
 
 def test_resume_and_session_mutually_exclusive(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     result = runner.invoke(app, ["run", "pi", "--resume", "--session", "x"])
     assert result.exit_code == 1
     assert "not both" in result.output
@@ -283,7 +296,7 @@ def test_resume_and_session_mutually_exclusive(home, tmp_path, monkeypatch):
 
 def test_resume_no_prior_session_errors(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
     assert result.exit_code == 1
     assert "no previous session to resume" in result.output
@@ -297,7 +310,7 @@ def _compose_text(home, env_id, session):
 
 def test_resume_dry_run_renders_continue(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     _seed_transcript(home, "pi-local", "pi-local")
     result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
     assert result.exit_code == 0, result.output
@@ -309,7 +322,7 @@ def test_resume_dry_run_renders_continue(home, tmp_path, monkeypatch):
 
 def test_session_dry_run_renders_id(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
     result = runner.invoke(app, ["run", "pi", "--session", uuid, "--dry-run"])
     assert result.exit_code == 0, result.output
@@ -319,7 +332,7 @@ def test_session_dry_run_renders_id(home, tmp_path, monkeypatch):
 
 def test_session_missing_lists_available(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
     result = runner.invoke(app, ["run", "pi", "--session", "nope", "--dry-run"])
     assert result.exit_code == 1
@@ -331,7 +344,7 @@ def test_resume_composes_with_net_change(home, tmp_path, monkeypatch):
     # Grant change (llm sidecar via --config) composes with the resume flag:
     # both the sidecar and --session land in the rendered compose command.
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
     cfg = _write_llm_cfg(tmp_path)
     result = runner.invoke(
@@ -346,7 +359,7 @@ def test_resume_composes_with_net_change(home, tmp_path, monkeypatch):
 
 def test_resume_grant_widening_warns(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
     # Original baseline ran with no network; resume widening to net: [service].
     baseline = session_dir("pi-local", "pi-local") / "glove.baseline.yaml"
@@ -367,7 +380,7 @@ def test_resume_widening_compares_original_not_prev_run(home, tmp_path, monkeypa
     # overwritten by an intervening narrower run, so widening back to the
     # original's grants must not warn (finding 5).
     _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    assert _init("pi").exit_code == 0
     uuid = _seed_transcript(home, "pi-local", "pi-local")
     # Original session already had a network sidecar; a later run narrowed to none
     # (effective.yaml drifted) but the baseline still records the wide original.
@@ -392,23 +405,33 @@ def test_resume_widening_compares_original_not_prev_run(home, tmp_path, monkeypa
 
 def test_ls_lists_registered_envs(home, tmp_path, monkeypatch):
     _chdir(monkeypatch, tmp_path / "wd")
-    runner.invoke(app, ["init", "pi"])
+    _init("pi")
     result = runner.invoke(app, ["ls"])
     assert result.exit_code == 0
     assert "wd" in result.output
     assert "pi" in result.output
 
 
+def _key_overlay(tmp_path, api_key):
+    over = tmp_path / "over.yaml"
+    over.write_text(
+        "extensions:\n"
+        "  llm: {provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m,"
+        f" api_key: {api_key}}}\n"
+    )
+    return over
+
+
 @pytest.mark.parametrize("harness", ["pi", "vibe"])
 def test_the_llm_key_is_written_nowhere_under_the_glove_home(home, tmp_path, monkeypatch, harness):
-    """The key stays in the user's config: the compose file names the var with no
-    value, and Pi's models.json references it ("$VAR"), never contains it."""
+    """The compose file names the var with no value, and Pi's models.json
+    references it ("$VAR"), never contains it."""
     secret = "sk-test-0123456789abcdef"
+    monkeypatch.setenv("MY_LLM_KEY", secret)
     _chdir(monkeypatch, tmp_path / "wd")
     work = tmp_path / "work"
     work.mkdir()
-    over = _write_llm_cfg(tmp_path)
-    over.write_text(over.read_text() + f"llm_api_key: {secret}\n")
+    over = _key_overlay(tmp_path, "env:MY_LLM_KEY")
     result = runner.invoke(
         app, ["run", harness, "--config", str(over), "--workdir", str(work), "--dry-run"]
     )
@@ -423,18 +446,42 @@ def test_the_llm_key_is_written_nowhere_under_the_glove_home(home, tmp_path, mon
         assert json.loads(models.read_text())["providers"]["glove"]["apiKey"] == "$GLOVE_LLM_API_KEY"
 
 
+def test_a_literal_key_is_refused(home, tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path / "wd")
+    over = _key_overlay(tmp_path, "sk-literal-key")
+    result = runner.invoke(app, ["run", "pi", "--config", str(over), "--dry-run"])
+    assert result.exit_code == 1
+    assert "llm.api_key is a secret: use a reference" in result.output
+    assert "sk-literal-key" not in result.output
+
+
+def _launch_plan(tmp_path, api_key):
+    from helpers import STUB_LLM, make_cfg
+
+    from glove.plan import build_session_plan
+    from glove.runtimes.docker import DockerRuntime
+
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), extensions={"llm": {**STUB_LLM, "api_key": api_key}})
+    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
+    (tmp_path / "docker-compose.yml").write_text(DockerRuntime().render(plan, tmp_path).compose_yaml)
+    return cfg, plan
+
+
 def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, monkeypatch):
     from glove import session as session_mod
-    from glove.config import Config, Service
+    from glove.plan import secret_env
 
     calls = []
     monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
     monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
-    cfg = Config(harness="pi", name="s", llm_api_key="sk-x", net=["service"],
-                 services=[Service(name="llm", to="example.test:8080")])
-    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
+    monkeypatch.setenv("MY_LLM_KEY", "sk-x")
+    cfg, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
+    session_mod.launch(cfg, plan, tmp_path, provider="docker", rebuild=False, secrets=secret_env(plan))
     assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
     assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)
+    assert "sk-x" not in (tmp_path / "docker-compose.yml").read_text()
 
 
 def test_a_keychain_reference_is_not_resolved_by_a_dry_run(home, tmp_path, monkeypatch):
@@ -449,27 +496,20 @@ def test_a_keychain_reference_is_not_resolved_by_a_dry_run(home, tmp_path, monke
     _chdir(monkeypatch, tmp_path / "wd")
     work = tmp_path / "work"
     work.mkdir()
-    over = _write_llm_cfg(tmp_path)
-    over.write_text(over.read_text() + "llm_api_key: keychain:my-llm\n")
+    over = _key_overlay(tmp_path, "keychain:my-llm")
     result = runner.invoke(
         app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run"]
     )
     assert result.exit_code == 0, result.output
     effective = next(home.rglob("glove.effective.yaml")).read_text()
-    assert "llm_api_key: keychain:my-llm" in effective
+    assert "api_key: keychain:my-llm" in effective
     compose = next(home.rglob("docker-compose.yml")).read_text()
     assert "GLOVE_LLM_API_KEY: null" in compose
 
 
-def test_launch_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
-    from glove import session as session_mod
-    from glove.config import Config, Service
+def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
+    from glove.plan import secret_env
 
-    calls = []
-    monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
-    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
     monkeypatch.setenv("MY_LLM_KEY", "sk-env")
-    cfg = Config(harness="pi", name="s", llm_api_key="env:MY_LLM_KEY", net=["service"],
-                 services=[Service(name="llm", to="example.test:8080")])
-    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
-    assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-env" for _, k in calls)
+    _, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
+    assert secret_env(plan) == {"GLOVE_LLM_API_KEY": "sk-env"}

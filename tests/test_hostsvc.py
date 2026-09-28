@@ -16,35 +16,18 @@ def _cfg(tmp_path):
 
 
 def test_expand_placeholders(tmp_path):
-    cfg, _work = _cfg(tmp_path)
-    sdir = tmp_path / "state"
-    cmd = "mcp --allowed-hosts glove-{session}-browser:8931 --output-dir {media_dir}"
-    out = _expand(cmd, cfg, "vibe-local", sdir)
-    assert "glove-vibe-local-browser:8931" in out
-    assert out.endswith(os.path.join(str(sdir), "media"))
-
-
-def test_media_dir_never_inside_project(tmp_path):
-    # glove must not litter the project working tree — the browser output dir
-    # lives in glove's own session state, never under the workdir.
     cfg, work = _cfg(tmp_path)
-    sdir = tmp_path / "state"
-    out = _expand("{media_dir}", cfg, "vibe-local", sdir)
-    assert str(os.path.realpath(work)) not in out
-    assert "research" not in out
-    # bare expansion (no session dir) still avoids the project — falls back to ~/.glove
-    bare = _expand("{media_dir}", cfg, "vibe-local")
-    assert str(os.path.realpath(work)) not in bare
-    assert bare.startswith(os.path.join(os.path.expanduser("~"), ".glove"))
+    out = _expand("x --allowed-hosts glove-{session}-browser:8931 --in {workdir} --h {home}", cfg, "vibe-local")
+    assert "glove-vibe-local-browser:8931" in out
+    assert f"--in {os.path.realpath(work)}" in out
+    assert out.endswith(os.path.expanduser("~"))
 
 
-def test_expand_chrome_profile_and_home(tmp_path):
+def test_retired_placeholders_are_not_expanded(tmp_path):
+    # media_dir/chrome_profile moved into the playwright extension's own state
+    # (per session); core no longer knows browser paths.
     cfg, _ = _cfg(tmp_path)
-    out = _expand("chrome --user-data-dir={chrome_profile}", cfg, "vibe-local")
-    # per session: never one profile shared (cookies, logins) across sessions
-    assert out.endswith(os.path.join(os.path.expanduser("~"), ".glove", "chrome-profile", "vibe-local"))
-    out = _expand("--user-data-dir={chrome_profile}", cfg, "s", tmp_path / "sess")
-    assert out == f"--user-data-dir={tmp_path / 'sess' / 'chrome-profile'}"
+    assert _expand("{media_dir} {chrome_profile}", cfg, "s", tmp_path) == "{media_dir} {chrome_profile}"
 
 
 def test_host_services_coerced_from_file(tmp_path):

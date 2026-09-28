@@ -1,0 +1,1 @@
+- Media tools are installed for shell use: `ffmpeg`/`ffprobe`, ImageMagick (`magick`), `cwebp`/`dwebp`, `exiftool`, and Python PIL.

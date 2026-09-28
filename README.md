@@ -12,14 +12,13 @@ security does not rest on the container alone: a kernel-level capability
 sandbox (nono/Landlock by default) runs *inside* the container and wraps every
 command the agent executes.
 
-> **Minimal core + opt-in plugins.** The base image is *harness + enforcer only*;
-> every optional capability is an off-by-default plugin enabled per session (like
-> `net:`) — **`media`** (analysis toolchain), **`search`** (private SearXNG), and
-> **`browser`** (host Chromium via Playwright). Enable them with
-> `plugins: [media, search, browser]` (+ `plugin_options:`) or `--with a,b`; each
-> composes as a derived image layer + its wiring only when enabled. See
-> `docs/planning/minimal-core-plugins-designnote.md`. Legacy top-level `browser:`
-> / bare `search` service configs still work with a deprecation warning.
+> **Minimal core + extensions (v3, in progress).** The base image is *harness +
+> enforcer only*. Every capability is an **extension** in `extensions/<name>/`
+> (a declarative `extension.yml`), selected per session in `extensions:`. An
+> extension you don't select contributes nothing: no containers, no mounts, no
+> image layers. Today: **`llm`** (the inference engine; required), **`media`**
+> (analysis toolchain), **`search`** (SearXNG) and **`playwright`** (host
+> Chromium). See [Extensions](#extensions).
 
 ## How it works - three rings (defense in depth)
 
@@ -53,9 +52,9 @@ Docker Desktop macOS blast-radius explanation.
 | Enforcer | nono (Landlock) - default | nono 0.78.0; Pi wired + verified (16-check integration) |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
 | Enforcer | none (ring 0 only) | debug |
-| Browser | host-mcp - v2 default | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true` - see [docs/pi-remote-llm.md](docs/pi-remote-llm.md) |
-| Browser | host-server | implemented (`--path` + version-pin; needs playwright in image); host-side start **untested** |
-| Browser | sidecar-desktop / vm-desktop | spec only (not implemented) |
+| Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
+| Browser | `playwright` extension, `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
+| Browser | `playwright` headless / novnc sidecars | planned (v3 M7) |
 
 Giving a harness web access needs Node/npx and a Chromium-family browser on the
 host; the friction-free option is Playwright's own Chrome for Testing
@@ -77,9 +76,9 @@ into your working dir.
 cd ~/src/service-a
 uv run glove doctor                 # probe host + runtime + enforcer
 uv run glove init pi                # scaffold the env config
+$EDITOR ~/.glove/envs/service-a/glove.yaml   # select extensions (at least `llm`)
 uv run glove pi --name TICKET-1234 \
-    --add-dir ~/src/shared-lib:ro \ # extra dir, read-only
-    --net service --browser host-mcp
+    --add-dir ~/src/shared-lib:ro   # extra dir, read-only
 #  → doctor (first run) → build image (first run) → host services → sidecars → TUI
 ```
 
@@ -99,16 +98,17 @@ enforcer: nono              # nono (Landlock, default) | srt (bubblewrap) | none
 workdir: .
 add_dirs:
   - { path: ../shared-lib, mode: ro }
-net: [service]              # none | service | internet | lan | docker:<name>
-plugins: [media, browser]   # opt-in capabilities (off by default); also `--with a,b`
-plugin_options:             # per-plugin config
-  browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
-  #   keep_browser: true      leave the (per-session) host Chrome running after `glove down`
-  #   i_accept_host_rce: true allow vibe + host-mcp (Vibe gets browser_run_code_unsafe)
-services:                   # forwarder allow-list (the only routable hosts)
-  - { name: llm, to: host.docker.internal:8899, port: 8080 }
-model: your-model-id       # must match the endpoint's /v1/models
-llm_api_key: keychain:my-llm  # a reference (keychain:<service> | env:<VAR>), resolved at launch; a literal also works
+extensions:                 # name → settings; unlisted = nothing in the session
+  llm:                      # required: fills the `inference` slot
+    provider: llama.cpp     # openai-compatible (any OpenAI-API server) | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    location: host          # host (this Mac) | lan | internet
+    endpoint: 127.0.0.1:8080
+    model: auto             # or an id; auto = the single model /v1/models lists
+    capabilities: auto      # or explicit keys, e.g. {vision: true}; probes fill the rest
+    # api_key: keychain:my-llm   # a reference only (keychain:<service> | env:<VAR>)
+  media: {}
+  # search: { host_port: 8888 }  # a SearXNG on this Mac (interim until v3 M4)
+  # playwright: { mode: host }   # headed Chrome on this Mac
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
@@ -127,10 +127,10 @@ Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
 
 ```
 glove init [HARNESS] [--name ENV] [--from FILE]
-glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …] [--with a,b] [--browser …]
+glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …]
                     [--runtime …] [--enforcer …] [--resume|-r] [--session ID] [--dry-run] [--rebuild]
 glove <harness> …                    # alias of run
-glove doctor  [--env ID] [--runtime R] [--enforcer E] [--browser B] [--json]
+glove doctor  [--env ID] [--runtime R] [--enforcer E] [--json]   # --env: also its extensions
 glove policy show [--env ID]         # rendered ring-1 policies + ring-0 hardening
 glove config  [--env ID] [--edit|--path]
 glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
@@ -306,24 +306,57 @@ run, **editing the config (or passing flags) before resuming changes the grants
 for the resumed conversation** — e.g. widen `net`/add a `service:` for a LAN host
 you now need, then resume, and pick up where you left off with the new grant
 live. When a resume run grants **broader** access than the session originally ran
-under (net, mounts, plugins, `allow_root`, `allow_sensitive`, services), glove
+under (net, mounts, extensions, `allow_root`, `allow_sensitive`, services), glove
 prints a prominent warning: the prior conversation context (which may include
 prompt-injected instructions) will run with the wider reach.
 
 > Transcripts live under the session's `home/` (`~/.glove/envs/<env-id>/sessions/<name>/home`).
 > This is durable on-disk state — don't sync that tree to anywhere untrusted.
 >
-> **Keep the LLM API key out of every file: reference it.** Set `llm_api_key` to
-> `keychain:<service>` (a macOS Keychain generic password) or `env:<VAR>`. glove
-> resolves the reference in memory when the session launches (never during
-> `--dry-run`), and the effective config records only the reference. A literal
-> key still works, but then your config file holds it. glove writes the key
-> nowhere else either way. The compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
+> **The LLM API key is never in a file.** `extensions.llm.api_key` must be a
+> reference: `keychain:<service>` (a macOS Keychain generic password) or
+> `env:<VAR>`; a literal key is refused. glove resolves it in memory when the
+> session launches (never during `--dry-run`), and the effective config records
+> only the reference. The compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
 > the environment of `compose` when it starts the session, and Pi's `models.json`
 > refers to it as `"$GLOVE_LLM_API_KEY"`. Inside the sandbox only the harness
 > process sees it; ring 1 strips it from every shell command. Sessions rendered by
 > an older glove held copies in `docker-compose.yml` and `models.json`: the next
 > `glove run` of the session rewrites both.
+
+## Extensions
+
+An extension is a directory under `extensions/` with an `extension.yml`
+manifest (`api: 1`): its settings schema, the endpoints (forwarders) the
+harness may reach, image layers, Pi extensions / Vibe MCP servers, a brief for
+the agent, and optionally hardened sidecars. Core validates all of it:
+
+- **Settings** are typed; unknown keys, `<set-me>` placeholders and literal
+  secrets are errors. Secrets are `keychain:`/`env:` references, resolved in
+  memory and passed to containers only as compose secrets from glove's
+  environment.
+- **Slots** are exclusive: `inference` (required; `llm`), `egress`, `browser`.
+  Two providers of one slot are refused.
+- **Sidecars** get the hardening set (non-root, `cap_drop: ALL`,
+  `no-new-privileges`, read-only rootfs, seccomp, pids/memory limits) from core;
+  a fragment cannot set a security key. Exceptions come only from the manifest's
+  `privileges:`, drawn from an allowlist, and are shown in `glove policy show`.
+  No extension publishes ports, joins the harness network, mounts the docker
+  socket, or binds host paths other than its own session state.
+- **The harness** only ever gets forwarders on its internal network.
+- **Out-of-tree** extensions load from `extension_paths:` in
+  `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
+  exceptions (or reach host ports) unless listed in `trusted_extensions:`.
+
+`llm` is the inference engine, picked like a gluetun VPN provider: `provider:`
+names a catalog entry (`extensions/llm/providers/*.yml`). `location:` routes it:
+`host` → a forwarder to this Mac; `lan` → a forwarder that dials exactly the
+configured `host:port`; `internet` → a forwarder to the provider's HTTPS host,
+aliased so TLS runs end to end. The harness never gets LAN or internet reach
+itself. `model: auto` and `capabilities: auto` are resolved at launch from a
+throwaway container on the harness network (the host never contacts the
+server), and core renders the result into Pi `models.json` / Vibe `config.toml`
+(vision → `input: ["text","image"]`).
 
 ## Toolchain
 
@@ -339,6 +372,8 @@ bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
+bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
+bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server
 ```
 
 glove is being restructured (v3) into a minimal core in `glove/` plus in-tree

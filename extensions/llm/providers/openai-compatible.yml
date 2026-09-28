@@ -1,0 +1,20 @@
+# The default for any server that speaks the OpenAI API (vLLM, NInfer, SGLang,
+# TGI, llama.cpp, a gateway, …). A dedicated entry exists only when a server
+# offers something this generic path cannot: a native capability endpoint
+# (llama.cpp /props, ollama /api/show, LM Studio /api/v0), a different wire
+# protocol, or a fixed cloud host.
+name: openai-compatible
+api: openai-completions
+base_path: /v1
+default_port: 8080
+locations: [host, lan, internet]
+auth: { header: Authorization, scheme: Bearer, required: false }
+models_endpoint: /v1/models
+probes:
+  capabilities:
+    # `max_model_len` on the model object: a vLLM convention that NInfer and
+    # llama.cpp also follow. Absent → the default below. Vision is not
+    # discoverable through the OpenAI API: set `capabilities: {vision: true}`.
+    path: /v1/models
+    context_window: "$.data[0].max_model_len"
+defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: false }

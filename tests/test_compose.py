@@ -7,9 +7,9 @@ import subprocess
 
 import pytest
 import yaml
+from helpers import make_cfg, render
 
-from glove.compose import render_compose
-from glove.config import AddDir, Config, Service
+from glove.config import AddDir, Service
 
 
 def _session_cfg(tmp_path):
@@ -17,7 +17,7 @@ def _session_cfg(tmp_path):
     work.mkdir()
     deliverable = tmp_path / "shared_lib"
     deliverable.mkdir()
-    cfg = Config(
+    cfg = make_cfg(
         harness="vibe",
         workdir=str(work),
         name="vibe-local",
@@ -25,7 +25,7 @@ def _session_cfg(tmp_path):
         add_dirs=[AddDir(str(deliverable), "rw")],
     )
     cfg.services = [
-        Service(name="llm", to="host.docker.internal:8899", port=8080),
+        Service(name="api", to="host.docker.internal:8899", port=8080),
         Service(name="search", to="searxng:8080", join_network="my-llm-net"),
         Service(name="browser", to="host.docker.internal:8931"),
     ]
@@ -34,8 +34,8 @@ def _session_cfg(tmp_path):
 
 def test_render_is_valid_yaml(tmp_path):
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     assert doc["name"] == "glove-vibe-local"
     services = doc["services"]
     assert "glove-vibe-local-harness" in services
@@ -46,8 +46,8 @@ def test_render_is_valid_yaml(tmp_path):
 
 def test_harness_hardening_present(tmp_path):
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     h = doc["services"]["glove-vibe-local-harness"]
     assert h["user"] == "501:20"
     assert h["cap_drop"] == ["ALL"]
@@ -60,10 +60,10 @@ def test_harness_hardening_present(tmp_path):
 def test_every_forwarder_is_hardened(tmp_path):
     # Plain socat forwarders get the same sidecar hardening set as the gates.
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     forwarders = {k: v for k, v in doc["services"].items() if not k.endswith("-harness")}
-    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "search", "browser")}
+    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "api", "search", "browser")}
     for name, svc in forwarders.items():
         assert svc["user"] == "501:20", name
         assert svc["cap_drop"] == ["ALL"], name
@@ -81,7 +81,8 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
     from glove.plan import build_session_plan
     from glove.runtimes import get_runtime
 
-    plan = build_session_plan(cfg, env_id="e", home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
+    plan = build_session_plan(cfg, env_id="e", home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20,
+                              state_dir=str(tmp_path / "ext"))
     plan.placeholder_host_dir = str(tmp_path / "ph")
     doc = yaml.safe_load(get_runtime("docker").render(plan, tmp_path).compose_yaml)
     vols = doc["services"]["glove-vibe-local-harness"]["volumes"]
@@ -97,8 +98,8 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
 
 def test_internal_network_and_external_ref(tmp_path):
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     nets = doc["networks"]
     assert nets["glove-vibe-local-net"]["internal"] is True
     assert nets["my-llm-net"]["external"] is True
@@ -114,8 +115,8 @@ def test_allow_root_drops_only_the_user(tmp_path):
     # everything else* — cap_drop, read-only rootfs, seccomp, limits all remain.
     cfg, work = _session_cfg(tmp_path)
     cfg.allow_root = True
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     h = doc["services"]["glove-vibe-local-harness"]
     assert "user" not in h  # runs as root
     assert h["cap_drop"] == ["ALL"]  # but hardening is retained
@@ -125,8 +126,8 @@ def test_allow_root_drops_only_the_user(tmp_path):
 
 def test_mounts_rendered_with_readonly(tmp_path):
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
-    doc = yaml.safe_load(result.compose_yaml)
+    _, text = render(cfg, tmp_path, cwd=str(work))
+    doc = yaml.safe_load(text)
     vols = doc["services"]["glove-vibe-local-harness"]["volumes"]
     binds = {v["target"]: v for v in vols if v["type"] == "bind"}
     assert binds["/work"].get("read_only") in (None, False)
@@ -136,9 +137,9 @@ def test_mounts_rendered_with_readonly(tmp_path):
 @pytest.mark.skipif(not shutil.which("docker"), reason="docker not installed")
 def test_docker_compose_config_parses(tmp_path):
     cfg, work = _session_cfg(tmp_path)
-    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
+    _, text = render(cfg, tmp_path, cwd=str(work))
     compose_file = tmp_path / "docker-compose.yml"
-    compose_file.write_text(result.compose_yaml)
+    compose_file.write_text(text)
     proc = subprocess.run(
         ["docker", "compose", "-f", str(compose_file), "config"],
         capture_output=True,

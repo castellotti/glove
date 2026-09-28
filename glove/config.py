@@ -42,9 +42,9 @@ class HostService:
     """A host-side helper glove starts in a detached tmux session.
 
     These run on the host (outside the sandbox) using host trust the container
-    deliberately lacks — the SSH model tunnel, the headed Chrome, the Playwright
-    MCP. `command` may use placeholders glove expands: {session}, {workdir},
-    {media_dir}, {chrome_profile}, {home}.
+    deliberately lacks — e.g. the headed Chrome and Playwright MCP of the
+    `playwright` extension's host mode. `command` may use placeholders glove
+    expands: {session}, {workdir}, {home}.
     """
 
     name: str
@@ -105,14 +105,11 @@ class Config:
     name: str | None = None
     add_dirs: list[AddDir] = field(default_factory=list)
     net: list[str] = field(default_factory=lambda: ["none"])
-    # Opt-in capabilities composed into the session, off by default (mirrors
-    # `net`). Each name maps to a plugin in `glove.plugins`; enabling one adds its
-    # image layer (and, in later phases, its network/host-service/ring-1 grants +
-    # per-harness wiring). Default [] ⇒ minimal base, nothing extra.
-    plugins: list[str] = field(default_factory=list)
-    # Per-plugin configuration, keyed by plugin name (e.g.
-    # {browser: {provider: host-mcp}}).
-    plugin_options: dict[str, Any] = field(default_factory=dict)
+    # Opt-in capabilities: extension name → its settings (glove/extensions.py).
+    # An extension not listed contributes nothing — no containers, no mounts,
+    # no image layers. The `llm` extension (the required `inference` slot) is
+    # where the model, endpoint and API key are configured.
+    extensions: dict[str, Any] = field(default_factory=dict)
     allow_root: bool = False
     allow_sensitive: bool = False  # permit mounting / or $HOME
     # Ring-0 ro binds over .vscode/.envrc/.mcp.json in rw mounts; a missing one
@@ -122,19 +119,6 @@ class Config:
     services: list[Service] = field(default_factory=list)
     harness_config: dict[str, Any] = field(default_factory=dict)
     env: dict[str, Any] = field(default_factory=dict)
-    # The model id the harness sends to its LLM endpoint (OpenAI `model` field).
-    model: str | None = None
-    # Which service fronts the LLM; its `<host>:<port>` becomes the
-    # harness's api_base. glove synthesises the provider config from this so the
-    # LLM host/port live entirely inside the container.
-    llm_service: str = "llm"
-    # API key for the LLM endpoint, if it requires one. glove injects it into the
-    # container env as GLOVE_LLM_API_KEY and points the harness provider's
-    # api_key_env_var at it, never into the generated harness config. Prefer a
-    # reference, resolved in memory at launch (resolve_secret), so no file holds
-    # the key: `keychain:<service>` (macOS Keychain) or `env:<VAR>`. A bare
-    # value is used literally.
-    llm_api_key: str | None = None
     # Host dir bind-mounted as the harness config home (/home/agent). Defaults
     # to the environment's own `home/` under ~/.glove/envs/<env-id>/ (persistent,
     # per-instance, user-inspectable — and exactly where external monitors look).
@@ -157,12 +141,9 @@ class Config:
     # install them at runtime). Changing these yields a distinct image tag.
     apt_packages: list[str] = field(default_factory=list)
     pip_packages: list[str] = field(default_factory=list)
-    # NEW in v2. Resource bounds (ring 0) and per-backend options.
-    # `tools`/`browser` are consumed by later phases (ring 1 tool policy / ring 2
-    # browser wiring); modeled as free dicts here so these configs load today.
+    # Resource bounds (ring 0) and the ring-1 tool policy knobs.
     limits: Limits = field(default_factory=Limits)
     tools: dict[str, Any] = field(default_factory=dict)
-    browser: dict[str, Any] = field(default_factory=dict)
     enforcer_options: dict[str, Any] = field(default_factory=dict)
     # Network observability (docs/planning/network-observability.md): routes the
     # service forwarders through the instrumented netgate and records flows to
@@ -180,19 +161,13 @@ class Config:
         # falls back to the workdir basename.
         return self.name or "env"
 
-    def to_dict(self, *, redact_secrets: bool = False) -> dict[str, Any]:
-        d = asdict(self)
-        # The effective config is persisted to ~/.glove as a reproducibility
-        # artifact; don't leave the LLM key in cleartext there. A reference
-        # (keychain:/env:) names where the key lives, not the key, so it stays.
-        if redact_secrets and d.get("llm_api_key") and not is_secret_ref(d["llm_api_key"]):
-            d["llm_api_key"] = None
-        return d
+    def to_dict(self) -> dict[str, Any]:
+        # Extension secret settings are references (keychain:/env:), validated
+        # as such, so the effective config never holds a secret value.
+        return asdict(self)
 
-    def to_yaml(self, *, redact_secrets: bool = False) -> str:
-        return yaml.safe_dump(
-            self.to_dict(redact_secrets=redact_secrets), sort_keys=False
-        )
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(self.to_dict(), sort_keys=False)
 
 
 SECRET_REF_PREFIXES = ("keychain:", "env:")
@@ -238,9 +213,9 @@ def resolve_secret(value: str) -> str:
 def split_csv(value: str) -> list[str]:
     """Split a comma-separated string into stripped, non-empty tokens.
 
-    The one normalization rule for comma-list config/flags (`net`, `plugins`,
-    `--with`), shared by the config coercer, the CLI, and doctor so they can't
-    drift on what a comma-string means.
+    The one normalization rule for comma-list config/flags (`net`), shared by
+    the config coercer and the CLI so they can't drift on what a comma-string
+    means.
     """
     return [p.strip() for p in value.split(",") if p.strip()]
 
@@ -273,10 +248,6 @@ def _coerce(data: dict[str, Any]) -> Config:
     if isinstance(net, str):
         net = split_csv(net)
 
-    plugins = data.pop("plugins", None)
-    if isinstance(plugins, str):
-        plugins = split_csv(plugins)
-
     limits_raw = data.pop("limits", None)
 
     known = set(Config.__dataclass_fields__)
@@ -290,8 +261,6 @@ def _coerce(data: dict[str, Any]) -> Config:
     cfg.host_services = host_services
     if net is not None:
         cfg.net = net
-    if plugins is not None:
-        cfg.plugins = plugins
     if limits_raw is not None:
         cfg.limits = _coerce_limits(limits_raw)
     return cfg

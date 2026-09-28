@@ -1,0 +1,34 @@
+api: 1
+name: playwright
+summary: A real Chromium for the agent via the Playwright MCP. v3 M2 ships `host` mode (headed Chrome on this Mac); headless/novnc sidecars follow.
+provides: [browser]
+settings:
+  mode:              { type: enum, values: [host], default: host }
+  port:              { type: int, default: 8931 }       # host MCP port
+  cdp_port:          { type: int, default: 9222 }       # host Chrome remote-debugging port
+  keep_browser:      { type: bool, default: false }     # leave the host Chrome running after `glove down`
+  i_accept_host_rce: { type: bool, default: false }     # Vibe + host: see README
+  tools:             { type: list, default: [browser_navigate, browser_navigate_back, browser_snapshot,
+                        browser_take_screenshot, browser_click, browser_type, browser_hover,
+                        browser_select_option, browser_press_key, browser_wait_for] }
+validate:
+  - when: { mode: host, harness: vibe, i_accept_host_rce: false }
+    error: >-
+      mode: host with harness vibe exposes Playwright's `browser_run_code_unsafe`, which runs
+      arbitrary code ON YOUR HOST (Vibe cannot filter MCP tools). Use Pi, or set
+      `i_accept_host_rce: true` to accept that risk.
+hooks: hooks.py
+endpoints:
+  browser:
+    port: "{{ settings.port }}"
+    target: { host_port: "{{ settings.port }}" }
+    observe: { tool: browser }
+harness:
+  env:
+    BROWSER_MCP_URL: "{{ endpoint.browser.url }}/mcp"
+    BROWSER_MCP_TOOLS: "{{ settings.tools | join(',') }}"
+    BROWSER_MODE: "{{ settings.mode }}"
+  pi_extensions: [pi-extension]
+  vibe_mcp:
+    - { name: playwright, transport: http, url: "{{ endpoint.browser.url }}/mcp" }
+  brief: brief/host.md

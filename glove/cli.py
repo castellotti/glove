@@ -210,9 +210,6 @@ def run(
     enforcer: str | None = typer.Option(
         None, "--enforcer", help="ring-1 enforcer: nono | srt | none"
     ),
-    browser: str | None = typer.Option(
-        None, "--browser", help="browser provider: host-mcp | host-server | none"
-    ),
     config: Path | None = typer.Option(None, "--config", help="YAML/JSON overlay"),
     env: str | None = typer.Option(
         None, "--env", help="select an env by id, ignoring cwd resolution"
@@ -223,9 +220,6 @@ def run(
     workdir: Path | None = typer.Option(None, "--workdir", help="the /work mount"),
     net: str | None = typer.Option(
         None, "--net", help="comma list: none|internal|internet|lan|docker:<n>|service"
-    ),
-    with_plugins: str | None = typer.Option(
-        None, "--with", help="comma list of plugins to enable (replaces glove.yaml plugins)"
     ),
     allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
     allow_sensitive: bool = typer.Option(
@@ -282,7 +276,6 @@ def run(
         "workdir": str(workdir) if workdir else None,
         "name": token,
         "net": split_csv(net) if net else None,
-        "plugins": split_csv(with_plugins) if with_plugins is not None else None,
         "allow_root": allow_root or None,
         "allow_sensitive": allow_sensitive or None,
         "rebuild": rebuild or None,
@@ -299,15 +292,6 @@ def run(
                 f"runtime {cfg.runtime!r} is not implemented yet; "
                 "use docker or podman"
             )
-        # The --browser flag selects the provider; build_session_plan expands the
-        # browser plugin (host services, sidecar, env) via _apply_plugin_config,
-        # so run/dry-run/policy-show all compose the same session.
-        if browser is not None:
-            cfg.browser = {**(cfg.browser or {}), "provider": browser}
-        from .plan import legacy_warnings
-
-        for w in legacy_warnings(cfg):
-            err.print(f"[yellow]deprecation:[/yellow] {w}")
         home_dir = _home_dir(cfg, sdir)
         # Resume: pre-flight validate the transcript exists (clear glove-level
         # error beats the harness silently starting fresh) and capture the prior
@@ -326,9 +310,9 @@ def run(
             prev_cfg = _load_baseline(sdir)
         plan = build_session_plan(
             cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd(),
-            resume=want_resume, session_id=resume_id,
+            resume=want_resume, session_id=resume_id, state_dir=str(sdir / "ext"),
         )
-        # cfg is now fully expanded (plugin bridges, browser wiring); compare the
+        # cfg is now fully expanded (extension host services); compare the
         # security-relevant grants against the resumed session's snapshot.
         if prev_cfg is not None:
             from .sessions import widening_warnings
@@ -407,12 +391,15 @@ def run(
     except (ConfigError, ValueError, HardeningError, OSError) as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
+    if plan.model is None:  # unreachable: `inference` is a required slot
+        err.print("[red]error:[/red] no inference provider")
+        raise typer.Exit(1)
 
     # The seeded harness home lives under the session dir (see _home_dir);
     # nothing is written to the invocation dir.
     compose_path = sdir / "docker-compose.yml"
     compose_path.write_text(rendered.compose_yaml)
-    effective_yaml = cfg.to_yaml(redact_secrets=True)
+    effective_yaml = cfg.to_yaml()
     # effective.yaml tracks the *current* run (used by `glove down` to tear down
     # this run's host services); baseline.yaml is written once at session creation
     # and never overwritten, so the grant-widening check always compares against
@@ -427,7 +414,7 @@ def run(
     # baseUrl from env_id alone points Pi at a host that doesn't exist
     # ("Connection error").
     home_files = render_home(
-        cfg, plan.profile, token, home_dir, mount_plan=plan.mount_plan
+        cfg, plan.profile, home_dir, plan.model, mount_plan=plan.mount_plan, comp=plan.composition
     )
 
     if dry_run:
@@ -435,7 +422,7 @@ def run(
             f"[bold]env:[/bold] {env_id}   "
             f"[bold]workdir→[/bold] {plan.working_dir}   "
             f"[bold]enforcer:[/bold] {cfg.enforcer}   "
-            f"[bold]plugins:[/bold] {', '.join(cfg.plugins) or 'none'}"
+            f"[bold]extensions:[/bold] {', '.join(a.name for a in plan.composition.active)}"
         )
         console.print(f"[dim]written to {compose_path}[/dim]\n")
         console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
@@ -449,7 +436,7 @@ def run(
     from .plan import secret_env
 
     try:
-        secrets = secret_env(cfg)
+        secrets = secret_env(plan)
     except ConfigError as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
@@ -469,8 +456,48 @@ def run(
     # (all harnesses default to a new session, and a new one quit before any
     # message leaves no transcript at all, so "newest in the pool" is wrong).
     launched_at = time.time()
-    launch(cfg, sdir, provider=cfg.provider, rebuild=cfg.rebuild, secrets=secrets)
+
+    def prepare() -> None:
+        # Launch-time resolution (e.g. llm `model: auto`), through a throwaway
+        # container on the harness network, then the final harness home.
+        _resolve_extensions(plan, cfg.provider, secrets)
+        render_home(cfg, plan.profile, home_dir, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+
+    try:
+        launch(cfg, plan, sdir, provider=cfg.provider, rebuild=cfg.rebuild, secrets=secrets, prepare=prepare)
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from e
     _print_resume_hint(plan.profile, home_dir, harness or cfg.harness, since=launched_at)
+
+
+def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
+    """Run each active extension's `resolve` hook (after sidecars are up) and
+    refresh the model descriptor from the inference slot's resolved exports."""
+    from .extensions import base_context
+    from .harnessconfig import LLM_API_KEY_ENV, ModelDescriptor
+    from .session import probe_http
+
+    comp = plan.composition
+    for a in comp.active:
+        if a.hooks is None or not hasattr(a.hooks, "resolve"):
+            continue
+        ex = a.exports
+        key = {LLM_API_KEY_ENV: secrets[LLM_API_KEY_ENV]} if LLM_API_KEY_ENV in secrets else None
+
+        def probe(url, method="GET", body=None, auth=False, _ex=ex, _key=key):
+            return probe_http(provider, plan, url, method=method, body=body, auth_env=_key if auth else None,
+                              auth_header=_ex.get("auth_header", "Authorization"),
+                              auth_scheme=_ex.get("auth_scheme", "Bearer"))
+
+        try:
+            a.exports, notes = a.hooks.resolve(base_context(comp, a), ex, probe)
+        except ValueError as e:
+            raise ConfigError(str(e)) from e
+        for n in notes:
+            console.print(f"  [cyan]{a.name}:[/cyan] {n}")
+    if "inference" in comp.slots:
+        plan.model = ModelDescriptor.from_exports(comp.slot_exports("inference"))
 
 
 def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) -> str:
@@ -747,28 +774,19 @@ def build(
     enforcer: str | None = typer.Option(
         None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
     ),
-    with_plugins: str | None = typer.Option(
-        None, "--with", help="comma list of plugins to compose into the image"
-    ),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
-    """Build the forwarder + netgate and (optionally) a harness image."""
+    """Build the forwarder + netgate and (optionally) a harness base image.
+    Extension layers are composed per session by `glove run`."""
     from .harness import get_profile
     from .observe import build_netgate
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
-    plugins = split_csv(with_plugins) if with_plugins else None
     build_forwarder(prov, force=rebuild)
     build_netgate(prov, force=rebuild, console=console)
     if harness:
-        build_harness(
-            prov,
-            get_profile(harness),
-            plugins=plugins,
-            enforcer=enforcer or "nono",
-            force=rebuild,
-        )
+        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
 
 
 @app.command("ls")
@@ -799,45 +817,40 @@ def doctor(
     env: str | None = typer.Option(None, "--env", help="read runtime/enforcer/browser from an env's config"),
     runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
     enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
-    browser: str | None = typer.Option(None, "--browser", help="probe a browser provider: host-mcp | host-server"),
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
     no_container: bool = typer.Option(
         False, "--no-container", help="skip container probes (host-only, fast)"
     ),
 ) -> None:
-    """Probe host + runtime + enforcer + browser readiness."""
+    """Probe host + runtime + enforcer (+ an env's extensions) readiness."""
     import json as _json
 
     from .doctor import run_doctor, worst_status
 
-    rt, enf, brw = runtime or "docker", enforcer or "nono", browser
+    rt, enf, exts = runtime or "docker", enforcer or "nono", {}
     if env is not None:
         cfg_path = _env_config_path(env)
         if cfg_path.is_file():
             data = yaml.safe_load(cfg_path.read_text()) or {}
             rt = runtime or data.get("runtime", rt)
             enf = enforcer or data.get("enforcer", enf)
-            # Probe the browser only when the browser plugin (or a legacy
-            # `browser:` block) is enabled for this env. `plugins` accepts a
-            # comma-string as well as a list (see config._coerce), so split
-            # before the membership test to avoid a substring false-positive.
-            plugins = data.get("plugins") or []
-            if isinstance(plugins, str):
-                plugins = split_csv(plugins)
-            legacy = (data.get("browser") or {}).get("provider")
-            if "browser" in plugins or legacy:
-                opts = (data.get("plugin_options") or {}).get("browser") or {}
-                brw = browser or legacy or opts.get("provider") or "host-mcp"
+            exts = data.get("extensions") or {}
+            harness_name = data.get("harness", "pi")
 
     try:
-        checks = run_doctor(runtime=rt, enforcer=enf, browser=brw, include_container_probes=not no_container)
+        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
+        if exts:
+            from .doctor import extension_checks
+
+            checks += extension_checks(exts, harness=harness_name)
     except ValueError as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
 
     if json_out:
         console.print_json(
-            _json.dumps({"runtime": rt, "enforcer": enf, "browser": brw, "checks": [c.to_dict() for c in checks]})
+            _json.dumps({"runtime": rt, "enforcer": enf, "extensions": sorted(exts),
+                         "checks": [c.to_dict() for c in checks]})
         )
     else:
         glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
@@ -878,6 +891,7 @@ def policy_show(
             env_id=env_id,
             home_dir=str(_home_dir(cfg, session_dir(env_id, env_id))),
             cwd=os.getcwd(),
+            state_dir=str(session_dir(env_id, env_id) / "ext"),
         )
     except (ConfigError, ValueError) as e:
         err.print(f"[red]error:[/red] {e}")
@@ -886,7 +900,7 @@ def policy_show(
     h = plan.hardening
     console.print(
         f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
-        f"plugins={', '.join(cfg.plugins) or 'none'}\n"
+        f"extensions={', '.join(a.name for a in plan.composition.active)}\n"
     )
     console.print("[bold]ring 0 — hardening[/bold]")
     console.print(
@@ -903,31 +917,7 @@ def policy_show(
                       "exposed to the container (srt strong)")
     console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
 
-    # Enabled plugins and exactly what each one grants (reviewable per §6-Q5).
-    from .plugins import resolve_plugins
-
-    enabled = resolve_plugins(cfg.plugins)  # cfg.plugins now includes bridged ones
-    console.print("\n[bold]plugins[/bold]")
-    if not enabled:
-        console.print("  [dim](none — minimal base image)[/dim]")
-    for p in enabled:
-        console.print(f"  [cyan]{p.name}[/cyan] — {p.summary}")
-        if p.requires_services:
-            console.print(
-                f"    egress: only via forwarder sidecar(s) {list(p.requires_services)} "
-                "(network allow-list; shell tools stay --block-net)"
-            )
-        if p.pi_extensions and cfg.harness == "pi":
-            console.print(f"    pi extension(s): {list(p.pi_extensions)}")
-        layers = p.layers_for(cfg.harness)
-        pkgs = {
-            "apt": [x for lyr in layers for x in lyr.apt],
-            "pip": [x for lyr in layers for x in lyr.pip],
-            "npm": [x for lyr in layers for x in lyr.npm],
-        }
-        shown = ", ".join(f"{k}={v}" for k, v in pkgs.items() if v)
-        if shown:
-            console.print(f"    image layer: {shown}")
+    _print_extensions(plan)
     hs = [h.name for h in cfg.host_services]
     if hs:
         console.print(f"  [dim]host services (run on host): {hs}[/dim]")
@@ -946,6 +936,35 @@ def policy_show(
         console.print("\n[bold yellow]documented gaps[/bold yellow]")
         for g in enf.gaps(plan):
             console.print(f"  [yellow]![/yellow] {g}")
+
+
+def _print_extensions(plan) -> None:
+    """Every active extension and exactly what it grants (reviewable)."""
+    comp = plan.composition
+    console.print("\n[bold]extensions[/bold]")
+    for a in comp.active:
+        tags = [a.manifest.taint]
+        if a.auto_added:
+            tags.append("auto")
+        if a.manifest.provides:
+            tags.append("provides " + ",".join(a.manifest.provides))
+        console.print(f"  [cyan]{a.name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {a.manifest.summary}")
+    for e in comp.endpoints:
+        where = "harness" if e.harness else "sidecars only"
+        console.print(f"    endpoint {e.name} :{e.port} → {e.target.host}:{e.target.port} "
+                      f"[dim]({e.extension}; {where}; via {e.target.network or 'net'})[/dim]")
+    for ext, layer in comp.image_layers:
+        shown = ", ".join(f"{k}={v}" for k, v in layer.items() if k in ("apt", "pip", "npm") and v)
+        if shown:
+            console.print(f"    image layer ({ext}): {shown}")
+    for ext, src in comp.pi_extensions:
+        console.print(f"    pi extension ({ext}): {comp.pi_extension_dest(ext, src)}")
+    for key, privs in comp.privileges.items():
+        console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")
+    if plan.model is not None:
+        m = plan.model
+        console.print(f"    model: {m.model} via {m.base_url} ({m.api}; vision={m.vision}, "
+                      f"context={m.context_window}, key={'yes' if m.api_key_env else 'no'})")
 
 
 net_app = typer.Typer(

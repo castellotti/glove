@@ -1,0 +1,24 @@
+api: 1
+name: search
+summary: Web search through SearXNG — Pi's web_search extension / a Vibe MCP server, reached only via the `search` endpoint.
+settings:
+  # Interim (v3 M2): a SearXNG already listening on this Mac. M4 replaces this
+  # with in-session SearXNG + valkey sidecars behind the egress slot.
+  host_port: { type: int, required: true }
+endpoints:
+  search:
+    port: 8080
+    target: { host_port: "{{ settings.host_port }}" }
+harness:
+  env:
+    SEARXNG_URL: "{{ endpoint.search.url }}"
+  image:
+    vibe: { copy: [[searxng_mcp.py, /opt/glove/ext/search/searxng_mcp.py]], pip: ["mcp<2"] }
+  pi_extensions: [pi-extension]
+  vibe_mcp:
+    - name: searxng
+      transport: stdio
+      command: python3
+      args: [/opt/glove/ext/search/searxng_mcp.py]
+      env: { SEARXNG_URL: "{{ endpoint.search.url }}" }
+  brief: brief.md

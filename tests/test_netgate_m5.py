@@ -7,13 +7,13 @@ import json
 import os
 
 import pytest
+from helpers import make_cfg
 from test_netgate_proxy import Captured, StubUpstreamProxy, _exchange, _origin, run
 from test_observe import pi_search_services, render
 from typer.testing import CliRunner
 
 from glove.cli import app
 from glove.config import ConfigError, Service
-from glove.harnessconfig import service_base
 from glove.netgate.httpproxy import parse_request_head, request_summary
 from glove.netgate.writer import NdjsonWriter
 from glove.observe import session_facts
@@ -36,16 +36,15 @@ def test_fanout_listener_is_never_on_the_harness_network(tmp_path):
     assert cmd[cmd.index("--client") + 1] == "searxng"
     assert cmd[cmd.index("--tool") + 1] == "search-engine-fanout"
     # the harness is never offered it
-    assert service_base(_cfg(), "ps", "fanout") is None
+    assert "fanout" not in {x.name for x in _cfg().harness_services}
     facts = {s["service"]: s for s in session_facts(plan)["services"]}
     assert facts["fanout"]["harness"] is False and facts["fanout"]["client"] == "searxng"
     assert facts["proxy"]["harness"] is True
 
 
 def _cfg():
-    from glove.config import Config
 
-    c = Config(harness="pi", name="ps", net=["service"])
+    c = make_cfg(harness="pi", name="ps", net=["service"])
     c.services = [*pi_search_services(), FANOUT]
     return c
 
@@ -53,16 +52,7 @@ def _cfg():
 def test_harness_false_plain_socat_also_stays_off_the_internal_net(tmp_path):
     plain = Service(name="fanout", to="egress-proxy:8888", port=8899, join_network="n", harness=False)
     _, doc, _ = render(tmp_path, services=[plain], observe={})
-    assert doc["services"]["glove-ps-fanout"]["networks"] == ["n"]
-
-
-def test_harness_false_search_listener_does_not_imply_the_search_plugin():
-    from glove.config import Config
-    from glove.plan import _legacy_bridges
-
-    c = Config(harness="pi", name="ps", net=["service"])
-    c.services = [Service(name="search", to="egress-proxy:8888", join_network="n", harness=False)]
-    assert _legacy_bridges(c) == []
+    assert set(doc["services"]["glove-ps-fanout"]["networks"]) == {"n"}
 
 
 def test_client_label_validation():
@@ -152,8 +142,9 @@ def test_cli_warns_loudly_under_full_record_mode(tmp_path, monkeypatch):
     r = CliRunner()
     assert r.invoke(app, ["init", "pi"]).exit_code == 0
     over = tmp_path / "o.yaml"
-    over.write_text("net: [service]\nmodel: m\nobserve: {enabled: true, record: full, record_headers: true}\n"
-                    "services:\n  - { name: llm, to: host.docker.internal:8080 }\n")
+    over.write_text("net: [service]\nobserve: {enabled: true, record: full, record_headers: true}\n"
+                    "extensions: {llm: {provider: llama.cpp, location: host, "
+                    "endpoint: \"127.0.0.1:8080\", model: m}}\n")
     out = r.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(tmp_path / "work"), "--dry-run"])
     assert out.exit_code == 0, out.output
     assert "record: full" in out.output and "browsing log" in out.output

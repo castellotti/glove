@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from glove.config import AddDir, Config
+from helpers import make_cfg
+
+from glove.config import AddDir
 from glove.enforcers import get_enforcer
 from glove.enforcers.base import ENFORCER_DIR
 from glove.enforcers.srt import render_settings
@@ -21,7 +23,7 @@ GOLDEN = Path(__file__).parent / "golden" / "srt"
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = Config(harness="pi", workdir=str(work), name="s", enforcer="srt", **kw)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="s", enforcer="srt", **kw)
     return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
 
 
@@ -48,7 +50,9 @@ def test_llm_key_denied_to_tool_commands(tmp_path):
     assert render_settings(_plan(tmp_path))["credentials"]["envVars"] == [
         {"name": "GLOVE_LLM_API_KEY", "mode": "deny"},
     ]
-    plan = _plan(tmp_path, llm_api_key="env:SOME_VAR")
+    from helpers import STUB_LLM
+
+    plan = _plan(tmp_path, extensions={"llm": {**STUB_LLM, "api_key": "env:SOME_VAR"}})
     plan.passthrough_env = [*plan.passthrough_env, "OTHER_SECRET"]
     names = [v["name"] for v in render_settings(plan)["credentials"]["envVars"]]
     assert names == ["GLOVE_LLM_API_KEY", "OTHER_SECRET"]

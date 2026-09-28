@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 import yaml
 
 from glove.config import (
@@ -40,12 +43,12 @@ def test_flag_over_env_file(tmp_path):
 
 def test_config_overlay_over_env_file(tmp_path):
     env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text("harness: pi\nmodel: a\n")
+    env_cfg.write_text("harness: pi\nenforcer: nono\n")
     overlay = tmp_path / "overlay.yaml"
-    overlay.write_text("model: b\n")
+    overlay.write_text("enforcer: srt\n")
     cfg = resolve(env_config_path=env_cfg, config_path=overlay, overrides={})
     assert cfg.harness == "pi"  # kept from env file
-    assert cfg.model == "b"  # overridden by --config overlay
+    assert cfg.enforcer == "srt"  # overridden by --config overlay
 
 
 def test_none_overrides_ignored(tmp_path):
@@ -97,7 +100,7 @@ def test_effective_config_round_trips():
     assert data["services"][0]["port"] == 8899
 
 
-# --- llm_api_key references (keychain:/env:), resolved in memory at launch ----
+# --- secret references (keychain:/env:), resolved in memory at launch ----------
 
 def _fake_security(monkeypatch, *, secret="sk-from-keychain", rc=0):
     import subprocess
@@ -152,8 +155,24 @@ def test_resolve_secret_missing_keychain_entry_is_a_config_error(monkeypatch):
         resolve_secret("keychain:my-llm")
 
 
-def test_redaction_keeps_a_reference_and_drops_a_literal():
-    ref = Config(llm_api_key="keychain:my-llm").to_dict(redact_secrets=True)
-    assert ref["llm_api_key"] == "keychain:my-llm"
-    lit = Config(llm_api_key="sk-literal").to_dict(redact_secrets=True)
-    assert lit["llm_api_key"] is None
+def test_retired_v2_keys_are_refused(tmp_path):
+    import pytest
+
+    from glove.config import ConfigError
+
+    for key in ("model: m", "llm_api_key: keychain:x", "llm_service: llm", "plugins: [search]", "browser: {}"):
+        (tmp_path / "glove.yaml").write_text(f"harness: pi\n{key}\n")
+        with pytest.raises(ConfigError, match="unknown config keys"):
+            resolve(env_config_path=tmp_path / "glove.yaml", overrides={})
+
+
+@pytest.mark.parametrize("example", sorted((Path(__file__).parent.parent / "docs/examples").glob("*.yaml")),
+                         ids=lambda p: p.name)
+def test_examples_plan(example, tmp_path):
+    from glove.config import load_config
+    from glove.plan import build_session_plan
+
+    cfg = load_config(example)
+    cfg.workdir = str(tmp_path)
+    plan = build_session_plan(cfg, env_id="ex", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    assert plan.model is not None

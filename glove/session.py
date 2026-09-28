@@ -10,15 +10,20 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import yaml
 from rich.console import Console
 
-from .compose import FORWARDER_IMAGE, TEMPLATES_DIR
 from .config import Config
-from .harness import HarnessProfile, effective_image, get_profile
-from .network import build_network_plan
-from .plan import secret_env
+from .harness import HarnessProfile, effective_image
+from .plan import FORWARDER_IMAGE
+from .runtimes.docker import TEMPLATES_DIR
+
+if TYPE_CHECKING:
+    from .plan import SessionPlan
 
 console = Console()
 
@@ -82,73 +87,73 @@ def build_harness(
     *,
     apt_packages: list[str] | None = None,
     pip_packages: list[str] | None = None,
-    plugins: list[str] | None = None,
     enforcer: str = "nono",
+    plan: SessionPlan | None = None,
     force: bool = False,
 ) -> str:
-    """Build the session image: the minimal base, plus a derived layer per
-    enabled plugin. Returns the tag the session should run.
-
-    With no plugins the base *is* the session image (byte-identical to a bare
-    base build). With plugins, the base stays cached and the plugin layers are
-    composed on top as a distinct, hash-tagged derived image."""
+    """Build the session image: the minimal base, plus — when the plan's
+    extensions contribute image layers or Pi extensions — a derived image on
+    top (content-addressed tag, see glove/image.py). Returns the tag to run."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    plugin_names = plugins or []
     srt = enforcer == "srt"
-
     base_tag = effective_image(profile, apt_packages, pip_packages)
-    final_tag = effective_image(profile, apt_packages, pip_packages, plugin_names)
     if srt:
         base_tag = f"{base_tag}-srt"
-        final_tag = f"{final_tag}-srt"
-
+    final_tag = plan.image if plan is not None else base_tag
     if not force and _image_exists(provider, final_tag):
         return final_tag
-
     _build_base(provider, profile, apt_packages, pip_packages, srt, base_tag, force=force)
-    if final_tag == base_tag:
-        # No derived layer to compose: either no plugins, or the enabled plugins
-        # contribute only runtime wiring (no image layers) for this harness, so
-        # effective_image collapsed the tag back onto the base.
+    if final_tag == base_tag or plan is None or plan.composition is None:
         return base_tag
 
-    from .plugins import resolve_plugins
-    from .plugins.image import render_dockerfile, stage_context
+    from .image import render_dockerfile, stage_context
 
-    resolved = resolve_plugins(plugin_names)
+    dockerfile, staged = render_dockerfile(base_tag, profile, plan.composition)
     with tempfile.TemporaryDirectory(prefix="glove-build-") as ctx:
         ctx_dir = Path(ctx)
-        stage_context(ctx_dir, profile, resolved)
-        dockerfile = ctx_dir / "Dockerfile"
-        dockerfile.write_text(render_dockerfile(base_tag, profile, resolved))
-        console.print(
-            f"[bold]composing plugin image[/bold] {final_tag}  "
-            f"(plugins: {', '.join(plugin_names)})"
-        )
+        stage_context(ctx_dir, staged)
+        (ctx_dir / "Dockerfile").write_text(dockerfile)
+        names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}))
+        console.print(f"[bold]composing extension image[/bold] {final_tag}  (extensions: {names})")
         subprocess.run(
-            [provider, "build", "-t", final_tag, "-f", str(dockerfile), str(ctx_dir)],
+            [provider, "build", "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir)],
             check=True,
         )
     return final_tag
 
 
-def ensure_images(cfg: Config, provider: str, *, rebuild: bool = False) -> None:
+def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = False) -> None:
+    """Build every image an active extension declares (`images:` in its manifest)."""
+    from .extensions import image_tag
+
+    if plan.composition is None:
+        return
+    for a in plan.composition.active:
+        for name, spec in (a.manifest.raw.get("images") or {}).items():
+            tag = image_tag(a, name)
+            if not force and _image_exists(provider, tag):
+                continue
+            ctx = a.manifest.path / str((spec or {}).get("build", name))
+            console.print(f"[bold]building extension image[/bold] {tag}")
+            subprocess.run([provider, "build", "-t", tag, str(ctx)], check=True)
+
+
+def ensure_images(cfg: Config, plan: SessionPlan, provider: str, *, rebuild: bool = False) -> None:
     from .observe import build_netgate
 
-    profile = get_profile(cfg.harness)
-    network = build_network_plan(cfg, cfg.resolved_name())
-    if len(network.gated) < len(network.sidecars):
+    if len(plan.network.gated) < len(plan.network.sidecars):
         build_forwarder(provider, force=rebuild)
-    if network.gated:
+    if plan.network.gated:
         build_netgate(provider, force=rebuild, console=console)
+    build_extension_images(provider, plan, force=rebuild)
     build_harness(
         provider,
-        profile,
+        plan.profile,
         apt_packages=cfg.apt_packages,
         pip_packages=cfg.pip_packages,
-        plugins=cfg.plugins,
         enforcer=cfg.enforcer,
+        plan=plan,
         force=rebuild,
     )
 
@@ -160,42 +165,75 @@ def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
 
 def launch(
     cfg: Config,
+    plan: SessionPlan,
     session_dir: Path,
     *,
     provider: str,
     rebuild: bool,
-    secrets: dict[str, str] | None = None,
+    secrets: dict[str, str],
+    prepare: Callable[[], None] | None = None,
 ) -> None:
-    """`secrets`: the already-resolved secret_env(cfg), if the caller has it."""
-    session = cfg.resolved_name()
-    project = f"glove-{session}"
+    """Build, start every sidecar, run `prepare()` (launch-time resolution and
+    the harness home), then run the harness on a PTY.
+
+    `secrets` is the already-resolved secret_env(plan): it is passed to compose
+    only in this process environment, never written to a file."""
+    project = plan.project
     compose_file = session_dir / "docker-compose.yml"
     base = _compose_base(provider, project, compose_file)
 
-    plan = build_network_plan(cfg, session)
-    forwarder_services = [f"glove-{session}-{s.role}" for s in plan.sidecars]
-    if plan.gated:
-        # the netgate collector (glove-<session>-netgate) — no network of its own
-        forwarder_services.insert(0, f"glove-{session}-netgate")
+    doc = yaml.safe_load(compose_file.read_text()) or {}
+    sidecars = [n for n in (doc.get("services") or {}) if n != plan.harness_service]
 
-    ensure_images(cfg, provider, rebuild=rebuild)
-    # the compose file names the secret vars without values (plan.passthrough_env)
-    env = {**os.environ, **(secret_env(cfg) if secrets is None else secrets)}
+    ensure_images(cfg, plan, provider, rebuild=rebuild)
+    env = {**os.environ, **secrets}
 
-    if forwarder_services:
-        console.print("[bold]starting forwarders…[/bold] " + ", ".join(forwarder_services))
-        subprocess.run([*base, "up", "-d", *forwarder_services], check=True, env=env)
+    if sidecars:
+        console.print("[bold]starting sidecars…[/bold] " + ", ".join(sidecars))
+        subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
+    if prepare is not None:
+        prepare()
 
     console.print("[bold]launching harness (Ctrl-D to exit)…[/bold]")
     try:
-        subprocess.run(
-            [*base, "run", "--rm", "-it", f"glove-{session}-harness"], check=False, env=env
-        )
+        subprocess.run([*base, "run", "--rm", "-it", plan.harness_service], check=False, env=env)
     finally:
         console.print(
-            f"[dim]harness exited; forwarders still up. "
-            f"Run `glove down {session}` to tear down.[/dim]"
+            f"[dim]harness exited; sidecars still up. "
+            f"Run `glove down {plan.session}` to tear down.[/dim]"
         )
+
+
+def probe_http(
+    provider: str, plan: SessionPlan, url: str, *, method: str = "GET", body: dict | None = None,
+    auth_env: dict[str, str] | None = None, auth_header: str = "Authorization", auth_scheme: str = "Bearer",
+) -> tuple[int, str]:
+    """HTTP request from a throwaway, hardened container on the harness network,
+    so the host never resolves or contacts the endpoint itself. A key travels
+    only as an env var of that container (never in any argv)."""
+    import json as _json
+
+    script = 'curl -sS -m 20 -o /tmp/b -w "%{http_code}" -X "$M" "$U"'
+    if body is not None:
+        script += ' -H "content-type: application/json" --data "$B"'
+    if auth_env:
+        prefix = f"{auth_scheme} " if auth_scheme else ""
+        script += f' -H "{auth_header}: {prefix}$GLOVE_LLM_API_KEY"'
+    script += "; echo; cat /tmp/b"
+    cmd = [
+        provider, "run", "--rm", "--network", plan.network.internal_network,
+        "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--read-only", "--tmpfs", "/tmp", "-e", "M", "-e", "U", "-e", "B",
+        *(["-e", "GLOVE_LLM_API_KEY"] if auth_env else []),
+        "--entrypoint", "sh", plan.image, "-c", script,
+    ]
+    env = {**os.environ, "M": method, "U": url, "B": _json.dumps(body or {}), **(auth_env or {})}
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
+    head, _, rest = r.stdout.partition("\n")
+    try:
+        return int(head.strip() or 0), rest
+    except ValueError:
+        return 0, (r.stdout + r.stderr)[-400:]
 
 
 def teardown(session: str, *, provider: str, wipe: bool) -> None:

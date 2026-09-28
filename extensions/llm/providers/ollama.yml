@@ -1,0 +1,14 @@
+name: ollama
+api: openai-completions
+base_path: /v1
+default_port: 11434
+locations: [host, lan]
+auth: { header: Authorization, scheme: Bearer, required: false }
+models_endpoint: /v1/models
+probes:
+  capabilities:
+    path: /api/show
+    method: POST
+    body: { model: "{model}" }
+    vision: { path: "$.capabilities", contains: vision }
+defaults: { vision: false, context_window: 8192, max_tokens: 4096, reasoning: false }

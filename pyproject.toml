@@ -35,7 +35,10 @@ artifacts = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "extensions"]
+pythonpath = [".", "tests"]
+# importlib: extension test files share basenames (extensions/*/tests/test_*.py)
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"

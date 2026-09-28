@@ -1,48 +1,18 @@
-# glove preset — Mistral Vibe against a local LLM, with a host browser.
-#
-# Shows the Vibe harness and the compact `browser:` provider block: glove
-# auto-wires the forwarder sidecar + host Chrome + Playwright MCP, and Vibe
-# auto-derives an MCP server for it (Vibe has a native MCP client).
-#
-# Use it:
-#   cd ~/path/to/your/project
-#   glove init vibe --from <glove-repo>/docs/examples/vibe-local.glove.yaml
-#   $EDITOR ~/.glove/envs/<env-id>/glove.yaml   # set the model + API key
-#   glove vibe --dry-run                # preview
-#   glove vibe                          # launch
-#
-# `init` copies this file into ~/.glove/envs/<env-id>/glove.yaml (outside your
-# repo). Put the real API key THERE, never in the repo.
-
+# Mistral Vibe against an LLM server on this Mac, plus a host browser.
 harness: vibe
 runtime: docker
 enforcer: nono
 workdir: .
-
-# The LLM must match `curl http://127.0.0.1:8080/v1/models`.
-model: your-model-id
-llm_service: llm
-llm_api_key: sk-REPLACE-ME
-
-net: [service]
-allow_root: false
-
-services:
-  # Bridge to an LLM running on the Docker host (127.0.0.1:8080). For a remote
-  # model, add an SSH-tunnel host service and target :8899 (see
-  # pi-remote-llm.glove.yaml).
-  - name: llm
-    to: host.docker.internal:8080
-    port: 8080
-
-# Opt-in browser capability. Enabling the `browser` plugin composes its wiring:
-# glove adds the `browser` forwarder plus `chrome` and `playwright` host
-# services, sets the harness MCP env, and (for Pi) bakes the browser extension
-# into a per-session image. This path drives a SYSTEM Google Chrome over CDP; if
-# Chrome isn't installed, use a dedicated Playwright Chrome for Testing instead
-# (see docs/pi-remote-llm.md and the hand-wired pi-remote-llm.glove.yaml example).
-plugins: [browser]
-plugin_options:
-  browser:
-    provider: host-mcp
-    port: 8931
+extensions:
+  llm:
+    provider: llama.cpp
+    location: host
+    endpoint: 127.0.0.1:8080
+    model: auto
+    capabilities: auto
+  playwright:
+    mode: host
+    # Vibe cannot filter MCP tools, so it would get Playwright's
+    # `browser_run_code_unsafe` (arbitrary code in the host MCP process).
+    # glove refuses vibe + host mode unless you accept that explicitly:
+    i_accept_host_rce: true

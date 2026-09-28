@@ -18,9 +18,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const BROWSER_MCP_URL = process.env.BROWSER_MCP_URL ?? "http://localhost:8931/mcp";
 
-// Curated surface — the core browsing tools. Others from the server are
-// ignored to keep Pi's tool list focused.
-const ALLOW = new Set([
+// Curated surface — the tools glove passes in BROWSER_MCP_TOOLS (the extension's
+// `tools` setting), else the core browsing set. Others are ignored.
+const DEFAULT_TOOLS = [
   "browser_navigate",
   "browser_navigate_back",
   "browser_snapshot",
@@ -31,7 +31,14 @@ const ALLOW = new Set([
   "browser_select_option",
   "browser_press_key",
   "browser_wait_for",
-]);
+];
+const ALLOW = new Set(
+  (process.env.BROWSER_MCP_TOOLS ?? "").split(",").map((t) => t.trim()).filter(Boolean),
+);
+if (ALLOW.size === 0) DEFAULT_TOOLS.forEach((t) => ALLOW.add(t));
+// Runs arbitrary JavaScript in the MCP process — on the operator's host in host
+// mode. Never exposed there, even if listed.
+if (process.env.BROWSER_MODE === "host") ALLOW.delete("browser_run_code_unsafe");
 
 function mapContent(blocks: any[]): any[] {
   const out = (blocks ?? []).map((c) =>

@@ -5,8 +5,9 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from helpers import make_cfg
 
-from glove.config import AddDir, Config
+from glove.config import AddDir
 from glove.hardening import HardeningError, find_violations, validate_hardening
 from glove.plan import build_session_plan
 
@@ -14,7 +15,7 @@ from glove.plan import build_session_plan
 def _plan(tmp_path, **cfg_kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = Config(harness="pi", workdir=str(work), name="s", **cfg_kw)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="s", **cfg_kw)
     return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "home"), uid=1000, gid=1000)
 
 

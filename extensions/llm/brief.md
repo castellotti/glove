@@ -1,0 +1,1 @@
+- Model: `{{ slot.inference.model }}`. {% if slot.inference.capabilities.vision %}You can see images: read screenshots, photos and scanned pages directly.{% else %}You cannot see images; use text tools (and OCR, if available) to read them.{% endif %}

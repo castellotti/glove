@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import make_cfg
 
 from glove.config import AddDir, Config, ConfigError
 from glove.harness import get_profile
@@ -18,7 +19,7 @@ from glove.sessions import (
 def _cfg(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    return Config(harness="pi", workdir=str(work), name="s", **kw)
+    return make_cfg(harness="pi", workdir=str(work), name="s", **kw)
 
 
 # --- HarnessProfile.resume_args -------------------------------------------------
@@ -175,10 +176,10 @@ def time_now() -> float:
 # --- grant-widening -------------------------------------------------------------
 
 def test_widening_detects_broader_grants():
-    prev = Config(net=["none"], plugins=[], allow_root=False)
+    prev = Config(net=["none"], extensions={"llm": {}}, allow_root=False)
     cur = Config(
         net=["service"],
-        plugins=["search"],
+        extensions={"llm": {"model": "x"}, "search": {"host_port": 1}},
         allow_root=True,
         add_dirs=[AddDir("/data", "rw")],
     )
@@ -186,6 +187,7 @@ def test_widening_detects_broader_grants():
     joined = "\n".join(warns)
     assert "net" in joined
     assert "search" in joined
+    assert "llm settings changed" in joined
     assert "allow_root" in joined
     assert "/data" in joined
 
@@ -198,7 +200,7 @@ def test_widening_ro_to_rw_upgrade():
 
 
 def test_widening_no_change_silent():
-    cfg = Config(net=["service"], plugins=["search"])
+    cfg = Config(net=["service"], extensions={"search": {"host_port": 1}})
     assert widening_warnings(cfg, cfg) == []
 
 

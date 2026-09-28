@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ..hardening import HardeningError, validate_hardening
@@ -69,6 +70,23 @@ def events_tmpfs_opts(uid: int, gid: int, context: str | None = None) -> str:
     mount sees ids, with an optional SELinux ``context=`` label."""
     opts = f"size=1m,mode=0700,uid={uid},gid={gid}"
     return f'{opts},context="{context}"' if context else opts
+
+
+def _indent(block: dict) -> str:
+    if not block:
+        return ""
+    text = yaml.safe_dump(block, sort_keys=False, default_flow_style=False)
+    return "".join(f"  {line}\n" if line else "\n" for line in text.splitlines())
+
+
+def _extension_blocks(plan: SessionPlan, extra: dict) -> dict[str, str]:
+    """Extension sidecars/volumes/secrets as YAML text for the template."""
+    if plan.composition is None:
+        return {"extension_services": "", "extension_volumes": "", "extension_secrets": ""}
+    from ..compose import harden_fragments
+
+    blocks = harden_fragments(plan.composition, plan, extra)
+    return {f"extension_{k}": _indent(v) for k, v in blocks.items()}
 
 
 class DockerRuntime:
@@ -176,7 +194,8 @@ class DockerRuntime:
             "external_networks": plan.network.external_networks,
             "harness_extra_networks": plan.network.harness_extra_networks,
             "harness_host_gateway": plan.network.harness_host_gateway,
-            "egress_network": plan.network.egress_network,
+            "hostgw_network": plan.network.hostgw_network,
+            "session_networks": plan.network.session_networks,
             "forwarder_image": plan.forwarder_image,
             "uid": plan.uid,
             "gid": plan.gid,
@@ -184,8 +203,14 @@ class DockerRuntime:
             "allow_root": plan.allow_root,
             **observe_context(plan),
             **extra,
+            **_extension_blocks(plan, extra),
         }
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
+        # Not waivable: re-check §3.4 on the merged project (extension sidecars
+        # included), so a merge bug cannot ship a weaker project.
+        from ..compose import validate_project
+
+        validate_project(yaml.safe_load(compose_yaml), plan, plan.composition)
         return RenderedProject(
             session=plan.session,
             project=plan.project,
