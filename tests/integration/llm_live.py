@@ -60,15 +60,16 @@ def main(directory: str, prompt: str, isolation: bool) -> int:
     print(f"== session {sid} at {sd.root} (subnet {cfg.subnet}); compose project {plan.project}")
     secrets = secret_env(plan)
     env = {**os.environ, **secrets}
-    base = _compose_base("docker", plan.project, sd.compose)
+    rt = cfg.provider  # docker | podman (the session file's runtime)
+    base = _compose_base(rt, plan.project, sd.compose)
     rc = 0
     try:
-        ensure_images(cfg, plan, "docker")
+        ensure_images(cfg, plan, rt)
         sidecars = [f"glove-{plan.session}-{s.role}" for s in plan.network.sidecars]
         subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
         print(f"== sidecars up: {', '.join(sidecars)}")
         print("== launch-time resolution (throwaway container on the harness network)")
-        _resolve_extensions(plan, "docker", secrets)
+        _resolve_extensions(plan, rt, secrets)
         m = plan.model
         sessiondir.write_effective(sd.effective, cfg, {"at": _now(), "model": asdict(m)})
         print(f"   descriptor: model={m.model} base_url={m.base_url} api={m.api} vision={m.vision} "

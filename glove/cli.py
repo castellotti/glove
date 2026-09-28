@@ -278,7 +278,7 @@ def plan_cmd(
         sd, _, sid, cfg = _open(directory)
         plan, compose_yaml, home_files = _materialize_plan(sd, sid, cfg, resume=resume, session=session,
                                                            overrides=frozenset(iknow))
-    except (ConfigError, ValueError, HardeningError, OSError) as e:
+    except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise _fail(str(e)) from e
     console.print(
         f"[bold]session:[/bold] {sid}  [bold]dir:[/bold] {sd.root}  [bold]harness:[/bold] {cfg.harness}  "
@@ -322,7 +322,7 @@ def up(
         # Resolve secret references (keychain:/env:) now, in memory, so a
         # missing key fails before anything starts.
         secrets = secret_env(plan)
-    except (ConfigError, ValueError, HardeningError, OSError) as e:
+    except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise _fail(str(e)) from e
 
     start_host_services(cfg, sid, sd.state)

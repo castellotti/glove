@@ -47,7 +47,7 @@ Docker Desktop macOS blast-radius explanation.
 | Component | Option | Status |
 |---|---|---|
 | Runtime | docker | hardened + doctor probes |
-| Runtime | podman | hardened + doctor probes; validated rootless (podman 6, libkrun, Vibe/nono, Landlock ABI 9) |
+| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): session lifecycle 10/10, nono Pi 16/16, Vibe 10/10, ring-0 15/15; srt is refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) - default | nono 0.78.0; Pi wired + verified (16-check integration) |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
@@ -405,6 +405,8 @@ bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
+# RT=podman runs test_session_dir / test_pi_nono / test_vibe_nono / test_ring0_protect on Podman
+# (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server
 ```

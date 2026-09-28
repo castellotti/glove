@@ -450,3 +450,10 @@ def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_
     assert result.exit_code == 0 and "re-allocating" in result.output
     assert reg.find(sid).subnet == "172.31.2.0/24"
     assert "172.31.2.0/27" in (d / ".glove" / "compose.yml").read_text()
+
+
+def test_an_unsupported_runtime_enforcer_pair_is_a_clean_error(home, tmp_path):
+    d = make_session(tmp_path / "s", "runtime: podman\nenforcer: srt\n")
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 1 and "not supported on the podman runtime" in result.output
+    assert "Traceback" not in result.output

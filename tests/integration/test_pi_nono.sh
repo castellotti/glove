@@ -14,6 +14,7 @@
 # first match, SIGPIPE-killing docker; under pipefail that non-zero would mask a
 # real match. We want the pipeline status to be grep's.
 set -u
+RT="${RT:-docker}"   # docker | podman
 
 IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.4.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -50,8 +51,8 @@ MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
 TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c)
 HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -c)
 
-run_tool()    { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
-run_harness() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" "$1" 2>&1; }
+run_tool()    { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
+run_harness() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" "$1" 2>&1; }
 
 echo "== ring-1 tool policy (shell commands) =="
 run_tool 'echo hi > /work/f && cat /work/f' | grep -q '^hi$' && ok "write /work" || bad "write /work"
@@ -79,15 +80,15 @@ echo "== ring-1 harness policy (harness process) =="
 run_harness 'echo cfg > /home/agent/.pi/agent/x && echo wrote_home_ok' | grep -q 'wrote_home_ok' \
   && ok "harness writes its config home" || bad "harness cannot write config home"
 # nested: a tool-wrapped command under the harness cannot read what the harness wrote
-docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" \
+"$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" \
   'echo topsecret > /home/agent/.pi/agent/t && nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "cat /home/agent/.pi/agent/t 2>&1"' \
   2>&1 | grep -qi 'permission denied' && ok "nested tool denied harness transcript" || bad "nested tool read transcript"
 
 echo "== entrypoint fail-closed =="
-docker run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint validates good policies and execs" || bad "entrypoint rejected valid policies"
 BADDIR="$(mktemp -d)"; printf '{ this is not valid json ' > "$BADDIR/harness.json"; printf '{}' > "$BADDIR/tool.json"
-docker run --rm -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run --rm -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && bad "entrypoint ran with an invalid policy" || ok "entrypoint fails closed on invalid policy"
 rm -rf "$BADDIR"
 

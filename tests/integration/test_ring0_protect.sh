@@ -12,6 +12,7 @@
 # Usage:  bash tests/integration/test_ring0_protect.sh
 # Requires: docker + `glove build pi`. See NOTE in test_pi_nono.sh re: pipefail.
 set -u
+RT="${RT:-docker}"   # docker | podman
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GLOVE_HOME="$(mktemp -d)"; S="$GLOVE_HOME/s"; WORKDIR="$S/work"; mkdir -p "$WORKDIR"
@@ -34,7 +35,7 @@ grep -q '/work/.git/hooks' "$COMPOSE" && ok "compose has the .git/hooks bind" ||
 # also exits non-zero, which would otherwise pass as "denied".
 denied() { echo "$1" | grep -q 'rc=[^0]' && echo "$1" | grep -Eq 'Read-only file system|Permission denied'; }
 run() {  # run $1 inside the rendered harness service, bypassing the TUI
-  docker compose -f "$COMPOSE" run --rm --no-deps -T --entrypoint bash "glove-$ENVID-harness" -c "$1" 2>&1
+  "$RT" compose -f "$COMPOSE" run --rm --no-deps -T --entrypoint bash "glove-$ENVID-harness" -c "$1" 2>&1
 }
 TOOL='nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c'
 
@@ -65,7 +66,7 @@ for who in harness tool; do
 done
 [ -d "$WORKDIR/.git" ] && [ ! -e "$WORKDIR/.git-moved" ] && ok "host: .git intact" || bad "host: .git moved"
 
-docker compose -f "$COMPOSE" down -v >/dev/null 2>&1  # `compose run` created the session networks
+"$RT" compose -f "$COMPOSE" down -v >/dev/null 2>&1  # `compose run` created the session networks
 rm -rf "$WORKDIR" "$GLOVE_HOME" 2>/dev/null || true
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="

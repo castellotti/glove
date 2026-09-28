@@ -7,6 +7,11 @@
 # Usage:  bash tests/integration/test_pi_srt.sh
 # Requires: docker + `glove build pi --enforcer srt`.
 set -u
+RT="${RT:-docker}"   # docker | podman
+if [ "$RT" = podman ]; then
+  echo "SKIP: glove refuses enforcer srt on the podman runtime (its relaxed seccomp profile can't be"
+  echo "      applied through podman's compose provider); srt is docker-only for now."; exit 2
+fi
 
 IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.4.0-srt}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,7 +37,7 @@ hardened=(--rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privilege
           -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
           -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET
           -v "$POLDIR:/etc/glove/enforcer:ro")
-run_tool() { docker run "${hardened[@]}" "$IMAGE" \
+run_tool() { "$RT" run "${hardened[@]}" "$IMAGE" \
   srt -s /etc/glove/enforcer/srt-settings.json -- bash -c "$1" 2>&1; }
 
 echo "== srt tool policy (weak mode, surgical seccomp) =="
@@ -57,7 +62,7 @@ for f in /proc/[0-9]*/environ; do tr '\0' '\n' < "$f" 2>/dev/null; done | grep -
 PROBE
 proc_probe() {  # $1 = settings file, rest = extra docker args
   local settings="$1"; shift
-  docker run --rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privileges:true \
+  "$RT" run --rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privileges:true \
     --cap-drop ALL --user 1000:1000 -w /work "$@" \
     -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent \
     -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET -v "$POLDIR:/etc/glove/enforcer:ro" "$IMAGE" \
@@ -67,17 +72,17 @@ weak_leak="$(proc_probe /etc/glove/enforcer/srt-settings.json)"
 echo "  weak mode: processes whose environ exposes the key = $weak_leak"
 [ "$weak_leak" = "0" ] && ok "weak: harness environ hidden" || bad "weak mode exposes the harness environ on this kernel (use srt.nested: strong)"
 
-docker run "${hardened[@]}" "$IMAGE" bash -lc \
+"$RT" run "${hardened[@]}" "$IMAGE" bash -lc \
   'echo topsecret > /home/agent/.pi/agent/t && srt -s /etc/glove/enforcer/srt-settings.json -- bash -c "cat /home/agent/.pi/agent/t 2>&1; echo rc=\$?"' \
   2>&1 | grep -Eq 'No such file|Permission denied|rc=[^0]' && ok "denyRead hides transcript" || bad "transcript readable"
 
 echo "== research matrix: strong mode needs systempaths=unconfined =="
 sed 's/"enableWeakerNestedSandbox": true/"enableWeakerNestedSandbox": false/' "$POLDIR/srt-settings.json" > "$WORKDIR/strong.json"
-docker run --rm --security-opt seccomp="$SECCOMP" --cap-drop ALL --user 1000:1000 -w /work \
+"$RT" run --rm --security-opt seccomp="$SECCOMP" --cap-drop ALL --user 1000:1000 -w /work \
   -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent "$IMAGE" \
   srt -s /work/strong.json -- bash -c 'echo strong' 2>&1 | grep -qi 'proc' \
   && ok "strong without systempaths fails (bwrap proc)" || bad "strong ran without systempaths"
-docker run --rm --security-opt seccomp="$SECCOMP" --security-opt systempaths=unconfined --cap-drop ALL --user 1000:1000 -w /work \
+"$RT" run --rm --security-opt seccomp="$SECCOMP" --security-opt systempaths=unconfined --cap-drop ALL --user 1000:1000 -w /work \
   -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent "$IMAGE" \
   srt -s /work/strong.json -- bash -c 'echo strong_ok' 2>&1 | grep -q 'strong_ok' \
   && ok "strong with systempaths=unconfined works" || bad "strong failed with systempaths"

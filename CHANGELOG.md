@@ -46,6 +46,10 @@ All notable changes to glove are documented here.
   lib_session.sh`); new `test_session_dir.sh` covers the lifecycle live.
   `test_netgate_m1.sh`/`test_netgate_m2.sh` still use v2 config keys and exit
   with SKIP until they are rewritten for the gate/observe extensions (v3 M5).
+- **Podman:** the session-dir lifecycle and the nono/Vibe/ring-0 integration
+  scripts take `RT=podman` and pass on Podman Desktop (macOS, rootless), also
+  while Docker Desktop runs sessions at the same time. An unsupported
+  runtime/enforcer pair (srt on podman) is now a clean error, not a traceback.
 
 ### Extensions and the `llm` inference slot (v3 M2)
 

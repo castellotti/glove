@@ -8,6 +8,7 @@
 # Usage:  bash tests/integration/test_vibe_nono.sh
 # See NOTE in test_pi_nono.sh about `pipefail` and grep closing pipes.
 set -u
+RT="${RT:-docker}"   # docker | podman
 
 IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.4.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -33,7 +34,7 @@ new_session "$GLOVE_HOME/s" vibe
 POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered" || { bad "no policies"; exit 1; }
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
-run_tool() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \
+run_tool() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \
   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "$1" 2>&1; }
 
 echo "== ring-1 tool policy enforces in the vibe image =="
@@ -47,21 +48,21 @@ run_tool 'env | grep -i -e key -e secret || echo NONE' | grep -q 'NONE' \
 
 echo "== baked vibe-hook rewrites a bash tool call =="
 HOOKIN='{"hook_event_name":"pre_tool","tool_name":"bash","tool_input":{"command":"ls /work"}}'
-out="$(echo "$HOOKIN" | docker run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null)"
+out="$(echo "$HOOKIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null)"
 echo "$out" | grep -q 'nono wrap .* -- bash -c' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
 echo "$out" | grep -q 'tool_input' && ok "hook returns tool_input replacement" || bad "no tool_input in hook output"
 
 echo "== baked vibe-hook denies a web-egress tool =="
 WEBIN='{"hook_event_name":"pre_tool","tool_name":"web_fetch","tool_input":{"url":"http://x"}}'
-echo "$WEBIN" | docker run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null \
+echo "$WEBIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null \
   | grep -q '"deny"' && ok "web_fetch denied" || bad "web_fetch not denied"
 
 echo "== baked vibe-hook fails closed on bad input =="
-echo "not json" | docker run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook >/dev/null 2>&1 \
+echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook >/dev/null 2>&1 \
   && bad "hook exited 0 on bad input" || ok "hook exits non-zero on bad input (strict -> deny)"
 
 echo "== entrypoint validates policies =="
-docker run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
 
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
