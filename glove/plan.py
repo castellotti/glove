@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from .config import Config, ConfigError
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
-from .mounts import Mount, MountPlan, compute_mounts
+from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
 from .network import NetworkPlan, build_network_plan
 from .observe import ObserveSettings, netgate_image
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -54,6 +54,9 @@ class SessionPlan:
     passthrough_env: list[str] = field(default_factory=list)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
+    # Empty files/dirs bound read-only over missing protected paths (set by the
+    # CLI once materialised; placeholders are skipped while it is None).
+    placeholder_host_dir: str | None = None
     # Network observability (glove/observe.py). `observe` is None unless enabled;
     # `net_host_dir` is the session's net/ (set by the CLI once materialised) —
     # bind-mounted into the netgate collector only, never into the harness.
@@ -77,6 +80,10 @@ class SessionPlan:
     @property
     def mounts(self) -> list[Mount]:
         return self.mount_plan.mounts
+
+    @property
+    def protect(self) -> tuple[Protect, ...]:
+        return self.mount_plan.protect
 
     @property
     def allow_root(self) -> bool:
@@ -268,6 +275,9 @@ def build_session_plan(
         [(a.path, a.mode) for a in cfg.add_dirs],
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
+    )
+    mount_plan = replace(
+        mount_plan, protect=protected_paths(mount_plan.mounts, protect_ide_files=cfg.protect_ide_files)
     )
     network = build_network_plan(cfg, session)
 

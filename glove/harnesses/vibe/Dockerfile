@@ -5,7 +5,7 @@ FROM python:3.12-slim
 
 # Ring-1 enforcer: pinned nono binary. Keep in sync with
 # glove/enforcers/nono/version.py (`glove build` / tests warn on drift).
-COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
+COPY --from=ghcr.io/nolabs-ai/nono:0.78.0@sha256:5a213ddc296761a7ad9b6fbcb14ac0e9660f33c23b0b4eb70ea7c933231ca079 /usr/bin/nono /usr/bin/nono
 
 ENV DEBIAN_FRONTEND=noninteractive
 

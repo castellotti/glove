@@ -44,8 +44,53 @@ def test_host_mcp_wiring():
     svc = w.services[0]
     assert f"http://glove-s-{svc.name}:{svc.port}/mcp" == "http://glove-s-browser:8931/mcp"
     pw = next(h for h in w.host_services if h.name == "playwright")
-    assert "@playwright/mcp" in pw.command
     assert "--allowed-hosts glove-s-browser:8931" in pw.command  # pinned to sidecar
+
+
+def test_host_mcp_is_version_pinned():
+    from glove.plugins.browser.host_mcp import PLAYWRIGHT_MCP_VERSION
+
+    cfg = Config(harness="pi", browser={"provider": "host-mcp"})
+    pw = next(h for h in get_provider("host-mcp").wiring(cfg, "s").host_services if h.name == "playwright")
+    assert f"playwright-core@{PLAYWRIGHT_MCP_VERSION} mcp " in pw.command
+    assert "@latest" not in pw.command
+    assert "@playwright/mcp" not in pw.command
+
+
+def test_host_server_uses_path_flag():
+    # run-server has `--path`; `--ws-path` does not exist and the server would
+    # not start. The path is the random ws-path with a leading slash.
+    cfg = Config(harness="pi", browser={"provider": "host-server", "ws_path": "pw-abc"})
+    w = get_provider("host-server").wiring(cfg, "s")
+    pw = next(h for h in w.host_services if h.name == "playwright")
+    assert "--path /pw-abc" in pw.command
+    assert "--ws-path" not in pw.command
+    assert w.env["PLAYWRIGHT_WS_ENDPOINT"].endswith(":3000/pw-abc")
+
+
+@pytest.mark.parametrize("provider", ["host-mcp", "host-server"])
+def test_host_chrome_profile_is_per_session_and_not_kept(provider):
+    cfg = Config(harness="pi", browser={"provider": provider})
+    chrome = next(h for h in get_provider(provider).wiring(cfg, "s").host_services if h.name == "chrome")
+    assert "--user-data-dir={chrome_profile}" in chrome.command  # per-session token (hostsvc)
+    # A kept Chrome would own :9222 and be reused by the next session (profile
+    # and all), so it is stopped on `glove down` unless the operator opts in.
+    assert chrome.keep is False
+    cfg = Config(harness="pi", browser={"provider": provider, "keep_browser": True})
+    chrome = next(h for h in get_provider(provider).wiring(cfg, "s").host_services if h.name == "chrome")
+    assert chrome.keep is True
+
+
+def test_vibe_host_mcp_refused_without_ack():
+    from glove.config import ConfigError
+
+    cfg = Config(harness="vibe", browser={"provider": "host-mcp"})
+    with pytest.raises(ConfigError, match="browser_run_code_unsafe"):
+        get_provider("host-mcp").wiring(cfg, "s")
+    with pytest.raises(ConfigError):
+        apply_browser(Config(harness="vibe", browser={"provider": "host-mcp"}), "s")
+    ok = Config(harness="vibe", browser={"provider": "host-mcp", "i_accept_host_rce": True})
+    assert get_provider("host-mcp").wiring(ok, "s").services
 
 
 def test_host_server_wiring_random_wspath():

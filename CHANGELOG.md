@@ -4,6 +4,51 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### Security (v3 M1 — also applicable to v2)
+
+- **srt no longer leaks the LLM key to tool commands.** The srt settings had no
+  `credentials` section, so `env` in a tool command showed `GLOVE_LLM_API_KEY`.
+  glove now renders `credentials.envVars` with `mode: deny` for the LLM key and
+  every passthrough secret. srt takes exact names only and unsets each one with
+  bwrap `--unsetenv`. Verified live: `env` in a tool command lacks the key. Also
+  verified: a tool command can't read the harness's `/proc/<pid>/environ` in
+  weak mode (the kernel refuses it across the user namespace; the PIDs are
+  still visible) or in strong mode (separate PID namespace), so `srt.nested:
+  strong` is not required for this.
+- **srt `allowUnixSockets` removed.** It was rendered at the top level, where
+  srt silently drops it. In srt it is a macOS-only `network` key and is ignored
+  on Linux anyway, because srt's seccomp filter blocks new AF_UNIX sockets.
+- **Ring-0 read-only binds over files the host later runs or trusts.**
+  `.git/hooks`, `.git/config` and an in-tree `core.hooksPath` in every rw mount
+  are read-only. `.git` is re-bound so renaming it fails with `EBUSY`; without
+  that, `mv .git x && git init` would bypass the binds, which the live test
+  showed. `protect_ide_files: true` does the same for
+  `.vscode`/`.envrc`/`.mcp.json`, using empty placeholders when missing. New
+  `tests/integration/test_ring0_protect.sh` (15 checks, harness and tool
+  commands).
+- **Every socat forwarder is hardened.** Only netgate forwarders had the sidecar
+  hardening set. Plain forwarders now run non-root with `cap_drop: ALL`,
+  `no-new-privileges`, a read-only rootfs and pids/memory limits.
+- **Browser fixes.**
+  - `host-mcp` + Vibe is refused unless `browser.i_accept_host_rce: true`.
+    Vibe gets every MCP tool, including `browser_run_code_unsafe`, which is
+    code execution on the host.
+  - The host MCP is pinned to `playwright-core@1.63.0 mcp` (it was
+    `@playwright/mcp@latest`).
+  - `host-server` passes `--path /<random>`. The `--ws-path` flag doesn't
+    exist, so the server couldn't start.
+  - The host Chrome profile is per session (`<session>/chrome-profile`), and
+    Chrome stops on `glove down` unless `browser.keep_browser: true`. A kept
+    Chrome would own `:9222` and be reused by the next session.
+- **Pins bumped.**
+  - nono 0.75.0 → 0.78.0, pinned by tag and digest in both Dockerfiles. 0.78.0
+    fixes five GHSAs, all in features glove doesn't use (packs, tool-sandbox,
+    proxy L7 path policy). Its removed profile aliases don't affect glove's
+    keys.
+  - srt 0.0.75 → 0.0.77, which adds the resolved-address DNS-rebinding guard.
+- **Hooks aligned.** The Vibe hook wraps commands with `bash -c` (non-login)
+  like Pi's. A login shell sources `/etc/profile`, which nono denies.
+
 ### Development
 
 - **Core/extension import boundary (v3 M0).** New top-level `extensions/`

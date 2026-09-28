@@ -3,7 +3,7 @@
 For users who prefer Anthropic's runtime (parity with Claude Code's sandbox, or
 Pi's own `sandbox` extension). Unlike nono, srt:
 
-- **wraps tool commands only** (`srt -s srt-settings.json -- bash -lc <cmd>`);
+- **wraps tool commands only** (`srt -s srt-settings.json -- bash -c <cmd>`);
   it has no "wrap the whole TUI and run proxies for children" mode, so the
   harness *process* is protected by ring 0 alone (documented in doctor / policy
   show).
@@ -11,13 +11,18 @@ Pi's own `sandbox` extension). Unlike nono, srt:
   relaxed seccomp profile (`nested-userns.json`, selected in `plan._seccomp_for`
   when `enforcer: srt`). `srt.nested: strong` additionally needs
   `systempaths=unconfined` (masked /proc exposed to the container).
-- has **no credential injection** available (its TLS-terminate + filterRequest
-  is experimental), so the LLM key stays in the harness env as in v1.
+- strips secrets from tool commands only by **exact name**: every harness
+  secret env var (`plan.passthrough_env`, always including the LLM key) is
+  rendered as a `credentials.envVars` entry with `mode: deny`, which srt turns
+  into bwrap `--unsetenv`. srt has no glob form, unlike nono's `deny_vars`.
+  srt's credential *masking* (sentinel + proxy-side substitution) exists but
+  requires TLS termination, so glove does not use it; the key stays in the
+  harness env.
 
-Verified against the sandbox-runtime 0.0.75 probe: weak mode enforces under the
-surgical profile (allowWrite honored, everything else read-only, empty
-allowedDomains = no network, denyRead hides the harness home); strong mode needs
-`systempaths=unconfined`.
+Verified against sandbox-runtime 0.0.77: weak mode enforces under the surgical
+profile (allowWrite honored, everything else read-only, empty allowedDomains =
+no network, denyRead hides the harness home, denied env vars absent); strong
+mode needs `systempaths=unconfined`.
 """
 
 from __future__ import annotations
@@ -27,20 +32,21 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from ..harnessconfig import LLM_API_KEY_ENV
 from ..runtimes.base import Check
 from .base import ENFORCER_DIR
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
 
-SRT_VERSION = "0.0.75"
+SRT_VERSION = "0.0.77"
 SRT_PACKAGE = f"@anthropic-ai/sandbox-runtime@{SRT_VERSION}"
 SETTINGS_FILE = "srt-settings.json"
 
 TMP = "/tmp"
 # The harness home bind-mount point. srt's `--ro-bind /` does NOT downgrade a
 # nested docker bind mount, and denying a *subdir* of a bind mount is a no-op —
-# so glove denies the whole home MOUNT POINT (verified against 0.0.75). srt then
+# so glove denies the whole home MOUNT POINT (verified against 0.0.75/0.0.77). srt then
 # binds an empty overlay over it, hiding the harness config/extensions/
 # transcripts from tool commands entirely.
 HARNESS_HOME_MOUNT = "/home/agent"
@@ -52,12 +58,21 @@ def _rw_paths(plan: SessionPlan) -> list[str]:
     return [work, *rw, TMP]
 
 
+def denied_env_vars(plan: SessionPlan) -> list[str]:
+    """Exact env var names srt must unset for tool commands: the LLM key always
+    (it may reach the harness env even when unset in config) plus every secret
+    the harness receives by passthrough."""
+    return list(dict.fromkeys([LLM_API_KEY_ENV, *plan.passthrough_env]))
+
+
 def render_settings(plan: SessionPlan) -> dict:
     """Render the single srt tool-command settings file.
 
-    `deniedDomains` and `denyWrite` are required keys in 0.0.75 (validation
-    error otherwise). `enableWeakerNestedSandbox` follows `srt.nested` — strong
-    mode is signalled by `systempaths_unconfined` on the hardening set.
+    `deniedDomains` and `denyWrite` are required keys (validation error
+    otherwise). `enableWeakerNestedSandbox` follows `srt.nested` — strong mode
+    is signalled by `systempaths_unconfined` on the hardening set. There is no
+    `allowUnixSockets`: in srt it is a macOS-only `network` key, ignored on
+    Linux, where srt's seccomp filter blocks new AF_UNIX sockets anyway.
     """
     weak = not plan.hardening.systempaths_unconfined
     return {
@@ -73,7 +88,7 @@ def render_settings(plan: SessionPlan) -> dict:
         # Tool commands get no network (only the harness browser tool reaches
         # the web). srt network is allow-only, so empty allowedDomains = blocked.
         "network": {"allowedDomains": [], "deniedDomains": []},
-        "allowUnixSockets": [],
+        "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in denied_env_vars(plan)]},
         "enableWeakerNestedSandbox": weak,
     }
 
@@ -111,7 +126,7 @@ class SrtEnforcer:
         """Documented weaknesses vs nono (printed by `glove policy show`)."""
         g = [
             "harness PROCESS is unwrapped (ring-0 only) — srt wraps tool commands only",
-            "LLM key stays in the harness env (no srt credential injection)",
+            "LLM key stays in the harness env (tool commands get it unset by exact name only)",
             "runs under the relaxed nested-userns seccomp (unprivileged userns enabled)",
             "srt cannot restrict a nested docker bind mount via allowWrite; the "
             "harness home is denied by denying its mount point (verified)",

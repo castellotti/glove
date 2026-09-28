@@ -50,11 +50,11 @@ Docker Desktop macOS blast-radius explanation.
 | Runtime | docker | hardened + doctor probes |
 | Runtime | podman | hardened + doctor probes; validated rootless (podman 6, libkrun, Vibe/nono, Landlock ABI 9) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
-| Enforcer | nono (Landlock) - default | Pi wired + verified (16-check integration) |
-| Enforcer | srt (bubblewrap) - opt-in | Pi wired + verified (7-check integration); tool commands only |
+| Enforcer | nono (Landlock) - default | nono 0.78.0; Pi wired + verified (16-check integration) |
+| Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
 | Enforcer | none (ring 0 only) | debug |
-| Browser | host-mcp - v2 default | implemented + live nav verified - see [docs/pi-remote-llm.md](docs/pi-remote-llm.md) |
-| Browser | host-server | implemented (ws-path + version-pin; needs playwright in image) |
+| Browser | host-mcp - v2 default | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true` - see [docs/pi-remote-llm.md](docs/pi-remote-llm.md) |
+| Browser | host-server | implemented (`--path` + version-pin; needs playwright in image); host-side start **untested** |
 | Browser | sidecar-desktop / vm-desktop | spec only (not implemented) |
 
 Giving a harness web access needs Node/npx and a Chromium-family browser on the
@@ -103,6 +103,8 @@ net: [service]              # none | service | internet | lan | docker:<name>
 plugins: [media, browser]   # opt-in capabilities (off by default); also `--with a,b`
 plugin_options:             # per-plugin config
   browser: { provider: host-mcp, port: 8931 }   # host-mcp | host-server | none
+  #   keep_browser: true      leave the (per-session) host Chrome running after `glove down`
+  #   i_accept_host_rce: true allow vibe + host-mcp (Vibe gets browser_run_code_unsafe)
 services:                   # forwarder allow-list (the only routable hosts)
   - { name: llm, to: host.docker.internal:8899, port: 8080 }
 model: your-model-id       # must match the endpoint's /v1/models
@@ -111,7 +113,13 @@ tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
 observe: { enabled: true }  # network observability (off by default) — see below
+protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 ```
+
+`.git/hooks` and `.git/config` in every rw mount are always bound read-only (and
+`.git` is pinned so it can't be renamed away): an agent must not plant a hook your
+Mac runs the next time you use git. See "Planted host-trusted files" in
+[docs/SECURITY.md](docs/SECURITY.md).
 
 Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
 
@@ -329,7 +337,8 @@ uv run lint-imports                        # core (glove/) must not import exten
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
-bash tests/integration/test_pi_srt.sh     # srt  / Pi  (7 checks)
+bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
+bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 ```
 
 glove is being restructured (v3) into a minimal core in `glove/` plus in-tree

@@ -25,10 +25,40 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 |---|---|---|---|
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
-| LLM API key | shell cmd (`env`, reading config) | ring 1 | nono `deny_vars` / srt env masking strip secrets from wrapped commands; key never in a tool's env. (Full proxy credential-injection so the key isn't in the *harness* env either is deferred) |
+| LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
+| Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
+| Other sessions' browser state | the host browser | host services | the host Chrome profile is per session (`<session>/chrome-profile`), and Chrome stops on `glove down` unless `browser.keep_browser: true` |
+
+## Planted host-trusted files (ring 0)
+
+`/work` is writable, and some files in it are later *executed or trusted by the
+host*: git runs `.git/hooks/*` and honours `.git/config` (`core.hooksPath`,
+`core.fsmonitor`, filter drivers …) the next time you run git on your Mac, and
+IDEs and direnv act on `.vscode/`, `.envrc` and `.mcp.json`. An agent that
+plants one gets code execution **outside** the sandbox. Landlock cannot express
+"writable directory except these children", so glove adds nested read-only
+binds after each rw mount (`glove/mounts.py:protected_paths`):
+
+- **Always, at the root of every rw mount that is a git repo:** `.git/hooks`
+  and `.git/config` are read-only, and so is an in-tree `core.hooksPath`
+  directory. `.git` itself is re-bound (read-write) so that it is a mount
+  point. Renaming or deleting it fails with `EBUSY`, which stops the agent from
+  swapping in a fresh `.git` with its own hooks. Commits, branches and fetches
+  still work.
+- **With `protect_ide_files: true`:** `.vscode/`, `.envrc` and `.mcp.json` are
+  read-only. When one is missing, glove binds an empty placeholder over it,
+  which creates an empty file or directory in your repo. That side effect is
+  why this setting is opt-in.
+- Bind sources are resolved with realpath and must stay inside the mount, so a
+  symlink can't expose another host path.
+
+**Residual gaps:** paths that don't exist at start (for example `git init`
+run inside a directory with no repo yet), nested repositories and submodules
+(`.git/modules/*`), and `.git` files (worktrees) are not covered.
+`tests/integration/test_ring0_protect.sh` checks this live.
 
 ## Network observability (the netgate)
 
@@ -148,6 +178,12 @@ Be precise about what "container root" means here:
   srt: srt requires relaxing the seccomp profile to allow unprivileged user
   namespaces (a historical source of kernel LPE bugs) and wraps tool commands
   only, leaving the harness process on ring 0 alone.
+- **Browser `host-mcp` with Vibe is refused by default.** Playwright's MCP always
+  exposes `browser_run_code_unsafe`, which runs arbitrary JavaScript in the MCP
+  process, and in `host-mcp` that process is on your Mac. Pi allowlists its
+  browser tools. Vibe cannot filter MCP tools, so `vibe` + `host-mcp` needs
+  `browser: {i_accept_host_rce: true}`. The host MCP is pinned
+  (`playwright-core@1.63.0 mcp`), not `@latest`.
 
 ## What glove does NOT defend against
 

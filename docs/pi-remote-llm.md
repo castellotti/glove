@@ -127,7 +127,7 @@ Three ways to satisfy it:
    host_services:
      - name: playwright
        command: >-
-         npx @playwright/mcp@latest --host 127.0.0.1 --port 8931
+         npx -y playwright-core@1.63.0 mcp --host 127.0.0.1 --port 8931
          --allowed-hosts glove-{session}-browser:8931 --shared-browser-context
          --output-dir {media_dir}
          --executable-path "$(ls -d ~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/*.app/Contents/MacOS/* 2>/dev/null | grep -i 'for Testing' | sort -V | tail -1)"

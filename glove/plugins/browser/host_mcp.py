@@ -14,8 +14,8 @@ from __future__ import annotations
 import shutil
 from typing import TYPE_CHECKING
 
-from ...config import HostService, Service
-from .base import BrowserWiring, headed_chrome_service
+from ...config import ConfigError, HostService, Service
+from .base import BrowserWiring, headed_chrome_service, keep_browser
 from .chrome import discover_chrome
 
 if TYPE_CHECKING:
@@ -23,6 +23,13 @@ if TYPE_CHECKING:
     from ...runtimes.base import Check
 
 DEFAULT_PORT = 8931
+# The Playwright MCP ships inside playwright-core since v1.62 (`playwright-core
+# mcp`), so one pinned package fixes the MCP, driver and browser build together
+# (it was `@playwright/mcp@latest`, which drifted under every session).
+PLAYWRIGHT_MCP_VERSION = "1.63.0"
+PLAYWRIGHT_MCP = f"playwright-core@{PLAYWRIGHT_MCP_VERSION}"
+# Opt-in acknowledgement for Vibe (below).
+ACCEPT_HOST_RCE = "i_accept_host_rce"
 
 
 class HostMcpProvider:
@@ -32,13 +39,14 @@ class HostMcpProvider:
         return int((cfg.browser or {}).get("port") or DEFAULT_PORT)
 
     def wiring(self, cfg: Config, session: str) -> BrowserWiring:
+        _refuse_vibe_without_ack(cfg)
         port = self._port(cfg)
         sidecar = f"glove-{session}-browser"
         browser = Service(name="browser", to=f"host.docker.internal:{port}", port=port)
         playwright = HostService(
             name="playwright",
             command=(
-                f"npx @playwright/mcp@latest --host 127.0.0.1 --port {port} "
+                f"npx -y {PLAYWRIGHT_MCP} mcp --host 127.0.0.1 --port {port} "
                 f"--allowed-hosts {sidecar}:{port} "
                 "--cdp-endpoint http://127.0.0.1:9222 --shared-browser-context "
                 "--output-dir {media_dir}"
@@ -56,7 +64,7 @@ class HostMcpProvider:
         # endpoint string has a single construction site.
         return BrowserWiring(
             services=[browser],
-            host_services=[headed_chrome_service(), playwright],
+            host_services=[headed_chrome_service(keep=keep_browser(cfg)), playwright],
             context_note=note,
         )
 
@@ -68,16 +76,31 @@ class HostMcpProvider:
             p = shutil.which(tool)
             checks.append(Check(
                 f"browser host-mcp: {tool}", "ok" if p else "warn",
-                p or "absent — needed for @playwright/mcp",
+                p or f"absent — needed for {PLAYWRIGHT_MCP} mcp",
             ))
         checks.append(_browser_backend_check())
         return checks
 
 
+def _refuse_vibe_without_ack(cfg: Config) -> None:
+    """Vibe gets *every* MCP tool, and Playwright's `browser_run_code_unsafe`
+    is a `core` tool (always exposed, no server-side switch) that runs arbitrary
+    JavaScript in the MCP process — here, a process on the operator's host. A
+    prompt injection could therefore run code on the host. Pi is safe (its
+    extension allowlists tools). Refuse Vibe + host-mcp unless acknowledged."""
+    if cfg.harness == "vibe" and not (cfg.browser or {}).get(ACCEPT_HOST_RCE):
+        raise ConfigError(
+            "browser provider 'host-mcp' with harness 'vibe' exposes Playwright's "
+            "`browser_run_code_unsafe` tool, which runs arbitrary code ON YOUR HOST "
+            "(Vibe cannot filter MCP tools). Use Pi, or set "
+            f"`browser: {{{ACCEPT_HOST_RCE}: true}}` to accept that risk."
+        )
+
+
 def _browser_backend_check():
     """One check line for the browser backend, with actionable guidance.
 
-    ``@playwright/mcp``'s ``--browser`` only accepts channels
+    The Playwright MCP's ``--browser`` only accepts channels
     (chrome/msedge/firefox/webkit) and defaults to the ``chrome`` channel = a
     system Google Chrome. When that is absent, the friction-free path is to point
     ``--executable-path`` at Playwright's own Chrome for Testing; surface it.

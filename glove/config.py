@@ -115,6 +115,9 @@ class Config:
     plugin_options: dict[str, Any] = field(default_factory=dict)
     allow_root: bool = False
     allow_sensitive: bool = False  # permit mounting / or $HOME
+    # Ring-0 ro binds over .vscode/.envrc/.mcp.json in rw mounts; a missing one
+    # gets an empty placeholder (creates it on the host), hence opt-in.
+    protect_ide_files: bool = False
     rebuild: bool = False
     services: list[Service] = field(default_factory=list)
     harness_config: dict[str, Any] = field(default_factory=dict)

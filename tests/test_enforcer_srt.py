@@ -1,6 +1,6 @@
 """srt enforcer tests — settings renderer, wrapping, image suffix.
 
-Golden settings verified against sandbox-runtime 0.0.75 (see
+Golden settings verified against sandbox-runtime 0.0.77 (see
 tests/integration/test_pi_srt.sh, which reproduces the nested-sandbox matrix).
 """
 
@@ -38,8 +38,29 @@ def test_weak_mode_default(tmp_path):
     # a no-op under srt) — both read and write.
     assert fs["denyRead"] == ["/home/agent"]
     assert fs["denyWrite"] == ["/home/agent"]
-    assert "deniedDomains" in settings["network"]  # required key (0.0.75)
+    assert "deniedDomains" in settings["network"]  # required key
     assert settings["network"]["allowedDomains"] == []  # tools get no network
+
+
+def test_llm_key_denied_to_tool_commands(tmp_path):
+    # srt has no glob form: every harness secret is unset by exact name, and
+    # the LLM key is always on the list even when no key is configured.
+    assert render_settings(_plan(tmp_path))["credentials"]["envVars"] == [
+        {"name": "GLOVE_LLM_API_KEY", "mode": "deny"},
+    ]
+    plan = _plan(tmp_path, llm_api_key="env:SOME_VAR")
+    plan.passthrough_env = [*plan.passthrough_env, "OTHER_SECRET"]
+    names = [v["name"] for v in render_settings(plan)["credentials"]["envVars"]]
+    assert names == ["GLOVE_LLM_API_KEY", "OTHER_SECRET"]
+    assert {v["mode"] for v in render_settings(plan)["credentials"]["envVars"]} == {"deny"}
+
+
+def test_no_top_level_allow_unix_sockets(tmp_path):
+    # srt's root schema is not strict, so a misplaced key is silently dropped;
+    # allowUnixSockets is a macOS-only network key and must not be rendered.
+    settings = render_settings(_plan(tmp_path))
+    assert "allowUnixSockets" not in settings
+    assert "allowUnixSockets" not in settings["network"]
 
 
 def test_strong_mode_from_options(tmp_path):

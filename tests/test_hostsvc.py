@@ -41,7 +41,10 @@ def test_media_dir_never_inside_project(tmp_path):
 def test_expand_chrome_profile_and_home(tmp_path):
     cfg, _ = _cfg(tmp_path)
     out = _expand("chrome --user-data-dir={chrome_profile}", cfg, "vibe-local")
-    assert out.endswith(os.path.join(os.path.expanduser("~"), ".glove", "chrome-profile"))
+    # per session: never one profile shared (cookies, logins) across sessions
+    assert out.endswith(os.path.join(os.path.expanduser("~"), ".glove", "chrome-profile", "vibe-local"))
+    out = _expand("--user-data-dir={chrome_profile}", cfg, "s", tmp_path / "sess")
+    assert out == f"--user-data-dir={tmp_path / 'sess' / 'chrome-profile'}"
 
 
 def test_host_services_coerced_from_file(tmp_path):

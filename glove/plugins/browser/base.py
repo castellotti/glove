@@ -47,14 +47,21 @@ class BrowserProvider(Protocol):
 
 # Shared host helper: a headed Chrome on the host with remote debugging, so both
 # host-mcp (CDP) and host-server (connectOverCDP) can attach to the same browser
-# the operator watches. keep=true leaves it running across `glove down`.
+# the operator watches. Its profile ({chrome_profile}) is per session, so
+# sessions never share cookies or logins. It is stopped on `glove down` unless
+# `browser.keep_browser: true`: a kept Chrome still owns :9222, and the next
+# session's host-service start would reuse it — profile and all.
 #
 # The binary is discovered on the host at wiring time (system Google Chrome, then
 # Playwright's Chrome for Testing) rather than hardcoded, so this works on Linux
 # and on a macOS host with only Chrome for Testing — the very setup `glove doctor`
 # recommends. Falls back to the macOS system path only so the command is still
 # well-formed when nothing is found (doctor will have warned).
-def headed_chrome_service() -> HostService:
+def keep_browser(cfg: Config) -> bool:
+    return bool((cfg.browser or {}).get("keep_browser", False))
+
+
+def headed_chrome_service(keep: bool = False) -> HostService:
     chrome = chrome_executable() or DEFAULT_CHROME
     return HostService(
         name="chrome",
@@ -64,5 +71,5 @@ def headed_chrome_service() -> HostService:
             "--no-first-run --no-default-browser-check"
         ),
         ready_port=9222,
-        keep=True,
+        keep=keep,
     )

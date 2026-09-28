@@ -2,7 +2,8 @@
 # Session: {{ session }}   Harness: {{ harness.name }}
 name: glove-{{ session }}
 {% macro gate_hardening() %}
-    # gate hardening: non-root, no caps, no privilege gain, read-only rootfs.
+    # sidecar hardening (every forwarder, gate and collector): non-root, no caps,
+    # no privilege gain, read-only rootfs, pids/memory limits.
     # Never NET_ADMIN, never the harness's network/PID namespace, never its home.
     user: "{{ uid }}:{{ gid }}"
 {% if userns_mode %}
@@ -96,6 +97,19 @@ services:
         read_only: true
 {% endif %}
 {% endfor %}
+{% for p in protect %}
+{% if p.host_path or placeholder_host_dir %}
+      # ring 0: {{ "read-only over a path the host later runs or trusts" if p.read_only
+      else "re-bound so it is a mount point and cannot be renamed away" }}
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.name) | tojson }}
+        target: {{ p.container_path | tojson }}
+{% if p.read_only %}
+        read_only: true
+{% endif %}
+{% endif %}
+{% endfor %}
 {% for t in hardening.tmpfs %}
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under /home/agent overlays the bind. mode is forced
@@ -164,6 +178,7 @@ services:
     image: {{ forwarder_image }}
     command: {{ s.command | tojson }}
     restart: unless-stopped
+{{ gate_hardening() }}
     networks:
 {% if s.harness %}
       - glove-{{ session }}-net

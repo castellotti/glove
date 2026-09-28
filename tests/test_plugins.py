@@ -307,7 +307,9 @@ def test_browser_legacy_block_enables_plugin_and_wires(tmp_path):
 def test_browser_via_plugins_list_defaults_host_mcp(tmp_path):
     from glove.plan import build_session_plan
 
-    cfg = Config(harness="vibe", workdir=_work(tmp_path), name="s", plugins=["browser"])
+    # (Vibe + host-mcp needs an explicit host-RCE acknowledgement; test_browsers.)
+    cfg = Config(harness="vibe", workdir=_work(tmp_path), name="s", plugins=["browser"],
+                 plugin_options={"browser": {"i_accept_host_rce": True}})
     plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
     # No provider given → defaults to host-mcp, which wires the browser service.
     assert cfg.browser.get("provider") == "host-mcp"

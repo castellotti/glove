@@ -29,6 +29,10 @@ PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.pi/agent"
 hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
           --read-only --tmpfs /tmp -w /work
+          # nono's state roots on tmpfs, exactly as glove renders them
+          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
+          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
+          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777
           -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
           -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
 
@@ -44,8 +48,8 @@ POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered to $POLDIR" || { bad "no policies rendered"; exit 1; }
 
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
-TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc)
-HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -lc)
+TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c)
+HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -c)
 
 run_tool()    { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
 run_harness() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" "$1" 2>&1; }
@@ -77,7 +81,7 @@ run_harness 'echo cfg > /home/agent/.pi/agent/x && echo wrote_home_ok' | grep -q
   && ok "harness writes its config home" || bad "harness cannot write config home"
 # nested: a tool-wrapped command under the harness cannot read what the harness wrote
 docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" \
-  'echo topsecret > /home/agent/.pi/agent/t && nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc "cat /home/agent/.pi/agent/t 2>&1"' \
+  'echo topsecret > /home/agent/.pi/agent/t && nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "cat /home/agent/.pi/agent/t 2>&1"' \
   2>&1 | grep -qi 'permission denied' && ok "nested tool denied harness transcript" || bad "nested tool read transcript"
 
 echo "== entrypoint fail-closed =="

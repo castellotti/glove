@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from glove.mounts import MountError, compute_mounts
+from glove.mounts import MountError, compute_mounts, protected_paths
 
 
 def _by_container(plan):
@@ -112,3 +112,72 @@ def test_allow_sensitive_permits_home():
     home = os.path.expanduser("~")
     plan = compute_mounts(home, allow_sensitive=True)
     assert plan.mounts[0].container_path == "/work"
+
+
+# --- ring-0 protected paths (v3 §6.3) ---------------------------------------
+
+
+def _repo(tmp_path, name="proj"):
+    work = tmp_path / name
+    (work / ".git" / "hooks").mkdir(parents=True)
+    (work / ".git" / "config").write_text("[core]\n\tbare = false\n")
+    return work
+
+
+def test_git_hooks_and_config_protected(tmp_path):
+    work = _repo(tmp_path)
+    plan = compute_mounts(str(work))
+    got = [(p.container_path, p.kind, p.read_only) for p in protected_paths(plan.mounts)]
+    # .git itself first (rw, only to pin it as a mount point), then the ro binds inside it
+    assert got == [
+        ("/work/.git", "dir", False),
+        ("/work/.git/hooks", "dir", True),
+        ("/work/.git/config", "file", True),
+    ]
+    assert all(p.host_path for p in protected_paths(plan.mounts))
+
+
+def test_nothing_protected_without_git(tmp_path):
+    work = tmp_path / "plain"
+    work.mkdir()
+    assert protected_paths(compute_mounts(str(work)).mounts) == ()
+
+
+def test_rw_add_dir_repo_protected_ro_not(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    rw = _repo(tmp_path, "rwlib")
+    ro = _repo(tmp_path, "rolib")
+    plan = compute_mounts(str(work), [(str(rw), "rw"), (str(ro), "ro")])
+    paths = {p.container_path for p in protected_paths(plan.mounts)}
+    assert paths == {"/mnt/rwlib/.git", "/mnt/rwlib/.git/hooks", "/mnt/rwlib/.git/config"}
+
+
+def test_symlink_escaping_the_mount_is_not_bound(tmp_path):
+    work = tmp_path / "w"
+    (work / ".git").mkdir(parents=True)
+    outside = tmp_path / "outside-hooks"
+    outside.mkdir()
+    (work / ".git" / "hooks").symlink_to(outside)
+    paths = {p.container_path for p in protected_paths(compute_mounts(str(work)).mounts)}
+    assert "/work/.git/hooks" not in paths
+    assert all(str(outside) != p.host_path for p in protected_paths(compute_mounts(str(work)).mounts))
+
+
+def test_in_tree_hooks_path_protected(tmp_path):
+    work = _repo(tmp_path)
+    (work / ".githooks").mkdir()
+    (work / ".git" / "config").write_text("[core]\n\thooksPath = .githooks\n")
+    paths = {p.container_path for p in protected_paths(compute_mounts(str(work)).mounts)}
+    assert "/work/.githooks" in paths
+
+
+def test_ide_files_opt_in_with_placeholders(tmp_path):
+    work = _repo(tmp_path)
+    (work / ".envrc").write_text("export X=1\n")
+    mounts = compute_mounts(str(work)).mounts
+    assert not any(p.container_path.endswith(".envrc") for p in protected_paths(mounts))
+    got = {p.container_path: p for p in protected_paths(mounts, protect_ide_files=True)}
+    assert got["/work/.envrc"].host_path == os.path.realpath(work / ".envrc")  # exists → real file
+    assert got["/work/.vscode"].host_path is None and got["/work/.vscode"].kind == "dir"
+    assert got["/work/.mcp.json"].host_path is None and got["/work/.mcp.json"].kind == "file"

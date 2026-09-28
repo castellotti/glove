@@ -36,7 +36,7 @@ hardened=(--rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privilege
           -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET
           -v "$POLDIR:/etc/glove/enforcer:ro")
 run_tool() { docker run "${hardened[@]}" "$IMAGE" \
-  srt -s /etc/glove/enforcer/srt-settings.json -- bash -lc "$1" 2>&1; }
+  srt -s /etc/glove/enforcer/srt-settings.json -- bash -c "$1" 2>&1; }
 
 echo "== srt tool policy (weak mode, surgical seccomp) =="
 run_tool 'echo hi > /work/f && cat /work/f' | grep -q '^hi$' && ok "write /work" || bad "write /work"
@@ -45,21 +45,50 @@ run_tool 'echo x > /home/agent/.pi/agent/pwn 2>&1; echo rc=$?' | grep -q 'rc=[^0
 run_tool 'curl -sS -m 5 https://example.com >/dev/null 2>&1; echo rc=$?' | grep -q 'rc=[^0]' \
   && ok "network blocked (empty allowedDomains)" || bad "network not blocked"
 
-echo "== srt denyRead hides the harness home =="
+echo "== srt strips the LLM key from tool commands (credentials.envVars deny) =="
+grep -q '"GLOVE_LLM_API_KEY"' "$POLDIR/srt-settings.json" && ok "settings deny GLOVE_LLM_API_KEY" || bad "key not in credentials.envVars"
+out="$(run_tool 'env')"
+echo "$out" | grep -q 'HOME=/home/agent' || bad "env did not run: $out"
+echo "$out" | grep -q 'INTEGRATION-SECRET' && bad "tool command sees the LLM key in env" || ok "tool command env lacks the LLM key"
+
+echo "== harness /proc/<pid>/environ from a tool command =="
+# A long-lived process holding the key stands in for the harness (same uid,
+# same container /proc) — the question is whether srt's /proc hides it.
+cat > "$WORKDIR/environ-probe.sh" <<'PROBE'
+# count processes whose /proc/<pid>/environ holds the key (ours is unset)
+for f in /proc/[0-9]*/environ; do tr '\0' '\n' < "$f" 2>/dev/null; done | grep -c INTEGRATION-SECRET
+PROBE
+proc_probe() {  # $1 = settings file, rest = extra docker args
+  local settings="$1"; shift
+  docker run --rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privileges:true \
+    --cap-drop ALL --user 1000:1000 -w /work "$@" \
+    -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent \
+    -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET -v "$POLDIR:/etc/glove/enforcer:ro" "$IMAGE" \
+    bash -c "sleep 30 & sleep 0.5; srt -s $settings -- bash /work/environ-probe.sh" 2>&1 | tail -1
+}
+weak_leak="$(proc_probe /etc/glove/enforcer/srt-settings.json)"
+echo "  weak mode: processes whose environ exposes the key = $weak_leak"
+[ "$weak_leak" = "0" ] && ok "weak: harness environ hidden" || bad "weak mode exposes the harness environ on this kernel (use srt.nested: strong)"
+
 docker run "${hardened[@]}" "$IMAGE" bash -lc \
-  'echo topsecret > /home/agent/.pi/agent/t && srt -s /etc/glove/enforcer/srt-settings.json -- bash -lc "cat /home/agent/.pi/agent/t 2>&1; echo rc=\$?"' \
+  'echo topsecret > /home/agent/.pi/agent/t && srt -s /etc/glove/enforcer/srt-settings.json -- bash -c "cat /home/agent/.pi/agent/t 2>&1; echo rc=\$?"' \
   2>&1 | grep -Eq 'No such file|Permission denied|rc=[^0]' && ok "denyRead hides transcript" || bad "transcript readable"
 
 echo "== research matrix: strong mode needs systempaths=unconfined =="
 sed 's/"enableWeakerNestedSandbox": true/"enableWeakerNestedSandbox": false/' "$POLDIR/srt-settings.json" > "$WORKDIR/strong.json"
 docker run --rm --security-opt seccomp="$SECCOMP" --cap-drop ALL --user 1000:1000 -w /work \
   -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent "$IMAGE" \
-  srt -s /work/strong.json -- bash -lc 'echo strong' 2>&1 | grep -qi 'proc' \
+  srt -s /work/strong.json -- bash -c 'echo strong' 2>&1 | grep -qi 'proc' \
   && ok "strong without systempaths fails (bwrap proc)" || bad "strong ran without systempaths"
 docker run --rm --security-opt seccomp="$SECCOMP" --security-opt systempaths=unconfined --cap-drop ALL --user 1000:1000 -w /work \
   -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent "$IMAGE" \
-  srt -s /work/strong.json -- bash -lc 'echo strong_ok' 2>&1 | grep -q 'strong_ok' \
+  srt -s /work/strong.json -- bash -c 'echo strong_ok' 2>&1 | grep -q 'strong_ok' \
   && ok "strong with systempaths=unconfined works" || bad "strong failed with systempaths"
+
+echo "== strong mode hides the harness /proc/<pid>/environ =="
+strong_leak="$(proc_probe /work/strong.json --security-opt systempaths=unconfined)"
+echo "  strong mode: processes whose environ exposes the key = $strong_leak"
+[ "$strong_leak" = "0" ] && ok "strong: harness environ hidden (PID namespace)" || bad "strong mode exposes harness environ"
 
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo

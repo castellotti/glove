@@ -16,6 +16,13 @@
     "allowedDomains": [],
     "deniedDomains": []
   },
-  "allowUnixSockets": [],
+  "credentials": {
+    "envVars": [
+      {
+        "name": "GLOVE_LLM_API_KEY",
+        "mode": "deny"
+      }
+    ]
+  },
   "enableWeakerNestedSandbox": true
 }

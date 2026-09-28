@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from glove.config import AddDir, Config
 from glove.enforcers import get_enforcer
 from glove.enforcers.base import ENFORCER_DIR
@@ -107,12 +109,14 @@ def test_wrap_and_wrapper_argv(tmp_path):
     assert f"{ENFORCER_DIR}/tool.json" in wrapper
 
 
-def test_nono_pin_matches_dockerfile():
-    # The Pi image's `COPY --from` tag must match the pinned nono version, so a
-    # bump in one place cannot silently diverge.
+@pytest.mark.parametrize("harness", ["pi", "vibe"])
+def test_nono_pin_matches_dockerfile(harness):
+    # Each harness image's `COPY --from` must be the pinned tag@digest, so a
+    # bump in one place cannot silently diverge (and a re-tag is caught).
     from glove.enforcers.nono.version import nono_image_ref
 
-    dockerfile = (Path(__file__).parent.parent / "glove/harnesses/pi/Dockerfile").read_text()
+    assert "@sha256:" in nono_image_ref()
+    dockerfile = (Path(__file__).parent.parent / f"glove/harnesses/{harness}/Dockerfile").read_text()
     assert f"COPY --from={nono_image_ref()} " in dockerfile
 
 

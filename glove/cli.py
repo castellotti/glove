@@ -353,6 +353,10 @@ def run(
             for fname, content in plan.policies.items():
                 (enforcer_dir / fname).write_text(content)
             plan.policies_host_dir = str(enforcer_dir)
+        if any(p.host_path is None for p in plan.protect):
+            from .mounts import write_placeholders
+
+            plan.placeholder_host_dir = str(write_placeholders(sdir / "placeholders", plan.protect))
         # Network observability: net/ is a sibling of home/, bind-mounted into
         # the netgate collector only. The render refuses any harness mount that
         # overlaps it (validate_net_isolation).

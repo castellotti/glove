@@ -1,6 +1,6 @@
 """`host-server` browser provider — Playwright server on the host.
 
-``npx playwright run-server --host 127.0.0.1 --port <port> --ws-path <random>``
+``npx playwright run-server --host 127.0.0.1 --port <port> --path /<random>``
 runs on the host; a forwarder bridges ``glove-<session>-browser:<port>`` → the
 host. The agent's own code connects with
 ``chromium.connect("ws://glove-<session>-browser:<port>/<ws-path>")`` (endpoint
@@ -19,7 +19,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from ...config import HostService, Service
-from .base import BrowserWiring, headed_chrome_service
+from .base import BrowserWiring, headed_chrome_service, keep_browser
 
 if TYPE_CHECKING:
     from ...config import Config
@@ -51,7 +51,7 @@ class HostServerProvider:
             name="playwright",
             command=(
                 f"npx playwright@{PLAYWRIGHT_VERSION} run-server "
-                f"--host 127.0.0.1 --port {port} --ws-path {ws_path}"
+                f"--host 127.0.0.1 --port {port} --path /{ws_path}"
             ),
             ready_port=port,
         )
@@ -63,7 +63,7 @@ class HostServerProvider:
         )
         return BrowserWiring(
             services=[browser],
-            host_services=[headed_chrome_service(), server],
+            host_services=[headed_chrome_service(keep=keep_browser(cfg)), server],
             env={"PLAYWRIGHT_WS_ENDPOINT": endpoint},
             context_note=note,
         )

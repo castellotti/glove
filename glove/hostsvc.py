@@ -53,7 +53,13 @@ def _tokens(
             if session_dir is not None
             else Path.home() / ".glove" / "media" / session
         ),
-        "chrome_profile": str(Path.home() / ".glove" / "chrome-profile"),
+        # Per session, beside media_dir: a shared profile would link sessions
+        # through cookies and logins.
+        "chrome_profile": str(
+            (session_dir / "chrome-profile")
+            if session_dir is not None
+            else Path.home() / ".glove" / "chrome-profile" / session
+        ),
         "home": str(Path.home()),
     }
 

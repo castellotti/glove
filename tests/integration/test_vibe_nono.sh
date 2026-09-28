@@ -17,7 +17,11 @@ PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.vibe"
 
 hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
-          --read-only --tmpfs /tmp -w /work -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
+          --read-only --tmpfs /tmp -w /work
+          # nono's state roots on tmpfs, exactly as glove renders them
+          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
+          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
+          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777 -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
           -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
 
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -31,7 +35,7 @@ POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered" || { bad "no policies"; exit 1; }
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
 run_tool() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \
-  nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc "$1" 2>&1; }
+  nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "$1" 2>&1; }
 
 echo "== ring-1 tool policy enforces in the vibe image =="
 run_tool 'echo hi > /work/f && cat /work/f' | grep -q '^hi$' && ok "write /work" || bad "write /work"
@@ -45,7 +49,7 @@ run_tool 'env | grep -i -e key -e secret || echo NONE' | grep -q 'NONE' \
 echo "== baked vibe-hook rewrites a bash tool call =="
 HOOKIN='{"hook_event_name":"pre_tool","tool_name":"bash","tool_input":{"command":"ls /work"}}'
 out="$(echo "$HOOKIN" | docker run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null)"
-echo "$out" | grep -q 'nono wrap .* -- bash -lc' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
+echo "$out" | grep -q 'nono wrap .* -- bash -c' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
 echo "$out" | grep -q 'tool_input' && ok "hook returns tool_input replacement" || bad "no tool_input in hook output"
 
 echo "== baked vibe-hook denies a web-egress tool =="

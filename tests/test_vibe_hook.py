@@ -30,7 +30,7 @@ def test_bash_command_rewritten():
     payload = {"tool_name": "bash", "tool_input": {"command": "ls /work", "timeout": 30}}
     out = hook.process(payload, WRAP)
     ti = out["hook_specific_output"]["tool_input"]
-    assert ti["command"] == "nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc 'ls /work'"
+    assert ti["command"] == "nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c 'ls /work'"
     assert ti["timeout"] == 30  # other fields preserved (full replacement)
 
 
@@ -38,7 +38,7 @@ def test_single_quotes_escaped():
     payload = {"tool_name": "bash", "tool_input": {"command": "echo 'hi there'"}}
     ti = hook.process(payload, WRAP)["hook_specific_output"]["tool_input"]
     # the inner single quote is escaped so the whole command survives as one arg
-    assert ti["command"].endswith("bash -lc 'echo '\\''hi there'\\'''")
+    assert ti["command"].endswith("bash -c 'echo '\\''hi there'\\'''")
 
 
 def test_missing_wrapper_denies_bash():

@@ -57,6 +57,44 @@ def test_harness_hardening_present(tmp_path):
     assert h["networks"] == ["glove-vibe-local-net"]
 
 
+def test_every_forwarder_is_hardened(tmp_path):
+    # Plain socat forwarders get the same sidecar hardening set as the gates.
+    cfg, work = _session_cfg(tmp_path)
+    result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
+    doc = yaml.safe_load(result.compose_yaml)
+    forwarders = {k: v for k, v in doc["services"].items() if not k.endswith("-harness")}
+    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "search", "browser")}
+    for name, svc in forwarders.items():
+        assert svc["user"] == "501:20", name
+        assert svc["cap_drop"] == ["ALL"], name
+        assert "no-new-privileges:true" in svc["security_opt"], name
+        assert svc["read_only"] is True, name
+        assert svc["pids_limit"] and svc["mem_limit"], name
+        assert "cap_add" not in svc and "privileged" not in svc, name
+
+
+def test_protected_binds_render_read_only_after_work(tmp_path):
+    cfg, work = _session_cfg(tmp_path)
+    (work / ".git" / "hooks").mkdir(parents=True)
+    (work / ".git" / "config").write_text("")
+    cfg.protect_ide_files = True
+    from glove.plan import build_session_plan
+    from glove.runtimes import get_runtime
+
+    plan = build_session_plan(cfg, env_id="e", home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)
+    plan.placeholder_host_dir = str(tmp_path / "ph")
+    doc = yaml.safe_load(get_runtime("docker").render(plan, tmp_path).compose_yaml)
+    vols = doc["services"]["glove-vibe-local-harness"]["volumes"]
+    targets = [v.get("target") for v in vols]
+    for t in ("/work/.git/hooks", "/work/.git/config", "/work/.vscode", "/work/.envrc", "/work/.mcp.json"):
+        v = vols[targets.index(t)]
+        assert v["read_only"] is True, t
+        assert targets.index(t) > targets.index("/work"), t  # nested bind overlays /work
+    git = vols[targets.index("/work/.git")]
+    assert not git.get("read_only") and targets.index("/work/.git") < targets.index("/work/.git/hooks")
+    assert vols[targets.index("/work/.envrc")]["source"] == str(tmp_path / "ph" / ".envrc")
+
+
 def test_internal_network_and_external_ref(tmp_path):
     cfg, work = _session_cfg(tmp_path)
     result = render_compose(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20)

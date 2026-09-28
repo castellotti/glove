@@ -8,7 +8,7 @@ FROM node:24-bookworm-slim
 
 # Ring-1 enforcer: pinned nono binary. glove/enforcers/nono/version.py
 # holds the source of truth; keep this ref in sync (`glove build` warns on drift).
-COPY --from=ghcr.io/nolabs-ai/nono:0.75.0 /usr/bin/nono /usr/bin/nono
+COPY --from=ghcr.io/nolabs-ai/nono:0.78.0@sha256:5a213ddc296761a7ad9b6fbcb14ac0e9660f33c23b0b4eb70ea7c933231ca079 /usr/bin/nono /usr/bin/nono
 
 ENV DEBIAN_FRONTEND=noninteractive
 # fd is a core Pi tool (Pi shells out to `fd` for file search and, absent it,
@@ -44,7 +44,7 @@ RUN if [ "$GLOVE_ENFORCER" = "srt" ]; then \
       apt-get update \
       && apt-get install -y --no-install-recommends bubblewrap socat \
       && rm -rf /var/lib/apt/lists/* \
-      && npm install -g @anthropic-ai/sandbox-runtime@0.0.75; \
+      && npm install -g @anthropic-ai/sandbox-runtime@0.0.77; \
     fi
 
 # The always-on ring-1 enforcer extension (pure node builtins, no deps to

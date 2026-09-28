@@ -165,6 +165,8 @@ class DockerRuntime:
             "home_dir": plan.home_dir,
             "working_dir": plan.working_dir,
             "mounts": plan.mounts,
+            "protect": plan.protect,
+            "placeholder_host_dir": plan.placeholder_host_dir,
             "environment": plan.environment,
             "enforcer_env": plan.enforcer_env,
             "passthrough_env": plan.passthrough_env,
