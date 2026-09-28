@@ -4,6 +4,49 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### A session is a directory (v3 M3)
+
+- **Breaking: the v2 environment model is gone.** `glove init`, `glove run`,
+  `glove config`, the bare `glove <harness>` form, `--env`, `--name`,
+  `--config`, `--workdir`, `--add-dir`, `--net`, `~/.glove/envs/` and the
+  registry's `home` field are removed (no compatibility shims).
+- **`glove new <template|path|git-url> [dir]`** materializes a session:
+  `glove-session.yml` (schema v3, `glove: 3`), `work/` (→ `/work`) and `.glove/`
+  (`0700`, with a `.gitignore` of `*`): `id` (`<dirname>-<6 hex>`, sanitised so
+  it is a valid compose project and Layman `SAFE_NAME`), `compose.yml`,
+  `effective.yml` (now also recording launch-time resolutions such as
+  `model: auto`), `baseline.yml`, `home/`, `enforcer/`, `ext/<name>/`.
+  Templates are materialized copies; `glove check` warns when a template changed
+  and `glove new --diff` shows the change. Bundled template: `minimal`.
+- **New commands:** `glove check` (schema, remaining `<set-me>`s, secret
+  references exist without reading them, doctor + extension checks), `glove plan`
+  (render and show the grants, incl. the last launch's resolved model),
+  `glove up` (`--resume`/`--session` work from `.glove/home`), `glove down`,
+  `glove rm [--all]`, `glove ls` (ok/missing/stale), `glove ps`, `glove gc`,
+  `glove policy`, and `glove keychain set <service>` (prompts; the secret never
+  appears in argv). Session commands find the nearest `glove-session.yml` at or
+  above the current directory.
+- **Registry v2** (`{"v": 2, "sessions": [{id, dir, harness, template, created,
+  grants, subnet}]}`, written atomically). A v2-era registry (a JSON list) is
+  refused, never overwritten. A moved session keeps its id and the registry
+  follows it; a copied one is refused until it gets its own id.
+- **Per-session subnets:** each session gets a /24 from `subnet_pool`
+  (`~/.glove/config.yml`, default `172.31.0.0/16`) and each of its networks a
+  /27. Allocation avoids other sessions and the runtime's existing networks, and
+  `glove up` re-allocates when a foreign network has taken the range.
+- **Mount safety:** `mounts:` (relative paths resolve against the session dir)
+  may never expose `.glove/`, `local/`, `glove-session.yml`, glove's home or
+  another registered session's state.
+- **Network-observability paths** move to their v3 locations:
+  `~/.glove/observe/<id>/net/` and `~/.glove/control/<id>/rules.json`
+  (`env` = `session` = the id); `session.json` and registry rows carry `grants`.
+  `glove net …` selects the session by directory (`--dir`).
+- `docs/examples/*.glove-session.yml` replace the v2 `*.glove.yaml` presets.
+- Integration scripts run on session directories (`tests/integration/
+  lib_session.sh`); new `test_session_dir.sh` covers the lifecycle live.
+  `test_netgate_m1.sh`/`test_netgate_m2.sh` still use v2 config keys and exit
+  with SKIP until they are rewritten for the gate/observe extensions (v3 M5).
+
 ### Extensions and the `llm` inference slot (v3 M2)
 
 - **Extension API (`api: 1`).** Capabilities are directories under

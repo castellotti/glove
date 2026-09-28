@@ -10,17 +10,20 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${STUB_PORT:-18080}"
-TMPROOT="$(mktemp -d)"; WORK="$TMPROOT/llmstub"; mkdir "$WORK"; export GLOVE_HOME="$TMPROOT/gh"
+TMPROOT="$(mktemp -d)"; S="$TMPROOT/llmstub"; export GLOVE_HOME="$TMPROOT/gh"
 python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!
 trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 sleep 1
-cd "$WORK" && uv run --project "$ROOT" glove init pi >/dev/null
-cat >> "$GLOVE_HOME/envs/$(basename "$WORK")/glove.yaml" <<YAML
+uv run --project "$ROOT" glove new minimal "$S" >/dev/null
+cat > "$S/glove-session.yml" <<YAML
+glove: 3
+template: minimal
+harness: pi
 extensions:
   llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:$PORT", model: auto, capabilities: auto}
 YAML
-uv run --project "$ROOT" python "$ROOT/tests/integration/llm_live.py" pi "Say hello."
+uv run --project "$ROOT" python "$ROOT/tests/integration/llm_live.py" "$S" "Say hello."
 rc=$?
 echo "== stub request log"
 cat "$TMPROOT/stub.log"; rm -f "$TMPROOT/stub.log"

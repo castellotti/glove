@@ -26,6 +26,20 @@ from glove.netgate.records import iso_utc, ulid
 from glove.netgate.writer import NdjsonWriter
 from glove.netview import follow_records, read_records
 
+_SINKS: list[EventSink] = []
+
+
+def _sink(path: str) -> EventSink:
+    """An EventSink closed after the test (the Forwarder does not own it)."""
+    _SINKS.append(EventSink(path))
+    return _SINKS[-1]
+
+
+@pytest.fixture(autouse=True)
+def _close_sinks():
+    yield
+    while _SINKS:
+        _SINKS.pop().close()
 
 def run(coro, timeout: float = 20.0):
     """asyncio.run with a hard ceiling, so a regression fails instead of hanging."""
@@ -108,7 +122,7 @@ def test_forward_is_byte_exact_and_records_counts(tmp_path, sockdir):
     async def main():
         server, uport, seen = await _upstream(response, read_request=len(request))
         col = _Running(tmp_path, sockdir / "ev.sock")
-        fwd = Forwarder(_spec(uport), EventSink(str(sockdir / "ev.sock")), update_interval=0.05)
+        fwd = Forwarder(_spec(uport), _sink(str(sockdir / "ev.sock")), update_interval=0.05)
         await fwd.start()
         got = await _client(fwd.port, request)
         await _settle(col.c)
@@ -152,7 +166,7 @@ def test_periodic_updates_for_a_long_flow(tmp_path, sockdir):
 
         server = await asyncio.start_server(slow, "127.0.0.1", 0)
         col = _Running(tmp_path, sockdir / "ev.sock")
-        fwd = Forwarder(_spec(server.sockets[0].getsockname()[1]), EventSink(str(sockdir / "ev.sock")),
+        fwd = Forwarder(_spec(server.sockets[0].getsockname()[1]), _sink(str(sockdir / "ev.sock")),
                         update_interval=0.05)
         await fwd.start()
         got = await _client(fwd.port, b"")
@@ -179,7 +193,7 @@ def test_upstream_unreachable_is_recorded_not_blocked(tmp_path, sockdir):
 
     async def main():
         col = _Running(tmp_path, sockdir / "ev.sock")
-        fwd = Forwarder(_spec(dead), EventSink(str(sockdir / "ev.sock")))
+        fwd = Forwarder(_spec(dead), _sink(str(sockdir / "ev.sock")))
         await fwd.start()
         got = await _client(fwd.port, b"hello")
         await _settle(col.c)
@@ -200,7 +214,7 @@ def test_upstream_unreachable_is_recorded_not_blocked(tmp_path, sockdir):
 def test_upstream_connect_timeout_closes_with_timeout(tmp_path, sockdir):
     async def main():
         col = _Running(tmp_path, sockdir / "ev.sock")
-        fwd = Forwarder(_spec(1), EventSink(str(sockdir / "ev.sock")), connect_timeout=0.05)
+        fwd = Forwarder(_spec(1), _sink(str(sockdir / "ev.sock")), connect_timeout=0.05)
 
         async def never():  # a blackholed upstream: the dial never completes
             await asyncio.sleep(3600)
@@ -229,7 +243,7 @@ def test_shutdown_closes_active_flows_with_gate_shutdown(tmp_path, sockdir):
 
         server = await asyncio.start_server(idle, "127.0.0.1", 0)
         col = _Running(tmp_path, sockdir / "ev.sock")
-        fwd = Forwarder(_spec(server.sockets[0].getsockname()[1]), EventSink(str(sockdir / "ev.sock")))
+        fwd = Forwarder(_spec(server.sockets[0].getsockname()[1]), _sink(str(sockdir / "ev.sock")))
         await fwd.start()
         _, w = await asyncio.open_connection("127.0.0.1", fwd.port)
         await _settle(col.c)
@@ -253,7 +267,7 @@ def test_no_collector_drops_records_not_traffic(sockdir):
 
     async def main():
         server, uport, _ = await _upstream(response, read_request=3)
-        sink = EventSink(str(sockdir / "nobody-listening.sock"))
+        sink = _sink(str(sockdir / "nobody-listening.sock"))
         fwd = Forwarder(_spec(uport), sink)
         await fwd.start()
         got = await _client(fwd.port, b"abc")
@@ -275,7 +289,7 @@ def test_unwritable_net_dir_drops_records_not_traffic(tmp_path, sockdir):
         server, uport, _ = await _upstream(response, read_request=4)
         col = _Running(ro, sockdir / "ev.sock")
         os.chmod(ro, 0o500)  # collector can no longer create flows.ndjson
-        fwd = Forwarder(_spec(uport), EventSink(str(sockdir / "ev.sock")))
+        fwd = Forwarder(_spec(uport), _sink(str(sockdir / "ev.sock")))
         await fwd.start()
         got = await _client(fwd.port, b"ping")
         await _settle(col.c)

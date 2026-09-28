@@ -1,4 +1,4 @@
-"""Config resolution tests."""
+"""Config and secret-reference tests."""
 
 from __future__ import annotations
 
@@ -7,13 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from glove.config import (
-    AddDir,
-    Config,
-    Service,
-    parse_add_dir_flag,
-    resolve,
-)
+from glove.config import Config, Service
 
 
 def test_defaults():
@@ -21,54 +15,6 @@ def test_defaults():
     assert cfg.harness == "vibe"
     assert cfg.net == ["none"]
     assert cfg.allow_root is False
-
-
-def test_env_file_over_defaults(tmp_path):
-    env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text(
-        "harness: pi\nnet: [service]\nadd_dirs:\n  - path: /data\n    mode: rw\n"
-    )
-    cfg = resolve(env_config_path=env_cfg, overrides={})
-    assert cfg.harness == "pi"
-    assert cfg.net == ["service"]
-    assert cfg.add_dirs == [AddDir("/data", "rw")]
-
-
-def test_flag_over_env_file(tmp_path):
-    env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text("harness: pi\n")
-    cfg = resolve(env_config_path=env_cfg, overrides={"harness": "vibe"})
-    assert cfg.harness == "vibe"
-
-
-def test_config_overlay_over_env_file(tmp_path):
-    env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text("harness: pi\nenforcer: nono\n")
-    overlay = tmp_path / "overlay.yaml"
-    overlay.write_text("enforcer: srt\n")
-    cfg = resolve(env_config_path=env_cfg, config_path=overlay, overrides={})
-    assert cfg.harness == "pi"  # kept from env file
-    assert cfg.enforcer == "srt"  # overridden by --config overlay
-
-
-def test_none_overrides_ignored(tmp_path):
-    env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text("harness: pi\n")
-    cfg = resolve(env_config_path=env_cfg, overrides={"harness": None, "name": "x"})
-    assert cfg.harness == "pi"
-    assert cfg.name == "x"
-
-
-def test_add_dirs_from_flags_append(tmp_path):
-    env_cfg = tmp_path / "glove.yaml"
-    env_cfg.write_text("add_dirs:\n  - path: /a\n    mode: ro\n")
-    cfg = resolve(env_config_path=env_cfg, overrides={"add_dirs": [AddDir("/b", "rw")]})
-    assert cfg.add_dirs == [AddDir("/a", "ro"), AddDir("/b", "rw")]
-
-
-def test_missing_env_file_yields_defaults(tmp_path):
-    cfg = resolve(env_config_path=tmp_path / "nope.yaml", overrides={})
-    assert cfg.harness == "vibe"
 
 
 def test_service_infers_port():
@@ -81,13 +27,6 @@ def test_service_join_network_no_host_gateway():
     s = Service(name="search", to="searxng:8080", join_network="my-llm-net")
     assert s.host_gateway is False
     assert s.port == 8080
-
-
-def test_parse_add_dir_flag():
-    assert parse_add_dir_flag("/x:rw") == AddDir("/x", "rw")
-    assert parse_add_dir_flag("/x") == AddDir("/x", "ro")
-    # a colon that isn't a mode is kept as part of the path
-    assert parse_add_dir_flag("/x:y") == AddDir("/x:y", "ro")
 
 
 def test_effective_config_round_trips():
@@ -155,24 +94,38 @@ def test_resolve_secret_missing_keychain_entry_is_a_config_error(monkeypatch):
         resolve_secret("keychain:my-llm")
 
 
-def test_retired_v2_keys_are_refused(tmp_path):
-    import pytest
-
-    from glove.config import ConfigError
-
-    for key in ("model: m", "llm_api_key: keychain:x", "llm_service: llm", "plugins: [search]", "browser: {}"):
-        (tmp_path / "glove.yaml").write_text(f"harness: pi\n{key}\n")
-        with pytest.raises(ConfigError, match="unknown config keys"):
-            resolve(env_config_path=tmp_path / "glove.yaml", overrides={})
-
-
-@pytest.mark.parametrize("example", sorted((Path(__file__).parent.parent / "docs/examples").glob("*.yaml")),
+@pytest.mark.parametrize("example", sorted((Path(__file__).parent.parent / "docs/examples").glob("*.yml")),
                          ids=lambda p: p.name)
 def test_examples_plan(example, tmp_path):
-    from glove.config import load_config
+    from glove import sessiondir
     from glove.plan import build_session_plan
 
-    cfg = load_config(example)
-    cfg.workdir = str(tmp_path)
+    sd, sid = sessiondir.materialize(str(example), tmp_path / "s")
+    cfg = sessiondir.to_config(sd, sessiondir.load_file(sd), sid)
     plan = build_session_plan(cfg, env_id="ex", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
     assert plan.model is not None
+
+
+def test_secret_exists_never_reads_the_secret(monkeypatch):
+    from glove.config import secret_exists
+
+    calls = _fake_security(monkeypatch)
+    assert secret_exists("keychain:my-llm")[0] is True
+    assert calls == [["security", "find-generic-password", "-s", "my-llm"]]  # no -w: attributes only
+    _fake_security(monkeypatch, rc=44)
+    ok, detail = secret_exists("keychain:my-llm")
+    assert not ok and "glove keychain set my-llm" in detail
+    monkeypatch.setenv("K", "v")
+    assert secret_exists("env:K")[0] and not secret_exists("env:NOPE_UNSET")[0]
+    assert not secret_exists("sk-literal")[0]
+
+
+def test_keychain_set_prompts_so_the_secret_is_never_in_argv(monkeypatch):
+    from glove.config import ConfigError, keychain_set
+
+    calls = _fake_security(monkeypatch)
+    monkeypatch.setenv("USER", "me")
+    assert keychain_set("my-llm") == 0
+    assert calls == [["security", "add-generic-password", "-U", "-a", "me", "-s", "my-llm", "-w"]]  # -w last
+    with pytest.raises(ConfigError):
+        keychain_set("-s")

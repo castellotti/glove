@@ -59,6 +59,9 @@ class NetworkPlan:
     # Session-owned networks from extensions: full name → internal?
     session_networks: dict[str, bool] = field(default_factory=dict)
     observe: ObserveSettings | None = None  # set iff observation is enabled
+    # Session-owned network name → its /27 of the session subnet (empty: the
+    # runtime's default pools).
+    subnets: dict[str, str] = field(default_factory=dict)
 
     @property
     def gated(self) -> list[Sidecar]:
@@ -89,6 +92,22 @@ def endpoint_service(ep: Endpoint) -> Service:
         name=ep.name, to=f"{ep.target.host}:{ep.target.port}", port=ep.port,
         host_gateway=ep.target.kind == "host", observe=ep.observe,
     )
+
+
+SLICE_PREFIX = 27  # 8 networks per /24 session subnet, 29 usable addresses each
+
+
+def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
+    """Deterministic /27 slices of a session's subnet, one per owned network
+    (in the given order), so a session's addresses never depend on what else
+    the runtime has allocated."""
+    import ipaddress
+
+    slices = list(ipaddress.ip_network(subnet).subnets(new_prefix=SLICE_PREFIX))
+    if len(networks) > len(slices):
+        raise ConfigError(f"session subnet {subnet} has room for {len(slices)} networks; "
+                          f"this session needs {len(networks)}")
+    return {n: str(s) for n, s in zip(networks, slices, strict=False)}
 
 
 def build_network_plan(cfg: Config, session: str, comp: Composition | None = None) -> NetworkPlan:
@@ -173,7 +192,9 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
         f"glove-{session}-hostgw" if any(s.host_gateway for s in sidecars) else None
     )
 
+    owned = [internal_net, *([hostgw_network] if hostgw_network else []), *sorted(session_networks)]
     return NetworkPlan(
+        subnets=slice_subnet(cfg.subnet, owned) if cfg.subnet else {},
         internal_network=internal_net,
         sidecars=sidecars,
         external_networks=external,

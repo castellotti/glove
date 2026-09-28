@@ -145,8 +145,8 @@ def test_resume_hint_ignores_stale_pool_leftover(tmp_path, capsys):
     stale = _seed(wk, "20240101_01a09d62.jsonl")
     os.utime(stale, (1000, 1000))  # long before "now"
 
-    _print_resume_hint(pi, home, "pi", since=time_now())
-    assert "session saved" not in capsys.readouterr().out
+    _print_resume_hint(pi, home, since=time_now())
+    assert "conversation saved" not in capsys.readouterr().out
 
 
 def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
@@ -161,9 +161,9 @@ def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
     fresh = _seed(wk, "20240102_deadbeef.jsonl")
     os.utime(fresh, (start + 5, start + 5))  # written during this run
 
-    _print_resume_hint(pi, home, "pi", since=start)
+    _print_resume_hint(pi, home, since=start)
     out = capsys.readouterr().out
-    assert "session saved" in out
+    assert "conversation saved" in out and "glove up --session deadbeef" in out
     assert "deadbeef" in out
 
 

@@ -26,6 +26,7 @@ import socket
 from pathlib import Path
 
 import pytest
+from helpers import make_session
 from test_observe import render
 from typer.testing import CliRunner
 
@@ -266,23 +267,13 @@ def no_dns(monkeypatch):
 
 def test_render_and_cli_never_resolve(no_dns, tmp_path, monkeypatch):
     monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "ghome"))
-    work = tmp_path / "work"
-    work.mkdir()
-    wd = tmp_path / "wd"
-    wd.mkdir()
+    llm = "{provider: llama.cpp, location: lan, endpoint: \"llm.example.com:8080\", model: m}"
+    wd = make_session(tmp_path / "wd", "observe: {enabled: true}\n", llm=llm)
     monkeypatch.chdir(wd)
     runner = CliRunner()
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    over = tmp_path / "o.yaml"
-    over.write_text(
-        "net: [service]\nobserve: {enabled: true}\n"
-        "extensions: {llm: {provider: llama.cpp, location: lan, endpoint: \"llm.example.com:8080\", model: m}}\n"
-        "services:\n"
-        "  - { name: proxy, to: egress-proxy:8888, join_network: pi-search-egress }\n"
-    )
-    r = runner.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run"])
+    r = runner.invoke(app, ["plan"])
     assert r.exit_code == 0, r.output
-    ndir = tmp_path / "ghome/envs/wd/sessions/wd/net"
+    ndir = tmp_path / "ghome" / "observe" / (wd / ".glove" / "id").read_text().strip() / "net"
     (ndir / "flows.ndjson").write_text(json.dumps({
         "v": 1, "type": "flow", "phase": "open", "id": "f_1", "service": "llm",
         "dest": {"host": "some.destination.example", "port": 443, "ip": None, "resolution": "unavailable"},

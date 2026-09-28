@@ -242,15 +242,30 @@ networks:
   glove-{{ session }}-net:
     name: glove-{{ session }}-net
     internal: true
+{% if subnets.get("glove-" ~ session ~ "-net") %}
+    ipam:
+      config:
+        - subnet: {{ subnets["glove-" ~ session ~ "-net"] }}
+{% endif %}
 {% if hostgw_network %}
   {{ hostgw_network }}:
     name: {{ hostgw_network }}
+{% if subnets.get(hostgw_network) %}
+    ipam:
+      config:
+        - subnet: {{ subnets[hostgw_network] }}
+{% endif %}
 {% endif %}
 {% for net, internal in session_networks.items() %}
   {{ net }}:
     name: {{ net }}
 {% if internal %}
     internal: true
+{% endif %}
+{% if subnets.get(net) %}
+    ipam:
+      config:
+        - subnet: {{ subnets[net] }}
 {% endif %}
 {% endfor %}
 {% for net in external_networks %}

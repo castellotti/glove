@@ -1,9 +1,9 @@
 # Pi against an LLM server on this Mac (llama.cpp, ollama, LM Studio, …).
-# Copy to ~/.glove/envs/<env-id>/glove.yaml after `glove init pi`.
+# Start a session from it: glove new docs/examples/pi-local.glove-session.yml <dir>
+glove: 3
 harness: pi
 runtime: docker
 enforcer: nono          # ring-1 kernel sandbox wrapping the agent + every command
-workdir: .
 extensions:
   llm:
     provider: llama.cpp          # see extensions/llm/providers/

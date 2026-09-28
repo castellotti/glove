@@ -7,7 +7,7 @@ import json
 import os
 
 import pytest
-from helpers import make_cfg
+from helpers import make_cfg, make_session
 from test_netgate_proxy import Captured, StubUpstreamProxy, _exchange, _origin, run
 from test_observe import pi_search_services, render
 from typer.testing import CliRunner
@@ -136,19 +136,12 @@ def test_full_mode_records_request_and_metadata_mode_never_does():
 
 def test_cli_warns_loudly_under_full_record_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
-    (tmp_path / "w").mkdir()
-    (tmp_path / "work").mkdir()
-    monkeypatch.chdir(tmp_path / "w")
-    r = CliRunner()
-    assert r.invoke(app, ["init", "pi"]).exit_code == 0
-    over = tmp_path / "o.yaml"
-    over.write_text("net: [service]\nobserve: {enabled: true, record: full, record_headers: true}\n"
-                    "extensions: {llm: {provider: llama.cpp, location: host, "
-                    "endpoint: \"127.0.0.1:8080\", model: m}}\n")
-    out = r.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(tmp_path / "work"), "--dry-run"])
+    d = make_session(tmp_path / "w", "observe: {enabled: true, record: full, record_headers: true}\n")
+    out = CliRunner().invoke(app, ["plan", str(d)])
     assert out.exit_code == 0, out.output
     assert "record: full" in out.output and "browsing log" in out.output
-    facts = json.loads((tmp_path / "gh/envs/w/sessions/w/net/session.json").read_text())
+    sid = (d / ".glove" / "id").read_text().strip()
+    facts = json.loads((tmp_path / "gh" / "observe" / sid / "net" / "session.json").read_text())
     assert facts["record"] == "full" and facts["record_headers"] is True
 
 
@@ -180,12 +173,15 @@ def test_existing_live_file_is_aged_by_its_mtime(tmp_path):
 
 def test_down_wipe_clears_the_flow_record(tmp_path, monkeypatch):
     monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
-    net = tmp_path / "gh/envs/e/sessions/e/net"
+    d = make_session(tmp_path / "s")
+    (d / ".glove").mkdir()
+    (d / ".glove" / "id").write_text("s-0a0b0c\n")
+    net = tmp_path / "gh/observe/s-0a0b0c/net"
     net.mkdir(parents=True)
     for f in ("flows.ndjson", "flows-20260923T000000000Z.ndjson", "exit.ndjson", "status.json", "session.json"):
         (net / f).write_text("{}")
     monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
-    out = CliRunner().invoke(app, ["down", "e", "--wipe", "--provider", "docker"])
+    out = CliRunner().invoke(app, ["down", str(d), "--wipe", "--provider", "docker"])
     assert out.exit_code == 0, out.output
     assert sorted(p.name for p in net.iterdir()) == ["session.json"]
 

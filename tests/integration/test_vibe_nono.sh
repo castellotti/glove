@@ -27,11 +27,10 @@ hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-echo "== rendering glove policies (glove vibe --dry-run) =="
-( cd "$WORKDIR" && uv run --project "$ROOT" glove init vibe >/dev/null \
-  && uv run --project "$ROOT" glove vibe --dry-run >/dev/null )
-ENVID="$(basename "$WORKDIR")"
-POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
+echo "== rendering glove policies (glove plan) =="
+. "$ROOT/tests/integration/lib_session.sh"
+new_session "$GLOVE_HOME/s" vibe
+POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered" || { bad "no policies"; exit 1; }
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
 run_tool() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \

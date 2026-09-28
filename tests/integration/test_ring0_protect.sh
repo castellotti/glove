@@ -14,7 +14,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORKDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
+GLOVE_HOME="$(mktemp -d)"; S="$GLOVE_HOME/s"; WORKDIR="$S/work"; mkdir -p "$WORKDIR"
 export GLOVE_HOME
 PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
@@ -22,15 +22,12 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 git -C "$WORKDIR" init -q && git -C "$WORKDIR" config user.email t@example.com && git -C "$WORKDIR" config user.name t
 echo hi > "$WORKDIR/README" && git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -qm init
-ENVID="$(basename "$WORKDIR")"
 
-echo "== rendering (glove pi --dry-run, protect_ide_files: true) =="
-( cd "$WORKDIR" && uv run --project "$ROOT" glove init pi >/dev/null )
-printf 'harness: pi\nname: %s\nprotect_ide_files: true\n' "$ENVID" > "$GLOVE_HOME/envs/$ENVID/glove.yaml"
-( cd "$WORKDIR" && uv run --project "$ROOT" glove pi --dry-run >/dev/null 2>&1 )
-SDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID"
-COMPOSE="$(ls "$SDIR"/*.yml "$SDIR"/*.yaml 2>/dev/null | head -1)"
-[ -n "$COMPOSE" ] && ok "compose rendered ($COMPOSE)" || { bad "no compose file in $SDIR"; ls -la "$SDIR"; exit 1; }
+echo "== rendering (glove plan, protect_ide_files: true) =="
+. "$ROOT/tests/integration/lib_session.sh"
+new_session "$S" pi 'protect_ide_files: true\n'
+ENVID="$S_ID"; COMPOSE="$S_COMPOSE"
+[ -f "$COMPOSE" ] && ok "compose rendered ($COMPOSE)" || { bad "no compose file"; exit 1; }
 grep -q '/work/.git/hooks' "$COMPOSE" && ok "compose has the .git/hooks bind" || bad "no .git/hooks bind"
 
 # A denial must be a real kernel refusal: an enforcer that failed to start
@@ -68,6 +65,7 @@ for who in harness tool; do
 done
 [ -d "$WORKDIR/.git" ] && [ ! -e "$WORKDIR/.git-moved" ] && ok "host: .git intact" || bad "host: .git moved"
 
+docker compose -f "$COMPOSE" down -v >/dev/null 2>&1  # `compose run` created the session networks
 rm -rf "$WORKDIR" "$GLOVE_HOME" 2>/dev/null || true
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="

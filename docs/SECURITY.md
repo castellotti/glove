@@ -41,7 +41,7 @@ Every capability (the model, search, the browser, …) is an extension in
   healthchecks. Core adds the hardening set to every sidecar (non-root,
   `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, seccomp, private IPC,
   pids/memory limits). Exceptions come only from the manifest's `privileges:`,
-  from an allowlist, and `glove policy show` lists them.
+  from an allowlist, and `glove policy` lists them.
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state, or a
   sidecar on the harness network. The harness reaches extensions only through

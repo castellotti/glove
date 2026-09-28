@@ -4,7 +4,7 @@ An ``Enforcer`` renders the kernel-policy files for a session, wraps the harness
 process, and provides the per-command wrapper the harness hooks prepend to every
 shell command. ``nono`` (Landlock) is the default; ``none`` is ring-0 only.
 
-Policies render to ``~/.glove/envs/<env>/sessions/<name>/enforcer/`` on the host
+Policies render to ``<session-dir>/.glove/enforcer/`` on the host
 and bind-mount read-only at ``/etc/glove/enforcer/`` — never inside ``/work``,
 never writable by the agent.
 """

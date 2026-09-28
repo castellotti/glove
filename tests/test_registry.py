@@ -1,173 +1,72 @@
-"""Environment identity + registry tests."""
+"""Registry v2 (``~/.glove/registry.json``): rows, locking, subnets, v1 refusal."""
 
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
-from glove import registry
+from glove import registry as reg
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def glove_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("GLOVE_HOME", str(tmp_path))
-    return tmp_path
+    home = tmp_path / "ghome"
+    monkeypatch.setenv("GLOVE_HOME", str(home))
+    return home
 
 
-def _mkdir(tmp_path, name):
-    d = tmp_path / name
-    d.mkdir(parents=True, exist_ok=True)
-    return str(d)
+def test_empty_when_absent():
+    assert reg.load_registry() == []
 
 
-def test_env_id_unused_base(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "pi-local")
-    assert registry.derive_env_id([], os.path.realpath(d), "pi") == "pi-local"
+def test_upsert_update_remove_round_trip(tmp_path):
+    reg.upsert(reg.SessionEntry(id="a-000001", dir="/x/a", harness="pi", template="minimal"))
+    reg.upsert(reg.SessionEntry(id="b-000002", dir="/x/b", harness="vibe"))
+    reg.upsert(reg.SessionEntry(id="a-000001", dir="/x/a2", harness="pi"))  # replaces by id
+    assert [(e.id, e.dir) for e in reg.load_registry()] == [("b-000002", "/x/b"), ("a-000001", "/x/a2")]
+    assert reg.update("b-000002", grants={"observe": {"net": True}, "filter": None}).grants["observe"]
+    assert reg.update("nope-000000", dir="/y") is None
+    assert reg.remove({"a-000001", "zzz"}) == 1
+    doc = json.loads(reg.registry_path().read_text())
+    assert doc["v"] == 2 and [s["id"] for s in doc["sessions"]] == ["b-000002"]
+    assert set(doc["sessions"][0]) == {"id", "dir", "harness", "template", "created", "grants", "subnet"}
 
 
-def test_env_id_same_dir_second_harness(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "pi-local")
-    first = registry.create_env(d, "pi")
-    assert first == "pi-local"
-    second = registry.create_env(d, "vibe")
-    assert second == "pi-local-vibe"
+def test_a_v1_registry_is_refused_not_migrated(glove_home):
+    glove_home.mkdir()
+    (glove_home / "registry.json").write_text('[{"dir": "/d", "harness": "pi", "env_id": "d"}]')
+    with pytest.raises(reg.RegistryError, match="glove v2 registry"):
+        reg.load_registry()
+    with pytest.raises(reg.RegistryError):
+        reg.upsert(reg.SessionEntry(id="a-000001", dir="/x", harness="pi"))
+    assert json.loads((glove_home / "registry.json").read_text())[0]["env_id"] == "d"
 
 
-def test_env_id_path_collision(glove_home, tmp_path):
-    a = _mkdir(tmp_path / "dev", "pi-local")
-    b = _mkdir(tmp_path / "other", "pi-local")
-    id_a = registry.create_env(a, "pi")
-    id_b = registry.create_env(b, "pi")
-    assert id_a == "pi-local"
-    assert id_b.startswith("pi-local-")
-    assert id_b != "pi-local"
-    assert len(id_b.rsplit("-", 1)[1]) == 6  # short(dir) hex
+def test_load_drops_unknown_keys_and_bad_rows(glove_home):
+    glove_home.mkdir()
+    (glove_home / "registry.json").write_text(json.dumps({"v": 2, "sessions": [
+        {"id": "a-000001", "dir": "/a", "harness": "pi", "future": 1}, {"dir": "/b"}, "junk"]}))
+    assert [e.id for e in reg.load_registry()] == ["a-000001"]
 
 
-def test_resolution_is_stable(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    first = registry.create_env(d, "pi")
-    # Re-resolving the same (dir, harness) returns the same id, no duplicate.
-    assert registry.find_env_id(d, "pi") == first
-    assert registry.resolve_env_id(d, "pi") == first
-    assert len(registry.load_registry()) == 1
+def test_unreadable_or_future_registries_are_errors(glove_home):
+    glove_home.mkdir()
+    (glove_home / "registry.json").write_text("{nope")
+    with pytest.raises(reg.RegistryError, match="unreadable"):
+        reg.load_registry()
+    (glove_home / "registry.json").write_text('{"v": 3, "sessions": []}')
+    with pytest.raises(reg.RegistryError, match="unsupported"):
+        reg.load_registry()
 
 
-def test_registry_round_trip(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    registry.create_env(d, "pi")
-    registry.create_env(d, "vibe")
-    entries = registry.load_registry()
-    assert {e.env_id for e in entries} == {"wd", "wd-vibe"}
-    assert all(e.dir == os.path.realpath(d) for e in entries)
-
-
-def test_resolve_env_id_no_create(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    assert registry.resolve_env_id(d, "pi", create=False) is None
-    assert registry.load_registry() == []
-
-
-def test_explicit_name(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    env_id = registry.create_env(d, "pi", name="custom")
-    assert env_id == "custom"
-    assert registry.find_env_id(d, "pi") == "custom"
-
-
-def test_explicit_name_clash_across_dirs_is_refused(glove_home, tmp_path):
-    a = _mkdir(tmp_path / "one", "wd")
-    b = _mkdir(tmp_path / "two", "wd")
-    registry.create_env(a, "pi", name="shared")
-    with pytest.raises(registry.RegistryError):
-        registry.create_env(b, "vibe", name="shared")
-    # The clash must not have created a second entry.
-    assert {e.env_id for e in registry.load_registry()} == {"shared"}
-
-
-def test_explicit_name_rebinds_same_dir_harness(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    registry.create_env(d, "pi", name="shared")
-    # Re-forcing the SAME (dir, harness) to the same name is a no-op rebind.
-    assert registry.create_env(d, "pi", name="shared") == "shared"
-    assert len(registry.load_registry()) == 1
-    # A different harness in the same dir cannot reuse the name (it would clobber
-    # the shared env tree); it must be refused just like a cross-dir clash.
-    with pytest.raises(registry.RegistryError):
-        registry.create_env(d, "vibe", name="shared")
-
-
-def test_home_defaults_to_none(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    registry.create_env(d, "pi")
-    (entry,) = registry.load_registry()
-    assert entry.home is None
-
-
-def test_load_tolerates_old_entries_without_home(glove_home):
-    # An entry written before the `home` field existed must still parse.
-    registry.registry_path().write_text(
-        json.dumps([{"dir": "/x", "harness": "pi", "env_id": "wd"}]) + "\n"
-    )
-    (entry,) = registry.load_registry()
-    assert entry.home is None
-
-
-def test_home_round_trips(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    registry.create_env(d, "pi")
-    entries = registry.load_registry()
-    entries[0].home = "/resolved/home"
-    registry.save_registry(entries)
-    # Reload from disk to confirm persistence through the JSON round trip.
-    (entry,) = registry.load_registry()
-    assert entry.home == "/resolved/home"
-    on_disk = json.loads(registry.registry_path().read_text())
-    assert on_disk[0]["home"] == "/resolved/home"
-
-
-def test_record_home_updates_registered_env(glove_home, tmp_path):
-    d = _mkdir(tmp_path, "wd")
-    env_id = registry.create_env(d, "pi")
-    assert registry.record_home(env_id, "/resolved/home") is True
-    (entry,) = registry.load_registry()
-    assert entry.home == "/resolved/home"
-    # An unchanged value is a no-op (no rewrite claimed).
-    assert registry.record_home(env_id, "/resolved/home") is False
-
-
-def test_record_home_noop_for_unregistered_env(glove_home):
-    # An ad-hoc `--config` run keyed by --env has no registry entry to update.
-    assert registry.record_home("ghost", "/resolved/home") is False
-    assert registry.load_registry() == []
-
-
-def test_rebind_preserves_recorded_home(glove_home, tmp_path):
-    # Regression: re-registering the same (dir, harness) — e.g. a second
-    # `glove init --name` — must not null the home an earlier `run` recorded.
-    d = _mkdir(tmp_path, "wd")
-    env_id = registry.create_env(d, "pi")
-    registry.record_home(env_id, "/resolved/home")
-    registry.create_env(d, "pi", name="renamed")
-    (entry,) = registry.load_registry()
-    assert entry.env_id == "renamed"
-    assert entry.home == "/resolved/home"
-
-
-def test_load_drops_unknown_keys_and_bad_entries(glove_home):
-    # A future schema field (or a malformed row) from another glove build must
-    # degrade, not crash every reader.
-    registry.registry_path().write_text(
-        json.dumps(
-            [
-                {"dir": "/x", "harness": "pi", "env_id": "wd", "future_field": 1},
-                {"harness": "pi", "env_id": "broken"},  # missing required `dir`
-            ]
-        )
-        + "\n"
-    )
-    (entry,) = registry.load_registry()
-    assert entry.env_id == "wd"
-    assert not hasattr(entry, "future_field")
+def test_allocate_subnet_skips_taken_and_overlapping():
+    assert reg.allocate_subnet("172.31.0.0/16", set()) == "172.31.0.0/24"
+    assert reg.allocate_subnet("172.31.0.0/16", {"172.31.0.0/24", "172.31.1.0/24"}) == "172.31.2.0/24"
+    assert reg.allocate_subnet("10.9.0.0/23", {"10.9.0.0/24"}) == "10.9.1.0/24"
+    with pytest.raises(reg.RegistryError, match="exhausted"):
+        reg.allocate_subnet("10.9.0.0/24", {"10.9.0.0/24"})
+    with pytest.raises(reg.RegistryError):
+        reg.allocate_subnet("10.9.0.0/25", set())
+    with pytest.raises(reg.RegistryError):
+        reg.allocate_subnet("nonsense", set())

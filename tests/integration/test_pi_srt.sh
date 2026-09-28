@@ -20,13 +20,10 @@ ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 echo "== rendering srt policies (enforcer: srt) =="
-( cd "$WORKDIR" && uv run --project "$ROOT" glove init pi >/dev/null )
-printf 'harness: pi\nname: %s\nenforcer: srt\n' "$(basename "$WORKDIR")" > "$GLOVE_HOME/envs/$(basename "$WORKDIR")/glove.yaml"
-( cd "$WORKDIR" && uv run --project "$ROOT" glove policy show pi >/dev/null 2>&1 )
-# render policies to disk via a dry-run
-( cd "$WORKDIR" && uv run --project "$ROOT" glove pi --dry-run >/dev/null 2>&1 )
-ENVID="$(basename "$WORKDIR")"
-POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
+. "$ROOT/tests/integration/lib_session.sh"
+new_session "$GLOVE_HOME/s" pi 'enforcer: srt\n'
+uv run --quiet --project "$ROOT" glove policy "$GLOVE_HOME/s" >/dev/null 2>&1
+POLDIR="$S_POLICIES"
 ls "$POLDIR/srt-settings.json" >/dev/null 2>&1 && ok "srt-settings.json rendered" || { bad "no srt settings"; exit 1; }
 
 # weak-mode hardened run (relaxed seccomp, no systempaths), srt wraps tool cmds.

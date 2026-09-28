@@ -26,10 +26,12 @@ harness, or use `--privileged`. The default in-container enforcer is **nono**
 
 ## Where things render
 
-- On-disk layout: `~/.glove/` (or `$GLOVE_HOME`).
-- Ring-1 policies render to
-  `~/.glove/envs/<env>/sessions/<name>/enforcer/` and mount **read-only** at
-  `/etc/glove/enforcer/` — never inside `/work`, never writable by the agent.
+- A session is a directory: `glove-session.yml`, `work/` (→ `/work`) and
+  `.glove/` (0700). Global state: `~/.glove/` (or `$GLOVE_HOME`): `config.yml`,
+  `registry.json`, `observe/<id>/`, `control/<id>/`.
+- Ring-1 policies render to `<session-dir>/.glove/enforcer/` and mount
+  **read-only** at `/etc/glove/enforcer/` — never inside `/work`, never writable
+  by the agent.
 
 ## Working agreements
 

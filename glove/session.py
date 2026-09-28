@@ -166,7 +166,7 @@ def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
 def launch(
     cfg: Config,
     plan: SessionPlan,
-    session_dir: Path,
+    compose_file: Path,
     *,
     provider: str,
     rebuild: bool,
@@ -179,7 +179,6 @@ def launch(
     `secrets` is the already-resolved secret_env(plan): it is passed to compose
     only in this process environment, never written to a file."""
     project = plan.project
-    compose_file = session_dir / "docker-compose.yml"
     base = _compose_base(provider, project, compose_file)
 
     doc = yaml.safe_load(compose_file.read_text()) or {}
@@ -199,8 +198,8 @@ def launch(
         subprocess.run([*base, "run", "--rm", "-it", plan.harness_service], check=False, env=env)
     finally:
         console.print(
-            f"[dim]harness exited; sidecars still up. "
-            f"Run `glove down {plan.session}` to tear down.[/dim]"
+            "[dim]harness exited; sidecars still up. Run `glove down` in the session "
+            "directory to tear down.[/dim]"
         )
 
 

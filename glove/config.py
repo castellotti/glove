@@ -1,11 +1,9 @@
-"""Session configuration: schema + defaults < env file < --config < flags.
+"""The internal session configuration (``Config``) and secret references.
 
-Resolution precedence is built-in defaults, then the environment's own
-`glove.yaml` (under `~/.glove/envs/<env-id>/`),
-then an explicit `--config` overlay, then CLI flags. There is no in-workdir
-auto-discovery — nothing is read from (or written to) the invocation dir. The
-fully resolved ("effective") config round-trips to YAML so a session is
-reproducible.
+A session's ``glove-session.yml`` (schema v3, ``glove/sessiondir.py``) is
+translated into a ``Config``, which the planner consumes. The fully resolved
+("effective") config round-trips to YAML (``.glove/effective.yml``) so a
+session is reproducible.
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +99,8 @@ class Config:
     # sandbox (nono | srt | none).
     runtime: str = "docker"
     enforcer: str = "nono"
+    # Internal (set from the session directory, never a session-file key):
+    # work/ is /work, and the name is the session id.
     workdir: str = "."
     name: str | None = None
     add_dirs: list[AddDir] = field(default_factory=list)
@@ -119,13 +119,6 @@ class Config:
     services: list[Service] = field(default_factory=list)
     harness_config: dict[str, Any] = field(default_factory=dict)
     env: dict[str, Any] = field(default_factory=dict)
-    # Host dir bind-mounted as the harness config home (/home/agent). Defaults
-    # to the environment's own `home/` under ~/.glove/envs/<env-id>/ (persistent,
-    # per-instance, user-inspectable — and exactly where external monitors look).
-    # Optional power-user override: point at another persistent path to keep a
-    # harness's config + your own extensions there. glove only writes the files
-    # it owns; anything else you add is preserved.
-    config_home_source: str | None = None
     # Free-text session brief appended to the harness context file, e.g.
     # what the agent should work on in /work.
     brief: str | None = None
@@ -133,9 +126,6 @@ class Config:
     # SSH model tunnel, headed Chrome, Playwright MCP. Managed lifecycle:
     # port-deduped, health-checked, torn down on `glove down` (unless keep).
     host_services: list[HostService] = field(default_factory=list)
-    # Legacy: commands glove only PRINTS for the operator to run by hand. Prefer
-    # host_services (auto-managed). Kept for anything you want to run manually.
-    host_setup: list[str] = field(default_factory=list)
     # Extra packages baked into the harness image on top of its defaults, so the
     # sandboxed agent has the tools a session needs (the box has no egress to
     # install them at runtime). Changing these yields a distinct image tag.
@@ -149,6 +139,9 @@ class Config:
     # service forwarders through the instrumented netgate and records flows to
     # the session's net/ dir. Off by default; validated in glove/observe.py.
     observe: dict[str, Any] | bool = field(default_factory=dict)
+    # Internal (not a session-file key): the session's /24 from the user's
+    # subnet pool, recorded in the registry; each session network gets a /27.
+    subnet: str | None = None
 
     @property
     def harness_services(self) -> list[Service]:
@@ -156,10 +149,8 @@ class Config:
         return [s for s in self.services if s.harness]
 
     def resolved_name(self) -> str:
-        # The name IS the env-id; the CLI always
-        # binds it from the registry before rendering. Resolution no longer
-        # falls back to the workdir basename.
-        return self.name or "env"
+        # The session id (glove/sessiondir.py); the CLI always sets it.
+        return self.name or "session"
 
     def to_dict(self) -> dict[str, Any]:
         # Extension secret settings are references (keychain:/env:), validated
@@ -208,6 +199,37 @@ def resolve_secret(value: str) -> str:
             raise ConfigError(f"{value}: environment variable {var!r} is not set")
         return secret
     return value
+
+
+def secret_exists(value: str) -> tuple[bool, str]:
+    """Whether a secret reference resolves, WITHOUT reading the secret:
+    `keychain:` asks only for the item's attributes (no decrypt, no prompt)."""
+    value = str(value)
+    if value.startswith("keychain:"):
+        service = value.removeprefix("keychain:")
+        if not shutil.which("security"):
+            return False, "the macOS `security` tool is not available on this host"
+        r = subprocess.run(["security", "find-generic-password", "-s", service],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        return (r.returncode == 0,
+                "Keychain item exists" if r.returncode == 0
+                else f"no Keychain item; create it with `glove keychain set {service}`")
+    if value.startswith("env:"):
+        var = value.removeprefix("env:")
+        return bool(os.environ.get(var)), "set" if os.environ.get(var) else f"${var} is not set"
+    return False, "not a reference (keychain:<service> | env:<VAR>)"
+
+
+def keychain_set(service: str) -> int:
+    """Store a secret in the login Keychain, prompting for it: `-w` as the last
+    option makes `security` read it from the terminal, so it is never in argv."""
+    if not service or service.startswith("-"):
+        raise ConfigError(f"invalid Keychain service name {service!r}")
+    if not shutil.which("security"):
+        raise ConfigError("the macOS `security` tool is not available on this host")
+    user = os.environ.get("USER") or "glove"
+    return subprocess.run(["security", "add-generic-password", "-U", "-a", user, "-s", service, "-w"],
+                          check=False).returncode
 
 
 def split_csv(value: str) -> list[str]:
@@ -298,44 +320,3 @@ def load_config(path: Path | None) -> Config:
     if path is None:
         return Config()
     return _coerce(_load_mapping(path))
-
-
-def parse_add_dir_flag(value: str) -> AddDir:
-    """Parse a --add-dir value of the form PATH[:ro|:rw]."""
-    path, sep, mode = value.rpartition(":")
-    if sep and mode in ("ro", "rw"):
-        return AddDir(path=path, mode=mode)
-    return AddDir(path=value, mode="ro")
-
-
-def merge_overrides(cfg: Config, overrides: dict[str, Any]) -> Config:
-    """Apply non-None CLI overrides on top of a file/default config."""
-    clean = {k: v for k, v in overrides.items() if v is not None}
-    # add_dirs from flags are appended, not replaced.
-    extra_add_dirs = clean.pop("add_dirs", None)
-    merged = replace(cfg, **clean) if clean else cfg
-    if extra_add_dirs:
-        merged = replace(merged, add_dirs=[*merged.add_dirs, *extra_add_dirs])
-    return merged
-
-
-def resolve(
-    *,
-    env_config_path: Path | None = None,
-    config_path: Path | None = None,
-    overrides: dict[str, Any] | None = None,
-) -> Config:
-    """Full resolution: defaults < env `glove.yaml` < `--config` < flags.
-
-    `env_config_path` is the environment's own config under
-    `~/.glove/envs/<env-id>/glove.yaml`; `config_path` is an optional `--config`
-    overlay for one-off/explicit runs. Both are merged at the mapping level
-    (top-level keys from the later source win) before flag overrides.
-    """
-    data: dict[str, Any] = {}
-    if env_config_path is not None and env_config_path.is_file():
-        data.update(_load_mapping(env_config_path))
-    if config_path is not None:
-        data.update(_load_mapping(config_path))
-    cfg = _coerce(data) if data else Config()
-    return merge_overrides(cfg, overrides or {})

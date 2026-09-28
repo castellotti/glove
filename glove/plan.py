@@ -142,6 +142,25 @@ def secret_env(plan: SessionPlan) -> dict[str, str]:
     return env
 
 
+def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
+    """(label, reference) of every secret the session will resolve at launch,
+    for `glove check` (which verifies they exist without reading them)."""
+    comp = plan.composition
+    if comp is None:
+        return []
+    out: list[tuple[str, str]] = []
+    inference = comp.slots.get("inference")
+    setting = inference.exports.get("api_key_secret") if inference else None
+    if setting and inference.settings.get(setting):
+        out.append((f"{inference.name}.{setting}", str(inference.settings[setting])))
+    for ext, name in comp.secrets.values():
+        a = comp.by_name(ext)
+        value = a.settings.get(name) if a else None
+        if value not in (None, "", "generate"):
+            out.append((f"{ext}.{name}", str(value)))
+    return out
+
+
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
     if cfg.enforcer == "srt":

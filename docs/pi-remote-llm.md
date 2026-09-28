@@ -7,16 +7,16 @@ A complete, reproducible setup for the **Pi** harness that:
 - reaches the web solely through a **dedicated headed Playwright browser** on the
   host that you can watch.
 
-Copy **[`docs/examples/pi-remote-llm.glove.yaml`](examples/pi-remote-llm.glove.yaml)**
-as your starting config; this doc explains the pieces.
+Start a session from **[`docs/examples/pi-remote-llm.glove-session.yml`](examples/pi-remote-llm.glove-session.yml)**;
+this doc explains the pieces.
 
 ```sh
-cd ~/path/to/your/project
-glove init pi --from <glove-repo>/docs/examples/pi-remote-llm.glove.yaml
-$EDITOR ~/.glove/envs/<env-id>/glove.yaml     # remote host, model, key reference
-glove doctor --env <env-id>                   # includes the extensions' checks
-glove pi --dry-run                            # preview
-glove pi                                      # launch
+glove new <glove-repo>/docs/examples/pi-remote-llm.glove-session.yml ~/work/remote-1
+cd ~/work/remote-1
+$EDITOR glove-session.yml      # remote host, model, key reference
+glove check                    # schema, secrets exist, doctor + the extensions' checks
+glove plan                     # preview
+glove up                       # launch
 ```
 
 ## The LLM (`llm` extension)
@@ -83,7 +83,7 @@ to it through one forwarder:
 
 - **Which Chrome.** glove uses a system Google Chrome/Chromium if installed,
   else Playwright's **Chrome for Testing** (`npx playwright install chromium`,
-  once). `glove doctor --env <env-id>` reports which it found.
+  once). `glove check` reports which it found.
 - **Per session.** The Chrome profile and MCP output live in the session's
   extension state, never in your repo and never shared between sessions. Chrome
   stops on `glove down` unless `keep_browser: true`.

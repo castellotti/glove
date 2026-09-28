@@ -257,12 +257,12 @@ def human_bytes(n: int) -> str:
     return f"{size / 1024:.1f}GB"
 
 
-def render_status(env_id: str, sname: str, net_dir: Path, s: dict) -> list[str]:
-    lines = [f"[bold]{env_id}[/bold] / session [bold]{sname}[/bold]  [dim]{net_dir}[/dim]"]
+def render_status(session_id: str, net_dir: Path, s: dict) -> list[str]:
+    lines = [f"[bold]{session_id}[/bold]  [dim]{net_dir}[/dim]"]
     if not s["observed"]:
         lines.append(
             "  [yellow]not observed[/yellow] — no net/session.json. Enable with "
-            "`observe: {enabled: true}` in the env's glove.yaml and re-run."
+            "`observe: {enabled: true}` in glove-session.yml and re-run `glove up`."
         )
         return lines
     facts = s["session"] or {}

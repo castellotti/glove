@@ -40,11 +40,10 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 # --- render real glove policies for a pi session -----------------------------
-echo "== rendering glove policies (glove pi --dry-run) =="
-( cd "$WORKDIR" && uv run --project "$ROOT" glove init pi >/dev/null \
-  && uv run --project "$ROOT" glove pi --add-dir "$WORKDIR:rw" --dry-run >/dev/null )
-ENVID="$(basename "$WORKDIR")"
-POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
+echo "== rendering glove policies (glove plan) =="
+. "$ROOT/tests/integration/lib_session.sh"
+new_session "$GLOVE_HOME/s" pi
+POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered to $POLDIR" || { bad "no policies rendered"; exit 1; }
 
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")

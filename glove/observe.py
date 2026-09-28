@@ -372,17 +372,20 @@ def render_context(plan: SessionPlan) -> dict:
 # --- net/ layout -----------------------------------------------------------
 
 
-def net_dir(session_dir: Path) -> Path:
-    """``<session>/net`` — a sibling of ``home/``, never mounted into the harness."""
-    return Path(session_dir) / "net"
+def net_dir(session_id: str) -> Path:
+    """``~/.glove/observe/<id>/net`` — outside the session dir's harness mounts,
+    never mounted into the harness (the export Layman reads)."""
+    from .registry import observe_dir
+
+    return observe_dir(session_id) / "net"
 
 
-def control_dir(env_id: str, session_name: str) -> Path:
-    """``~/.glove/control/<env>/<session>/`` — where ``rules.json`` lives. Written
-    by Layman or ``glove net block``; mounted read-only into the gate only."""
-    from .registry import glove_home
+def control_dir(session_id: str) -> Path:
+    """``~/.glove/control/<id>/`` — where ``rules.json`` lives. Written by Layman
+    or ``glove net block``; mounted read-only into the gate only."""
+    from .registry import control_dir as _control_dir
 
-    return glove_home() / "control" / env_id / session_name
+    return _control_dir(session_id)
 
 
 def ensure_net_dir(path: Path) -> Path:
@@ -428,8 +431,7 @@ def _within(child: str, parent: str) -> bool:
 def validate_net_isolation(plan: SessionPlan) -> None:
     """Refuse to render if the agent could see or write its own flow record.
 
-    ``net/`` must share no path with any harness bind: not the home (which a
-    ``config_home_source`` may relocate anywhere), not /work, not an add-dir. A
+    ``net/`` must share no path with any harness bind: not the home, not /work, not an add-dir. A
     harness mount at or above ``net/`` would let the agent read its surveillance
     record; one inside it would let the agent forge it. Not waivable."""
     if plan.observe is None:
@@ -451,7 +453,7 @@ def validate_net_isolation(plan: SessionPlan) -> None:
                 raise HardeningError(
                     f"refusing to render: {what} dir {g} overlaps the harness mount "
                     f"{rp} ({label}) — the agent could {harm}. "
-                    "Move the mount (or config_home_source) outside it."
+                    "Move the mount outside it."
                 )
 
 
@@ -496,7 +498,17 @@ def session_facts(plan: SessionPlan) -> dict:
         "record_headers": plan.observe.record_headers,
         "rendered_at": iso_utc(),
         "services": services,
+        # Until the observe/filter split (v3 M5) an observed session's gates
+        # always read rules.json, so observing implies the filter grant.
+        "grants": session_grants(plan),
     }
+
+
+def session_grants(plan: SessionPlan) -> dict:
+    """``grants`` for ``session.json`` and the registry row (Layman handoff §4)."""
+    if plan.observe is None:
+        return {"observe": None, "filter": None}
+    return {"observe": {"net": True, "transcripts": False}, "filter": {"granted": True}}
 
 
 def _upstream_kind(plan: SessionPlan) -> str:

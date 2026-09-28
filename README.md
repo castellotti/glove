@@ -62,42 +62,57 @@ host; the friction-free option is Playwright's own Chrome for Testing
 against a remote OpenAI-compatible LLM over an SSH tunnel plus a dedicated headed
 Playwright browser, including the `@playwright/mcp` `--browser` channel gotcha and
 the `--executable-path` fix - see **[docs/pi-remote-llm.md](docs/pi-remote-llm.md)**
-and copy **[docs/examples/pi-remote-llm.glove.yaml](docs/examples/pi-remote-llm.glove.yaml)**.
+and start from **[docs/examples/pi-remote-llm.glove-session.yml](docs/examples/pi-remote-llm.glove-session.yml)**
+(`glove new docs/examples/pi-remote-llm.glove-session.yml <dir>`).
 
 Runnable presets live in **[docs/examples/](docs/examples/)**.
 
 ## Quick start
 
-Identity is the pair `(directory you run from, harness)`, bound to a stable
-`env-id`; all state lives under `~/.glove/envs/<env-id>/` - nothing is written
-into your working dir.
+**A session is a directory.** `glove new` materializes one; you edit one file and
+run `glove up`. Its state lives in `<dir>/.glove/`, so deleting the directory
+deletes the session (only a registry row, and what an extension explicitly
+exports, stays under `~/.glove`; `glove gc` removes those).
 
 ```sh
-cd ~/src/service-a
-uv run glove doctor                 # probe host + runtime + enforcer
-uv run glove init pi                # scaffold the env config
-$EDITOR ~/.glove/envs/service-a/glove.yaml   # select extensions (at least `llm`)
-uv run glove pi --name TICKET-1234 \
-    --add-dir ~/src/shared-lib:ro   # extra dir, read-only
-#  → doctor (first run) → build image (first run) → host services → sidecars → TUI
+glove new minimal ~/work/research-1     # glove-session.yml, work/, .glove/ (0700)
+cd ~/work/research-1
+$EDITOR glove-session.yml               # the ONE file you edit (set the llm <set-me>s)
+glove check                             # schema, secrets exist (never read), doctor
+glove plan                              # what it grants; renders .glove/, launches nothing
+glove up                                # build → sidecars → resolve model → TUI
+glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-Inspect what will run before launching:
+`glove new` takes a bundled template (`templates/`: `minimal`), a path to a
+directory or file, or a git URL. Templates are *materialized*, not inherited:
+the file is a full copy, so upgrading glove never silently widens a session.
+`glove check` warns when the template changed since, and `glove new --diff`
+shows how.
 
-```sh
-uv run glove pi --dry-run           # print the rendered compose project
-uv run glove policy show            # ring-1 policies + ring-0 hardening + gaps
+```
+<session-dir>/
+  glove-session.yml   the file you edit (no secrets: references only)
+  work/               → /work (rw)
+  local/              optional private host assets (e.g. hooks); never mounted
+  .glove/             0700; only home/ and enforcer/ are mounted
+    id                stable session id: <dirname>-<6 hex>
+    compose.yml  effective.yml  baseline.yml  template.yml
+    home/             → /home/agent (config, transcripts)
+    enforcer/         → /etc/glove/enforcer (ro, ring-1 policies)
+    ext/<name>/       per-extension state
 ```
 
-## Configuration (`~/.glove/envs/<env-id>/glove.yaml`)
+## Session file (`glove-session.yml`, schema v3)
 
 ```yaml
+glove: 3
+template: minimal           # provenance only
 harness: pi                 # pi | vibe | claude-code (experimental)
 runtime: docker             # docker | podman | apple-container|gondolin|utm (stub)
 enforcer: nono              # nono (Landlock, default) | srt (bubblewrap) | none
-workdir: .
-add_dirs:
-  - { path: ../shared-lib, mode: ro }
+mounts:                     # explicit extra host dirs; work/ is always /work
+  - { path: ~/src/shared-lib, mode: ro }
 extensions:                 # name → settings; unlisted = nothing in the session
   llm:                      # required: fills the `inference` slot
     provider: llama.cpp     # openai-compatible (any OpenAI-API server) | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
@@ -116,31 +131,49 @@ observe: { enabled: true }  # network observability (off by default) — see bel
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 ```
 
+Relative mount paths resolve against the session directory. A mount that would
+expose `.glove/`, `local/`, `glove-session.yml`, glove's home (`~/.glove`) or
+another session's state is refused. The v2 keys (`workdir`, `add_dirs`, `net`,
+`services`, `name`, …) are refused with a pointer to their replacement.
+
+Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
+`172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of
+it. Allocation avoids other sessions and the runtime's existing networks; if a
+foreign network takes the range later, `glove up` re-allocates.
+
 `.git/hooks` and `.git/config` in every rw mount are always bound read-only (and
 `.git` is pinned so it can't be renamed away): an agent must not plant a hook your
 Mac runs the next time you use git. See "Planted host-trusted files" in
 [docs/SECURITY.md](docs/SECURITY.md).
 
-Precedence: defaults < env `glove.yaml` < `--config` overlay < flags.
-
 ## CLI
 
+Session commands take an optional directory; without one they use the nearest
+`glove-session.yml` at or above the current directory.
+
 ```
-glove init [HARNESS] [--name ENV] [--from FILE]
-glove run  HARNESS  [--name SESSION] [--add-dir P[:ro|:rw]]… [--net …]
-                    [--runtime …] [--enforcer …] [--resume|-r] [--session ID] [--dry-run] [--rebuild]
-glove <harness> …                    # alias of run
-glove doctor  [--env ID] [--runtime R] [--enforcer E] [--json]   # --env: also its extensions
-glove policy show [--env ID]         # rendered ring-1 policies + ring-0 hardening
-glove config  [--env ID] [--edit|--path]
-glove ls | ps | down [ID] [--name SESSION] [--wipe] | build [HARNESS] [--enforcer srt]
-glove net status [--env ID] [--session NAME] [--json]          # gate health + per-service totals
-glove net flows  [--env ID] [--session NAME] [--follow] [--json] [--tail N]
+glove new <template|path|git-url> [DIR]      # materialize a session (DIR default: .)
+glove new --diff <any> [DIR]                 # how the template changed since `glove new`
+glove check [DIR] [--no-container]           # schema, placeholders, secrets exist, doctor
+glove plan  [DIR] [--compose] [--resume|--session ID]   # render .glove/, print the grants
+glove up    [DIR] [--resume|-r] [--session ID] [--rebuild]
+glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow record
+glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
+glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
+glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
+glove keychain set <service>                 # store a secret, prompting (never in argv)
+glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt] | version
+glove net status [--dir D] [--json]          # gate health + per-service totals
+glove net flows  [--dir D] [--follow] [--json] [--tail N]
 glove net block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
 glove net unblock <rule-id|target>
-glove net rules  [--json]                                       # rules + the gate's load result
-glove net validate <file|-> [--env ID] [--session TOKEN] [--json] # the gate's validator; pure
+glove net rules  [--json]                    # rules + the gate's load result
+glove net validate <file|-> [--env ID] [--session ID] [--json]   # the gate's validator; pure
 ```
+
+`~/.glove/registry.json` (v2, `{"v": 2, "sessions": [{id, dir, harness,
+template, created, grants, subnet}]}`) indexes sessions; a v2-era registry
+(a JSON list) is refused rather than overwritten; move it aside.
 
 ### Network observability
 
@@ -148,8 +181,8 @@ With `observe: {enabled: true}`, every service forwarder becomes an instrumented
 **netgate**: a drop-in for the socat forwarder (same container name, networks
 and port, so the harness config is unchanged) that records every connection:
 open, ~1 Hz updates while bytes move, and close, with cumulative byte counts,
-timing, tool label and scope. Records go to the session's `net/` directory
-(`~/.glove/envs/<env>/sessions/<session>/net/`, a sibling of `home/`) through a
+timing, tool label and scope. Records go to the session's export directory
+(`~/.glove/observe/<id>/net/`, outside the session dir's mounts) through a
 single collector container that has **no network at all**
 (`network_mode: none`):
 
@@ -263,14 +296,15 @@ every folder, owner and mode under `~/.glove`.
   read-write over it, each only if it exists when Layman starts. Layman follows `~/.glove` only, not
   `$GLOVE_HOME`. A `control/` that appears later is picked up when Layman
   restarts.
-- **What glove guarantees.** Whenever glove creates its home (`glove init`,
-  `glove run`, any registry write), it also creates `control/`, and `glove
-  init`/`glove run` add it to an older home that lacks it. Both are yours, mode
-  `0777 & ~umask` (`0755` usually). The rest of the layout is as before:
-  `control/<env>/<session>/` (`0700`) is created when a session with a gate is
-  rendered, and `net/` is `0700` with files `0600`. glove warns, with the
-  `sudo chown` that fixes it, when `control/` belongs to someone else.
-- **What Layman writes.** Only `control/<env>/<session>/rules.json`, only if
+- **What glove guarantees.** Whenever glove creates its home (`glove new`, any
+  registry write), it also creates `control/`, and adds it to an older home
+  that lacks it. Both are yours, mode `0777 & ~umask` (`0755` usually).
+  `control/<id>/` (`0700`) is created when a session with a gate is rendered,
+  and `observe/<id>/net/` is `0700` with files `0600`; `rules.json`'s `env` and
+  `session` are both the session id. glove warns, with the `sudo chown` that
+  fixes it, when `control/` belongs to someone else. (The v3 read/write grant
+  split, and Layman's side of the new paths, land in v3 M5.)
+- **What Layman writes.** Only `control/<id>/rules.json`, only if
   that directory exists, and by atomic rename: a temp file unique to Layman
   in the same directory, `fsync`, `chmod 0644` (explicitly, not through the
   umask), rename. No `chown`, no new directories. The directory is `0700` and
@@ -288,41 +322,39 @@ rootful Podman.
 
 ### Resuming a session
 
-A harness session's state — its conversation transcript — lives in the
-persistent per-session home glove bind-mounts, **not** in the (ephemeral)
-container. So you can reopen a prior session:
+A conversation's transcript lives in the session's `.glove/home` (bind-mounted
+at `/home/agent`), **not** in the (ephemeral) container. So you can reopen one:
 
-- `glove <harness> … --resume` (`-r`) — reopen the **most recent** session for
-  this env/workdir. Re-run your exact previous command with `--resume` appended.
-  glove checks a transcript exists, then defers to the harness's own
-  continue-last (which picks the last session for its current project), so use
-  `--session <id>` when you need to be sure exactly which one reopens.
-- `glove <harness> … --session <id>` — reopen a **specific** session (full or
+- `glove up --resume` (`-r`) — reopen the **most recent** conversation. glove
+  checks a transcript exists, then defers to the harness's own continue-last,
+  so use `--session <id>` when you need to be sure exactly which one reopens.
+- `glove up --session <id>` — reopen a **specific** conversation (full or
   partial UUID, or a transcript path). glove resolves it to that transcript's
   canonical id before handing it to the harness.
 
 Because glove re-renders the whole sandbox from the *current* config on every
-run, **editing the config (or passing flags) before resuming changes the grants
-for the resumed conversation** — e.g. widen `net`/add a `service:` for a LAN host
-you now need, then resume, and pick up where you left off with the new grant
-live. When a resume run grants **broader** access than the session originally ran
-under (net, mounts, extensions, `allow_root`, `allow_sensitive`, services), glove
+run, **editing `glove-session.yml` before resuming changes the grants for the
+resumed conversation** — e.g. add an extension or a mount you now need, then
+resume with the new grant live. When a resume run grants **broader** access than
+the session's `.glove/baseline.yml` (mounts, extensions, `allow_root`,
+`allow_sensitive`), glove
 prints a prominent warning: the prior conversation context (which may include
 prompt-injected instructions) will run with the wider reach.
 
-> Transcripts live under the session's `home/` (`~/.glove/envs/<env-id>/sessions/<name>/home`).
-> This is durable on-disk state — don't sync that tree to anywhere untrusted.
+> Transcripts live under the session's `.glove/home/`. This is durable on-disk
+> state — don't sync that tree to anywhere untrusted (`.glove/` carries a
+> `.gitignore` of `*`, so a session inside a git repo never commits it).
 >
 > **The LLM API key is never in a file.** `extensions.llm.api_key` must be a
 > reference: `keychain:<service>` (a macOS Keychain generic password) or
 > `env:<VAR>`; a literal key is refused. glove resolves it in memory when the
-> session launches (never during `--dry-run`), and the effective config records
+> session launches (never during `glove plan` or `glove check`, which only checks
+> that the Keychain item exists), and the effective config records
 > only the reference. The compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
 > the environment of `compose` when it starts the session, and Pi's `models.json`
 > refers to it as `"$GLOVE_LLM_API_KEY"`. Inside the sandbox only the harness
-> process sees it; ring 1 strips it from every shell command. Sessions rendered by
-> an older glove held copies in `docker-compose.yml` and `models.json`: the next
-> `glove run` of the session rewrites both.
+> process sees it; ring 1 strips it from every shell command. Store a key with
+> `glove keychain set <service>` (it prompts; the key is never in argv).
 
 ## Extensions
 
@@ -340,7 +372,7 @@ the agent, and optionally hardened sidecars. Core validates all of it:
 - **Sidecars** get the hardening set (non-root, `cap_drop: ALL`,
   `no-new-privileges`, read-only rootfs, seccomp, pids/memory limits) from core;
   a fragment cannot set a security key. Exceptions come only from the manifest's
-  `privileges:`, drawn from an allowlist, and are shown in `glove policy show`.
+  `privileges:`, drawn from an allowlist, and are shown in `glove policy`.
   No extension publishes ports, joins the harness network, mounts the docker
   socket, or binds host paths other than its own session state.
 - **The harness** only ever gets forwarders on its internal network.
@@ -372,6 +404,7 @@ bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
+bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server
 ```

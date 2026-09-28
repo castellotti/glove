@@ -1,0 +1,74 @@
+"""The session directory model (glove/sessiondir.py)."""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+from helpers import make_session
+
+from glove import sessiondir as sdm
+from glove.network import slice_subnet
+
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # Layman's, handoff §3
+COMPOSE_PROJECT = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+@pytest.mark.parametrize(("name", "prefix"), [
+    ("research-1", "research-1"), ("tmp.XyZ12", "tmp-xyz12"), ("My Project!", "my-project"),
+    ("...", "session"), ("_x_", "x"), ("a" * 60, "a" * 40), ("ünïcode", "n-code")])
+def test_ids_are_sanitised_dirnames_plus_six_hex(name, prefix):
+    sid = sdm.new_id(name)
+    assert sid.rsplit("-", 1)[0] == prefix
+    assert sdm.ID_RE.match(sid) and SAFE_NAME.match(sid) and COMPOSE_PROJECT.match(f"glove-{sid}")
+
+
+def test_ensure_state_is_idempotent_and_private(tmp_path):
+    sd = sdm.SessionDir(make_session(tmp_path / "s"))
+    sid, created = sdm.ensure_state(sd)
+    assert created and sdm.ensure_state(sd) == (sid, False)
+    assert (sd.state / ".gitignore").read_text().endswith("*\n")  # never committed with a repo
+    (sd.state / "id").write_text("../../etc\n")  # a tampered id is not trusted
+    assert sd.read_id() is None
+
+
+def test_find_walks_up_from_a_subdirectory(tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s")
+    (d / "work" / "deep").mkdir()
+    monkeypatch.chdir(d / "work" / "deep")
+    assert sdm.find().root == d.resolve()
+    with pytest.raises(sdm.SessionError, match="not a glove session"):
+        sdm.find(tmp_path)
+
+
+def test_the_schema_version_is_required(tmp_path):
+    d = make_session(tmp_path / "s")
+    (d / "glove-session.yml").write_text("harness: pi\n")
+    with pytest.raises(sdm.SessionError, match="glove: 3"):
+        sdm.load_file(sdm.SessionDir(d))
+
+
+def test_placeholders_left_names_every_path():
+    raw = {"a": "<set-me>", "b": {"c": "keychain:<set-me>", "d": "ok"}, "e": ["x", "<set-me>"]}
+    assert sdm.placeholders_left(raw) == ["a", "b.c", "e[1]"]
+
+
+def test_every_bundled_template_is_a_valid_v3_file(tmp_path):
+    assert "minimal" in sdm.list_templates()
+    for name in sdm.list_templates():
+        sd, sid = sdm.materialize(name, tmp_path / name)
+        raw = sdm.load_file(sd)
+        assert raw["template"] == name
+        sdm.to_config(sd, raw, sid)
+
+
+def test_git_url_detection():
+    assert sdm._is_git_url("https://github.com/x/y") and sdm._is_git_url("git@github.com:x/y.git")
+    assert not sdm._is_git_url("minimal") and not sdm._is_git_url("./tpl")
+
+
+def test_subnet_slices_are_deterministic_27s():
+    assert slice_subnet("172.31.4.0/24", ["n", "h", "x"]) == {
+        "n": "172.31.4.0/27", "h": "172.31.4.32/27", "x": "172.31.4.64/27"}
+    with pytest.raises(ValueError, match="room for 8"):
+        slice_subnet("172.31.4.0/24", [str(i) for i in range(9)])

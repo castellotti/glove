@@ -145,14 +145,3 @@ def describe_host_services(
                       + (f" (:{svc.ready_port})" if svc.ready_port else "")
                       + (" [dim]keep[/dim]" if svc.keep else ""))
         console.print(f"    {_expand(svc.command, cfg, session, session_dir)}")
-
-
-def print_host_setup(cfg: Config) -> None:
-    """Legacy: print manual host_setup commands (not auto-managed)."""
-    if not cfg.host_setup:
-        return
-    console.print()
-    console.rule("[bold yellow]RUN ON HOST manually (host_setup)")
-    for i, cmd in enumerate(cfg.host_setup, 1):
-        console.print(f"[bold]{i}.[/bold] [cyan]{cmd}[/cyan]")
-    console.rule()

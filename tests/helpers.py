@@ -38,3 +38,20 @@ STUB_LLM_YAML = (
     "extensions:\n"
     "  llm: {provider: llama.cpp, location: host, endpoint: \"127.0.0.1:8080\", model: test-model}\n"
 )
+
+
+def session_file(extra: str = "", *, harness: str = "pi", llm: str | None = None) -> str:
+    """A v3 glove-session.yml with the stub inference provider (or `llm`, a
+    flow mapping replacing it) plus `extra` top-level YAML."""
+    llm = llm or "{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:8080\", model: test-model}"
+    return f"glove: 3\ntemplate: test\nharness: {harness}\nextensions:\n  llm: {llm}\n{extra}"
+
+
+def make_session(root, extra: str = "", **kw):
+    """Write a session directory (file + work/) without `glove new`; returns its Path."""
+    from pathlib import Path
+
+    root = Path(root)
+    (root / "work").mkdir(parents=True, exist_ok=True)
+    (root / "glove-session.yml").write_text(session_file(extra, **kw))
+    return root

@@ -1,69 +1,59 @@
 """glove command-line interface.
 
-Identity is the pair `(invocation_dir, harness)` — the dir you run `glove` from
-plus the harness — bound to a stable `env-id` in `~/.glove/registry.json`. All
-config + state lives under `~/.glove/envs/<env-id>/`; nothing is written into
-the invocation dir.
+A session is a directory holding ``glove-session.yml`` (see
+``glove/sessiondir.py``). Every session command takes an optional directory
+and otherwise uses the nearest session at or above the cwd:
 
-Subcommands: init, run (default), config, ls, down, build. The bare form
-`glove <harness> [opts]` is rewritten to `glove run <harness> [opts]` by
-`main()`.
+    glove new <template|path|git-url> [dir]    materialize a session
+    glove check | plan | up | down | rm         work with one session
+    glove ls | ps | gc                          all sessions (~/.glove/registry.json)
+    glove keychain set <service>                store a secret, prompting for it
 """
 
 from __future__ import annotations
 
 import collections
-import os
 import shutil
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-import yaml
 from rich.console import Console
 from rich.syntax import Syntax
 
 from . import __version__
-from .config import ConfigError, parse_add_dir_flag, resolve, split_csv
+from . import registry as reg
+from . import sessiondir as sdm
+from .config import ConfigError
 from .hardening import HardeningError
 from .harness import known_harnesses
 from .harnessconfig import render_home
-from .hostsvc import (
-    describe_host_services,
-    print_host_setup,
-    start_host_services,
-    stop_host_services,
-)
+from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .plan import build_session_plan
-from .registry import (
-    RegistryError,
-    create_env,
-    ensure_home,
-    env_dir,
-    envs_root,
-    find_env_id,
-    load_registry,
-    record_home,
-    session_dir,
-    session_token,
-)
 from .runtimes import get_runtime, known_runtimes
+from .sessiondir import SessionDir, SessionError
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Run agentic harnesses inside constrained Docker/Podman sandboxes.",
+    help="Run agentic harnesses inside constrained Docker/Podman sandboxes. A session is a directory.",
 )
 console = Console()
 err = Console(stderr=True)
 
-SUBCOMMANDS = {"init", "run", "config", "down", "ls", "ps", "build", "doctor", "policy", "net", "version"}
+_DIR_ARG = typer.Argument(None, help="session directory (default: the nearest one at or above the cwd)")
+
+
+def _fail(msg: str, code: int = 1) -> typer.Exit:
+    err.print(f"[red]error:[/red] {msg}")
+    return typer.Exit(code)
 
 
 def _ensure_home() -> None:
     """``registry.ensure_home``, printing its warnings (see there)."""
-    for w in ensure_home():
+    for w in reg.ensure_home():
         err.print(f"[yellow]⚠[/yellow] {w}")
 
 
@@ -75,400 +65,292 @@ def _autodetect_provider() -> str:
     return "docker"
 
 
-def _env_config_path(env_id: str) -> Path:
-    return env_dir(env_id) / "glove.yaml"
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _home_dir(cfg, sdir: Path) -> Path:
-    """The harness config home: the session's own `home/`, or a power-user override.
-
-    Per-session, not per-env: the rendered harness config embeds session-scoped
-    values (notably the LLM `baseUrl`, which targets this session's own
-    `glove-<token>-llm` sidecar). Two sessions of one env coexisting must not
-    share one `home/`, or the second render clobbers the first's config.toml /
-    models.json and points it at a sidecar that isn't on its network. Re-running
-    the *same* session reuses its home, so history still persists per session.
-    """
-    if cfg.config_home_source:
-        return Path(os.path.realpath(cfg.config_home_source))
-    return sdir / "home"
+def _foreign_subnets(raw: dict, sid: str) -> set[str]:
+    """Subnets of the runtime's existing networks that are not this session's."""
+    try:
+        nets = get_runtime(raw.get("runtime") or "docker").network_subnets()
+    except (ValueError, AttributeError, OSError):
+        return set()
+    return {x for name, subnets in nets.items() if not name.startswith(f"glove-{sid}-") for x in subnets}
 
 
-def _record_home(env_id: str, home_dir: Path) -> None:
-    """Write the resolved harness home back into the registry entry for `env_id`.
+def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = False) -> reg.SessionEntry:
+    """Register the session (or follow a moved directory) and give it a subnet.
 
-    The registry is the single canonical pointer external monitors use to find
-    an env's transcript logs. Stored as an abs realpath (no unresolved symlinks,
-    which would not resolve inside a consumer's container).
-    """
-    record_home(env_id, os.path.realpath(str(home_dir)))
+    The subnet avoids other sessions' and — when allocating, or with
+    ``check_runtime`` (``glove up``) — the runtime's existing networks; a
+    session whose subnet a foreign network has since taken is re-allocated.
+    A directory copied with its ``.glove/`` carries the original's id; two live
+    directories with one id would share compose projects and exports, so that
+    is refused rather than guessed at."""
+    import ipaddress
 
+    from .userconfig import load_user_config
 
-def _register_forced_env(env_id: str, harness: str) -> None:
-    """Register a genuinely new forced `--env X --config Y` one-off.
-
-    Registration (not just `_record_home`) is what makes a session visible to
-    external monitors (see `_record_home`, which no-ops for an unregistered env).
-    Bind only a forced env-id that is absent from the registry, run from a cwd not
-    already bound for this harness — preserving `--env`'s "select an existing env,
-    ignoring cwd" semantics: an already-registered env-id or an already-bound cwd
-    is left untouched. One registry read serves both checks (`create_env` reloads
-    under its own lock, which is what actually guards concurrent writers).
-    """
-    cwd = os.getcwd()
-    entries = load_registry()
-    already_registered = any(e.env_id == env_id for e in entries)
-    cwd_bound = any(
-        e.dir == os.path.realpath(cwd) and e.harness == harness for e in entries
-    )
-    if not already_registered and not cwd_bound:
-        create_env(cwd, harness, name=env_id)
-
-
-@app.command()
-def init(
-    harness: str | None = typer.Argument(
-        None, help=f"one of: {', '.join(known_harnesses())} (default: vibe)"
-    ),
-    name: str | None = typer.Option(
-        None, "--name", help="force the env-id (default: derived from cwd)"
-    ),
-    from_file: Path | None = typer.Option(
-        None, "--from", help="import an existing config (e.g. a legacy glove.yaml)"
-    ),
-) -> None:
-    """Scaffold `~/.glove/envs/<env-id>/glove.yaml` bound to (cwd, harness).
-
-    Never writes to the invocation dir. Auto-create-on-first-run is not enabled
-    by default (a future `autocreate: true` config toggle may add it).
-    """
-    imported: dict = {}
-    if from_file is not None:
-        if not from_file.is_file():
-            err.print(f"[red]error:[/red] --from file not found: {from_file}")
-            raise typer.Exit(1)
-        imported = yaml.safe_load(from_file.read_text()) or {}
-        if not isinstance(imported, dict):
-            err.print(f"[red]error:[/red] {from_file}: top-level config must be a mapping")
-            raise typer.Exit(1)
-
-    resolved_harness = harness or imported.get("harness") or "vibe"
-    if resolved_harness not in known_harnesses():
-        err.print(
-            f"[red]error:[/red] unknown harness {resolved_harness!r}; "
-            f"known: {', '.join(known_harnesses())}"
-        )
-        raise typer.Exit(1)
-
+    root = str(sd.root)
     _ensure_home()
-    cwd = os.getcwd()
-    existing = None if name else find_env_id(cwd, resolved_harness)
-    if existing is not None:
-        env_id = existing
-        console.print(f"[dim]reusing existing env[/dim] {env_id}")
-    else:
-        try:
-            env_id = create_env(cwd, resolved_harness, name=name)
-        except RegistryError as e:
-            err.print(f"[red]error:[/red] {e}")
-            raise typer.Exit(1) from e
+    with reg.registry_lock():
+        entries = reg.load_registry()
+        row = next((e for e in entries if e.id == sid), None)
+        if row is not None and row.dir != root:
+            other = SessionDir(Path(row.dir))
+            if other.root.is_dir() and other.read_id() == sid:
+                raise SessionError(
+                    f"{sd.root} and {other.root} carry the same session id {sid} (a copied directory?). "
+                    f"Give this copy its own identity with `rm {sd.state / 'id'}`, then re-run.")
+            err.print(f"[yellow]⚠[/yellow] session {sid} moved: {row.dir} → {root}")
+            row.dir = root
+        if row is None:
+            row = reg.SessionEntry(id=sid, dir=root, harness=raw["harness"], created=_now())
+            entries.append(row)
+        row.harness = raw["harness"]
+        row.template = raw.get("template")
+        foreign = _foreign_subnets(raw, sid) if (check_runtime or not row.subnet) else set()
+        if row.subnet and any(ipaddress.ip_network(row.subnet).overlaps(ipaddress.ip_network(f, strict=False))
+                              for f in foreign):
+            err.print(f"[yellow]⚠[/yellow] subnet {row.subnet} is now used by another network; re-allocating")
+            row.subnet = None
+        if not row.subnet:
+            taken = {e.subnet for e in entries if e.id != sid and e.subnet} | foreign
+            row.subnet = reg.allocate_subnet(load_user_config().subnet_pool, taken)
+        reg.save_registry(entries)
+    return row
 
-    edir = env_dir(env_id)
-    edir.mkdir(parents=True, exist_ok=True)
-    cfg_path = edir / "glove.yaml"
 
-    doc = dict(imported)
-    doc["harness"] = resolved_harness
-    doc["name"] = env_id
-    # A legacy in-workdir home hack has no place under ~/.glove/envs; the env's
-    # own home/ is the default. Drop it unless it points somewhere absolute.
-    src = doc.get("config_home_source")
-    if src in (".", "", None) or (src and not os.path.isabs(os.path.expanduser(src))):
-        doc.pop("config_home_source", None)
+def _open(dir_arg: Path | None, *, register: bool = True, check_runtime: bool = False):
+    """(session dir, raw file, id, Config) — the session at ``dir_arg``."""
+    from .userconfig import load_user_config
 
-    cfg_path.write_text(yaml.safe_dump(doc, sort_keys=False))
-    console.print(
-        f"[green]✓[/green] env [bold]{env_id}[/bold] "
-        f"([dim]{resolved_harness} @ {os.path.realpath(cwd)}[/dim])"
-    )
-    console.print(f"  edit config: [cyan]{cfg_path}[/cyan]")
-    console.print(f"  launch:      [cyan]glove {resolved_harness}[/cyan]")
+    sd = sdm.find(dir_arg)
+    raw = sdm.load_file(sd)
+    if register:
+        sid, _ = sdm.ensure_state(sd)
+        subnet = _sync_registry(sd, sid, raw, check_runtime=check_runtime).subnet
+    else:  # read-only callers (check): never create state or registry rows
+        sid = sd.read_id() or sdm.new_id(sd.root.name)
+        row = reg.find(sid)
+        subnet = row.subnet if row else None
+    cfg = sdm.to_config(sd, raw, sid, subnet=subnet, default_runtime=load_user_config().runtime)
+    return sd, raw, sid, cfg
+
+
+# --- glove new ---------------------------------------------------------------------
 
 
 @app.command()
-def run(
-    harness: str | None = typer.Argument(
-        None, help=f"one of: {', '.join(known_harnesses())}"
-    ),
-    name: str | None = typer.Option(
-        None, "--name", help="name this session (coexists with others; default: env-id)"
-    ),
-    provider: str | None = typer.Option(None, help="docker | podman (autodetect)"),
-    runtime: str | None = typer.Option(
-        None, "--runtime", help=f"ring-0 runtime: {', '.join(known_runtimes())}"
-    ),
-    enforcer: str | None = typer.Option(
-        None, "--enforcer", help="ring-1 enforcer: nono | srt | none"
-    ),
-    config: Path | None = typer.Option(None, "--config", help="YAML/JSON overlay"),
-    env: str | None = typer.Option(
-        None, "--env", help="select an env by id, ignoring cwd resolution"
-    ),
-    add_dir: list[str] = typer.Option(
-        [], "--add-dir", help="extra host path PATH[:ro|:rw] (repeatable)"
-    ),
-    workdir: Path | None = typer.Option(None, "--workdir", help="the /work mount"),
-    net: str | None = typer.Option(
-        None, "--net", help="comma list: none|internal|internet|lan|docker:<n>|service"
-    ),
-    allow_root: bool = typer.Option(False, "--allow-root", help="permit root/sudo"),
-    allow_sensitive: bool = typer.Option(
-        False, "--allow-sensitive", help="permit mounting / or $HOME"
-    ),
-    iknow: list[str] = typer.Option(
-        [], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)"
-    ),
-    rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the harness image"),
-    resume: bool = typer.Option(
-        False, "--resume", "-r", help="reopen the most recent session for this env"
-    ),
-    session: str | None = typer.Option(
-        None, "--session",
-        help="reopen a specific session by id (full/partial UUID or path)",
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="write + print the compose project, don't launch"
-    ),
+def new(
+    template: str = typer.Argument(..., help="bundled template name, a path, or a git URL"),
+    directory: Path = typer.Argument(Path("."), help="the session directory (created if missing)"),
+    diff: bool = typer.Option(False, "--diff", help="show how the template changed since `glove new`"),
 ) -> None:
-    """Resolve the env for (cwd, harness), render its compose project, launch it."""
-    if harness is None and env is None:
-        err.print("[red]error:[/red] specify a harness (e.g. `glove vibe`) or --env ID")
-        raise typer.Exit(1)
-
-    if resume and session is not None:
-        err.print(
-            "[red]error:[/red] pass either --resume (last) or --session <id> "
-            "(specific), not both."
-        )
-        raise typer.Exit(1)
-    want_resume = resume or session is not None
-
-    try:
-        env_id = _resolve_run_env(env, harness, has_config=config is not None)
-    except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    env_cfg_path = _env_config_path(env_id)
-
-    # The session names this run; its compose project is glove-<env>[-<session>]
-    # so several sessions of one env can coexist.
-    session_name = name or env_id
-    token = session_token(env_id, session_name)
-
-    rt = runtime or None
-    prov = provider or (rt if rt in ("docker", "podman") else None) or _autodetect_provider()
-    overrides = {
-        "harness": harness,
-        "provider": prov,
-        "runtime": rt,
-        "enforcer": enforcer or None,
-        "workdir": str(workdir) if workdir else None,
-        "name": token,
-        "net": split_csv(net) if net else None,
-        "allow_root": allow_root or None,
-        "allow_sensitive": allow_sensitive or None,
-        "rebuild": rebuild or None,
-        "add_dirs": [parse_add_dir_flag(a) for a in add_dir] if add_dir else None,
-    }
-
-    sdir = session_dir(env_id, session_name)
-    try:
-        cfg = resolve(
-            env_config_path=env_cfg_path, config_path=config, overrides=overrides
-        )
-        if cfg.runtime not in ("docker", "podman"):
-            raise ConfigError(
-                f"runtime {cfg.runtime!r} is not implemented yet; "
-                "use docker or podman"
-            )
-        home_dir = _home_dir(cfg, sdir)
-        # Resume: pre-flight validate the transcript exists (clear glove-level
-        # error beats the harness silently starting fresh) and capture the prior
-        # security snapshot for the grant-widening warning — both before build.
-        prev_cfg = None
-        resume_id = session
-        if want_resume:
-            from .harness import get_profile
-
-            ref = _validate_resume(get_profile(cfg.harness), home_dir, session, env_id)
-            # Hand the harness the canonical id find_session resolved (a partial
-            # UUID/path the user typed is not something the harness can open), not
-            # the raw string. None ⇒ continue-last, which takes no id.
-            if ref is not None:
-                resume_id = ref.id
-            prev_cfg = _load_baseline(sdir)
-        plan = build_session_plan(
-            cfg, env_id=env_id, home_dir=str(home_dir), cwd=os.getcwd(),
-            resume=want_resume, session_id=resume_id, state_dir=str(sdir / "ext"),
-        )
-        # cfg is now fully expanded (extension host services); compare the
-        # security-relevant grants against the resumed session's snapshot.
-        if prev_cfg is not None:
-            from .sessions import widening_warnings
-
-            widened = widening_warnings(prev_cfg, cfg)
-            if widened:
-                err.print(
-                    "[yellow]⚠ resuming with broader access than the original "
-                    "session; prior conversation context will run with the new "
-                    "grants:[/yellow]"
-                )
-                for w in widened:
-                    err.print(f"  [yellow]•[/yellow] {w}")
-        # Materialize under ~/.glove/envs/<env>/sessions/<session>/. Ring-1
-        # policies are written *before* render so the read-only bind source
-        # exists; they live outside /work and are never writable by the agent.
-        _ensure_home()
-        sdir.mkdir(parents=True, exist_ok=True)
-        if plan.policies:
-            enforcer_dir = sdir / "enforcer"
-            enforcer_dir.mkdir(parents=True, exist_ok=True)
-            for fname, content in plan.policies.items():
-                (enforcer_dir / fname).write_text(content)
-            plan.policies_host_dir = str(enforcer_dir)
-        if any(p.host_path is None for p in plan.protect):
-            from .mounts import write_placeholders
-
-            plan.placeholder_host_dir = str(write_placeholders(sdir / "placeholders", plan.protect))
-        # Network observability: net/ is a sibling of home/, bind-mounted into
-        # the netgate collector only. The render refuses any harness mount that
-        # overlaps it (validate_net_isolation).
-        if plan.observe is not None:
-            from .observe import control_dir, ensure_net_dir, net_dir
-
-            plan.net_host_dir = str(ensure_net_dir(net_dir(sdir)))
-            plan.control_host_dir = str(ensure_net_dir(control_dir(env_id, session_name)))
-            from .observe import rules_file_problem
-
-            problem = rules_file_problem(Path(plan.control_host_dir))
-            if problem:
-                err.print(
-                    f"[bold red]⚠ rules.json:[/bold red] {problem} — the gate runs as you, so it will "
-                    "reject this file (status.json rules.ok: false) and enforce no rules until it is "
-                    "readable. A second writer must leave it readable by you: mode 0644, or owned by you "
-                    "(handoff §3, 'Ownership')."
-                )
-        rendered = get_runtime(cfg.runtime).render(
-            plan, sdir, overrides=frozenset(iknow)
-        )
-        if plan.observe is not None:
-            from .observe import session_facts, write_session_facts
-
-            write_session_facts(Path(plan.net_host_dir), session_facts(plan))
-            if plan.observe.record == "full":
-                err.print(
-                    "[bold red]⚠ observe.record: full[/bold red] — this session writes a browsing log to "
-                    f"{plan.net_host_dir}: the method and URL of every cleartext HTTP request"
-                    + (" and request headers (credentials redacted)" if plan.observe.record_headers else "")
-                    + ". HTTPS paths stay invisible (no TLS interception). This trades the session's "
-                    "privacy for visibility; `glove net status` and Layman badge it."
-                )
-        # Register the forced one-off now the effective harness is known: it can
-        # arrive from --config, so cfg.harness — not the CLI arg — is authoritative.
-        # After a successful render so an aborted run leaves no phantom row; a
-        # forced-env-id clash raises RegistryError, caught by the handler below.
-        if env is not None:
-            _register_forced_env(env_id, cfg.harness)
-        # Persist the run-time-resolved home into the registry as the single
-        # source of truth for external monitors (Layman). This is the only place
-        # the resolved home is known: config_home_source can arrive via --config
-        # at run time. Recorded only after the session renders (not on an aborted
-        # run), for every registered env including the default layout, as an abs
-        # realpath so a consumer needs no special-casing or symlink resolution.
-        # Path only — never config contents or secrets.
-        _record_home(env_id, home_dir)
-    except (ConfigError, ValueError, HardeningError, OSError) as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-    if plan.model is None:  # unreachable: `inference` is a required slot
-        err.print("[red]error:[/red] no inference provider")
-        raise typer.Exit(1)
-
-    # The seeded harness home lives under the session dir (see _home_dir);
-    # nothing is written to the invocation dir.
-    compose_path = sdir / "docker-compose.yml"
-    compose_path.write_text(rendered.compose_yaml)
-    effective_yaml = cfg.to_yaml()
-    # effective.yaml tracks the *current* run (used by `glove down` to tear down
-    # this run's host services); baseline.yaml is written once at session creation
-    # and never overwritten, so the grant-widening check always compares against
-    # the original session, not a drifting previous run.
-    (sdir / "glove.effective.yaml").write_text(effective_yaml)
-    baseline = sdir / "glove.baseline.yaml"
-    if not baseline.exists():
-        baseline.write_text(effective_yaml)
-    # Render with the session token (== the name of the network sidecars, and
-    # what describe/start_host_services key on below), NOT env_id: a `--name`d
-    # session's llm sidecar is glove-<env>-<name>-llm, so building the harness
-    # baseUrl from env_id alone points Pi at a host that doesn't exist
-    # ("Connection error").
-    home_files = render_home(
-        cfg, plan.profile, home_dir, plan.model, mount_plan=plan.mount_plan, comp=plan.composition
-    )
-
-    if dry_run:
-        console.print(
-            f"[bold]env:[/bold] {env_id}   "
-            f"[bold]workdir→[/bold] {plan.working_dir}   "
-            f"[bold]enforcer:[/bold] {cfg.enforcer}   "
-            f"[bold]extensions:[/bold] {', '.join(a.name for a in plan.composition.active)}"
-        )
-        console.print(f"[dim]written to {compose_path}[/dim]\n")
-        console.print(Syntax(rendered.compose_yaml, "yaml", theme="ansi_dark"))
-        _print_summary(plan, home_files)
-        describe_host_services(cfg, token, sdir)
-        print_host_setup(cfg)
+    """Materialize a session: glove-session.yml, work/ and .glove/ (0700)."""
+    if diff:
+        try:
+            sd = sdm.find(directory)
+        except SessionError as e:
+            raise _fail(str(e)) from e
+        drift = sdm.template_drift(sd)
+        if drift is None:
+            console.print("[green]✓[/green] the template is unchanged since `glove new`")
+            return
+        console.print(f"[bold]template {drift[0]} changed since `glove new`[/bold] (your file ← template now)\n")
+        console.print(Syntax(drift[1], "diff", theme="ansi_dark"))
         return
-
-    # Resolve secret references (keychain:/env:) now, in memory, so a missing
-    # key fails before anything starts.
-    from .plan import secret_env
-
     try:
-        secrets = secret_env(plan)
-    except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
+        _ensure_home()
+        reg.load_registry()  # refuse early on a v2 registry, before writing the directory
+        sd, sid = sdm.materialize(template, directory)
+        _sync_registry(sd, sid, sdm.load_file(sd))
+    except (SessionError, reg.RegistryError) as e:
+        raise _fail(str(e)) from e
+    console.print(f"[green]✓[/green] session [bold]{sid}[/bold] from template [cyan]{template}[/cyan] at {sd.root}")
+    todo = sdm.placeholders_left(sdm.load_file(sd))
+    if todo:
+        console.print(f"  set these in [cyan]{sd.file}[/cyan]: {', '.join(todo)}")
+    cd = "" if sd.root == Path.cwd().resolve() else f"cd {sd.root} && "
+    console.print(f"  then: [cyan]{cd}glove check && glove up[/cyan]")
 
-    # Start host-side helpers (SSH tunnel, Chrome, Playwright MCP) before the
-    # harness, then print anything left for the operator to run by hand. Key them
-    # by the session token (== compose project suffix) so `glove down` can find
-    # and stop them per session, not just the default unnamed one.
-    start_host_services(cfg, token, sdir)
-    print_host_setup(cfg)
-    # Non-dry-run launch lives in session.py; import lazily so --dry-run needs
-    # no provider present.
+
+# --- plan / up ---------------------------------------------------------------------
+
+
+def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
+                      overrides: frozenset[str] = frozenset()):
+    """Build the plan and write everything the session needs under .glove/
+    (policies, placeholders, compose.yml, effective/baseline, the harness home).
+    Returns (plan, compose yaml, seeded home files)."""
+    want_resume = resume or session is not None
+    prev_cfg = None
+    resume_id = session
+    if want_resume:
+        from .harness import get_profile
+
+        ref = _validate_resume(get_profile(cfg.harness), sd.home, session, sid)
+        if ref is not None:
+            resume_id = ref.id
+        prev_cfg, _ = sdm.read_effective(sd.baseline)
+    plan = build_session_plan(
+        cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
+        resume=want_resume, session_id=resume_id, state_dir=str(sd.ext),
+    )
+    if prev_cfg is not None:
+        from .sessions import widening_warnings
+
+        widened = widening_warnings(prev_cfg, cfg)
+        if widened:
+            err.print("[yellow]⚠ resuming with broader access than the original session; prior "
+                      "conversation context will run with the new grants:[/yellow]")
+            for w in widened:
+                err.print(f"  [yellow]•[/yellow] {w}")
+    _ensure_home()
+    # Ring-1 policies are written before render so the read-only bind source
+    # exists; they live in .glove/, never inside /work, never agent-writable.
+    if plan.policies:
+        enforcer_dir = sd.state / "enforcer"
+        enforcer_dir.mkdir(parents=True, exist_ok=True)
+        for fname, content in plan.policies.items():
+            (enforcer_dir / fname).write_text(content)
+        plan.policies_host_dir = str(enforcer_dir)
+    if any(p.host_path is None for p in plan.protect):
+        from .mounts import write_placeholders
+
+        plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
+    if plan.observe is not None:
+        from .observe import control_dir, ensure_net_dir, net_dir, rules_file_problem
+
+        plan.net_host_dir = str(ensure_net_dir(net_dir(sid)))
+        plan.control_host_dir = str(ensure_net_dir(control_dir(sid)))
+        problem = rules_file_problem(Path(plan.control_host_dir))
+        if problem:
+            err.print(
+                f"[bold red]⚠ rules.json:[/bold red] {problem} — the gate runs as you, so it will "
+                "reject this file (status.json rules.ok: false) and enforce no rules until it is "
+                "readable. A second writer must leave it readable by you: mode 0644, or owned by you.")
+    rendered = get_runtime(cfg.runtime).render(plan, sd.state, overrides=overrides)
+    if plan.observe is not None:
+        from .observe import session_facts, write_session_facts
+
+        write_session_facts(Path(plan.net_host_dir), session_facts(plan))
+        if plan.observe.record == "full":
+            err.print(
+                "[bold red]⚠ observe.record: full[/bold red] — this session writes a browsing log to "
+                f"{plan.net_host_dir}: the method and URL of every cleartext HTTP request"
+                + (" and request headers (credentials redacted)" if plan.observe.record_headers else "")
+                + ". HTTPS paths stay invisible (no TLS interception). This trades the session's "
+                "privacy for visibility; `glove net status` and Layman badge it.")
+    from .observe import session_grants
+
+    reg.update(sid, grants=session_grants(plan))
+    if plan.model is None:  # unreachable: `inference` is a required slot
+        raise ConfigError("no inference provider")
+    sd.compose.write_text(rendered.compose_yaml)
+    # effective.yml tracks the current run (`glove down` stops its host
+    # services; `glove plan` shows its resolutions); baseline.yml is written
+    # once, so the widening check compares against the session's origin.
+    _, resolved = sdm.read_effective(sd.effective)
+    sdm.write_effective(sd.effective, cfg, resolved)
+    if not sd.baseline.exists():
+        sdm.write_effective(sd.baseline, cfg)
+    home_files = render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan,
+                             comp=plan.composition)
+    return plan, rendered.compose_yaml, home_files
+
+
+_IKNOW = typer.Option([], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)")
+
+
+@app.command("plan")
+def plan_cmd(
+    directory: Path | None = _DIR_ARG,
+    compose: bool = typer.Option(False, "--compose", help="also print the rendered compose project"),
+    resume: bool = typer.Option(False, "--resume", "-r", help="render as `glove up --resume` would"),
+    session: str | None = typer.Option(None, "--session", help="render as `glove up --session <id>` would"),
+    iknow: list[str] = _IKNOW,
+) -> None:
+    """Render the session (writes .glove/, launches nothing) and show what it grants."""
+    if resume and session is not None:
+        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
+    try:
+        sd, _, sid, cfg = _open(directory)
+        plan, compose_yaml, home_files = _materialize_plan(sd, sid, cfg, resume=resume, session=session,
+                                                           overrides=frozenset(iknow))
+    except (ConfigError, ValueError, HardeningError, OSError) as e:
+        raise _fail(str(e)) from e
+    console.print(
+        f"[bold]session:[/bold] {sid}  [bold]dir:[/bold] {sd.root}  [bold]harness:[/bold] {cfg.harness}  "
+        f"[bold]enforcer:[/bold] {cfg.enforcer}  [bold]subnet:[/bold] {cfg.subnet or '-'}")
+    console.print(f"[dim]compose project written to {sd.compose}[/dim]")
+    if compose:
+        console.print()
+        console.print(Syntax(compose_yaml, "yaml", theme="ansi_dark"))
+    _print_extensions(plan)
+    _, resolved = sdm.read_effective(sd.effective)
+    if resolved.get("model"):
+        m = resolved["model"]
+        console.print(f"    [bold]resolved at last launch[/bold] ({resolved.get('at', '?')}): model {m.get('model')}, "
+                      f"vision={m.get('vision')}, context={m.get('context_window')}")
+    _print_summary(plan, home_files)
+    describe_host_services(cfg, sid, sd.state)
+
+
+@app.command()
+def up(
+    directory: Path | None = _DIR_ARG,
+    rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the images"),
+    resume: bool = typer.Option(False, "--resume", "-r", help="reopen the most recent conversation"),
+    session: str | None = typer.Option(None, "--session",
+                                       help="reopen a conversation by id (full/partial UUID or path)"),
+    iknow: list[str] = _IKNOW,
+) -> None:
+    """Build, start the sidecars, resolve launch-time settings, attach the harness."""
+    if resume and session is not None:
+        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
+    try:
+        sd, _, sid, cfg = _open(directory, check_runtime=True)
+        todo = sdm.placeholders_left(sdm.load_file(sd))
+        if todo:
+            raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {sdm.PLACEHOLDER})")
+        if cfg.runtime not in ("docker", "podman"):
+            raise ConfigError(f"runtime {cfg.runtime!r} is not implemented yet; use docker or podman")
+        plan, _, _ = _materialize_plan(sd, sid, cfg, resume=resume, session=session, overrides=frozenset(iknow))
+        from .plan import secret_env
+
+        # Resolve secret references (keychain:/env:) now, in memory, so a
+        # missing key fails before anything starts.
+        secrets = secret_env(plan)
+    except (ConfigError, ValueError, HardeningError, OSError) as e:
+        raise _fail(str(e)) from e
+
+    start_host_services(cfg, sid, sd.state)
     from .session import launch
 
-    # Timestamp the launch so the post-exit hint reports only a transcript THIS
-    # run actually wrote — not a stale one left in the pool by an earlier session
-    # (all harnesses default to a new session, and a new one quit before any
-    # message leaves no transcript at all, so "newest in the pool" is wrong).
+    # Only transcripts written at/after launch belong to this run (see the hint).
     launched_at = time.time()
 
     def prepare() -> None:
-        # Launch-time resolution (e.g. llm `model: auto`), through a throwaway
-        # container on the harness network, then the final harness home.
+        # Launch-time resolution (e.g. llm `model: auto`) through a throwaway
+        # container on the harness network, recorded in effective.yml, then the
+        # final harness home.
+        from dataclasses import asdict
+
         _resolve_extensions(plan, cfg.provider, secrets)
-        render_home(cfg, plan.profile, home_dir, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+        sdm.write_effective(sd.effective, cfg, {"at": _now(), "model": asdict(plan.model)})
+        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+
+    import subprocess
 
     try:
-        launch(cfg, plan, sdir, provider=cfg.provider, rebuild=cfg.rebuild, secrets=secrets, prepare=prepare)
+        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets, prepare=prepare)
     except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-    _print_resume_hint(plan.profile, home_dir, harness or cfg.harness, since=launched_at)
+        raise _fail(str(e)) from e
+    except subprocess.CalledProcessError as e:
+        raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
+                    "`glove down` removes what did start.") from e
+    _print_resume_hint(plan.profile, sd.home, since=launched_at)
 
 
 def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
@@ -500,110 +382,44 @@ def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
         plan.model = ModelDescriptor.from_exports(comp.slot_exports("inference"))
 
 
-def _resolve_run_env(env: str | None, harness: str | None, *, has_config: bool) -> str:
-    """Pick the env-id for a run: explicit --env, else (cwd, harness)."""
-    if env is not None:
-        if not _env_config_path(env).is_file() and not has_config:
-            raise ConfigError(
-                f"no env {env!r} under {envs_root()}; run `glove init` first"
-            )
-        # A forced `--env X --config Y` one-off needs no prior `glove init`. It is
-        # still registered so its home is recorded and it stays visible to external
-        # monitors — but that happens after config resolution (see
-        # _register_forced_env, called from `run`), because the harness needed to
-        # bind (dir, harness) can be supplied by `--config`, not just the CLI arg,
-        # and is not known here. This function only picks the env-id.
-        return env
-
-    cwd = os.getcwd()
-    existing = find_env_id(cwd, harness)
-    if existing is not None:
-        return existing
-    if has_config:
-        # One-off/explicit run: bind a fresh env so state still lives under
-        # ~/.glove (never the cwd).
-        return create_env(cwd, harness)
-    raise ConfigError(
-        f"no env for ({cwd}, {harness}); run `glove init {harness}` "
-        "(or pass --config for a one-off)"
-    )
-
-
-def _validate_resume(profile, home_dir: Path, session_id: str | None, env_id: str):
+def _validate_resume(profile, home_dir: Path, session_id: str | None, sid: str):
     """Validate a resume request, returning the resolved `SessionRef` or None.
 
     `--session <id>` returns the transcript find_session resolved (so the caller
     can hand the harness its canonical id). `--resume` (continue-last) returns
-    None: glove only confirms *some* transcript exists — it can't replicate the
-    harness's own project/cwd scoping, so the harness makes the final choice of
-    which session to continue. Raises ConfigError (rendered on the standard error
-    path) when there is nothing matching to resume."""
+    None: glove only confirms *some* transcript exists — the harness makes the
+    final choice of which conversation to continue."""
     from .sessions import list_sessions, match_session, sessions_dir
 
     refs = list_sessions(sessions_dir(profile, Path(home_dir)))
     if not refs:
-        raise ConfigError(
-            f"no previous session to resume for env {env_id!r}; run without "
-            "--resume/--session to start one."
-        )
+        raise ConfigError(f"no previous conversation to resume in session {sid!r}; run `glove up` without "
+                          "--resume/--session to start one.")
     if session_id is None:
         return None
     ref = match_session(refs, session_id)
     if ref is None:
-        available = "\n".join(
-            f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs
-        )
-        raise ConfigError(
-            f"no session matching {session_id!r} for env {env_id!r}. "
-            f"available:\n{available}"
-        )
+        available = "\n".join(f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs)
+        raise ConfigError(f"no conversation matching {session_id!r} in session {sid!r}. available:\n{available}")
     return ref
 
 
-def _load_baseline(sdir: Path):
-    """The session's *original* redacted config snapshot, or None if absent.
-
-    Written once at session creation and never overwritten (see the run body), so
-    the grant-widening check compares against the config the session was born
-    under, not a previous run that may itself have drifted."""
-    from .config import load_config
-
-    snapshot = sdir / "glove.baseline.yaml"
-    if not snapshot.is_file():
-        return None
-    try:
-        return load_config(snapshot)
-    except (ConfigError, ValueError):
-        return None
-
-
 def _fmt_mtime(mtime: float) -> str:
-    from datetime import datetime
-
     return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
 
-def _print_resume_hint(profile, home_dir: Path, harness: str, *, since: float) -> None:
-    """After the TUI exits, show how to reopen the session THIS run wrote.
-
-    glove never sees the harness's internal session id, so it identifies the
-    run's transcript by mtime: only files written at/after ``since`` (the launch
-    time) belong to this run. If none were (a fresh session quit before any
-    message persists nothing), report no id rather than a stale pool leftover —
-    that leftover is an unrelated earlier session, and pointing ``--session`` at
-    it would resume the wrong conversation."""
+def _print_resume_hint(profile, home_dir: Path, *, since: float) -> None:
+    """After the TUI exits, show how to reopen the conversation THIS run wrote
+    (identified by mtime; a fresh one quit before any message leaves none)."""
     from .sessions import list_sessions, sessions_dir
 
     refs = [r for r in list_sessions(sessions_dir(profile, Path(home_dir))) if r.mtime >= since]
     if not refs:
         return
     newest = refs[0]
-    console.print(f"\n[bold]session saved:[/bold] {newest.id}")
-    console.print(f"  resume last:     [cyan]glove {harness} <same args> --resume[/cyan]")
-    console.print(
-        f"  resume this one: [cyan]glove {harness} <same args> "
-        f"--session {newest.id}[/cyan]"
-    )
+    console.print(f"\n[bold]conversation saved:[/bold] {newest.id}")
+    console.print("  resume last:     [cyan]glove up --resume[/cyan]")
+    console.print(f"  resume this one: [cyan]glove up --session {newest.id}[/cyan]")
 
 
 def _print_summary(plan, home_files) -> None:
@@ -624,9 +440,7 @@ def _print_summary(plan, home_files) -> None:
             f"scope={s.gate.scope or 'per-destination'})[/cyan]"
             if s.gate else ""
         )
-        console.print(
-            f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{gate}"
-        )
+        console.print(f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{gate}")
     if plan.observe is not None and plan.net_host_dir:
         console.print(
             f"[bold]network observability[/bold] (record={plan.observe.record}): flows → "
@@ -637,305 +451,8 @@ def _print_summary(plan, home_files) -> None:
         console.print(f"  {f}")
     console.print(
         "[bold]persists on host[/bold] (container /home/agent is bind-mounted):\n"
-        f"  {home_files[0].parent}  [dim]— config, logs/, session transcripts, history[/dim]"
+        f"  {plan.home_dir}  [dim]— config, logs/, conversation transcripts, history[/dim]"
     )
-
-
-@app.command()
-def config(
-    harness: str | None = typer.Argument(
-        None, help="harness, to resolve the env from cwd"
-    ),
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-    path: bool = typer.Option(False, "--path", help="print the config path only"),
-    edit: bool = typer.Option(False, "--edit", help="open the config in $EDITOR"),
-) -> None:
-    """Locate (or open) an environment's `glove.yaml`."""
-    try:
-        env_id = _locate_env(env, harness)
-    except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    cfg_path = _env_config_path(env_id)
-    if not cfg_path.is_file():
-        err.print(f"[red]error:[/red] no config at {cfg_path}; run `glove init` first")
-        raise typer.Exit(1)
-
-    if edit:
-        editor = os.environ.get("EDITOR", "vi")
-        import subprocess
-
-        subprocess.run([editor, str(cfg_path)], check=False)
-        return
-    if path:
-        console.print(str(cfg_path))
-        return
-    console.print(f"[bold]{env_id}[/bold]  [dim]{cfg_path}[/dim]\n")
-    console.print(Syntax(cfg_path.read_text(), "yaml", theme="ansi_dark"))
-
-
-def _locate_env(env: str | None, harness: str | None) -> str:
-    """Resolve an env-id from --env, (cwd, harness), or a unique cwd match."""
-    if env is not None:
-        return env
-    cwd = os.getcwd()
-    if harness is not None:
-        existing = find_env_id(cwd, harness)
-        if existing is None:
-            raise ConfigError(f"no env for ({cwd}, {harness})")
-        return existing
-    cwd_real = os.path.realpath(cwd)
-    matches = [e for e in load_registry() if e.dir == cwd_real]
-    if not matches:
-        raise ConfigError(f"no env registered for {cwd_real}")
-    if len(matches) > 1:
-        ids = ", ".join(m.env_id for m in matches)
-        raise ConfigError(f"multiple envs for this dir ({ids}); pass a harness or --env")
-    return matches[0].env_id
-
-
-@app.command()
-def down(
-    env_id: str | None = typer.Argument(None, help="env-id to tear down"),
-    name: str | None = typer.Option(
-        None, "--name", help="tear down only this session (default: all sessions of the env)"
-    ),
-    provider: str | None = typer.Option(None),
-    wipe: bool = typer.Option(
-        False, "--wipe", help="also remove the config volume and the network-observability record"
-    ),
-) -> None:
-    """Tear down an env's sessions (compose projects) and their host services.
-
-    Every session of the env is torn down — including `--name`d ones, whose
-    compose project is `glove-<env>-<name>` — unless `--name` narrows it to one.
-    """
-    from .config import load_config
-    from .registry import sessions_root
-    from .session import teardown
-
-    if env_id is None:
-        cwd_real = os.path.realpath(os.getcwd())
-        matches = [e for e in load_registry() if e.dir == cwd_real]
-        if len(matches) == 1:
-            env_id = matches[0].env_id
-        elif not matches:
-            err.print(f"[red]error:[/red] no env registered for {cwd_real}; pass an env-id")
-            raise typer.Exit(1)
-        else:
-            ids = ", ".join(m.env_id for m in matches)
-            err.print(f"[red]error:[/red] multiple envs for this dir ({ids}); pass an env-id")
-            raise typer.Exit(1)
-
-    prov = provider or _autodetect_provider()
-    # Session dirs are named by the bare session name (env-id for the default,
-    # unnamed session; the --name value otherwise). Their compose project is
-    # keyed by the session *token* (glove-<env>[-<name>]).
-    sroot = sessions_root(env_id)
-    if name is not None:
-        session_names = [name]
-    elif sroot.is_dir():
-        session_names = sorted(p.name for p in sroot.iterdir() if p.is_dir())
-    else:
-        session_names = []
-    # Fall back to the default session so a legacy/never-run env still tears down.
-    if not session_names:
-        session_names = [env_id]
-
-    for sname in session_names:
-        sdir = session_dir(env_id, sname)
-        token = session_token(env_id, sname)
-        effective = sdir / "glove.effective.yaml"
-        if effective.exists():
-            try:
-                cfg = load_config(effective)
-                token = cfg.resolved_name()
-                console.print(f"[bold]stopping host services…[/bold] ({sname})")
-                stop_host_services(cfg, token, sdir)
-            except Exception as e:
-                err.print(f"[yellow]warn:[/yellow] host-service teardown skipped for {sname}: {e}")
-        teardown(token, provider=prov, wipe=wipe)
-        if wipe:
-            from .observe import net_dir, wipe_flow_record
-
-            removed = wipe_flow_record(net_dir(sdir))
-            if removed:
-                console.print(f"[dim]removed {removed} network-observability file(s) from {net_dir(sdir)}[/dim]")
-
-
-@app.command()
-def build(
-    harness: str | None = typer.Argument(
-        None, help=f"harness image to build ({', '.join(known_harnesses())}); "
-        "omit to build the forwarder + netgate only"
-    ),
-    provider: str | None = typer.Option(None),
-    enforcer: str | None = typer.Option(
-        None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"
-    ),
-    rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
-) -> None:
-    """Build the forwarder + netgate and (optionally) a harness base image.
-    Extension layers are composed per session by `glove run`."""
-    from .harness import get_profile
-    from .observe import build_netgate
-    from .session import build_forwarder, build_harness
-
-    prov = provider or _autodetect_provider()
-    build_forwarder(prov, force=rebuild)
-    build_netgate(prov, force=rebuild, console=console)
-    if harness:
-        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
-
-
-@app.command("ls")
-def list_envs() -> None:
-    """List environments: `env-id  harness  <-  invocation-dir  (workdir)`."""
-    entries = load_registry()
-    if not entries:
-        console.print("[dim]no envs — run `glove init <harness>`[/dim]")
-        return
-    for e in sorted(entries, key=lambda x: x.env_id):
-        workdir = ""
-        cfg_path = _env_config_path(e.env_id)
-        if cfg_path.is_file():
-            try:
-                data = yaml.safe_load(cfg_path.read_text()) or {}
-                workdir = data.get("workdir", "") or ""
-            except (yaml.YAMLError, OSError):
-                pass
-        wd = f"  [dim](work: {workdir})[/dim]" if workdir else ""
-        console.print(
-            f"[bold]{e.env_id}[/bold]  [cyan]{e.harness}[/cyan]  "
-            f"[dim]<-[/dim]  {e.dir}{wd}"
-        )
-
-
-@app.command()
-def doctor(
-    env: str | None = typer.Option(None, "--env", help="read runtime/enforcer/browser from an env's config"),
-    runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
-    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
-    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
-    no_container: bool = typer.Option(
-        False, "--no-container", help="skip container probes (host-only, fast)"
-    ),
-) -> None:
-    """Probe host + runtime + enforcer (+ an env's extensions) readiness."""
-    import json as _json
-
-    from .doctor import run_doctor, worst_status
-
-    rt, enf, exts = runtime or "docker", enforcer or "nono", {}
-    if env is not None:
-        cfg_path = _env_config_path(env)
-        if cfg_path.is_file():
-            data = yaml.safe_load(cfg_path.read_text()) or {}
-            rt = runtime or data.get("runtime", rt)
-            enf = enforcer or data.get("enforcer", enf)
-            exts = data.get("extensions") or {}
-            harness_name = data.get("harness", "pi")
-
-    try:
-        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
-        if exts:
-            from .doctor import extension_checks
-
-            checks += extension_checks(exts, harness=harness_name)
-    except ValueError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    if json_out:
-        console.print_json(
-            _json.dumps({"runtime": rt, "enforcer": enf, "extensions": sorted(exts),
-                         "checks": [c.to_dict() for c in checks]})
-        )
-    else:
-        glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
-                 "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
-        from rich.markup import escape
-
-        console.print(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}\n")
-        for c in checks:
-            console.print(
-                f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  "
-                f"[dim]{escape(c.detail)}[/dim]"
-            )
-    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
-
-
-policy_app = typer.Typer(add_completion=False, help="Inspect rendered ring-1 policies + ring-0 hardening.")
-app.add_typer(policy_app, name="policy")
-
-
-@policy_app.command("show")
-def policy_show(
-    harness: str | None = typer.Argument(None, help="harness, to resolve the env from cwd"),
-    env: str | None = typer.Option(None, "--env", help="select an env by id"),
-) -> None:
-    """Print the rendered ring-1 policies and the ring-0 hardening for review."""
-    try:
-        env_id = _locate_env(env, harness)
-    except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    cfg = resolve(env_config_path=_env_config_path(env_id), overrides={})
-    try:
-        # policy_show inspects the default (unnamed) session; it renders no home,
-        # so the path only labels the plan's read-only bind row.
-        plan = build_session_plan(
-            cfg,
-            env_id=env_id,
-            home_dir=str(_home_dir(cfg, session_dir(env_id, env_id))),
-            cwd=os.getcwd(),
-            state_dir=str(session_dir(env_id, env_id) / "ext"),
-        )
-    except (ConfigError, ValueError) as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-
-    h = plan.hardening
-    console.print(
-        f"[bold]{env_id}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
-        f"extensions={', '.join(a.name for a in plan.composition.active)}\n"
-    )
-    console.print("[bold]ring 0 — hardening[/bold]")
-    console.print(
-        f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
-        f"cap_add={list(h.cap_add) or '[]'}  no_new_privileges={h.no_new_privileges}"
-    )
-    console.print(
-        f"  read_only={h.read_only}  ipc={h.ipc}  pids={h.limits.pids}  "
-        f"mem={h.limits.memory}  cpus={h.limits.cpus}"
-    )
-    console.print(f"  seccomp={h.seccomp_profile}")
-    if h.systempaths_unconfined:
-        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys "
-                      "exposed to the container (srt strong)")
-    console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
-
-    _print_extensions(plan)
-    hs = [h.name for h in cfg.host_services]
-    if hs:
-        console.print(f"  [dim]host services (run on host): {hs}[/dim]")
-
-    if not plan.policies:
-        console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")
-    else:
-        for fname in sorted(plan.policies):
-            console.print(f"\n[bold]ring 1 — {fname}[/bold]")
-            console.print(Syntax(plan.policies[fname].rstrip(), "json", theme="ansi_dark"))
-
-    from .enforcers import get_enforcer
-
-    enf = get_enforcer(cfg.enforcer)
-    if hasattr(enf, "gaps"):
-        console.print("\n[bold yellow]documented gaps[/bold yellow]")
-        for g in enf.gaps(plan):
-            console.print(f"  [yellow]![/yellow] {g}")
 
 
 def _print_extensions(plan) -> None:
@@ -967,55 +484,365 @@ def _print_extensions(plan) -> None:
                       f"context={m.context_window}, key={'yes' if m.api_key_env else 'no'})")
 
 
-net_app = typer.Typer(
-    add_completion=False,
-    help="Network observability: gate status and flow records (net/ of a session).",
-)
+# --- check -------------------------------------------------------------------------
+
+
+@app.command()
+def check(
+    directory: Path | None = _DIR_ARG,
+    no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
+) -> None:
+    """Validate the session file, check its secrets exist (never reads them),
+    and run doctor for its runtime, enforcer and extensions."""
+    from rich.markup import escape
+
+    from .config import secret_exists
+    from .doctor import extension_checks, run_doctor, worst_status
+    from .plan import secret_refs
+    from .runtimes.base import Check
+
+    try:
+        sd, raw, sid, cfg = _open(directory, register=False)
+    except (ConfigError, ValueError) as e:
+        raise _fail(str(e)) from e
+    checks: list[Check] = [Check("session file", "ok", f"{sd.file} (schema v{sdm.SCHEMA_VERSION})")]
+    todo = sdm.placeholders_left(raw)
+    if todo:
+        checks.append(Check("placeholders", "fail", f"still {sdm.PLACEHOLDER}: {', '.join(todo)}"))
+    else:
+        try:
+            plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
+                                      state_dir=str(sd.ext))
+            checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
+            for label, ref in secret_refs(plan):
+                ok, detail = secret_exists(ref)
+                checks.append(Check(f"secret {label}", "ok" if ok else "fail", f"{ref}: {detail}"))
+        except (ConfigError, ValueError) as e:
+            checks.append(Check("plan", "fail", str(e)))
+    drift = sdm.template_drift(sd)
+    if drift is not None:
+        checks.append(Check("template", "warn",
+                            f"{drift[0]} changed since `glove new`; review with `glove new --diff`"))
+    try:
+        checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
+        checks += extension_checks(cfg.extensions, harness=cfg.harness)
+    except ValueError as e:
+        checks.append(Check("doctor", "fail", str(e)))
+    glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
+             "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
+    console.print(f"[bold]glove check[/bold]  {sid}  ({sd.root})\n")
+    for c in checks:
+        console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
+    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+
+
+# --- down / rm / ls / ps / gc -----------------------------------------------------------
+
+
+def _stop(sd: SessionDir, sid: str, provider: str, *, wipe: bool) -> None:
+    from .session import teardown
+
+    cfg, _ = sdm.read_effective(sd.effective)
+    if cfg is not None and cfg.host_services:
+        console.print("[bold]stopping host services…[/bold]")
+        try:
+            stop_host_services(cfg, sid, sd.state)
+        except Exception as e:
+            err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
+    teardown(sid, provider=provider, wipe=wipe)
+    if wipe:
+        from .observe import net_dir, wipe_flow_record
+
+        removed = wipe_flow_record(net_dir(sid))
+        if removed:
+            console.print(f"[dim]removed {removed} network-observability file(s) from {net_dir(sid)}[/dim]")
+
+
+@app.command()
+def down(
+    directory: Path | None = _DIR_ARG,
+    provider: str | None = typer.Option(None),
+    wipe: bool = typer.Option(False, "--wipe", help="also remove volumes and the network-observability record"),
+) -> None:
+    """Stop the session's containers and host services."""
+    try:
+        sd = sdm.find(directory)
+    except SessionError as e:
+        raise _fail(str(e)) from e
+    sid = sd.read_id()
+    if sid is None:
+        raise _fail(f"{sd.root} has never been launched (no .glove/id)")
+    _stop(sd, sid, provider or _autodetect_provider(), wipe=wipe)
+
+
+def _remove_exports(sid: str) -> list[Path]:
+    gone = []
+    for p in (reg.observe_dir(sid), reg.control_dir(sid)):
+        if p.is_dir():
+            shutil.rmtree(p)
+            gone.append(p)
+    return gone
+
+
+@app.command()
+def rm(
+    directory: Path | None = _DIR_ARG,
+    all_: bool = typer.Option(False, "--all", help="also delete the directory itself (work/ included)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
+    provider: str | None = typer.Option(None),
+) -> None:
+    """`down --wipe`, then delete .glove/, the exports and the registry row.
+    work/ and glove-session.yml stay unless --all."""
+    try:
+        sd = sdm.find(directory)
+    except SessionError as e:
+        raise _fail(str(e)) from e
+    sid = sd.read_id()
+    what = f"the whole directory {sd.root}" if all_ else f"{sd.state} (work/ and {sdm.SESSION_FILE} stay)"
+    if not yes and not typer.confirm(f"Remove session {sid or '(never launched)'}: {what}?", default=False):
+        raise typer.Exit(1)
+    if sid is not None:
+        _stop(sd, sid, provider or _autodetect_provider(), wipe=True)
+        for p in _remove_exports(sid):
+            console.print(f"[dim]removed {p}[/dim]")
+        try:
+            reg.remove({sid})
+        except reg.RegistryError as e:
+            err.print(f"[yellow]warn:[/yellow] {e}")
+    if all_:
+        shutil.rmtree(sd.root)
+    elif sd.state.exists():
+        sdm.remove_state(sd)
+    console.print(f"[green]✓[/green] removed {what}")
+
+
+def _row_state(e: reg.SessionEntry) -> str:
+    sd = SessionDir(Path(e.dir))
+    if not sd.root.is_dir():
+        return "missing"
+    return "ok" if sd.read_id() == e.id else "stale"
+
+
+@app.command("ls")
+def list_cmd() -> None:
+    """Registered sessions: id, harness, template, state, directory."""
+    try:
+        entries = reg.load_registry()
+    except reg.RegistryError as e:
+        raise _fail(str(e)) from e
+    if not entries:
+        console.print("[dim]no sessions — create one with `glove new <template> <dir>`[/dim]")
+        return
+    colour = {"ok": "green", "missing": "red", "stale": "yellow"}
+    for e in sorted(entries, key=lambda x: x.id):
+        st = _row_state(e)
+        observed = " [cyan]observe[/cyan]" if (e.grants or {}).get("observe") else ""
+        console.print(f"[bold]{e.id}[/bold]  [cyan]{e.harness}[/cyan]  {e.template or '-'}  "
+                      f"[{colour[st]}]{st}[/{colour[st]}]{observed}  {e.dir}")
+    if any(_row_state(e) != "ok" for e in entries):
+        console.print("[dim]missing/stale rows (and their exports) are removed by `glove gc`[/dim]")
+
+
+@app.command("ps")
+def ps_cmd(runtime: str | None = typer.Option(None, "--runtime", help="docker | podman")) -> None:
+    """Running glove sessions (compose projects) and their directories."""
+    rt = get_runtime(runtime or _autodetect_provider())
+    running = rt.ps()
+    if not running:
+        console.print("[dim]no running glove sessions[/dim]")
+        return
+    try:
+        dirs = {e.id: e.dir for e in reg.load_registry()}
+    except reg.RegistryError:
+        dirs = {}
+    for s in sorted(running, key=lambda x: x.project):
+        console.print(f"[bold]{s.session}[/bold]  {dirs.get(s.session, '[dim](not registered)[/dim]')}  "
+                      f"[dim]({len(s.services)} containers: {', '.join(sorted(s.services))})[/dim]")
+
+
+@app.command()
+def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> None:
+    """Remove registry rows whose directory is gone (or no longer that session),
+    with their exports under ~/.glove/observe and ~/.glove/control."""
+    try:
+        entries = reg.load_registry()
+    except reg.RegistryError as e:
+        raise _fail(str(e)) from e
+    dead = {e.id for e in entries if _row_state(e) != "ok"}
+    live = {e.id for e in entries} - dead
+    orphans: list[Path] = []
+    for root in (reg.glove_home() / "observe", reg.glove_home() / "control"):
+        if root.is_dir():
+            # only v3 session ids: anything else there is not glove v3's to remove
+            orphans += [p for p in sorted(root.iterdir())
+                        if p.is_dir() and sdm.ID_RE.match(p.name) and p.name not in live]
+    if not dead and not orphans:
+        console.print("[green]✓[/green] nothing to collect")
+        return
+    for sid in sorted(dead):
+        console.print(f"  registry row {sid}")
+    for p in orphans:
+        console.print(f"  {p}")
+    if not yes and not typer.confirm("Remove these?", default=False):
+        raise typer.Exit(1)
+    for p in orphans:
+        shutil.rmtree(p)
+    reg.remove(dead)
+    console.print(f"[green]✓[/green] removed {len(dead)} row(s), {len(orphans)} export dir(s)")
+
+
+# --- keychain / build / doctor / policy ---------------------------------------------------
+
+keychain_app = typer.Typer(add_completion=False,
+                           help="Secrets in the macOS Keychain (referenced as keychain:<service>).")
+app.add_typer(keychain_app, name="keychain")
+
+
+@keychain_app.command("set")
+def keychain_set_cmd(service: str = typer.Argument(..., help="Keychain service name")) -> None:
+    """Store (or replace) a secret, prompting for it — it never appears in argv or a file."""
+    from .config import keychain_set
+
+    try:
+        rc = keychain_set(service)
+    except ConfigError as e:
+        raise _fail(str(e)) from e
+    if rc != 0:
+        raise typer.Exit(rc)
+    console.print(f"[green]✓[/green] stored; reference it as [cyan]keychain:{service}[/cyan]")
+
+
+@app.command()
+def build(
+    harness: str | None = typer.Argument(
+        None, help=f"harness image to build ({', '.join(known_harnesses())}); "
+                   "omit to build the forwarder + netgate only"
+    ),
+    provider: str | None = typer.Option(None),
+    enforcer: str | None = typer.Option(None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"),
+    rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
+) -> None:
+    """Build the forwarder + netgate and (optionally) a harness base image.
+    Extension layers are composed per session by `glove up`."""
+    from .harness import get_profile
+    from .observe import build_netgate
+    from .session import build_forwarder, build_harness
+
+    prov = provider or _autodetect_provider()
+    build_forwarder(prov, force=rebuild)
+    build_netgate(prov, force=rebuild, console=console)
+    if harness:
+        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
+
+
+@app.command()
+def doctor(
+    runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
+    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
+    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
+    no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
+) -> None:
+    """Probe host + runtime + enforcer readiness (`glove check` adds a session's extensions)."""
+    import json as _json
+
+    from rich.markup import escape
+
+    from .doctor import run_doctor, worst_status
+
+    rt, enf = runtime or "docker", enforcer or "nono"
+    try:
+        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
+    except ValueError as e:
+        raise _fail(str(e)) from e
+    if json_out:
+        console.print_json(_json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]}))
+    else:
+        glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
+                 "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
+        console.print(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}\n")
+        for c in checks:
+            console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
+    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+
+
+@app.command()
+def policy(directory: Path | None = _DIR_ARG) -> None:
+    """Print the rendered ring-1 policies and the ring-0 hardening for review."""
+    try:
+        sd, _, sid, cfg = _open(directory, register=False)
+        plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext))
+    except (ConfigError, ValueError) as e:
+        raise _fail(str(e)) from e
+
+    h = plan.hardening
+    console.print(f"[bold]{sid}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
+                  f"extensions={', '.join(a.name for a in plan.composition.active)}\n")
+    console.print("[bold]ring 0 — hardening[/bold]")
+    console.print(f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
+                  f"cap_add={list(h.cap_add) or '[]'}  no_new_privileges={h.no_new_privileges}")
+    console.print(f"  read_only={h.read_only}  ipc={h.ipc}  pids={h.limits.pids}  "
+                  f"mem={h.limits.memory}  cpus={h.limits.cpus}")
+    console.print(f"  seccomp={h.seccomp_profile}")
+    if h.systempaths_unconfined:
+        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys exposed to the container "
+                      "(srt strong)")
+    console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
+    _print_extensions(plan)
+    hs = [x.name for x in cfg.host_services]
+    if hs:
+        console.print(f"  [dim]host services (run on host): {hs}[/dim]")
+    if not plan.policies:
+        console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")
+    else:
+        for fname in sorted(plan.policies):
+            console.print(f"\n[bold]ring 1 — {fname}[/bold]")
+            console.print(Syntax(plan.policies[fname].rstrip(), "json", theme="ansi_dark"))
+    from .enforcers import get_enforcer
+
+    enf = get_enforcer(cfg.enforcer)
+    if hasattr(enf, "gaps"):
+        console.print("\n[bold yellow]documented gaps[/bold yellow]")
+        for g in enf.gaps(plan):
+            console.print(f"  [yellow]![/yellow] {g}")
+
+
+# --- net (network observability; moves to the observe/filter extensions in M5) ----------
+
+net_app = typer.Typer(add_completion=False, help="Network observability: gate status, flow records, rules.")
 app.add_typer(net_app, name="net")
 
-
-_NET_ENV_OPT = typer.Option(None, "--env", help="select an env by id")
-_NET_SESSION_OPT = typer.Option(None, "--session", help="session name (default: the env's default)")
+_NET_DIR_OPT = typer.Option(None, "--dir", help="session directory (default: the nearest one)")
 
 
-def _net_session(env: str | None, session: str | None) -> tuple[str, str]:
-    """(env_id, session name) — `--session` is the session *name* (default:
-    the env's default session), not a transcript id."""
-    env_id = _locate_env(env, None)
-    return env_id, session or env_id
-
-
-def _net_dir_for(env: str | None, session: str | None) -> tuple[str, str, Path]:
-    """(env_id, session name, net dir)."""
-    from .observe import net_dir
-
-    env_id, sname = _net_session(env, session)
-    return env_id, sname, net_dir(session_dir(env_id, sname))
+def _net_session(directory: Path | None) -> str:
+    sd = sdm.find(directory)
+    sid = sd.read_id()
+    if sid is None:
+        raise SessionError(f"{sd.root} has never been launched (no .glove/id)")
+    return sid
 
 
 @net_app.command("status")
 def net_status(
-    env: str | None = _NET_ENV_OPT,
-    session: str | None = _NET_SESSION_OPT,
+    directory: Path | None = _NET_DIR_OPT,
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
 ) -> None:
     """Gate health, record mode, services, upstream and resolver state."""
     import json as _json
 
-    from .netview import summarize
+    from .netview import render_status, summarize
+    from .observe import net_dir
 
     try:
-        env_id, sname, ndir = _net_dir_for(env, session)
+        sid = _net_session(directory)
     except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
+        raise _fail(str(e)) from e
+    ndir = net_dir(sid)
     summary = summarize(ndir)
     if json_out:
         console.print_json(_json.dumps(summary))
         return
-    from .netview import render_status
-
-    for line in render_status(env_id, sname, ndir, summary):
+    for line in render_status(sid, ndir, summary):
         console.print(line, highlight=False)
     if not summary["observed"]:
         raise typer.Exit(1)
@@ -1023,8 +850,7 @@ def net_status(
 
 @net_app.command("flows")
 def net_flows(
-    env: str | None = _NET_ENV_OPT,
-    session: str | None = _NET_SESSION_OPT,
+    directory: Path | None = _NET_DIR_OPT,
     follow: bool = typer.Option(False, "--follow", "-f", help="keep tailing (survives rotation)"),
     json_out: bool = typer.Option(False, "--json", help="print raw NDJSON records"),
     tail: int | None = typer.Option(None, "--tail", "-n", help="only the last N records"),
@@ -1033,15 +859,14 @@ def net_flows(
     import json as _json
 
     from .netview import follow_records, format_record, iter_records
+    from .observe import net_dir
 
     try:
-        _, _, ndir = _net_dir_for(env, session)
+        ndir = net_dir(_net_session(directory))
     except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
+        raise _fail(str(e)) from e
     if not ndir.is_dir():
-        err.print(f"[red]error:[/red] no net/ dir at {ndir} — is `observe.enabled` on for this session?")
-        raise typer.Exit(1)
+        raise _fail(f"no net/ dir at {ndir} — is `observe.enabled` on for this session?")
 
     def emit(rec: dict) -> None:
         if json_out:
@@ -1063,12 +888,13 @@ def net_flows(
             pass
 
 
-def _rules_target(env: str | None, session: str | None) -> tuple[str, str, Path]:
-    """(env_id, session token, rules.json path) for `glove net block|unblock|rules`."""
+def _rules_target(directory: Path | None) -> tuple[str, Path]:
+    """(session id, rules.json path). The id is both the rules file's `env`
+    and its `session` (Layman handoff §3)."""
     from .observe import control_dir
 
-    env_id, sname = _net_session(env, session)
-    return env_id, session_token(env_id, sname), control_dir(env_id, sname) / "rules.json"
+    sid = _net_session(directory)
+    return sid, control_dir(sid) / "rules.json"
 
 
 @net_app.command("block")
@@ -1078,8 +904,7 @@ def net_block(
     terminate: bool = typer.Option(False, "--terminate", help="also cut matching established flows"),
     allow: bool = typer.Option(False, "--allow", help="write an allow rule instead (e.g. under default block)"),
     note: str | None = typer.Option(None, "--note", help="free-text note shown in `glove net rules`"),
-    env: str | None = _NET_ENV_OPT,
-    session: str | None = _NET_SESSION_OPT,
+    directory: Path | None = _NET_DIR_OPT,
 ) -> None:
     """Append a rule to the session's rules.json (the file Layman writes too).
 
@@ -1090,38 +915,35 @@ def net_block(
     from .netrules import block_rule, load, save
 
     try:
-        env_id, token, path = _rules_target(env, session)
-        data = load(path, env_id, token)
+        sid, path = _rules_target(directory)
+        data = load(path, sid, sid)
         rule = block_rule(target, port=port, terminate=terminate, note=note, action="allow" if allow else "block")
         data["rules"] = [*data["rules"], rule]
-        save(path, data, env_id, token)
+        save(path, data, sid, sid)
     except (ConfigError, PolicyError, OSError) as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
+        raise _fail(str(e)) from e
     console.print(f"[green]✓[/green] {rule['action']} {rule['match']} → {rule['id']}  [dim]{path}[/dim]")
 
 
 @net_app.command("unblock")
 def net_unblock(
     key: str = typer.Argument(..., help="rule id (r_…) or the exact host glob / IP / CIDR it matches"),
-    env: str | None = _NET_ENV_OPT,
-    session: str | None = _NET_SESSION_OPT,
+    directory: Path | None = _NET_DIR_OPT,
 ) -> None:
     """Remove rules by id or by the exact target they match."""
     from .netgate.policy import PolicyError
     from .netrules import load, remove, save
 
     try:
-        env_id, token, path = _rules_target(env, session)
-        data = load(path, env_id, token)
+        sid, path = _rules_target(directory)
+        data = load(path, sid, sid)
         gone = remove(data, key)
         if not gone:
             err.print(f"[yellow]no rule matches {key!r}[/yellow]")
             raise typer.Exit(1)
-        save(path, data, env_id, token)
+        save(path, data, sid, sid)
     except (ConfigError, PolicyError, OSError) as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
+        raise _fail(str(e)) from e
     for r in gone:
         console.print(f"[green]✓[/green] removed {r['id']} ({r['action']} {r['match']})")
 
@@ -1152,11 +974,8 @@ def _rules_file_state(path: Path, st: dict) -> str:
 @net_app.command("validate")
 def net_validate(
     file: str = typer.Argument(..., help="rules.json to check, or - for stdin"),
-    env: str | None = typer.Option(None, "--env", help="the gate's env id: the file's `env` must equal it"),
-    session: str | None = typer.Option(
-        None, "--session",
-        help="the gate's session TOKEN (the file's `session` value: <env> or <env>-<name>), "
-             "not the directory name the other `net` commands take"),
+    env: str | None = typer.Option(None, "--env", help="the gate's session id: the file's `env` must equal it"),
+    session: str | None = typer.Option(None, "--session", help="the file's `session` must equal it (the session id)"),
     json_out: bool = typer.Option(False, "--json", help="one JSON object on stdout"),
 ) -> None:
     """Check a rules file with the gate's own validator. Pure: reads only FILE —
@@ -1192,33 +1011,30 @@ def net_validate(
 
 @net_app.command("rules")
 def net_rules(
-    env: str | None = _NET_ENV_OPT,
-    session: str | None = _NET_SESSION_OPT,
+    directory: Path | None = _NET_DIR_OPT,
     json_out: bool = typer.Option(False, "--json", help="print the rules document"),
 ) -> None:
     """Show the effective rules, their provenance, and the gate's load result."""
     import json as _json
 
     from .netgate.policy import PolicyError
+    from .netgate.writer import read_json_dict
     from .netrules import load
+    from .observe import net_dir
 
     try:
-        env_id, token, path = _rules_target(env, session)
-        data = load(path, env_id, token)
-        problem = None
+        sid, path = _rules_target(directory)
+    except ConfigError as e:
+        raise _fail(str(e)) from e
+    try:
+        data, problem = load(path, sid, sid), None
     except PolicyError as e:
         data, problem = None, str(e)
-    except ConfigError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
     if json_out:
         console.print_json(_json.dumps(data or {"error": problem}))
         return
-    from .netgate.writer import read_json_dict
-
-    _, sname, ndir = _net_dir_for(env, session)
-    status = read_json_dict(ndir / "status.json") or {}
-    console.print(f"[bold]{env_id}[/bold] / session [bold]{sname}[/bold]  [dim]{path}[/dim]")
+    status = read_json_dict(net_dir(sid) / "status.json") or {}
+    console.print(f"[bold]{sid}[/bold]  [dim]{path}[/dim]")
     if problem:
         console.print(f"  [red]rules.json is invalid:[/red] {problem}")
         console.print("  [dim]the gate keeps its last known-good set until this is fixed[/dim]")
@@ -1238,23 +1054,6 @@ def net_rules(
         console.print(f"  {i:>2}. {r['action']:<5} {r['match']}  [dim]{r['id']}[/dim]{extra}", highlight=False)
 
 
-@app.command("ps")
-def list_sessions(
-    runtime: str | None = typer.Option(None, "--runtime", help="docker | podman"),
-) -> None:
-    """List running glove sessions (compose projects)."""
-    rt = get_runtime(runtime or _autodetect_provider())
-    sessions = rt.ps()
-    if not sessions:
-        console.print("[dim]no running glove sessions[/dim]")
-        return
-    for s in sorted(sessions, key=lambda x: x.project):
-        console.print(
-            f"[bold]{s.project}[/bold]  [dim]({len(s.services)} services: "
-            f"{', '.join(sorted(s.services))})[/dim]"
-        )
-
-
 @app.command()
 def version() -> None:
     """Print the glove version."""
@@ -1262,10 +1061,6 @@ def version() -> None:
 
 
 def main() -> None:
-    """Entry point: rewrite `glove <harness> ...` → `glove run <harness> ...`."""
-    argv = sys.argv[1:]
-    if argv and not argv[0].startswith("-") and argv[0] not in SUBCOMMANDS | {"--help"}:
-        sys.argv.insert(1, "run")
     app()
 
 

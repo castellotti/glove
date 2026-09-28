@@ -196,6 +196,7 @@ class DockerRuntime:
             "harness_host_gateway": plan.network.harness_host_gateway,
             "hostgw_network": plan.network.hostgw_network,
             "session_networks": plan.network.session_networks,
+            "subnets": plan.network.subnets,
             "forwarder_image": plan.forwarder_image,
             "uid": plan.uid,
             "gid": plan.gid,
@@ -220,6 +221,23 @@ class DockerRuntime:
         )
 
     # --- lifecycle inspection ---------------------------------------------
+
+    def network_subnets(self) -> dict[str, list[str]]:
+        """Every existing network's IPv4 subnets, by name (empty when the
+        runtime is unavailable) — for subnet allocation that avoids them."""
+        if not shutil.which(self.cli):
+            return {}
+        ids = subprocess.run([self.cli, "network", "ls", "-q"], capture_output=True, text=True, check=False)
+        if ids.returncode != 0 or not ids.stdout.split():
+            return {}
+        out = subprocess.run(
+            [self.cli, "network", "inspect", "-f", "{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}",
+             *ids.stdout.split()], capture_output=True, text=True, check=False)
+        nets: dict[str, list[str]] = {}
+        for line in out.stdout.splitlines():
+            name, *subnets = line.split()
+            nets[name] = [x for x in subnets if "." in x]
+        return nets
 
     def ps(self) -> list[RunningSession]:
         if not shutil.which(self.cli):

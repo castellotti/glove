@@ -38,21 +38,19 @@ def test_ensure_home_creates_home_and_control_idempotently(ghome):
 
 
 def test_any_registry_write_creates_control(ghome, tmp_path):
-    registry.create_env(str(tmp_path), "pi")
+    registry.upsert(registry.SessionEntry(id="s-000000", dir=str(tmp_path), harness="pi"))
     assert (ghome / "control").is_dir() and (ghome / "registry.json").is_file()
 
 
-def test_cli_init_creates_control(ghome, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+def test_glove_new_creates_control(ghome, tmp_path):
+    assert runner.invoke(app, ["new", "minimal", str(tmp_path / "s")]).exit_code == 0
     assert (ghome / "control").is_dir()
 
 
-def test_glove_init_adds_control_to_an_older_home(ghome, tmp_path, monkeypatch):
+def test_glove_new_adds_control_to_an_older_home(ghome, tmp_path):
     ghome.mkdir()
-    (ghome / "registry.json").write_text("[]\n")
-    monkeypatch.chdir(tmp_path)
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    (ghome / "registry.json").write_text('{"v": 2, "sessions": []}\n')
+    assert runner.invoke(app, ["new", "minimal", str(tmp_path / "s")]).exit_code == 0
     assert (ghome / "control").is_dir()
 
 

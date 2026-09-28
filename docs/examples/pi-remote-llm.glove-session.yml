@@ -1,14 +1,15 @@
 # Pi against a remote OpenAI-compatible LLM reached over an SSH tunnel, plus a
 # headed Playwright browser on this Mac. See docs/pi-remote-llm.md.
+# Start a session from it: glove new docs/examples/pi-remote-llm.glove-session.yml <dir>
 #
 # The tunnel is a host service glove starts in tmux: it forwards 127.0.0.1:8899
 # on this Mac to the remote server, so to glove the model is at `location: host`.
 # (If the server is directly reachable on your LAN, use `location: lan` and
 # `endpoint: <host>:<port>` instead, and drop the tunnel.)
+glove: 3
 harness: pi
 runtime: docker
 enforcer: nono
-workdir: .
 harness_config:
   settings:
     defaultThinkingLevel: xhigh

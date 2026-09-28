@@ -1,8 +1,9 @@
 # Mistral Vibe against an LLM server on this Mac, plus a host browser.
+# Start a session from it: glove new docs/examples/vibe-local.glove-session.yml <dir>
+glove: 3
 harness: vibe
 runtime: docker
 enforcer: nono
-workdir: .
 extensions:
   llm:
     provider: llama.cpp

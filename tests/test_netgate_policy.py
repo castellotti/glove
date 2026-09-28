@@ -11,6 +11,7 @@ import socket
 import warnings
 
 import pytest
+from helpers import make_session
 from test_netgate_invariants import _jsonc_blocks
 from test_netgate_proxy import Captured, StubUpstreamProxy, _exchange, _origin, client_hello, run
 from typer.testing import CliRunner
@@ -21,6 +22,7 @@ from glove.netgate.forward import Forwarder, ForwardSpec
 from glove.netgate.policy import PolicyError, PolicyWatcher, RuleSet, validate
 
 ENV = SESSION = "pi-search"
+CLI_ID = "pi-search-0a0b0c"  # the CLI tests' session id (rules env == session == id)
 
 
 def doc(*rules, default="allow", **top) -> dict:
@@ -286,6 +288,11 @@ def test_a_cut_flow_closes_its_upstream_too(tmp_path, mode):
         w.close()
         server.close()
 
+    # Earlier tests' garbage (their unclosed sockets) is collected first, so
+    # only a socket this flow leaked can warn inside the capture.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        gc.collect()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ResourceWarning)
         run(main())
@@ -335,23 +342,23 @@ def test_tcp_mode_sni_rule_blocks_before_any_byte_is_forwarded(tmp_path):
 def ghome(tmp_path, monkeypatch):
     g = tmp_path / "ghome"
     monkeypatch.setenv("GLOVE_HOME", str(g))
-    wd = tmp_path / "wd"
-    wd.mkdir()
+    wd = make_session(tmp_path / "wd")  # a launched session: .glove/id holds its id
+    (wd / ".glove").mkdir()
+    (wd / ".glove" / "id").write_text(CLI_ID + "\n")
     monkeypatch.chdir(wd)
-    assert CliRunner().invoke(app, ["init", "pi", "--name", "pi-search"]).exit_code == 0
     return g
 
 
 def test_cli_block_unblock_rules(ghome):
     r = CliRunner()
-    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path = ghome / "control" / CLI_ID / "rules.json"
     out = r.invoke(app, ["net", "block", "*.DoubleClick.net", "--terminate", "--note", "ads"])
     assert out.exit_code == 0, out.output
     assert r.invoke(app, ["net", "block", "203.0.113.0/24", "--port", "443"]).exit_code == 0
     assert r.invoke(app, ["net", "block", "api.example.com", "--allow"]).exit_code == 0
     data = json.loads(path.read_text())
     assert oct(path.stat().st_mode & 0o777) == "0o600"
-    rs = validate(data, env="pi-search", session="pi-search")  # the gate would accept it
+    rs = validate(data, env=CLI_ID, session=CLI_ID)  # the gate would accept it
     assert [(x.action, x.host, str(x.net) if x.net else None) for x in rs.rules] == [
         ("block", "*.doubleclick.net", None), ("block", None, "203.0.113.0/24"), ("allow", "api.example.com", None)]
     assert data["rules"][0]["terminate"] is True and data["updated_by"] == "glove-cli"
@@ -366,9 +373,9 @@ def test_cli_block_unblock_rules(ghome):
 
 
 def test_cli_refuses_to_overwrite_an_invalid_file(ghome):
-    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path = ghome / "control" / CLI_ID / "rules.json"
     path.parent.mkdir(parents=True)
-    path.write_text('{"v": 1, "env": "pi-search", "session": "pi-search", "rules": [], "exec": "x"}')
+    path.write_text(json.dumps({"v": 1, "env": CLI_ID, "session": CLI_ID, "rules": [], "exec": "x"}))
     out = CliRunner().invoke(app, ["net", "block", "x.example"])
     assert out.exit_code == 1 and "unknown top-level" in out.output
     assert "exec" in path.read_text()  # untouched
@@ -377,9 +384,9 @@ def test_cli_refuses_to_overwrite_an_invalid_file(ghome):
 
 
 def test_cli_rules_shows_a_file_without_default_or_rules(ghome):
-    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path = ghome / "control" / CLI_ID / "rules.json"
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"v": 1, "env": ENV, "session": SESSION}))  # valid: both optional
+    path.write_text(json.dumps({"v": 1, "env": CLI_ID, "session": CLI_ID}))  # valid: both optional
     out = CliRunner().invoke(app, ["net", "rules"])
     assert out.exit_code == 0, out.output
     assert "default: allow" in out.output and "(no rules)" in out.output
@@ -486,7 +493,7 @@ def test_collector_status_reports_an_unreadable_file(tmp_path):
 
 @needs_non_root
 def test_cli_reports_an_unreadable_file_instead_of_crashing_or_replacing_it(ghome):
-    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
+    path = ghome / "control" / CLI_ID / "rules.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(doc(rule(host="kept.example"))))
     path.chmod(0o000)
@@ -568,8 +575,8 @@ def test_cli_rules_says_whether_the_file_on_disk_is_enforced(ghome):
 
     r = CliRunner()
     assert r.invoke(app, ["net", "block", "a.example"]).exit_code == 0
-    path = ghome / "control" / "pi-search" / "pi-search" / "rules.json"
-    net = ghome / "envs" / "pi-search" / "sessions" / "pi-search" / "net"
+    path = ghome / "control" / CLI_ID / "rules.json"
+    net = ghome / "observe" / CLI_ID / "net"
     net.mkdir(parents=True, exist_ok=True)
 
     def status(**rules):

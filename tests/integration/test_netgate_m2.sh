@@ -23,6 +23,10 @@
 # Requires: docker, python3, uv, openssl, the `glove/pi` image, nginx:alpine and
 # python:3.12-alpine. Podman: untested.
 set -u
+# NOT RUNNABLE since v3 M2/M3: this script drives the v2 CLI (`glove init/run`,
+# `services:`/`net:`/`model:` config keys). It is rewritten against the gate and
+# observe extensions and session directories in v3 M5.
+echo "SKIP: $(basename "$0") is v2-shaped; rewritten in v3 M5 (see CHANGELOG.md)"; exit 2
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="$(mktemp -d /tmp/ngm2.XXXXXX)"

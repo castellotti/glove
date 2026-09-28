@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from glove.config import Config, HostService, resolve
+from glove.config import Config, HostService, load_config
 from glove.hostsvc import _expand
 
 
@@ -42,7 +42,7 @@ def test_host_services_coerced_from_file(tmp_path):
         "    ready_port: 9222\n"
         "    keep: true\n"
     )
-    cfg = resolve(env_config_path=tmp_path / "glove.yaml", overrides={})
+    cfg = load_config(tmp_path / "glove.yaml")
     assert [s.name for s in cfg.host_services] == ["model-tunnel", "chrome"]
     assert cfg.host_services[0].ready_port == 8899
     assert cfg.host_services[1].keep is True

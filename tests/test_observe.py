@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg
+from helpers import make_cfg, make_session
 from typer.testing import CliRunner
 
 from glove.cli import app
@@ -335,38 +335,31 @@ def ghome(tmp_path, monkeypatch):
 
 
 def _observed_run(tmp_path, monkeypatch, *extra) -> tuple:
-    work = tmp_path / "work"
-    work.mkdir(exist_ok=True)
-    wd = tmp_path / "pi-local"
-    wd.mkdir(exist_ok=True)
-    monkeypatch.chdir(wd)
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    over = tmp_path / "over.yaml"
-    over.write_text(
-        "net: [service]\nobserve: {enabled: true}\n"
-        "extensions: {llm: {provider: llama.cpp, location: host, endpoint: \"127.0.0.1:8080\", model: m}}\n"
-    )
-    return runner.invoke(app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run", *extra])
+    d = make_session(tmp_path / "pi-local", "observe: {enabled: true}\n")
+    monkeypatch.chdir(d)
+    result = runner.invoke(app, ["plan", *extra])
+    return result, (d / ".glove" / "id").read_text().strip() if result.exit_code == 0 else None
 
 
-def test_cli_dry_run_materialises_net_dir(ghome, tmp_path, monkeypatch):
-    result = _observed_run(tmp_path, monkeypatch)
+def test_cli_plan_materialises_net_dir_under_the_observe_export(ghome, tmp_path, monkeypatch):
+    result, sid = _observed_run(tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
-    sdir = ghome / "envs" / "pi-local" / "sessions" / "pi-local"
-    ndir = sdir / "net"
-    assert ndir.is_dir() and (sdir / "home").is_dir()
-    assert ndir.parent == (sdir / "home").parent  # a sibling of home/
+    ndir = ghome / "observe" / sid / "net"
+    assert ndir.is_dir() and (tmp_path / "pi-local" / ".glove" / "home").is_dir()
     assert os.stat(ndir).st_mode & 0o777 == 0o700
     assert os.stat(ndir / "session.json").st_mode & 0o777 == 0o600
     facts = json.loads((ndir / "session.json").read_text())
-    assert facts["session"] == "pi-local" and facts["services"][0]["tool"] == "llm"
+    assert facts["env"] == facts["session"] == sid and facts["services"][0]["tool"] == "llm"
+    assert facts["grants"] == {"observe": {"net": True, "transcripts": False}, "filter": {"granted": True}}
+    assert (ghome / "control" / sid).is_dir()
     assert "network observability" in result.output
 
 
 def test_cli_net_status_and_flows(ghome, tmp_path, monkeypatch):
-    assert _observed_run(tmp_path, monkeypatch).exit_code == 0
-    ndir = ghome / "envs" / "pi-local" / "sessions" / "pi-local" / "net"
-    rec = {"v": 1, "type": "flow", "phase": "close", "id": "f_X", "env": "pi-local", "session": "pi-local",
+    result, sid = _observed_run(tmp_path, monkeypatch)
+    assert result.exit_code == 0, result.output
+    ndir = ghome / "observe" / sid / "net"
+    rec = {"v": 1, "type": "flow", "phase": "close", "id": "f_X", "env": sid, "session": sid,
            "t": "2026-09-23T04:12:33.412Z", "service": "llm", "tool": "llm", "client": "harness",
            "dest": {"host": "host.docker.internal", "port": 8080, "ip": None, "resolution": "unavailable"},
            "scope": "local", "bytes": {"up": 10, "down": 2048}, "verdict": "allow", "close_reason": "eof"}
@@ -390,13 +383,13 @@ def test_cli_net_status_and_flows(ghome, tmp_path, monkeypatch):
 
 
 def test_cli_net_status_unobserved_session(ghome, tmp_path, monkeypatch):
-    wd = tmp_path / "wd"
-    wd.mkdir()
-    monkeypatch.chdir(wd)
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
+    d = make_session(tmp_path / "wd")
+    monkeypatch.chdir(d)
+    assert runner.invoke(app, ["plan"]).exit_code == 0
     result = runner.invoke(app, ["net", "status"])
     assert result.exit_code == 1
     assert "not observed" in result.output
+
 
 
 # --- netgate on podman (followup item 2, found testing rootless podman) -------------
