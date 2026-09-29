@@ -64,7 +64,7 @@ def test_limits_flow_through(tmp_path):
 
 
 def test_browser_endpoint_reaches_environment(tmp_path):
-    cfg = _cfg(tmp_path, extensions={"playwright": {"port": 8931}})
+    cfg = _cfg(tmp_path, extensions={"playwright": {"mode": "host", "port": 8931}})
     plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
     assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
 

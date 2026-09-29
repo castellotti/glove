@@ -21,7 +21,9 @@ command the agent executes.
 > (corporate resources only), **`search`** (a per-session SearXNG),
 > **`webfetch`** (Pi's `web_fetch`), **`observe`** (network observability,
 > read) and **`filter`** (network rules, write), **`media`** (analysis
-> toolchain) and **`playwright`** (host Chromium). See [Extensions](#extensions).
+> toolchain), **`ocr`**/**`rag`** (documents) and **`playwright`** (a real
+> Chromium: a hardened headless sidecar, a noVNC-watched one, or the host's
+> Chrome). See [Extensions](#extensions).
 
 ## How it works - three rings (defense in depth)
 
@@ -61,12 +63,13 @@ Docker Desktop macOS blast-radius explanation.
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
-| Browser | `playwright` extension, `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
-| Browser | `playwright` headless / novnc sidecars | planned (v3 M7) |
+| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi and Vibe on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
+| Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
 
-Giving a harness web access needs Node/npx and a Chromium-family browser on the
-host; the friction-free option is Playwright's own Chrome for Testing
-(`npx playwright install chromium`). For a complete, reproducible setup - Pi
+The sidecar modes need nothing on the host. Host mode needs Node/npx and a
+Chromium-family browser on the host; the friction-free option is Playwright's
+own Chrome for Testing (`npx playwright install chromium`). For a complete,
+reproducible host-mode setup - Pi
 against a remote OpenAI-compatible LLM over an SSH tunnel plus a dedicated headed
 Playwright browser, including the `@playwright/mcp` `--browser` channel gotcha and
 the `--executable-path` fix - see **[docs/pi-remote-llm.md](docs/pi-remote-llm.md)**
@@ -92,7 +95,7 @@ glove up                                # build → sidecars → resolve model �
 glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `pi-rag`, `corporate`), a path to a
+`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `pi-rag`, `browse-watch`, `corporate`), a path to a
 directory or file, or a git URL. Templates are *materialized*, not inherited:
 the file is a full copy, so upgrading glove never silently widens a session.
 `glove check` warns when the template changed since, and `glove new --diff`
@@ -135,7 +138,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   search: {}                # per-session SearXNG behind the egress
   webfetch: {}              # Pi's web_fetch through the egress
   media: {}
-  # playwright: { mode: host }   # headed Chrome on this Mac
+  # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
@@ -184,6 +187,8 @@ glove filter block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--no
 glove filter unblock <rule-id|target>        # (filter) only with the filter grant
 glove filter rules  [--json]                 # rules + the gates' load result
 glove filter validate <file|-> [--env ID] [--session ID] [--json]   # the gate's validator; pure
+glove playwright view [--dir D] [--control] [--no-open]   # (playwright novnc) watch/drive the browser
+glove playwright status [--dir D]
 ```
 
 An extension with a `cli:` in its manifest is mounted at `glove <name> …`.
@@ -389,8 +394,12 @@ the agent, and optionally hardened sidecars. Core validates all of it:
   `privileges:`, drawn from an allowlist, and are shown in `glove policy`
   (`low_ports` lets a sidecar listen below 1024 in its own network namespace,
   as docker allows every container by default and podman does not).
-  No extension publishes ports, joins the harness network, mounts the docker
-  socket, or binds host paths other than its own session state.
+  A seccomp exception names a core profile (`chromium-userns`, for Chromium's
+  sandbox; never the harness's), and a runtime that cannot apply it refuses the
+  session rather than dropping it (podman). No extension publishes ports, joins
+  the harness network, mounts the docker socket, or binds host paths other
+  than its own session state and, for a trusted extension and a setting the
+  user chose, a named subdirectory of `work/` (never all of it).
 - **The harness** only ever gets forwarders on its internal network.
 - **Harness mounts** from an extension (`mounts: {models: {setting: models_dir}}`)
   are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
@@ -481,6 +490,25 @@ read-only mount filled once by `glove rag fetch-model`; `obsidian_dir` (a
 claude-obsidian checkout, read-only) adds its vault-synthesis skills. No egress
 provider is needed. Template: `glove new pi-rag <dir>`; details in
 [extensions/rag/README.md](extensions/rag/README.md).
+
+### Browser: `playwright`
+
+A real Chromium through Playwright's MCP (`playwright-core@1.63.0 mcp`, pinned
+by lockfile). **`headless`** (default) and **`novnc`** run it in a hardened
+sidecar that sits alone on an internal network with two forwarders: the
+harness's way in (`browser`) and the browser's way out (`browser-egress`, to
+the session's egress proxy; with `observe`, a gate that records every
+destination as `client: playwright` and applies `filter` rules and the SSRF
+guard). Chromium's own sandbox is on, with the sidecar-only `chromium-userns`
+seccomp profile (on Podman set `chromium_sandbox: "off"`). In `novnc` mode it
+runs headed on a VNC display inside the sidecar; `glove playwright view` opens
+it in your browser through a loopback tunnel that lives only while the command
+runs, view-only unless `allow_control: true` (enforced by the VNC server).
+**`host`** drives a Chrome on your desktop (refused behind vpn/tor). The agent
+gets only the `tools` allowlist: Pi registers just those, Vibe hides every
+other `playwright_*` tool (`browser_run_code_unsafe` included). Template:
+`glove new browse-watch <dir>`; details in
+[extensions/playwright/README.md](extensions/playwright/README.md).
 
 ## Toolchain
 

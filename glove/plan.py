@@ -230,6 +230,7 @@ def build_session_plan(
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
         export_dirs=export_dirs(env_id),
+        work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]

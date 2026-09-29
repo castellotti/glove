@@ -21,10 +21,21 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from .extensions import CORE_NETWORKS, SECRETS_DIR, Active, Composition, ExtensionError, network_name, secret_env_var
+from .extensions import (
+    CORE_NETWORKS,
+    SECRETS_DIR,
+    Active,
+    Composition,
+    ExtensionError,
+    network_name,
+    require_trust,
+    secret_env_var,
+)
 from .extensions import active_items as _active_items
 from .extensions import base_context as _ctx
 from .extensions import image_tag as _image_tag
+from .extensions import render_value as _render
+from .hardening import SIDECAR_ONLY_SECCOMP
 from .runtimes.seccomp import SECCOMP_DIR
 
 if TYPE_CHECKING:
@@ -40,12 +51,15 @@ PRIVILEGE_ALLOWLIST = {
     "devices": frozenset({"/dev/net/tun"}),
 }
 PRIVILEGE_KEYS = frozenset({"cap_add", "devices", "user_root", "read_only", "seccomp", "low_ports"})
+# Not privileges: the text shown when a runtime cannot grant one (e.g. a way to
+# run without it).
+PRIVILEGE_META = frozenset({"hint"})
 DEFAULT_LIMITS = {"pids": 256, "memory": "512m"}
 
 
 # Core-owned profiles a sidecar may request by name (an extension never ships
-# its own JSON). `nested-userns` stays harness-only (srt).
-SIDECAR_SECCOMP = frozenset({"chromium-userns"})
+# its own JSON). `nested-userns` stays harness-only (srt); these never are.
+SIDECAR_SECCOMP = SIDECAR_ONLY_SECCOMP
 
 
 def seccomp_profiles() -> set[str]:
@@ -57,7 +71,7 @@ def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
     items = raw if isinstance(raw, list) else [raw] if raw else []
     merged: dict[str, Any] = {}
     for p in _active_items(items, _ctx(comp, a)):
-        unknown = set(p) - PRIVILEGE_KEYS
+        unknown = set(p) - PRIVILEGE_KEYS - PRIVILEGE_META
         if unknown:
             raise ExtensionError(f"extension {a.name!r} service {short!r}: unknown privilege(s) {sorted(unknown)}")
         for key in ("cap_add", "devices"):
@@ -75,6 +89,8 @@ def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
                     f"({sorted(seccomp_profiles())})"
                 )
             merged["seccomp"] = p["seccomp"]
+            if p.get("hint"):
+                merged["seccomp_hint"] = str(p["hint"])
         if p.get("user_root") is True:
             merged["user_root"] = True
         if p.get("read_only") is False:
@@ -137,10 +153,18 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
                 if roots[root] and not v.get("read_only"):
                     raise ExtensionError(f"{where}: the {root!r} export root binds read-only here")
                 bind = dict(v)
+            elif comp.work_dir is not None and _within(src, str(comp.work_dir)):
+                # a named subdirectory of /work (a setting the user opted into),
+                # never /work itself: e.g. the browser's downloads
+                if os.path.realpath(src) == os.path.realpath(comp.work_dir):
+                    raise ExtensionError(f"{where}: a sidecar never binds all of /work, only a subdirectory")
+                require_trust(a, f"{where}: binding a /work subdirectory")
+                bind = dict(v)
             else:
                 raise ExtensionError(
                     f"{where}: a sidecar may bind only its state dir ({{{{ state }}}}), read-only its "
-                    "assets ({{ assets }}), or an export root it owns ({{ exports.<root> }})"
+                    "assets ({{ assets }}), an export root it owns ({{ exports.<root> }}), or a "
+                    "subdirectory of /work ({{ work }}/<dir>)"
                 )
             if label:
                 # SELinux hosts deny containers an unlabelled bind; `z`: shared
@@ -210,7 +234,8 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     if "@sha256:" not in image and image not in built:
         raise ExtensionError(f"{where}: image must be pinned by digest (@sha256:…) or built by the extension")
     priv = _privileges(comp, a, short) if networks is None else {}
-    lim = {**DEFAULT_LIMITS, **((a.manifest.raw.get("limits") or {}).get(short) or {})}
+    lim = {**DEFAULT_LIMITS, **_render((a.manifest.raw.get("limits") or {}).get(short) or {}, _ctx(comp, a),
+                                       f"{where} limits")}
     if svc.get("dns") and "wan" not in (svc.get("networks") or []):
         raise ExtensionError(f"{where}: `dns` is only meaningful on the egress provider's wan network")
     name = f"glove-{comp.session}-{short}"
@@ -254,6 +279,12 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         out["cap_add"] = list(priv["cap_add"])
     if priv.get("devices"):
         out["devices"] = [f"{d}:{d}" for d in priv["devices"]]
+    hint = priv.pop("seccomp_hint", None)
+    if priv.get("seccomp") and not extra.get("emit_seccomp", True):
+        # never drop a sidecar's profile silently: it is what the sidecar needs
+        raise ExtensionError(
+            f"{where} needs the {priv['seccomp']!r} seccomp profile, which this runtime cannot apply "
+            "(podman compose inlines a custom profile and podman rejects it)" + (f" — {hint}" if hint else ""))
     sec = ["no-new-privileges:true"]
     if extra.get("emit_seccomp", True):
         sec.append(f"seccomp={SECCOMP_DIR / (priv.get('seccomp', 'default') + '.json')}")
@@ -267,7 +298,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     out["pids_limit"] = int(lim["pids"])
     out["mem_limit"] = str(lim["memory"])
     if lim.get("cpus"):
-        out["cpus"] = lim["cpus"]
+        out["cpus"] = float(lim["cpus"])
     if priv:
         comp.privileges[f"{a.name}/{short}"] = [{k: v} for k, v in priv.items()]
     return out

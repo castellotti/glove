@@ -15,6 +15,7 @@ routing and probes live in the `llm` extension.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -176,12 +177,29 @@ def rel_config_home(profile: HarnessProfile) -> Path:
     return Path(profile.config_home_path).relative_to(CONTAINER_HOME)
 
 
-def _mcp_servers(cfg: Config, comp: Composition | None) -> list[dict[str, Any]]:
+def _mcp_servers(cfg: Config, comp: Composition | None) -> tuple[list[dict[str, Any]], list[str]]:
     """Vibe MCP servers: each extension's contribution, then explicit
-    `harness_config.mcp_servers`."""
-    servers: list[dict[str, Any]] = list(comp.vibe_mcp) if comp is not None else []
+    `harness_config.mcp_servers` — and Vibe `disabled_tools` patterns.
+
+    An extension's server may carry `enabled_tools` (a list, or comma-separated):
+    an allowlist of that server's tools. Vibe has no per-server allowlist (its
+    global `enabled_tools` would hide its own tools too), so it becomes one
+    regex that hides every other `<server>_*` tool — including ones a later
+    server version adds."""
+    servers: list[dict[str, Any]] = []
+    disabled: list[str] = []
+    for item in comp.vibe_mcp if comp is not None else []:
+        item = dict(item)
+        allow = item.pop("enabled_tools", None)
+        if allow is not None:
+            names = [t.strip() for t in (allow.split(",") if isinstance(allow, str) else allow) if str(t).strip()]
+            ok = re.fullmatch(r"[a-z0-9_]+", item["name"]) and all(re.fullmatch(r"[A-Za-z0-9_-]+", n) for n in names)
+            if not ok:
+                raise ValueError(f"vibe mcp {item['name']!r}: bad enabled_tools {names}")
+            disabled.append(f"re:{item['name']}_(?!(?:{'|'.join(names) or '(?!)'})$).*")
+        servers.append(item)
     servers.extend(cfg.harness_config.get("mcp_servers", []))
-    return servers
+    return servers, disabled
 
 
 # Descriptor api → Vibe (backend, api_style).
@@ -205,6 +223,7 @@ def _render_vibe(
     # Vibe deep-merges models by alias, so a collision silently shadows ours).
     alias = "glove"
 
+    servers, disabled_tools = _mcp_servers(cfg, comp)
     doc: dict[str, Any] = {
         "active_model": alias,
         "auto_approve": True,
@@ -215,7 +234,7 @@ def _render_vibe(
         # Use the standard bash tool (spawns via the shell) so glove's pre_tool
         # hook, which rewrites the command text, applies cleanly.
         "experimental_bash_tool": False,
-        "mcp_servers": _mcp_servers(cfg, comp),
+        "mcp_servers": servers,
         "providers": [
             {
                 "name": "glove",
@@ -252,9 +271,13 @@ def _render_vibe(
             continue
         if key in ("providers", "models") and isinstance(value, list):
             doc[key].extend(value)
+        elif key == "disabled_tools" and isinstance(value, list):
+            disabled_tools = [*disabled_tools, *value]
         else:
             doc[key] = value
 
+    if disabled_tools:
+        doc["disabled_tools"] = disabled_tools
     path = cfg_dir / "config.toml"
     path.write_bytes(tomli_w.dumps(doc).encode())
     written = [path]

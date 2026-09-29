@@ -95,3 +95,10 @@ def test_refusal_and_override(tmp_path):
         validate_hardening(plan)
     # naming the row waives it
     validate_hardening(plan, overrides=frozenset({"read-only"}))
+
+
+def test_row_seccomp_never_the_sidecar_userns_profile(tmp_path):
+    from glove.runtimes.seccomp import SECCOMP_DIR
+
+    plan = _reharden(_plan(tmp_path), seccomp_profile=str(SECCOMP_DIR / "chromium-userns.json"))
+    assert any(v.key == "seccomp" and "sidecar-only" in v.message for v in find_violations(plan))

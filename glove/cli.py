@@ -522,6 +522,13 @@ def check(
             plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
                                       state_dir=str(sd.ext), session_dir=str(sd.root))
             checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
+            import yaml
+
+            try:  # in memory: every render-time invariant, for this runtime
+                n = len(yaml.safe_load(get_runtime(cfg.runtime).render(plan, sd.state).compose_yaml)["services"])
+                checks.append(Check("render", "ok", f"{cfg.runtime}: {n} services"))
+            except (ConfigError, ValueError, NotImplementedError) as e:
+                checks.append(Check("render", "fail", str(e)))
             for label, ref in secret_refs(plan):
                 ok, detail = secret_exists(ref)
                 checks.append(Check(f"secret {label}", "ok" if ok else "fail", f"{ref}: {detail}"))

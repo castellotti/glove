@@ -416,6 +416,9 @@ class Composition:
     privileges: dict[str, list[dict]] = field(default_factory=dict)  # "ext/service" → exceptions
     # The session directory (hooks only — never a template) and its /24.
     session_dir: Path | None = None
+    # The harness's /work on the host: trusted extensions may bind a named
+    # subdirectory of it into a sidecar (`{{ work }}/<dir>`), never all of it.
+    work_dir: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
     # Export root → this session's host dir (created by the CLI, never here).
@@ -511,6 +514,7 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
         },
         "state": str(comp.state_dir(a.name)),
         "mount": dict(a.mounts),
+        "work": str(comp.work_dir or ""),
         "assets": str(a.manifest.path),
         "images": {k: image_tag(a, k) for k in (a.manifest.raw.get("images") or {})},
         "libs": {lib.name: {"images": {k: image_tag(lib, k) for k in (lib.manifest.raw.get("images") or {})}}
@@ -698,7 +702,7 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
             raise ExtensionError(f"{where}: the {slot!r} slot is empty or exports no proxy_host")
         target = Target(str(ex["proxy_host"]), int(ex["proxy_port"]), "slot", str(ex.get("network", "egress")))
     elif "host_port" in t:
-        _require_trust(a, f"{where}: reaching a host port")
+        require_trust(a, f"{where}: reaching a host port")
         target = Target(HOST_GATEWAY, int(t["host_port"]), "host", "hostgw")
     elif "address" in t:
         # a remote host:port: the inference provider over `llm`, or the egress
@@ -708,7 +712,7 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         if slot is None or slot not in a.manifest.provides:
             raise ExtensionError(f"{where}: only the inference provider (via: llm) or the egress provider "
                                  "(via: wan) may dial a remote address")
-        _require_trust(a, f"{where}: dialling a remote address")
+        require_trust(a, f"{where}: dialling a remote address")
         host, _, port = str(t["address"]).rpartition(":")
         if not host or not port.isdigit():
             raise ExtensionError(f"{where}: address must be host:port, got {t['address']!r}")
@@ -725,7 +729,7 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
     )
 
 
-def _require_trust(a: Active, what: str) -> None:
+def require_trust(a: Active, what: str) -> None:
     if not a.manifest.trusted:
         raise ExtensionError(
             f"{what} is a privilege; out-of-tree extension {a.name!r} is not in `trusted_extensions` "
@@ -819,7 +823,7 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
 
 def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:
     for item in active_items(items, ctx):
-        _require_trust(a, f"extension {a.name!r}: a host service")
+        require_trust(a, f"extension {a.name!r}: a host service")
         r = render_value(item, ctx, f"extension {a.name!r} host service")
         comp.host_services.append(HostService(
             name=f"{a.name}-{r['name']}", command=str(r["command"]),
@@ -848,11 +852,13 @@ def compose(
     session_dir: Path | None = None,
     subnet: str | None = None,
     export_dirs: dict[str, Path] | None = None,
+    work_dir: Path | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, subnet=subnet, export_dirs=dict(export_dirs or {}),
+                       session_dir=session_dir, work_dir=work_dir, subnet=subnet,
+                       export_dirs=dict(export_dirs or {}),
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
         if a.manifest.hooks_path:

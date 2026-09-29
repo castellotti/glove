@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 
 import pytest
@@ -14,7 +15,7 @@ from glove.harnessconfig import LLM_API_KEY_ENV, ModelDescriptor, build_environm
 from glove.mounts import compute_mounts
 from glove.plan import build_session_plan
 
-EXTS = {"direct": {}, "search": {}, "playwright": {"i_accept_host_rce": True}}
+EXTS = {"direct": {}, "search": {}, "playwright": {}}
 
 
 def _home(harness: str, tmp_path, *, llm=None, extensions=EXTS, **kw):
@@ -45,7 +46,14 @@ def test_vibe_config_toml(tmp_path):
     names = {s["name"] for s in doc["mcp_servers"]}
     assert names == {"playwright", "searxng"}
     pw = next(s for s in doc["mcp_servers"] if s["name"] == "playwright")
-    assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp"
+    assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp" and "enabled_tools" not in pw
+    # the playwright allowlist, as a Vibe denylist scoped to that server's tools
+    (deny,) = doc["disabled_tools"]
+    assert deny.startswith("re:playwright_(?!(?:browser_navigate|")
+    hidden = re.compile(deny.removeprefix("re:"))
+    assert hidden.fullmatch("playwright_browser_run_code_unsafe") and hidden.fullmatch("playwright_browser_evaluate")
+    assert not hidden.fullmatch("playwright_browser_navigate") and not hidden.fullmatch("bash")
+    assert not hidden.fullmatch("searxng_search")
     sx = next(s for s in doc["mcp_servers"] if s["name"] == "searxng")
     assert sx["env"]["SEARXNG_URL"] == "http://glove-vibe-sess-search:8080"
 
@@ -57,7 +65,7 @@ def test_vibe_context_file_has_sudo_relay_brief_and_extension_briefs(tmp_path):
     assert "Write output to /mnt/x." in text
     assert "## Capabilities" in text
     assert "`web_search`" in text  # search brief
-    assert "REAL Chromium on the operator's own desktop" in text  # playwright host brief
+    assert "drive a Chromium in an isolated sidecar" in text  # playwright headless brief
     assert "Model: `test-model`" in text  # llm brief
 
 

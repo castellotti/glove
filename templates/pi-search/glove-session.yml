@@ -31,6 +31,7 @@ extensions:
   webfetch: {}                 # Pi's web_fetch through the egress
   ocr: {}                      # tesseract/ocrmypdf/poppler + glove-ocr, for scanned PDFs and images
   media: {}
+  # playwright: {}             # a real Chromium in a sidecar, via the egress (extensions/playwright/README.md)
   # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
   # observe: {exit_identity: via-proxy}
   # filter: {}                 # also let `glove filter …` / Layman block destinations (needs observe)

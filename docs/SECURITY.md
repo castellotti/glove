@@ -27,10 +27,10 @@ ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
 | LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
-| The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
+| The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 | Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
-| Other sessions' browser state | the host browser | host services | the host Chrome profile is per session (`<session>/chrome-profile`), and Chrome stops on `glove down` unless `browser.keep_browser: true` |
+| Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
 
 ## Extensions (what a capability pack may and may not do)
 
@@ -47,9 +47,17 @@ Every capability (the model, search, the browser, …) is an extension in
   rather than granting `NET_BIND_SERVICE`.
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state (or an
-  export root it owns, below), or a sidecar on the harness network. The harness reaches extensions only through
+  export root it owns, below, or — trusted extensions, on a setting the user
+  chose — a named subdirectory of `work/`, never all of it), or a sidecar on
+  the harness network. The harness reaches extensions only through
   single-purpose forwarders. Only the active egress provider joins the routable
   `wan` network.
+- **Seccomp exceptions** name a core profile; the only one is `chromium-userns`
+  (glove's default plus unconditional `clone`, `clone3`, `unshare`, `chroot`,
+  for Chromium's namespace sandbox). The harness can never use it (a hardening
+  row). A runtime that cannot apply a requested profile refuses the session
+  (`glove check` shows it): podman's compose inlines a custom profile and
+  podman rejects it, so there it must be turned off explicitly, never dropped.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
   setting is refused.
@@ -135,6 +143,55 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   everything else is refused with the gate's reason, and the host gateway,
   metadata and the session's network are refused even inside an allowed CIDR.
   **Untested:** a real corporate VPN (split DNS and routes via the host).
+
+### Browser (`playwright`)
+
+A browser is an exfiltration channel and a code-execution surface by design:
+it runs whatever the web serves, and Playwright's MCP always offers
+`browser_run_code_unsafe` (arbitrary JavaScript in the MCP process; the MCP
+has no server-side switch for it). The controls:
+
+- **Sidecar modes (`headless`, `novnc`).** Chromium and the MCP run in a
+  sidecar as the operator's uid with no capabilities, a read-only root,
+  `no-new-privileges`, private IPC and pids/memory/cpu limits, on an internal
+  network whose only members are two forwarders. It has no DNS and no default
+  route (verified live), so a compromised renderer or MCP reaches neither the
+  internet around the egress nor the harness or its llm endpoint. The browser's
+  proxy is fixed server-side; its traffic leaves only through the egress slot,
+  and with `observe` every destination is a flow (`client: playwright`) with
+  `filter` rules and the SSRF guard applied at the gate. The MCP never gets a
+  CDP port or `--allow-unrestricted-file-access`. Chromium's own sandbox is
+  on (`chromium-userns`, above); on podman it must be `off`, and then the
+  container is the only boundary.
+- **The tool allowlist.** Pi registers only the `tools` setting (never
+  `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
+  `disabled_tools` regex hiding every other `playwright_*` tool (verified
+  live). That is a client-side filter: it keeps the model from calling the
+  tool, it is not a boundary around the MCP.
+- **Watching (`novnc`).** VNC and websockify listen on the sidecar's own
+  loopback; nothing is published. `glove playwright view` opens a loopback
+  listener only while it runs, pipes each connection through `docker|podman
+  exec … socat`, and refuses requests whose `Host` or `Origin` is not that
+  listener (other pages in the operator's browser, DNS rebinding). The two
+  VNC passwords are generated in the sidecar's tmpfs at every start (never an
+  env var, compose secret or host file) and reach noVNC in the URL fragment.
+  View-only and the clipboard are enforced by the VNC server
+  (`AcceptPointerEvents`/`AcceptKeyEvents` off unless `allow_control`;
+  `AcceptCutText`/`SendCutText` off unless `clipboard:`), verified live with a
+  raw RFB client. VncAuth is weak (8 characters, DES); it guards a listener that
+  exists only on loopback and only while `view` runs. Anything the operator
+  types in control is visible to the agent.
+- **Downloads and uploads.** What the browser saves stays in the sidecar's
+  state dir, which the agent's shell cannot read, unless `downloads: work`.
+  `browser_file_upload` is confined to an empty directory unless
+  `uploads: work` (then `work/browser-uploads/`, read-only).
+- **Host mode** runs the browser and the MCP as the operator, on the desktop,
+  with the host's network: refused when the egress is anonymising (vpn, tor),
+  and with Vibe unless `i_accept_host_rce: true`. Its CDP and MCP ports are
+  per-session loopback ports; any local process can drive them while they run.
+- **Background traffic.** Chromium still contacts Google services
+  (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
+  `www.google.com` in live runs) through the egress; `filter` can block them.
 
 ## Planted host-trusted files (ring 0)
 
@@ -295,12 +352,12 @@ Be precise about what "container root" means here:
   srt: srt requires relaxing the seccomp profile to allow unprivileged user
   namespaces (a historical source of kernel LPE bugs) and wraps tool commands
   only, leaving the harness process on ring 0 alone.
-- **Browser `host-mcp` with Vibe is refused by default.** Playwright's MCP always
-  exposes `browser_run_code_unsafe`, which runs arbitrary JavaScript in the MCP
-  process, and in `host-mcp` that process is on your Mac. Pi allowlists its
-  browser tools. Vibe cannot filter MCP tools, so `vibe` + `host-mcp` needs
-  `browser: {i_accept_host_rce: true}`. The host MCP is pinned
-  (`playwright-core@1.63.0 mcp`), not `@latest`.
+- **Prefer the browser sidecar modes** (`headless`, `novnc`) over `mode: host`:
+  a compromised browser or MCP stays in a cap-less container on an internal
+  network instead of running as you on your desktop. Host mode with Vibe is
+  refused unless `i_accept_host_rce: true`: Vibe hides `browser_run_code_unsafe`
+  but the MCP still serves it, on your Mac. The MCP is pinned
+  (`playwright-core@1.63.0`), never `@latest`.
 
 ## What glove does NOT defend against
 

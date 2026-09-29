@@ -126,12 +126,15 @@ def build_harness(
 
 def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = False) -> None:
     """Build every image an active extension declares (`images:` in its manifest)."""
-    from .extensions import image_tag
+    from .extensions import image_tag, when_matches
 
     if plan.composition is None:
         return
     for a in plan.composition.active:
         for name, spec in (a.manifest.raw.get("images") or {}).items():
+            ctx = {"settings": a.settings, "harness": plan.composition.harness}
+            if not when_matches((spec or {}).get("when"), ctx):
+                continue  # e.g. the browser sidecar's image in host mode
             tag = image_tag(a, name)
             if not force and _image_exists(provider, tag):
                 continue

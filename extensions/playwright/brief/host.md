@@ -1,1 +1,1 @@
-- Your `browser_*` tools drive a REAL Chromium on the operator's own desktop. It is your only way to the web, and its traffic does **not** go through any VPN/Tor egress. `browser_take_screenshot` returns the image to you directly.
+- Your `browser_*` tools drive a REAL Chrome on the operator's own desktop. It is your only way to the web, and its traffic does **not** go through any VPN/Tor egress. Read a page with `browser_snapshot`; `browser_take_screenshot` returns the image to you directly.

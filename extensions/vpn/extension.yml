@@ -33,6 +33,7 @@ exports:
   proxy_port: 8888
   proxy_url: "http://glove-{{ session.id }}-gluetun:8888"
   route: vpn
+  anonymising: true                    # hides the operator's address: browsers on the host would bypass it
   resolver: "dns://glove-{{ session.id }}-gluetun:53"
   network: egress
 services: compose/services.yml.j2

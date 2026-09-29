@@ -75,8 +75,8 @@ to it through one forwarder:
  harness container ──internal net──▶ glove-<session>-browser (forwarder)
    pi browser extension                     │
    (reads BROWSER_MCP_URL)                  ▼
-                                    host 127.0.0.1:8931  (Playwright MCP)
-                                           │ CDP :9222
+                                    host 127.0.0.1:<mcp port>  (Playwright MCP)
+                                           │ CDP 127.0.0.1:<cdp port>
                                            ▼
                                     headed Chrome on your desktop (you watch)
 ```
@@ -85,16 +85,22 @@ to it through one forwarder:
   else Playwright's **Chrome for Testing** (`npx playwright install chromium`,
   once). `glove check` reports which it found.
 - **Per session.** The Chrome profile and MCP output live in the session's
-  extension state, never in your repo and never shared between sessions. Chrome
-  stops on `glove down` unless `keep_browser: true`.
+  extension state, never in your repo and never shared between sessions. So
+  are the two loopback ports: free ones picked at the first launch and kept
+  (`port`/`cdp_port` pin them). Chrome stops on `glove down` unless
+  `keep_browser: true`.
 - **Pinned to the forwarder.** `--allowed-hosts` accepts only requests arriving
   through `glove-<session>-browser`. Shell commands can't reach it (ring 1 blocks
   their network).
 - **Tools.** Pi exposes only the `tools:` setting's list, and never
   `browser_run_code_unsafe` in host mode (it runs arbitrary code in the MCP
-  process, on your Mac). Vibe cannot filter MCP tools, so glove refuses
-  `vibe` + host mode unless you set `i_accept_host_rce: true`.
-- **No anonymity.** The browser uses your Mac's network directly.
+  process, on your Mac). Vibe hides every other tool too, but that is a client
+  filter, not a boundary, so glove refuses `vibe` + host mode unless you set
+  `i_accept_host_rce: true`.
+- **No anonymity.** The browser uses your Mac's network directly, so host mode
+  is refused with a `vpn` or `tor` egress. For a browser that goes through the
+  egress (and that you can still watch), use `mode: novnc`: see
+  [extensions/playwright/README.md](../extensions/playwright/README.md).
 
 `browser_take_screenshot` returns the image to the agent inline.
 

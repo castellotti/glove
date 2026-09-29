@@ -190,10 +190,11 @@ def test_unknown_extension(tree):
 
 
 def test_playwright_host_refuses_vibe_without_ack():
+    host = {"mode": "host"}
     with pytest.raises(ExtensionError, match="browser_run_code_unsafe"):
-        select({"llm": STUB_LLM, "playwright": {}}, harness="vibe")
-    select({"llm": STUB_LLM, "playwright": {"i_accept_host_rce": True}}, harness="vibe")
-    select({"llm": STUB_LLM, "playwright": {}}, harness="pi")
+        select({"llm": STUB_LLM, "playwright": host}, harness="vibe")
+    select({"llm": STUB_LLM, "playwright": {**host, "i_accept_host_rce": True}}, harness="vibe")
+    select({"llm": STUB_LLM, "playwright": host}, harness="pi")
 
 
 # --- out-of-tree taint -----------------------------------------------------------------

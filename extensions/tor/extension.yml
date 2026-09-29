@@ -16,6 +16,7 @@ exports:
   proxy_port: 8118
   proxy_url: "http://glove-{{ session.id }}-privoxy:8118"
   route: tor
+  anonymising: true
   resolver: "tor-socks://glove-{{ session.id }}-tor:9150"
   network: egress
 services: compose/services.yml.j2

@@ -2,13 +2,14 @@
  * glove-pi-browser — gives Pi the same browser as Vibe.
  *
  * Pi has no MCP client, so this extension IS one: it connects to the Playwright
- * MCP server (the `browser` forwarder sidecar → host Playwright → shared Chrome
- * via CDP) and re-exposes its tools as native Pi tools. MCP result content maps
- * 1:1 to Pi content, so image blocks (screenshots) flow straight into Pi's
- * vision (they also land in the host-side Playwright --output-dir, which glove
- * points at its own session state, not the project working tree).
+ * MCP server through the `browser` forwarder (the browser sidecar, or in host
+ * mode the host's Playwright driving Chrome over CDP) and re-exposes its tools
+ * as native Pi tools. MCP result content maps 1:1 to Pi content, so image
+ * blocks (screenshots) flow straight into Pi's vision (they also land in the
+ * MCP's --output-dir, which glove keeps outside /work unless the operator opts
+ * in).
  *
- * BROWSER_MCP_URL is injected by glove from the browser sidecar. One persistent
+ * BROWSER_MCP_URL is injected by glove from the `browser` endpoint. One persistent
  * MCP client is kept for the whole session, so the browser context/page is
  * stable across tool calls.
  */
@@ -66,7 +67,7 @@ export default async function (pi: ExtensionAPI) {
           content: [{
             type: "text",
             text: `Browser MCP unreachable at ${BROWSER_MCP_URL} (${err?.message}). ` +
-              `Ensure glove started the chrome + playwright host services.`,
+              `Check the browser sidecar (\`glove ps\`) — or in host mode, the chrome + mcp host services.`,
           }],
           details: {},
         };
@@ -74,6 +75,12 @@ export default async function (pi: ExtensionAPI) {
     });
     return;
   }
+
+  // Close the MCP stream when Pi tears the session down: an open stream keeps
+  // Node alive, so `pi -p` would never exit.
+  pi.on("session_shutdown", async () => {
+    await client.close().catch(() => {});
+  });
 
   const { tools } = await client.listTools();
   for (const t of tools) {

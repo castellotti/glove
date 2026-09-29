@@ -1,0 +1,37 @@
+# A glove session: web tasks with Pi in a browser you can watch (and, when you
+# allow it, take over for a CAPTCHA or login). Edit this file, then
+# `glove check && glove up`; `glove playwright view` opens the live browser.
+glove: 3
+template: browse-watch
+harness: pi
+enforcer: nono
+runtime: docker                # docker | podman (podman: set chromium_sandbox: "off" below)
+mounts: []
+limits: { pids: 512, memory: 6g, cpus: 4 }
+extensions:
+  llm:                         # the model (required): see extensions/llm/README.md
+    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    location: <set-me>         # host | lan | internet
+    endpoint: <set-me>         # host:port for host/lan; omit for a cloud provider's default
+    model: auto
+    capabilities: auto         # a vision-capable model reads screenshots
+    # api_key: keychain:<set-me>
+  # Egress: exactly one of vpn | tor | direct — the browser's only way out.
+  direct: {}                   # no tunnel, no anonymity
+  # vpn: {provider: <set-me>, wireguard_key: keychain:<set-me>}
+  # tor: {}
+  playwright:
+    mode: novnc                # headed Chromium on a VNC display in its sidecar
+    allow_control: false       # true: `glove playwright view --control` may click and type
+    # clipboard: "off"         # off | to-browser | both
+    # profile: ephemeral       # session: keep cookies/logins across launches (under .glove/)
+    # downloads: session       # work: downloads land in work/browser-output/
+    # chromium_sandbox: "on"   # "off" on podman (it cannot apply the sandbox's seccomp profile)
+  # observe: {}                # every destination the browser reaches, as flow records
+  # filter: {}                 # and `glove filter block <host>` (needs observe)
+brief: |
+  # browse-watch — session brief
+
+  You are an assistant doing **web tasks in a real browser**, running in a
+  locked `glove` sandbox. Use your `browser_*` tools; read pages with
+  `browser_snapshot`. Put your outputs in `/work`.

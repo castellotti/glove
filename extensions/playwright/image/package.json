@@ -1,0 +1,8 @@
+{
+  "name": "glove-playwright",
+  "private": true,
+  "description": "The one Playwright pin for glove's browser sidecar and host mode (`playwright-core mcp`).",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}
