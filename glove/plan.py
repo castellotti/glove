@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import Config
+from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
 from .network import NetworkPlan, build_network_plan
-from .observe import ObserveSettings, netgate_image
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 if TYPE_CHECKING:
@@ -63,13 +63,10 @@ class SessionPlan:
     # Empty files/dirs bound read-only over missing protected paths (set by the
     # CLI once materialised; placeholders are skipped while it is None).
     placeholder_host_dir: str | None = None
-    # Network observability (glove/observe.py). `observe` is None unless enabled;
-    # `net_host_dir` is the session's net/ (set by the CLI once materialised) —
-    # bind-mounted into the netgate collector only, never into the harness.
-    observe: ObserveSettings | None = None
-    netgate_image: str | None = None
-    net_host_dir: str | None = None
-    control_host_dir: str | None = None  # ~/.glove/control/<env>/<session>, ro into the gate
+    # observe's transcripts export (glove/exports.py): the host dir bound over
+    # the harness's transcript directory (None: not exported).
+    transcripts_host_dir: str | None = None
+    transcripts_container_dir: str | None = None
     # Extensions (glove/extensions.py): the selected set with every rendered
     # contribution, and the inference slot's model descriptor.
     composition: Composition | None = None
@@ -212,6 +209,7 @@ def build_session_plan(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
+        export_dirs=export_dirs(env_id),
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
@@ -284,9 +282,9 @@ def build_session_plan(
         derived_dockerfile=derived_df,
     )
     plan.passthrough_env = secret_env_names(plan)
-    plan.observe = network.observe
-    if network.gated:
-        plan.netgate_image = netgate_image()
+    if transcripts_wanted(comp) and profile.transcript_subdir:
+        plan.transcripts_host_dir = str(comp.export_dirs["observe"] / "transcripts")
+        plan.transcripts_container_dir = f"{profile.config_home_path}/{profile.transcript_subdir}"
 
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
     # collect enforcer env/caps. Pi loads capability code as `-e <path>`.

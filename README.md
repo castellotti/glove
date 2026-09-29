@@ -17,10 +17,11 @@ command the agent executes.
 > (a declarative `extension.yml`), selected per session in `extensions:`. An
 > extension you don't select contributes nothing: no containers, no mounts, no
 > image layers. Today: **`llm`** (the inference engine; required), the egress
-> providers **`vpn`** (gluetun), **`tor`** and **`direct`**, **`search`**
-> (a per-session SearXNG), **`webfetch`** (Pi's `web_fetch`), **`media`**
-> (analysis toolchain) and **`playwright`** (host Chromium). See
-> [Extensions](#extensions).
+> providers **`vpn`** (gluetun), **`tor`**, **`direct`** and **`corporate`**
+> (corporate resources only), **`search`** (a per-session SearXNG),
+> **`webfetch`** (Pi's `web_fetch`), **`observe`** (network observability,
+> read) and **`filter`** (network rules, write), **`media`** (analysis
+> toolchain) and **`playwright`** (host Chromium). See [Extensions](#extensions).
 
 ## How it works - three rings (defense in depth)
 
@@ -57,6 +58,8 @@ Docker Desktop macOS blast-radius explanation.
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | implemented; hardened start verified (root + NET_ADMIN + tun, no sysctls); live tunnel run **untested** (needs the operator's VPN: `test_egress.sh vpn`) |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
+| Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
+| Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
 | Browser | `playwright` extension, `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
 | Browser | `playwright` headless / novnc sidecars | planned (v3 M7) |
 
@@ -88,7 +91,7 @@ glove up                                # build → sidecars → resolve model �
 glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`), a path to a
+`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `corporate`), a path to a
 directory or file, or a git URL. Templates are *materialized*, not inherited:
 the file is a full copy, so upgrading glove never silently widens a session.
 `glove check` warns when the template changed since, and `glove new --diff`
@@ -132,17 +135,19 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   webfetch: {}              # Pi's web_fetch through the egress
   media: {}
   # playwright: { mode: host }   # headed Chrome on this Mac
+  observe: {}               # network observability (read) — see below
+  # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }
-observe: { enabled: true }  # network observability (off by default) — see below
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 ```
 
 Relative mount paths resolve against the session directory. A mount that would
 expose `.glove/`, `local/`, `glove-session.yml`, glove's home (`~/.glove`) or
 another session's state is refused. The v2 keys (`workdir`, `add_dirs`, `net`,
-`services`, `name`, …) are refused with a pointer to their replacement.
+`services`, `observe`, `name`, …) are refused with a pointer to their
+replacement.
 
 Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
 `172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of
@@ -171,127 +176,123 @@ glove policy [DIR]                           # ring-1 policies + ring-0 hardenin
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove keychain set <service>                 # store a secret, prompting (never in argv)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt] | version
-glove net status [--dir D] [--json]          # gate health + per-service totals
-glove net flows  [--dir D] [--follow] [--json] [--tail N]
-glove net block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
-glove net unblock <rule-id|target>
-glove net rules  [--json]                    # rules + the gate's load result
-glove net validate <file|-> [--env ID] [--session ID] [--json]   # the gate's validator; pure
+glove ext                                    # every loadable extension, origin, CLI
+glove observe status [--dir D] [--json]      # (observe) gate health + per-service totals
+glove observe flows  [--dir D] [--follow] [--json] [--tail N]
+glove filter block  <host-glob|ip|cidr> [--port N] [--terminate] [--allow] [--note TEXT]
+glove filter unblock <rule-id|target>        # (filter) only with the filter grant
+glove filter rules  [--json]                 # rules + the gates' load result
+glove filter validate <file|-> [--env ID] [--session ID] [--json]   # the gate's validator; pure
 ```
+
+An extension with a `cli:` in its manifest is mounted at `glove <name> …`.
 
 `~/.glove/registry.json` (v2, `{"v": 2, "sessions": [{id, dir, harness,
 template, created, grants, subnet}]}`) indexes sessions; a v2-era registry
 (a JSON list) is refused rather than overwritten; move it aside.
 
-### Network observability
+### Network observability: `observe` (read) and `filter` (write)
 
-With `observe: {enabled: true}`, every service forwarder becomes an instrumented
-**netgate**: a drop-in for the socat forwarder (same container name, networks
-and port, so the harness config is unchanged) that records every connection:
-open, ~1 Hz updates while bytes move, and close, with cumulative byte counts,
-timing, tool label and scope. Records go to the session's export directory
-(`~/.glove/observe/<id>/net/`, outside the session dir's mounts) through a
-single collector container that has **no network at all**
-(`network_mode: none`):
+Two explicit, per-session grants, each its own extension:
 
-```
-net/session.json    static facts: services, tools, upstreams, record mode (0600)
-net/flows.ndjson    append-only flow stream + gate start/stop records, size-rotated
-                    to flows-<stamp>[-<n>].ndjson (order by (stamp, n), not by name)
-net/exit.ndjson     apparent-origin changes (only with exit identity on)
-net/status.json     gate heartbeat, upstream health, dropped-record counters,
-                    the rules load result (with the enforced file's SHA-256)
-```
+| Grant | Extension | What it does |
+|---|---|---|
+| **observe** | `observe` | every forwarder becomes a recording **netgate**; flows (and, by default, the harness's transcripts) are exported to `~/.glove/observe/<id>/` |
+| **filter** | `filter` (needs `observe`) | `~/.glove/control/<id>/rules.json` exists and every gate enforces it; `glove filter …` and Layman edit it |
 
 ```yaml
-observe:
-  enabled: true
-  resolve: in-tunnel        # in-tunnel | none — there is deliberately no `host`
-  rotate_mb: 64             # rotate flows.ndjson at this size…
-  keep: 8                   # …keeping this many rotated files
-services:
-  - { name: llm, to: host.docker.internal:8080, port: 8080,
-      observe: { tool: llm, scope: local } }      # optional per-service labels
-  - { name: other, to: x:1, observe: false }      # opt out: stays plain socat
-                                                  # (enabled: false turns all of it off)
-  - { name: proxy, to: egress-proxy:8888, join_network: pi-search-egress,
-      observe: { mode: http-proxy, route: vpn } } # see below
+extensions:
+  observe:
+    record: metadata          # metadata | full (method + URL of cleartext HTTP; loud warning)
+    resolve: in-tunnel        # in-tunnel | none — there is deliberately no `host`
+    exit_identity: none       # via-proxy: poll the apparent exit IP through the tunnel
+    transcripts: true         # export the harness transcripts too
+    rotate_mb: 64             # rotate flows.ndjson at this size…
+    keep: 8                   # …keeping this many rotated files
+    retain: none              # e.g. 12h: expire older records
+    skip: []                  # endpoint names that stay plain socat
+  filter: {}
 ```
 
-**Proxy mode.** A service the harness uses as an HTTP proxy (glove-pi-search's
-`proxy`/`web_fetch`) can run with `mode: http-proxy`. The gate then reads the
-destination from each `CONNECT host:port` or `GET http://host/…` and records the
-real hostname and port, not just `egress-proxy`. It chains to the upstream
-(`chain:http://<to>` by default) **by hostname**, so the tunnel, not the gate or
-your host, resolves it. `route: vpn|tor|direct` is required and declares what
-that upstream really is. glove can't verify a tunnel, so it won't assume one, and
-`direct` marks every flow as untunnelled. Before anything goes upstream, a built-in
-**SSRF guard** refuses non-public destinations: private and metadata IPs in any
-notation, container names like `gluetun`, and `.internal`/`localhost` names.
-Refusals are recorded as blocked flows. In `tcp` mode the gate also peeks
-(never terminates) a TLS ClientHello, so an HTTPS flow shows its SNI hostname.
+**observe** fills the `forwarder` slot: each endpoint's forwarder is a netgate
+instead of socat, a drop-in (same container name, networks and port, so the
+harness config is unchanged) that records every connection: open, ~1 Hz updates
+while bytes move, and close, with cumulative byte counts, timing, tool label and
+scope. Records go to `~/.glove/observe/<id>/net/` through a single collector
+container that has **no network at all** (`network_mode: none`):
 
-Guarantees, each covered by a test (`tests/test_netgate_invariants.py`) and by
-live runs (`tests/integration/test_netgate_m1.sh`, `…_m2.sh`,
-`test_netgate_shutdown.sh`, `netgate_control_perms.sh`):
-- the gate exposes no API on any network;
-- it never gains `NET_ADMIN`, joins the harness's network or PID namespace, or
-  mounts the harness home;
-- `net/` has no harness mount, and a render that would expose it is refused;
+```
+net/session.json    static facts: services, tools, upstreams, record mode, grants (0600)
+net/flows.ndjson    append-only flow stream + gate start/stop records, size-rotated
+                    to flows-<stamp>[-<n>].ndjson (order by (stamp, n), not by name)
+net/exit.ndjson     apparent-origin changes (only with exit_identity: via-proxy)
+net/status.json     gate heartbeat, upstream health, dropped-record counters, and —
+                    only with filter — the rules load result (the enforced file's SHA-256)
+```
+
+With `transcripts: true`, glove binds `~/.glove/observe/<id>/transcripts/` over
+the harness's transcript directory (Pi `.pi/agent/sessions`, Vibe
+`.vibe/logs/session`), so transcripts are written there directly; `glove up
+--resume` finds them there too.
+
+**Proxy gates.** A forwarder to the egress proxy (`webfetch`'s `proxy`) runs in
+`http-proxy` mode: it reads the destination from each `CONNECT host:port` or
+`GET http://host/…`, records the real hostname, and chains to the egress proxy
+**by hostname**, so the tunnel, not the gate or your host, resolves it. The
+route (`vpn|tor|direct|corporate`) comes from the egress provider. Before
+anything goes upstream, a built-in **SSRF guard** refuses non-public
+destinations (private and metadata IPs in any notation, container names,
+`.internal`/`localhost` names), recorded as blocked flows. With the egress
+provider's in-tunnel resolver (gluetun's DNS, Tor's SOCKS `RESOLVE`), flows
+carry `dest.ip` with `resolution: in-tunnel`, `ip` rules apply to hostnames,
+and a name that resolves to a private address is refused. `tcp`-mode gates
+peek (never terminate) a TLS ClientHello, so an HTTPS flow shows its SNI.
+
+**The whole chain.** With observe on, **SearXNG leaves the egress network**:
+its engine requests go through its own gate (`searxng-egress`, `client:
+searxng`) on the search extension's private network, the only route it has to
+the egress proxy. One `web_search` shows every engine SearXNG contacted.
+
+**filter** mounts `control/<id>/` read-only into every gate and the collector
+and passes `--rules`. `glove filter block '*.doubleclick.net'` writes a rule to
+`rules.json`, the same file Layman writes. The gates reload it within about a
+second, refuse new matching connections with a recorded `verdict: block` (and
+`web_fetch` tells the agent it was refused by policy, with the reason), and with
+`--terminate` also cut established ones. A malformed or unreadable file is
+rejected as a whole: the gates keep the previous rules and report the error in
+`glove filter rules` and `status.json`. `glove filter validate FILE` runs the
+gate's validator without a gate. **Observe alone never mounts `control/`,
+never passes `--rules`, and glove never creates `control/<id>/` for it.**
+Removing `filter:` revokes the grant at the next `glove up`: `rules.json` moves
+to `.glove/ext/filter/rules.revoked.json`, `control/<id>/` is removed, and
+`grants.filter.granted` becomes `false`. The built-in SSRF guard always runs
+first; `rules.json` cannot widen it.
+
+Guarantees, each covered by tests (`extensions/gate/tests/`,
+`extensions/observe/tests/`) and live runs (`tests/integration/test_observe.sh`,
+`test_netgate_shutdown.sh`, `netgate_control_perms.sh`, on Docker and Podman):
+- the gates expose no API on any network, never gain `NET_ADMIN`, join the
+  harness's network or PID namespace, or mount the harness home;
+- `net/` and `control/` have no harness mount, and a render that would expose
+  them is refused (not waivable);
 - nothing resolves a destination hostname on the host;
 - telemetry failures drop records, never traffic.
-
-**Blocking.** `glove net block '*.doubleclick.net'` writes a rule to
-`~/.glove/control/<env>/<session>/rules.json`, the same file Layman writes. The
-gate reloads it within about a second, refuses new matching connections with a
-recorded `verdict: block`, and with `--terminate` also cuts established ones.
-A malformed file is rejected as a whole: the gate keeps the previous rules and
-reports the error in `glove net rules` and `status.json`. So is a file the gate
-cannot read (e.g. left `root:root 0600` by another writer): it is never taken
-for "no rules". `status.json` names the enforced file and the last rejected one
-by SHA-256, and `glove net rules` says whether the file on disk is `enforced`,
-`rejected` or `pending`. `glove net validate FILE` runs the gate's validator
-without a gate. The gate runs as your uid, so a second writer (Layman) must
-leave `rules.json` readable by you (mode `0644`); see "Layman" below. The
-built-in SSRF guard always runs first.
 
 **Gate lifecycle.** Every flow record carries its forwarder's `run` id, and
 `flows.ndjson` records each forwarder's and the collector's `start`/`stop`. A
 clean `glove down` stops the forwarders before the collector, so every open
-flow gets its `gate_shutdown` close. A forwarder that dies without one (e.g.
-`docker kill`, which `restart: unless-stopped` does not undo) gets an inferred
-`stop` from the collector after 30 s of silence. `glove net status` then counts
-its unclosed flows as cut, not active.
+flow gets its `gate_shutdown` close. A forwarder that dies without one gets an
+inferred `stop` from the collector after 30 s of silence, and `glove observe
+status` counts its unclosed flows as cut, not active. `glove down --wipe`
+deletes the flow record (not `session.json` or transcripts).
 
-**Where things are (M4).** With `observe.resolver: dns://gluetun:53` (or
-`tor-socks://tor:9150`), a proxy gate resolves each destination through the
-*tunnel's* resolver, never your host's. Flows then carry `dest.ip` with
-`resolution: in-tunnel`, `ip` rules apply to hostnames, and a name that resolves
-to a private address is refused. If the resolver is down, flows say
-`unavailable` and traffic is unaffected. With `observe.exit_identity: via-proxy`,
-the session's apparent origin (exit IP and location) is fetched *through* the
-tunnel and written to `net/exit.ndjson`. It's opt-in, because the echo service
-(`am.i.mullvad.net` by default) is a third party, though it only sees the exit.
-
-**The whole chain (M5).** A `harness: false` service is a gate listener for
-*egress-stack* components, and the sandbox can't reach it. glove-pi-search points
-SearXNG's outgoing proxy at one (`fanout`), so a single `web_search` shows every
-engine SearXNG contacted (`client: searxng`, `tool: search-engine-fanout`).
-`observe.record: full` (with an explicit warning) adds the method and URL of
-*cleartext* HTTP requests, and `record_headers` adds headers with credentials
-redacted. HTTPS stays opaque. `observe.retain: 12h` expires old records, and
-`glove down --wipe` deletes them.
-
-Design and as-built decisions:
-[docs/planning/network-observability.md](docs/planning/network-observability.md).
-Sample data: `tests/fixtures/netobs/` (the original fixture, frozen) and one
-directory per UI state in `tests/fixtures/netobs-scenarios/`.
-Verified live on Docker Desktop (macOS) and on rootless and rootful Podman,
-including an SELinux-enforcing Fedora host. On Podman the gate's `net/` and
-`control/` binds are labelled `selinux: z`, and its socket tmpfs gets a
-container SELinux context when SELinux is on. Rootful Docker on Linux:
-**untested**. On a native SELinux host, the *harness's* own binds are not
-labelled: **unsupported** (see "Layman" below).
+Sample data: `tests/fixtures/netobs/` (the v2 fixture, frozen),
+`tests/fixtures/netobs-scenarios/` (one directory per flow state) and
+`tests/fixtures/netobs-v3/` (one `~/.glove` tree per grant state, generated by
+`extensions/observe/tests/fixtures/generate.py`). On Podman, sidecar binds are
+labelled `selinux: z`, tmpfs volumes get a container SELinux context when
+SELinux is on, and sidecars start one at a time (see
+[docs/SECURITY.md](docs/SECURITY.md)). Rootful Docker on Linux: **untested**.
 
 ### Layman
 
@@ -307,11 +308,12 @@ every folder, owner and mode under `~/.glove`.
 - **What glove guarantees.** Whenever glove creates its home (`glove new`, any
   registry write), it also creates `control/`, and adds it to an older home
   that lacks it. Both are yours, mode `0777 & ~umask` (`0755` usually).
-  `control/<id>/` (`0700`) is created when a session with a gate is rendered,
-  and `observe/<id>/net/` is `0700` with files `0600`; `rules.json`'s `env` and
-  `session` are both the session id. glove warns, with the `sudo chown` that
-  fixes it, when `control/` belongs to someone else. (The v3 read/write grant
-  split, and Layman's side of the new paths, land in v3 M5.)
+  `observe/<id>/` exists only with the **observe** grant (`net/` is `0700`,
+  files `0600`), and `control/<id>/` (`0700`) only with the **filter** grant;
+  both grants are in `session.json` and the registry row. `rules.json`'s `env`
+  and `session` are both the session id. glove warns, with the `sudo chown`
+  that fixes it, when `control/` belongs to someone else. Layman's side of the
+  v3 paths: `../layman/docs/planning/glove-v3-handoff.md`.
 - **What Layman writes.** Only `control/<id>/rules.json`, only if
   that directory exists, and by atomic rename: a temp file unique to Layman
   in the same directory, `fsync`, `chmod 0644` (explicitly, not through the
@@ -331,7 +333,9 @@ rootful Podman.
 ### Resuming a session
 
 A conversation's transcript lives in the session's `.glove/home` (bind-mounted
-at `/home/agent`), **not** in the (ephemeral) container. So you can reopen one:
+at `/home/agent`) — or, with observe's `transcripts: true`, in
+`~/.glove/observe/<id>/transcripts/` — **not** in the (ephemeral) container. So
+you can reopen one:
 
 - `glove up --resume` (`-r`) — reopen the **most recent** conversation. glove
   checks a transcript exists, then defers to the harness's own continue-last,
@@ -398,26 +402,29 @@ throwaway container on the harness network (the host never contacts the
 server), and core renders the result into Pi `models.json` / Vibe `config.toml`
 (vision → `input: ["text","image"]`).
 
-### Egress: `vpn`, `tor`, `direct`
+### Egress: `vpn`, `tor`, `direct`, `corporate`
 
-Web tools reach the internet only through the session's **egress provider**,
+Web tools reach the network only through the session's **egress provider**,
 one of `vpn` (a [gluetun](https://github.com/qdm12/gluetun) tunnel), `tor`
-(tor + privoxy) or `direct` (a plain proxy, no anonymity). Each session gets
+(tor + privoxy), `direct` (a plain proxy, no anonymity) or `corporate`
+(corporate resources only, over this machine's corporate VPN). Each session gets
 its own networks:
 
 | Network | Kind | Who joins |
 |---|---|---|
 | `glove-<id>-net` | internal | the harness and its forwarders |
-| `glove-<id>-egress` | internal | egress consumers (SearXNG, the `proxy` forwarder) and the provider's proxy |
+| `glove-<id>-egress` | internal | egress consumers (SearXNG, the `proxy` forwarder, observe's gates) and the provider's proxy |
 | `glove-<id>-wan` | bridge | **only** the egress provider's tunnel container |
 
 So only the tunnel container can reach the internet. If its proxy fails,
 consumers have no other route out (egress fails closed by topology).
 
 Before the harness starts, `glove up` runs each extension's **verify** checks:
-`container-healthy`, `tcp-open`, `http-ok` and `exit-ip-differs`. The last one
-requires the exit IP seen through the proxy to differ from this machine's IP,
-and fails if either is unknown. They run from throwaway hardened containers on
+`container-healthy`, `tcp-open`, `http-ok`, `http-refused` and
+`exit-ip-differs`. `exit-ip-differs` requires the exit IP seen through the proxy
+to differ from this machine's IP, and fails if either is unknown;
+`http-refused` requires the proxy to refuse a URL (corporate: the general
+internet). They run from throwaway hardened containers on
 the session's networks. A failing check shows the sidecar's last log lines (key
 and password lines withheld) and stops the session's sidecars. VPN secrets are
 Keychain references handed to gluetun as compose secrets. An optional
@@ -428,6 +435,21 @@ every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
 going through the egress proxy. `webfetch` gives Pi `web_fetch` through a
 `proxy` forwarder. Both need an egress provider. The `pi-search` template puts
 it together: `glove new pi-search <dir>`.
+
+**`corporate`** is a netgate proxy that resolves and dials destinations itself
+(`dns: host` follows the VPN's split DNS through Docker Desktop / Podman
+machine) under a static **default-block** policy: only `allow_domains` (host
+globs), `allow_cidrs`, and with `from_interface: utun4` the host's routes via
+that interface (read from `netstat -rn` at plan time, shown in `glove plan`,
+stored in `.glove/effective.yml`). Those entries are also its SSRF-guard
+exceptions, because corporate hosts are private; they come only from
+`glove-session.yml`, never from `rules.json`. This machine, the runtime's host
+gateway, cloud metadata and the session's own network stay refused even inside
+an allowed range. `tcp: [{name: git-ssh, to: "git.example.internal:22"}]` adds
+raw TCP endpoints (`glove-<id>-git-ssh:22`). `glove up` checks that
+`https://example.com` is refused through it, and that `probe_url` (if set)
+answers. Template: `glove new corporate <dir>`; details in
+[extensions/corporate/README.md](extensions/corporate/README.md).
 
 ## Toolchain
 
@@ -445,8 +467,12 @@ bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
-                                              # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (8 checks)
-# RT=podman runs test_session_dir / test_pi_nono / test_vibe_nono / test_ring0_protect / test_egress on Podman
+                                              # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
+bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)
+bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
+bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
+bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
+# RT=podman runs every script above except test_pi_srt on Podman
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server

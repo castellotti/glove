@@ -168,3 +168,45 @@ def test_hook_provided_secret_wins_over_the_setting(tmp_path, monkeypatch):
     # the keychain ref is never resolved when the hook provided the value
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("keychain read"))
     assert resolve_secrets(comp, provided=provided) == {var: "hooked"}
+
+
+# --- http-refused (v3 M5: corporate's negative check) --------------------------------
+
+
+@pytest.mark.parametrize(("answers", "ok", "match"), [
+    ([(0, "403 000")], True, None),  # CONNECT refused by the proxy
+    ([(0, "000 403")], True, None),  # a cleartext request refused
+    ([(7, "000 000"), (0, "403 000")], True, None),  # proxy not up yet, then refuses
+    ([(0, "200 200")], False, "let https://example.com/ through"),
+    ([(7, "000 000"), (7, "000 000")], False, "did not answer"),
+])
+def test_http_refused(tmp_path, monkeypatch, answers, ok, match):
+    plan = _plan(tmp_path)
+    it = iter(answers)
+    monkeypatch.setattr(verify, "probe", lambda *a, **k: next(it))
+    item = {"kind": "http-refused", "url": "https://example.com/", "proxy": "http://p:8888", "retries": 2}
+    if ok:
+        assert run_check("docker", plan, "corporate", item, _quiet, sleep_scale=0) == \
+            "https://example.com/ refused by http://p:8888"
+    else:
+        with pytest.raises(VerifyError, match=match):
+            run_check("docker", plan, "corporate", item, _quiet, sleep_scale=0)
+
+
+def test_a_failed_compose_up_stops_everything(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, {"tor": {}})
+    f = _compose_file(tmp_path, plan)
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw.get("env") or {}))
+        if "up" in cmd:
+            raise subprocess.CalledProcessError(1, cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(session.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError):
+        session.start_sidecars(plan, f, provider="podman", env={})
+    assert calls[-1][0][-1] == "down"  # never a half-started egress stack
+    ups = [c for c, _ in calls if "up" in c]
+    assert len(ups[0]) == len(["podman", "compose", "-p", "x", "-f", "f", "up", "-d"]) + 1  # podman: one at a time

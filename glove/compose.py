@@ -8,7 +8,9 @@ private, pids/memory limits) and then applies exactly the ``privileges:``
 exceptions the manifest declares, drawn from ``PRIVILEGE_ALLOWLIST``. Names are
 session-scoped (``glove-<id>-<short>``), networks are logical (``egress``,
 ``wan``, an extension-private net), and host binds are limited to the
-extension's own state dir and (read-only) its assets.
+extension's own state dir, (read-only) its assets, and an export root it owns
+(``Composition.export_access``). A `forwarder` provider's per-endpoint services
+go through the same path, with networks set by core.
 
 ``validate_project`` then re-checks the §3.4 invariants on the *merged*
 project, so a bug in the merge cannot ship a weaker project.
@@ -101,9 +103,12 @@ def _within(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip("/") + "/")
 
 
-def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set[str]) -> list[dict]:
+def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set[str],
+             extra: dict | None = None) -> list[dict]:
     out = []
     state = str(comp.state_dir(a.name))
+    roots = {root: ro for root, ro in comp.export_access(a).items() if root in comp.export_dirs}
+    label = (extra or {}).get("bind_selinux")
     for v in vols or []:
         where = f"extension {a.name!r} service {short!r} volume {v!r}"
         if not isinstance(v, dict):
@@ -119,17 +124,26 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
             src = str(v.get("source", ""))
             if "docker.sock" in src:
                 raise ExtensionError(f"{where}: the docker socket is never mounted")
+            root = next((r for r in roots if _within(src, str(comp.export_dirs[r]))), None)
             if _within(src, state):
-                out.append(dict(v))
+                bind = dict(v)
             elif _within(src, str(a.manifest.path)):
                 if not v.get("read_only"):
                     raise ExtensionError(f"{where}: extension assets bind read-only")
-                out.append(dict(v))
+                bind = dict(v)
+            elif root is not None:
+                if roots[root] and not v.get("read_only"):
+                    raise ExtensionError(f"{where}: the {root!r} export root binds read-only here")
+                bind = dict(v)
             else:
                 raise ExtensionError(
-                    f"{where}: a sidecar may bind only its state dir ({{{{ state }}}}) or, read-only, its "
-                    "assets ({{ assets }})"
+                    f"{where}: a sidecar may bind only its state dir ({{{{ state }}}}), read-only its "
+                    "assets ({{ assets }}), or an export root it owns ({{ exports.<root> }})"
                 )
+            if label:
+                # SELinux hosts deny containers an unlabelled bind; `z`: shared
+                bind["bind"] = {"selinux": label}
+            out.append(bind)
         else:
             raise ExtensionError(f"{where}: type must be tmpfs|volume|bind")
     return out
@@ -164,26 +178,131 @@ def _networks(comp: Composition, a: Active, short: str, svc: dict) -> dict | Non
     return out
 
 
+def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
+                      volumes: dict[str, Any]) -> set[str]:
+    declared = set((doc.get("volumes") or {}).keys())
+    for vname, vspec in (doc.get("volumes") or {}).items():
+        vspec = vspec or {}
+        opts = dict(vspec.get("driver_opts") or {})
+        if set(vspec) - {"driver_opts"} or (opts and (opts.get("type") != "tmpfs" or set(opts) - {"type"})):
+            raise ExtensionError(
+                f"extension {a.name!r}: volume {vname!r} may only be a plain or tmpfs volume "
+                "(`driver_opts: {type: tmpfs}`; core sets its size, mode and owner)"
+            )
+        full = f"glove-{comp.session}-{a.name}-{vname}"
+        if opts:
+            # owned by the session uid as the mount sees ids, mode 0700
+            opts = {"type": "tmpfs", "device": "tmpfs", "o": extra.get("tmpfs_volume_opts", "size=1m,mode=0700")}
+        volumes[full] = {"name": full, **({"driver": "local", "driver_opts": opts} if opts else {})}
+    return declared
+
+
+def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: SessionPlan, extra: dict,
+                    declared: set[str], *, networks: dict[str, Any] | None = None,
+                    tmpfs_volumes: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """One validated, hardened service. `networks` (already full names) is core's
+    choice for a forwarder; fragment services declare logical networks."""
+    where = f"extension {a.name!r} service {short!r}"
+    image = str(svc.get("image", ""))
+    built = {_image_tag(x, k) for x in (a, *_required_libs(comp, a)) for k in (x.manifest.raw.get("images") or {})}
+    if "@sha256:" not in image and image not in built:
+        raise ExtensionError(f"{where}: image must be pinned by digest (@sha256:…) or built by the extension")
+    priv = _privileges(comp, a, short) if networks is None else {}
+    lim = {**DEFAULT_LIMITS, **((a.manifest.raw.get("limits") or {}).get(short) or {})}
+    if svc.get("dns") and "wan" not in (svc.get("networks") or []):
+        raise ExtensionError(f"{where}: `dns` is only meaningful on the egress provider's wan network")
+    name = f"glove-{comp.session}-{short}"
+    out: dict[str, Any] = {"container_name": name, **{k: v for k, v in svc.items() if k not in (
+        "volumes", "networks", "depends_on", "secrets", "network_mode")}}
+    if networks is not None:
+        out["networks"] = networks
+    else:
+        nets = _networks(comp, a, short, svc)
+        if nets is None:
+            out["network_mode"] = "none"
+        else:
+            out["networks"] = nets
+    if svc.get("volumes"):
+        out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra)
+    deps = svc.get("depends_on") or []
+    if deps:
+        items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
+        out["depends_on"] = {f"glove-{comp.session}-{d}": (c or {"condition": "service_started"})
+                             for d, c in items}
+    if svc.get("secrets"):
+        own = {k.removeprefix(f"{a.name}-") for k, (ext, _) in comp.secrets.items() if ext == a.name}
+        missing = [x for x in svc["secrets"] if x not in own]
+        if missing:
+            raise ExtensionError(f"{where}: secret(s) {missing} are not declared (or not active)")
+        out["secrets"] = [{"source": f"glove-{comp.session}-{a.name}-{x}", "target": x} for x in svc["secrets"]]
+    out.setdefault("restart", "unless-stopped")
+    if not priv.get("user_root"):
+        out["user"] = f"{plan.uid}:{plan.gid}"
+        # Rootless podman's keep-id only where the sidecar must be the session
+        # uid: it writes a host bind (it must own what it writes), or shares a
+        # tmpfs volume, which core creates owned by that uid (e.g. the netgate
+        # events socket). Elsewhere its uid stays an unprivileged subuid.
+        rw_bind = any(v.get("type") == "bind" and not v.get("read_only") for v in out.get("volumes") or [])
+        shared = any(v.get("type") == "volume" and v.get("source") in tmpfs_volumes for v in out.get("volumes") or [])
+        if extra.get("userns_mode") and (rw_bind or shared):
+            out["userns_mode"] = extra["userns_mode"]
+    out["cap_drop"] = ["ALL"]
+    if priv.get("cap_add"):
+        out["cap_add"] = list(priv["cap_add"])
+    if priv.get("devices"):
+        out["devices"] = [f"{d}:{d}" for d in priv["devices"]]
+    sec = ["no-new-privileges:true"]
+    if extra.get("emit_seccomp", True):
+        sec.append(f"seccomp={SECCOMP_DIR / (priv.get('seccomp', 'default') + '.json')}")
+    out["security_opt"] = sec
+    out["read_only"] = priv.get("read_only", True)
+    out["ipc"] = "private"
+    out["pids_limit"] = int(lim["pids"])
+    out["mem_limit"] = str(lim["memory"])
+    if lim.get("cpus"):
+        out["cpus"] = lim["cpus"]
+    if priv:
+        comp.privileges[f"{a.name}/{short}"] = [{k: v} for k, v in priv.items()]
+    return out
+
+
+def _required_libs(comp: Composition, a: Active) -> list[Active]:
+    from .extensions import required_libs
+
+    return required_libs(comp, a)
+
+
+def _tmpfs(volumes: dict[str, Any]) -> frozenset[str]:
+    return frozenset(n for n, v in volumes.items() if (v.get("driver_opts") or {}).get("type") == "tmpfs")
+
+
+def _forwarder_networks(plan: SessionPlan, s) -> dict[str, Any]:
+    nets: dict[str, Any] = {}
+    if s.harness:
+        aliases = [*s.impl_aliases, *s.aliases]
+        nets[plan.network.internal_network] = {"aliases": aliases} if aliases else {}
+    for n in s.networks:
+        nets[n] = {}
+    if s.host_gateway and plan.network.hostgw_network:
+        nets[plan.network.hostgw_network] = {}
+    return nets
+
+
 def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[str, dict]:
-    """Validated, namespaced, hardened `services`/`volumes`/`secrets` blocks."""
+    """Validated, namespaced, hardened `services`/`volumes`/`secrets` blocks —
+    extension fragments plus the `forwarder` provider's per-endpoint services."""
     services: dict[str, Any] = {}
     volumes: dict[str, Any] = {}
     reserved = {f"glove-{comp.session}-{e.name}" for e in comp.endpoints} | {plan.harness_service}
+    declared_by: dict[str, set[str]] = {}
     for a, doc in comp.fragments:
         bad_top = set(doc) - {"services", "volumes"}
         if bad_top:
             raise ExtensionError(
                 f"extension {a.name!r}: a fragment may hold only services/volumes, got {sorted(bad_top)}"
             )
-        declared = set((doc.get("volumes") or {}).keys())
-        for vname, vspec in (doc.get("volumes") or {}).items():
-            vspec = vspec or {}
-            opts = vspec.get("driver_opts") or {}
-            if set(vspec) - {"driver_opts"} or (opts and opts.get("type") != "tmpfs"):
-                raise ExtensionError(f"extension {a.name!r}: volume {vname!r} may only be a plain or tmpfs volume")
-            full = f"glove-{comp.session}-{a.name}-{vname}"
-            volumes[full] = {"name": full, **({"driver": "local", "driver_opts": opts} if opts else {})}
-        limits = {**DEFAULT_LIMITS}
+        declared = _declared_volumes(comp, a, doc, extra, volumes)
+        declared_by[a.name] = declared
         for short, svc in (doc.get("services") or {}).items():
             where = f"extension {a.name!r} service {short!r}"
             svc = dict(svc or {})
@@ -193,63 +312,22 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
             name = f"glove-{comp.session}-{short}"
             if name in services or name in reserved:
                 raise ExtensionError(f"{where}: name {name!r} is already used")
-            image = str(svc.get("image", ""))
-            built = {_image_tag(a, k) for k in (a.manifest.raw.get("images") or {})}
-            if "@sha256:" not in image and image not in built:
-                raise ExtensionError(f"{where}: image must be pinned by digest (@sha256:…) or built by the extension")
-            priv = _privileges(comp, a, short)
-            lim = {**limits, **((a.manifest.raw.get("limits") or {}).get(short) or {})}
-            if svc.get("dns") and "wan" not in (svc.get("networks") or []):
-                raise ExtensionError(f"{where}: `dns` is only meaningful on the egress provider's wan network")
-            out: dict[str, Any] = {"container_name": name, **{k: v for k, v in svc.items() if k not in (
-                "volumes", "networks", "depends_on", "secrets", "network_mode")}}
-            nets = _networks(comp, a, short, svc)
-            if nets is None:
-                out["network_mode"] = "none"
-            else:
-                out["networks"] = nets
-            if svc.get("volumes"):
-                out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared)
-            deps = svc.get("depends_on") or []
-            if deps:
-                items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
-                out["depends_on"] = {f"glove-{comp.session}-{d}": (c or {"condition": "service_started"})
-                                     for d, c in items}
-            if svc.get("secrets"):
-                own = {k.removeprefix(f"{a.name}-") for k, (ext, _) in comp.secrets.items() if ext == a.name}
-                missing = [s for s in svc["secrets"] if s not in own]
-                if missing:
-                    raise ExtensionError(f"{where}: secret(s) {missing} are not declared (or not active)")
-                out["secrets"] = [{"source": f"glove-{comp.session}-{a.name}-{s}", "target": s}
-                                  for s in svc["secrets"]]
-            out.setdefault("restart", "unless-stopped")
-            if not priv.get("user_root"):
-                out["user"] = f"{plan.uid}:{plan.gid}"
-                # Rootless podman's keep-id only where the sidecar writes a host
-                # bind (it must own what it writes); elsewhere its uid stays an
-                # unprivileged subuid. Podman 6.1 also intermittently gives
-                # concurrently started keep-id containers a one-entry id map.
-                rw_bind = any(v.get("type") == "bind" and not v.get("read_only") for v in out.get("volumes") or [])
-                if extra.get("userns_mode") and rw_bind:
-                    out["userns_mode"] = extra["userns_mode"]
-            out["cap_drop"] = ["ALL"]
-            if priv.get("cap_add"):
-                out["cap_add"] = list(priv["cap_add"])
-            if priv.get("devices"):
-                out["devices"] = [f"{d}:{d}" for d in priv["devices"]]
-            sec = ["no-new-privileges:true"]
-            if extra.get("emit_seccomp", True):
-                sec.append(f"seccomp={SECCOMP_DIR / (priv.get('seccomp', 'default') + '.json')}")
-            out["security_opt"] = sec
-            out["read_only"] = priv.get("read_only", True)
-            out["ipc"] = "private"
-            out["pids_limit"] = int(lim["pids"])
-            out["mem_limit"] = str(lim["memory"])
-            if lim.get("cpus"):
-                out["cpus"] = lim["cpus"]
-            if priv:
-                comp.privileges[f"{a.name}/{short}"] = [{k: v} for k, v in priv.items()]
-            services[name] = out
+            services[name] = _harden_service(comp, a, short, svc, plan, extra, declared,
+                                             tmpfs_volumes=_tmpfs(volumes))
+    provider = comp.slots.get("forwarder")
+    for s in plan.network.implemented:
+        assert provider is not None
+        name = f"glove-{comp.session}-{s.role}"
+        if name in services:
+            raise ExtensionError(f"forwarder {name!r} clashes with an extension service")
+        services[name] = _harden_service(comp, provider, s.role, dict(s.impl or {}), plan, extra,
+                                         declared_by.get(provider.name, set()),
+                                         networks=_forwarder_networks(plan, s), tmpfs_volumes=_tmpfs(volumes))
+        if s.host_gateway:
+            services[name]["extra_hosts"] = [f"{extra.get('host_gateway_name', 'host.docker.internal')}:host-gateway"]
+        if s.listen_port < 1024:
+            # a low port as non-root: podman does not default this (docker does)
+            services[name]["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}
     secrets = {f"glove-{comp.session}-{c}": {"environment": secret_env_var(c)} for c in comp.secrets}
     return {"services": services, "volumes": volumes, "secrets": secrets}
 
@@ -296,9 +374,11 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition | None) -> 
         nets = svc.get("networks") or {}
         nets = set(nets) if not isinstance(nets, dict) else set(nets.keys())
         if wan in nets:
-            owner = next((a for a, d in comp.fragments
-                          if name.removeprefix(f"glove-{session}-") in (d.get("services") or {})), None)
-            if egress_provider is None or owner is not egress_provider:
+            short = name.removeprefix(f"glove-{session}-")
+            owner = next((a for a, d in comp.fragments if short in (d.get("services") or {})), None)
+            # ...or the forwarder of an endpoint the egress provider declared (a raw TCP hop)
+            ep_owner = next((comp.by_name(e.extension) for e in comp.endpoints if e.name == short), None)
+            if egress_provider is None or egress_provider not in (owner, ep_owner):
                 raise ExtensionError(f"service {name!r} joins the wan network, which only the egress provider may")
         if harness_net in nets and name != plan.harness_service:
             role = name.removeprefix(f"glove-{session}-")

@@ -355,7 +355,7 @@ def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
 
 def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
     monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
-    d = make_session(tmp_path / "s", "observe: {enabled: true}\n")
+    d = make_session(tmp_path / "s", "  observe: {}\n  filter: {}\n")
     assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
     sid = _sid(d)
     assert (home / "observe" / sid / "net" / "session.json").is_file() and (home / "control" / sid).is_dir()
@@ -371,8 +371,8 @@ def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
 
 
 def test_deleting_the_dir_leaves_only_the_row_and_exports_which_gc_removes(home, tmp_path):
-    d = make_session(tmp_path / "s", "observe: {enabled: true}\n")
-    keep = make_session(tmp_path / "keep", "observe: {enabled: true}\n")
+    d = make_session(tmp_path / "s", "  observe: {transcripts: false}\n")
+    keep = make_session(tmp_path / "keep", "  observe: {transcripts: false}\n")
     for x in (d, keep):
         assert runner.invoke(app, ["plan", str(x)]).exit_code == 0
     sid, kept = _sid(d), _sid(keep)

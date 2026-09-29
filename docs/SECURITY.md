@@ -43,8 +43,8 @@ Every capability (the model, search, the browser, …) is an extension in
   pids/memory limits). Exceptions come only from the manifest's `privileges:`,
   from an allowlist, and `glove policy` lists them.
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
-  docker socket, host binds outside the extension's own session state, or a
-  sidecar on the harness network. The harness reaches extensions only through
+  docker socket, host binds outside the extension's own session state (or an
+  export root it owns, below), or a sidecar on the harness network. The harness reaches extensions only through
   single-purpose forwarders. Only the active egress provider joins the routable
   `wan` network.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
@@ -53,12 +53,25 @@ Every capability (the model, search, the browser, …) is an extension in
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
+- **Export roots** are the only session data outside the session directory, and
+  core owns them: `~/.glove/observe/<id>/` exists only for the in-tree
+  `observe` extension, `~/.glove/control/<id>/` only while the in-tree `filter`
+  extension is active (and then read-only in the gates). Binds are checked by
+  path; any other extension gets neither.
+- **The forwarder slot.** An extension filling `forwarder` (observe) may replace
+  the socat forwarders, but only with services core names, networks and
+  hardens: its hook cannot choose networks, aliases outside the endpoint's own
+  name, security keys or privileges.
+- **Low ports.** A forwarder listening below 1024 gets
+  `net.ipv4.ip_unprivileged_port_start=0` in its own network namespace (Docker's
+  default; Podman does not set it), so it still runs as the operator's uid with
+  no capabilities.
 
 The inference server is reached the same way: one `glove-<id>-llm` forwarder
 that dials exactly the configured host (or the host gateway, or a cloud API on
 443). The harness never gets a LAN or internet route of its own.
 
-### Egress (`vpn`, `tor`, `direct`)
+### Egress (`vpn`, `tor`, `direct`, `corporate`)
 
 Web tools reach the internet only through the session's egress provider.
 Egress consumers (SearXNG, the harness's `proxy` forwarder) sit on the
@@ -93,9 +106,32 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   allows CONNECT only to 443/80. Tor exits and gluetun's kill switch already
   refuse private destinations. **Known gap:** names are judged by shape and never
   resolved, so a public name that resolves privately passes both checks under
-  `direct`. The netgate's guard (observe, M5) has the same limit.
+  `direct`. With observe on, the proxy gate's in-tunnel resolver closes this for
+  vpn and tor (a name resolving to a private address is refused); `direct` has
+  no in-tunnel resolver, so the gap stays there.
 - **`direct` is not anonymous.** Its flows are labelled `route: direct`. Its
   brief tells the agent so.
+- **tor's SOCKS port** is on the private `torlink` and on the internal egress
+  network (observe's gates resolve names in-tunnel through it), never the
+  harness network. Everything on the egress network already leaves only through
+  Tor; tor has no ControlPort.
+- **`corporate`: an allowlist, not a tunnel.** Its proxy is a netgate that
+  resolves destinations itself (the host's resolver via Docker/Podman, so the
+  corporate VPN's split DNS applies), checks the **resolved address**, applies a
+  static default-block policy built from `allow_domains`/`allow_cidrs`/
+  `from_interface`, and dials that same address (never re-resolving). The
+  allowlist is also the SSRF guard's exception list, because corporate hosts are
+  private. It comes only from `glove-session.yml`, reaches the gate only on its
+  command line, and cannot come from `rules.json` (no such key; the corporate
+  gate does not read `rules.json` at all). Refused whatever the allowlist says:
+  loopback, link-local/metadata (`169.254.0.0/16`, `100.100.100.200`),
+  multicast, the runtime's host gateway (resolved from its fixed names at
+  start), the session's own /24, and names like `host.docker.internal`.
+  `web_fetch` gets the same allowlist for its own pre-check. Measured live (a
+  public host standing in for a corporate one): the allowed host is reached,
+  everything else is refused with the gate's reason, and the host gateway,
+  metadata and the session's network are refused even inside an allowed CIDR.
+  **Untested:** a real corporate VPN (split DNS and routes via the host).
 
 ## Planted host-trusted files (ring 0)
 
@@ -125,11 +161,16 @@ run inside a directory with no repo yet), nested repositories and submodules
 (`.git/modules/*`), and `.git` files (worktrees) are not covered.
 `tests/integration/test_ring0_protect.sh` checks this live.
 
-## Network observability (the netgate)
+## Network observability (the netgate): observe reads, filter writes
 
-With `observe.enabled`, the service forwarders are replaced by the netgate
+With the `observe` extension, the forwarders are replaced by the netgate
 (`docs/planning/network-observability.md`). It changes what glove *records*,
-never what the agent can *reach*:
+never what the agent can *reach*. Writing rules is a separate grant, the
+`filter` extension: without it no gate reads a rules file, none mounts
+`~/.glove/control/`, and glove never creates `control/<id>/` (an invariant
+test). Removing `filter` revokes the grant at the next `glove up` (the rules
+file moves into the session dir, the directory goes, `status.json` stops
+reporting `rules`).
 
 - **Same reach.** Each gate forwarder has exactly the name, networks, port and
   target of the socat sidecar it replaces. A `tcp` gate dials only its configured
@@ -146,49 +187,57 @@ never what the agent can *reach*:
   upstream acts on exactly the host that was checked. Absolute-form requests are
   forced to one request per connection. **Known gap:** the guard judges a name
   by its shape and never resolves it (that would leak it). A public-looking name
-  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the gate,
-  and the upstream proxy's own policy is the backstop until the in-tunnel
-  resolver (M4). Note too that `route: vpn|tor` is the operator's declaration,
-  not a verified fact.
+  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the shape
+  check; with the egress provider's in-tunnel resolver (vpn, tor) the gate
+  resolves it in-tunnel and refuses a private answer. The route is the egress
+  provider's declaration, not a verified fact.
   Measured on glove-pi-search: gluetun's HTTP proxy forwards to gluetun's own
   control server (`gluetun:8000`, and `127.0.0.1:8000` inside its namespace),
   which can reconfigure the VPN. Only gluetun's control-server auth stood in the
   way. Under the gate, those requests are refused before they reach gluetun.
-- **Listeners for the egress stack, not the agent (M5).** A `harness: false`
-  service (glove-pi-search's SearXNG fan-out listener) is rendered only on its
-  egress network. The sandbox has no route to it, it is never offered to the
-  harness, and a test asserts both. It chains to the same upstream SearXNG already
-  used, so SearXNG's reach is unchanged, and the SSRF guard now also covers
-  SearXNG's requests.
+- **SearXNG behind its own gate.** With observe on, SearXNG leaves the egress
+  network: it reaches the egress proxy only through its gate (`searxng-egress`)
+  on the search extension's private network. The gate is never on the harness
+  network and is never offered to the harness (tests and a live check assert
+  SearXNG cannot reach the proxy directly). The SSRF guard and, with filter, the
+  rules cover SearXNG's requests too.
 - **`record: full` is a deliberate privacy trade.** It writes the method and
   URL of cleartext HTTP requests (and, opted in, headers with credentials
   redacted) to disk. HTTPS paths are never visible, because there is no TLS
   interception. glove warns at launch, and the mode is carried in `session.json`,
-  `status.json` and `glove net status`. `retain` and `glove down --wipe` bound
+  `status.json` and `glove observe status`. `retain` and `glove down --wipe` bound
   how long any of it stays.
 - **No new API.** Forwarders listen only on their forward port. The collector
   has `network_mode: none`, so it has no interface at all. Records travel over
   a Unix datagram socket on a tmpfs volume that only the gate containers mount.
 - **No new privilege.** Gate containers run as the operator's uid with
   `cap_drop ALL`, `no-new-privileges`, a read-only rootfs and pids/mem limits.
+  On rootless Podman they (and the collector) run `keep-id`, because they share
+  a tmpfs volume owned by that uid; glove starts sidecars one at a time there
+  (Podman 6.1 gives concurrently started keep-id containers a one-entry id map).
   They never get `NET_ADMIN`, never share the harness's network or PID
   namespace, and never mount its home.
-- **Invisible to the agent.** Telemetry goes to the session's `net/` dir, which
-  is bind-mounted into the collector only. The render refuses (no waiver) any
-  harness mount that overlaps `net/`: the agent must neither read its own flow
-  record nor forge one.
+- **Invisible to the agent.** Telemetry goes to `~/.glove/observe/<id>/net/`,
+  which is bind-mounted into the collector only. The render refuses (no waiver)
+  any harness mount that overlaps the observe export or `control/<id>/`: the
+  agent must neither read its own flow record nor forge one. The one exception
+  is the transcripts export (`observe/<id>/transcripts/`), which the harness
+  writes as it always wrote its transcripts; a reader of that directory must
+  treat it as agent-written data.
 - **A control channel that can only say allow/block.** `rules.json`
-  (`~/.glove/control/<env>/<session>/`) is mounted read-only into the gate
-  containers and never into the harness. The same no-waiver render check applies,
+  (`~/.glove/control/<id>/`, only with the filter grant) is mounted read-only
+  into the gate containers and never into the harness. The same no-waiver render check applies,
   so the agent cannot read or rewrite its own rules. Its schema has no key for a
   path, command, mount, image or environment variable. Any unknown key rejects
   the whole file, and the gate keeps its last known-good set, so a buggy or
   compromised writer can at worst change which destinations are allowed. The
   built-in SSRF guard runs before the rules, so no rule can allow an internal
-  destination.
-- **No host DNS.** Nothing on the host resolves a destination. The gate resolves
-  only its configured target or upstream (as socat did) and glove's own ingress
-  alias. In proxy mode the destination reaches the upstream as text. This was
+  destination; only the operator's `corporate` allowlist (session file,
+  command line) widens it.
+- **No host DNS.** Nothing on the host resolves a destination. An observe gate
+  resolves only its configured target or upstream (as socat did) and glove's
+  own ingress alias; the corporate egress gate, by design, resolves destinations
+  in its container and checks the address before dialling it. In proxy mode the destination reaches the upstream as text. This was
   measured live by sniffing the gate's netns: only the upstream's name was ever
   queried. A destination IP is either a literal or reported `unavailable`.
 - **Traffic the gate itself originates (M4, when configured).** A proxy gate

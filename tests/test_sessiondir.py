@@ -94,3 +94,25 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
     comp = plan.composition
     assert [a.name for a in comp.active] == ["llm", "media", "vpn", "search", "webfetch"]
     assert comp.slot_exports("egress")["route"] == "vpn"
+
+
+def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert "corporate" in sdm.list_templates()
+    sd, sid = sdm.materialize("corporate", tmp_path / "corp")
+    text = sd.file.read_text()
+    filled = (text.replace("provider: <set-me>", "provider: llama.cpp").replace("location: <set-me>", "location: host")
+              .replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
+              .replace("allow_domains: [<set-me>]", 'allow_domains: ["*.corp.example"]'))
+    sd.file.write_text(filled)
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    comp = plan.composition
+    assert {a.name for a in comp.active} == {"llm", "gate", "corporate", "webfetch", "observe"}
+    assert comp.slot_exports("egress")["route"] == "corporate"
+    assert comp.slots["forwarder"].name == "observe"

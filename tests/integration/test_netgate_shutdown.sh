@@ -11,7 +11,7 @@
 #   B  SIGKILL the forwarder (`docker kill`): no close is written, and Docker
 #      does NOT restart it (a kill counts as a manual stop for unless-stopped).
 #      The collector notices the silence (no heartbeat for 30 s) and writes an
-#      inferred `gate stop`, so `glove net status`'s reader counts the flow as
+#      inferred `gate stop`, so `glove observe status`'s reader counts the flow as
 #      cut (inferred), not active — and still does once the forwarder is back.
 #
 # Usage:  [RT=podman] bash tests/integration/test_netgate_shutdown.sh
@@ -22,7 +22,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
-IMG="$(cd "$ROOT" && uv run python -c 'from glove.observe import build_netgate; print(build_netgate("'"$RT"'"))' | tail -1)"
+IMG="$(cd "$ROOT" && uv run python tests/integration/gate_image.py "$RT" | tail -1)"
 if [ "$RT" = podman ]; then T="$(mktemp -d "$HOME/.ngsd.XXXXXX")"; else T="$(mktemp -d /tmp/ngsd.XXXXXX)"; fi
 P="ngsd$$"
 PASS=0 FAIL=0
@@ -112,7 +112,7 @@ EOF
 
 recs() { cat "$T"/net/flows*.ndjson 2>/dev/null; }
 summ() { uv run --project "$ROOT" python -c "
-import json; from glove.netview import summarize
+import json; from extensions.observe.netview import summarize
 f = summarize('$T/net')['flows']; print(f['active'], f['cut_inferred'])"; }
 wait_update() {
   for _ in $(seq 40); do recs | grep -q '"phase":"update"' && return 0; sleep 0.5; done; return 1

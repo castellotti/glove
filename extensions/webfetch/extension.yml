@@ -15,5 +15,7 @@ endpoints:
 harness:
   env:
     GLOVE_FETCH_PROXY: "{{ endpoint.proxy.url }}"
+    # corporate egress only: its allowlist (private hosts the guard lets through)
+    GLOVE_FETCH_ALLOW: "{{ (slot.egress.get('guard_hosts', []) + slot.egress.get('guard_cidrs', [])) | join(',') }}"
   pi_extensions: [pi-extension]
   brief: brief.md

@@ -2,8 +2,9 @@
 
 Fills the `egress` slot with Tor. Two sidecars, both built from pinned Alpine:
 `tor` (the only container on the session's `wan` network; SOCKS on a private
-`torlink` network) and `privoxy`, the HTTP proxy egress consumers use on the
-internal egress network. privoxy forwards every request to Tor by hostname, so
+`torlink` network and on the internal egress network, where observe's gates use
+it to resolve names in-tunnel) and `privoxy`, the HTTP proxy egress consumers
+use on the internal egress network. privoxy forwards every request to Tor by hostname, so
 names are resolved at the Tor exit. Flows are labelled `route: tor`.
 
 ```yaml

@@ -15,6 +15,15 @@ endpoints:
   search:
     port: 8080
     target: { service: searxng, network: searchnet, port: 8080 }
+  # SearXNG's hop to the egress proxy. Only rendered when a forwarder provider
+  # (observe) interposes a gate: then SearXNG leaves the egress network and
+  # reaches the proxy only through it. Otherwise SearXNG dials the proxy.
+  searxng-egress:
+    harness: false
+    interpose: true
+    target: { slot: egress }
+    listen_networks: [searchnet]
+    observe: { client: searxng }
 verify:
   - { name: searxng-up, kind: http-ok, url: "http://glove-{{ session.id }}-searxng:8080/healthz",
       network: searchnet, retries: 20, interval: 3, service: searxng }

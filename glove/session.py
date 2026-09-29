@@ -141,12 +141,8 @@ def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = Fa
 
 
 def ensure_images(cfg: Config, plan: SessionPlan, provider: str, *, rebuild: bool = False) -> None:
-    from .observe import build_netgate
-
-    if len(plan.network.gated) < len(plan.network.sidecars):
+    if plan.network.socat:
         build_forwarder(provider, force=rebuild)
-    if plan.network.gated:
-        build_netgate(provider, force=rebuild, console=console)
     build_extension_images(provider, plan, force=rebuild)
     build_harness(
         provider,
@@ -190,9 +186,20 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
         return
     with_secrets = [n for n in sidecars if services[n].get("secrets")]
     console.print("[bold]starting sidecars…[/bold] " + ", ".join(sidecars))
-    if with_secrets:
-        subprocess.run([*base, "up", "-d", "--force-recreate", *with_secrets], check=True, env=env)
-    subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
+    from .runtimes import get_runtime
+
+    # podman: one container at a time (see PodmanRuntime.serial_start)
+    batches = [[n] for n in sidecars] if get_runtime(provider).serial_start else [sidecars]
+    try:
+        if with_secrets:
+            subprocess.run([*base, "up", "-d", "--force-recreate", *with_secrets], check=True, env=env)
+        for batch in batches:
+            subprocess.run([*base, "up", "-d", *batch], check=True, env=env)
+    except subprocess.CalledProcessError:
+        # never leave a half-started egress stack behind (fail closed)
+        console.print("[bold red]starting the sidecars failed — stopping the session's sidecars.[/bold red]")
+        subprocess.run([*base, "down"], env=env, capture_output=True)
+        raise
     if plan.composition is None or not plan.composition.verify:
         return
     console.print("[bold]verifying…[/bold]")

@@ -1,6 +1,8 @@
 services:
-  # tor: the only container on the session's wan network. Its SOCKS port is
-  # reachable only on the private torlink network (privoxy).
+  # tor: the only container on the session's wan network. Consumers use
+  # privoxy's HTTP proxy; tor is also on egress (never the harness network) so
+  # observe's gates can resolve names in-tunnel over its SOCKS port. Everything
+  # on egress already leaves only through Tor.
   tor:
     image: "{{ images.tor }}"
     command:
@@ -15,6 +17,7 @@ services:
 {% endif %}
     networks:
       wan: {}
+      egress: {}
       torlink: { aliases: [tor] }
     tmpfs: ["/tmp"]
     healthcheck:

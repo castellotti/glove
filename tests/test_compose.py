@@ -9,7 +9,7 @@ import pytest
 import yaml
 from helpers import make_cfg, render
 
-from glove.config import AddDir, Service
+from glove.config import AddDir
 
 
 def _session_cfg(tmp_path):
@@ -21,14 +21,9 @@ def _session_cfg(tmp_path):
         harness="vibe",
         workdir=str(work),
         name="vibe-local",
-        net=["service"],
         add_dirs=[AddDir(str(deliverable), "rw")],
+        extensions={"direct": {}, "search": {}},
     )
-    cfg.services = [
-        Service(name="api", to="host.docker.internal:8899", port=8080),
-        Service(name="search", to="searxng:8080", join_network="my-llm-net"),
-        Service(name="browser", to="host.docker.internal:8931"),
-    ]
     return cfg, work
 
 
@@ -41,7 +36,6 @@ def test_render_is_valid_yaml(tmp_path):
     assert "glove-vibe-local-harness" in services
     assert "glove-vibe-local-llm" in services
     assert "glove-vibe-local-search" in services
-    assert "glove-vibe-local-browser" in services
 
 
 def test_harness_hardening_present(tmp_path):
@@ -62,8 +56,8 @@ def test_every_forwarder_is_hardened(tmp_path):
     cfg, work = _session_cfg(tmp_path)
     _, text = render(cfg, tmp_path, cwd=str(work))
     doc = yaml.safe_load(text)
-    forwarders = {k: v for k, v in doc["services"].items() if not k.endswith("-harness")}
-    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "api", "search", "browser")}
+    forwarders = {k: v for k, v in doc["services"].items() if v["image"].startswith("glove/forwarder:")}
+    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "search")}
     for name, svc in forwarders.items():
         assert svc["user"] == "501:20", name
         assert svc["cap_drop"] == ["ALL"], name
@@ -96,18 +90,19 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
     assert vols[targets.index("/work/.envrc")]["source"] == str(tmp_path / "ph" / ".envrc")
 
 
-def test_internal_network_and_external_ref(tmp_path):
+def test_internal_networks_and_forwarder_joins(tmp_path):
     cfg, work = _session_cfg(tmp_path)
     _, text = render(cfg, tmp_path, cwd=str(work))
     doc = yaml.safe_load(text)
     nets = doc["networks"]
     assert nets["glove-vibe-local-net"]["internal"] is True
-    assert nets["my-llm-net"]["external"] is True
-    # the search sidecar joins the external net; host-gateway sidecars don't
+    assert not any(n.get("external") for n in nets.values())  # every network is the session's own
+    # the search forwarder joins its target's private net; host-gateway ones the hostgw bridge
     search = doc["services"]["glove-vibe-local-search"]
-    assert "my-llm-net" in search["networks"]
+    assert set(search["networks"]) == {"glove-vibe-local-net", "glove-vibe-local-searchnet"}
     llm = doc["services"]["glove-vibe-local-llm"]
     assert llm["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    assert set(llm["networks"]) == {"glove-vibe-local-net", "glove-vibe-local-hostgw"}
 
 
 def test_allow_root_drops_only_the_user(tmp_path):

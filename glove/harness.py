@@ -28,6 +28,9 @@ class HarnessProfile:
     # `config_home_path`. Pi/Vibe nest them under `sessions/<project>/`; Claude
     # Code uses `projects/<slug>/`. sessions_dir joins this onto the host home.
     sessions_subdir: str = "sessions"
+    # The directory observe's `transcripts: true` exports (relative to
+    # `config_home_path`); None ⇒ this harness's transcripts are not exported.
+    transcript_subdir: str | None = "sessions"
     default_env: dict[str, str] = field(default_factory=dict)
     # Read-only paths the harness's own interpreter/runtime needs beyond nono's
     # default system reads — e.g. the python venv or node prefix the entry binary
@@ -90,6 +93,7 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # not --resume. A specific id is `--resume <id>`.
         resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),
+        transcript_subdir="logs/session",
     ),
     "pi": HarnessProfile(
         name="pi",
@@ -128,6 +132,7 @@ _REGISTRY: dict[str, HarnessProfile] = {
         default_env={"CLAUDE_CONFIG_DIR": "/home/agent/.claude"},
         # CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
         sessions_subdir="projects",
+        transcript_subdir=None,
         # Documented CC flags; image is a stub — wired but untested.
         resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),

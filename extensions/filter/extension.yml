@@ -1,0 +1,5 @@
+api: 1
+name: filter
+summary: Network rules (write) — ~/.glove/control/<id>/rules.json, read-only in every gate; `glove filter …` and Layman edit it.
+requires: [observe]
+cli: cli.py

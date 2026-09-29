@@ -23,11 +23,11 @@ diverge:
   (10.88.0.x) — so it reaches the host rather than shadowing it. Verified with
   ``podman run --add-host host.docker.internal:host-gateway`` on this machine.
 
-- **Netgate (observe).** The events tmpfs volume's ``uid=``/``gid=`` are
-  interpreted in the rootless user namespace, so they are ``0`` (the host user)
-  there; and the gate's ``net/``/``control/`` binds carry ``selinux: z``, since
-  an SELinux-enforcing host denies containers an unlabelled bind. Verified in a
-  podman machine VM (Fedora, SELinux enforcing) on its own filesystem.
+- **Extension tmpfs volumes and binds** (e.g. observe's netgate). A tmpfs
+  volume's ``uid=``/``gid=`` are interpreted in the rootless user namespace, so
+  they are ``0`` (the host user) there; and sidecar binds carry ``selinux: z``,
+  since an SELinux-enforcing host denies containers an unlabelled bind. Verified
+  (v2) in a podman machine VM (Fedora, SELinux enforcing) on its own filesystem.
 
 Validated on rootless podman 6 (libkrun machine, Fedora VM, Landlock ABI 9).
 ``srt`` is not supported on podman yet: its relaxed nested-userns profile can't
@@ -42,7 +42,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .base import Check
-from .docker import DockerRuntime, events_tmpfs_opts
+from .docker import DockerRuntime, tmpfs_volume_opts
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -168,23 +168,30 @@ class PodmanRuntime(DockerRuntime):
             "userns_mode": "keep-id" if rootless else None,
             # Rely on podman's built-in default seccomp (see module docstring).
             "emit_seccomp": False,
-            # Rootless podman mounts the events tmpfs inside its user namespace,
+            # Rootless podman mounts a tmpfs volume inside its user namespace,
             # where the host user is uid 0: `uid=<host uid>` would name a subuid
             # (seen as 500:999 under keep-id) and the gate could not create its
-            # socket. Namespace root is the host user, i.e. the gate's uid.
+            # socket. Namespace root is the host user, i.e. the sidecar's uid.
             # ...and on SELinux the shared tmpfs needs a container label too, or
             # container_t may not create the socket in it (tmpfs_t). A bind can
             # say `selinux: z`; a tmpfs volume only takes a mount `context=`.
-            "events_tmpfs_opts": events_tmpfs_opts(
+            "tmpfs_volume_opts": tmpfs_volume_opts(
                 *((0, 0) if rootless else (plan.uid, plan.gid)),
                 context="system_u:object_r:container_file_t:s0" if self.selinux_enabled() else None,
             ),
             # SELinux-enforcing hosts (Fedora/RHEL) deny containers an unlabelled
-            # bind; `z` (shared: the collector and every forwarder mount them)
-            # relabels net/ and control/. A no-op where SELinux is off, and on a
+            # bind; `z` (shared: e.g. the collector and every gate mount the
+            # observe export) relabels it. A no-op where SELinux is off, and on a
             # podman machine's virtiofs share.
-            "gate_bind_selinux": "z",
+            "bind_selinux": "z",
         }
+
+    # Start sidecars one `compose up -d <service>` at a time: Podman 6.1 gives
+    # concurrently started keep-id containers a one-entry id map ("doesn't map
+    # GID 20"), and every sidecar that must be the session uid (a host bind,
+    # the netgate events tmpfs) runs keep-id. Compose's --parallel and
+    # COMPOSE_PARALLEL_LIMIT do not serialise container starts.
+    serial_start = True
 
     # --- doctor ------------------------------------------------------------
 

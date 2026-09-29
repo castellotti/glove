@@ -1,0 +1,33 @@
+# A glove session: work with corporate resources only, over this machine's
+# corporate VPN — no general internet. Edit this file, then
+# `glove check && glove up`. Schema: README "Session file".
+glove: 3
+template: corporate
+harness: pi
+enforcer: nono
+runtime: docker                # docker | podman
+# Corporate repos the agent may read (never mount a credentials dir):
+mounts: []                     # e.g. [{path: ~/src/corp-repo, mode: ro}]; work/ is always /work
+extensions:
+  llm:                         # the model (required): see extensions/llm/README.md
+    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | …
+    location: <set-me>         # host | lan | internet
+    endpoint: <set-me>         # host:port for host/lan
+    model: auto
+    # api_key: keychain:<set-me>
+  corporate:                   # the only way out: see extensions/corporate/README.md
+    allow_domains: [<set-me>]  # host globs, e.g. ["*.corp.example", "git.example.internal"]
+    allow_cidrs: []            # e.g. ["10.20.0.0/16"]
+    # from_interface: <set-me> # also allow the host's routes via this interface (e.g. utun4; macOS)
+    dns: host                  # host (follows the VPN's split DNS) | <IPv4 of a corporate DNS server>
+    # tcp: [{name: git-ssh, to: "git.example.internal:22"}]   # raw TCP, as glove-<id>-git-ssh:22
+    # probe_url: <set-me>      # an allowed URL `glove up` checks before starting the agent
+  webfetch: {}                 # Pi's web_fetch, through the corporate gate
+  observe: {}                  # record every flow (and transcripts) for review
+  # filter: {}                 # let `glove filter …` / Layman block destinations too
+brief: |
+  # corporate — session brief
+
+  You work with this organisation's internal resources. Read the repositories
+  under `/work` and `/mnt`, and fetch internal pages with `web_fetch`. Put your
+  outputs in `/work`.

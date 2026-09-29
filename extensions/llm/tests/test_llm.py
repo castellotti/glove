@@ -59,7 +59,7 @@ def _llm(**s):
 def _plan(tmp_path, harness="pi", **s):
     work = tmp_path / "work"
     work.mkdir(parents=True, exist_ok=True)
-    cfg = make_cfg(harness=harness, name="s", workdir=str(work), net=["none"])
+    cfg = make_cfg(harness=harness, name="s", workdir=str(work))
     cfg.extensions = _llm(**s)
     plan, text = render(cfg, tmp_path)
     return plan, yaml.safe_load(text), text
@@ -128,14 +128,14 @@ def test_observe_labels_the_llm_forwarder(tmp_path):
     for scenario, scope in (("host", "local"), ("lan", "lan"), ("internet", "cloud")):
         work = tmp_path / scenario / "w"
         work.mkdir(parents=True)
-        cfg = make_cfg(harness="pi", name="s", workdir=str(work), net=["none"], observe={"enabled": True})
-        cfg.extensions = _llm(**SCENARIOS[scenario])
+        cfg = make_cfg(harness="pi", name="s", workdir=str(work))
+        cfg.extensions = {**_llm(**SCENARIOS[scenario]), "observe": {}}
         from glove.plan import build_session_plan
 
         plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / scenario / "h"),
                                   state_dir=str(tmp_path / scenario / "ext"))
-        gate = next(s.gate for s in plan.network.sidecars if s.role == "llm")
-        assert (gate.tool, gate.scope) == ("llm", scope)
+        facts = next(s.facts for s in plan.network.sidecars if s.role == "llm")
+        assert (facts["tool"], facts["scope"]) == ("llm", scope)
 
 
 @pytest.mark.parametrize("settings,match", [

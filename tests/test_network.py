@@ -1,43 +1,32 @@
-"""Network-plan tests: net profiles + declared services → sidecars."""
+"""Network-plan tests: extension endpoints → forwarder sidecars."""
 
 from __future__ import annotations
 
-import pytest
+from helpers import make_cfg
 
-from glove.config import Config, ConfigError, Service
-from glove.network import build_network_plan
-
-
-def _cfg(**kw) -> Config:
-    return Config(harness="pi", name="s", **kw)
+from glove.plan import build_session_plan
 
 
-def test_declared_service_without_service_profile_errors():
-    # Security default is no network: a declared service without the `service`
-    # net profile is a contradiction. It used to be silently dropped (while the
-    # harness config still pointed at the dead endpoint); now it fails loudly
-    # rather than silently dropping OR auto-granting network.
-    cfg = _cfg()  # net defaults to ["none"]
-    cfg.services = [Service(name="llm", to="host.docker.internal:8899", port=8080)]
-    with pytest.raises(ConfigError, match=r"net.*does not permit"):
-        build_network_plan(cfg, "s")
+def _plan(tmp_path, exts=None):
+    cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), extensions=exts or {}, subnet="172.31.4.0/24")
+    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
-def test_declared_service_renders_with_service_profile():
-    cfg = _cfg(net=["service"])
-    cfg.services = [Service(name="llm", to="host.docker.internal:8899", port=8080)]
-    plan = build_network_plan(cfg, "s")
-    assert [s.role for s in plan.sidecars] == ["llm"]
-    assert plan.sidecars[0].listen_port == 8080
+def test_the_inference_endpoint_is_the_only_forwarder_by_default(tmp_path):
+    net = _plan(tmp_path).network
+    assert [s.role for s in net.sidecars] == ["llm"]
+    assert net.hostgw_network == "glove-s-hostgw" and net.sidecars[0].host_gateway
 
 
-def test_service_join_network_becomes_external():
-    cfg = _cfg(net=["service"])
-    cfg.services = [Service(name="search", to="searxng:8080", join_network="my-net")]
-    plan = build_network_plan(cfg, "s")
-    assert "my-net" in plan.external_networks
+def test_endpoints_join_their_target_networks_and_sessions_get_slices(tmp_path):
+    net = _plan(tmp_path, {"direct": {}, "search": {}}).network
+    search = next(s for s in net.sidecars if s.role == "search")
+    assert search.networks == ("glove-s-searchnet",) and search.impl is None
+    assert list(net.subnets) == ["glove-s-net", "glove-s-hostgw", "glove-s-egress", "glove-s-searchnet",
+                                 "glove-s-wan"]
+    assert net.subnets["glove-s-net"] == "172.31.4.0/27"
 
 
-def test_no_services_no_sidecars():
-    plan = build_network_plan(_cfg(), "s")
-    assert plan.sidecars == []
+def test_an_uninterposed_hop_renders_no_forwarder(tmp_path):
+    net = _plan(tmp_path, {"direct": {}, "search": {}}).network
+    assert "searxng-egress" not in {s.role for s in net.sidecars}

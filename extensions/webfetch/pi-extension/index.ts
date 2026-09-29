@@ -10,6 +10,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { fetch, ProxyAgent } from "undici";
 import { convert } from "html-to-text";
+import http from "node:http";
 import { refusal } from "./guard.ts";
 
 const PROXY = process.env.GLOVE_FETCH_PROXY ?? "";
@@ -18,6 +19,35 @@ const UA =
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const dispatcher = PROXY ? new ProxyAgent(PROXY) : undefined;
+
+/** The egress gate's refusal text if it answers a CONNECT for `url` with 403, else null. */
+function tunnelRefusal(url: URL): Promise<string | null> {
+  if (!PROXY) return Promise.resolve(null);
+  const proxy = new URL(PROXY);
+  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  return new Promise((resolve) => {
+    const req = http.request({ host: proxy.hostname, port: proxy.port, method: "CONNECT",
+                               path: `${url.hostname}:${port}`, timeout: 15000 });
+    req.on("connect", (res, socket, head) => {
+      socket.destroy();
+      resolve(res.statusCode === 403 ? (head.toString("utf-8").trim() || "refused (403)") : null);
+    });
+    req.on("response", (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve(res.statusCode === 403 ? body.trim() || "refused (403)" : null));
+    });
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.on("error", () => resolve(null));
+    req.end();
+  });
+}
+
+function policyRefusal(url: URL, why: string) {
+  return { content: [{ type: "text" as const, text:
+    `Refused by this session's network policy for ${url}: ${why}. Do not retry or look for another ` +
+    `route; tell the user if you need this source.` }], details: {} };
+}
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -95,6 +125,11 @@ export default function (pi: ExtensionAPI) {
       } catch (err: any) {
         if (err?.name === "AbortError") throw err;
         const cause = err?.cause?.code || err?.cause?.message || err?.message || "unknown";
+        // undici does not say why a tunnel failed; ask the proxy once. A 403 is a
+        // policy decision (a filter rule, the corporate allowlist, the SSRF
+        // guard), not a network failure.
+        const refused = await tunnelRefusal(url);
+        if (refused !== null) return policyRefusal(url, refused);
         return {
           content: [{ type: "text", text:
             `Fetch failed for this URL (${cause}). This is a per-request failure, not ` +
@@ -110,6 +145,10 @@ export default function (pi: ExtensionAPI) {
           "Rate-limited (HTTP 429). Back off; do not retry immediately." }], details: {} };
       }
       if (!res.ok) {
+        if (res.status === 403 && res.headers.get("content-type")?.startsWith("text/plain")) {
+          const text = await res.text();
+          if (text.startsWith("glove netgate refused")) return policyRefusal(url, text.trim());
+        }
         return { content: [{ type: "text", text: `HTTP ${res.status} for ${url}` }], details: {} };
       }
 

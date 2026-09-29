@@ -219,8 +219,10 @@ def settings_doc(ctx: dict[str, Any], secret_key: str) -> dict[str, Any]:
     # using_tor_proxy stays off even for Tor: SearXNG accepts it only with
     # socks5h:// proxies, and every consumer here uses the one HTTP proxy_url
     # (privoxy for Tor). tor.yml carries the longer timeouts instead.
-    doc["outgoing"] = {**(doc.get("outgoing") or {}), "proxies": {"all://": [egress["proxy_url"]]},
-                       "using_tor_proxy": False}
+    # The egress hop: with observe, a gate on searchnet (SearXNG then has no
+    # route to the egress proxy but through it); without, the proxy itself.
+    hop = ((ctx.get("endpoint") or {}).get("searxng-egress") or {}).get("url") or egress["proxy_url"]
+    doc["outgoing"] = {**(doc.get("outgoing") or {}), "proxies": {"all://": [hop]}, "using_tor_proxy": False}
     return doc
 
 

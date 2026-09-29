@@ -65,7 +65,7 @@ def test_read_only_commands_never_touch_the_home(ghome, tmp_path):
     assert runner.invoke(app, ["ls"]).exit_code == 0
     rules = tmp_path / "rules.json"
     rules.write_text(json.dumps({"v": 1, "env": "e", "session": "e", "rules": []}))
-    assert runner.invoke(app, ["net", "validate", str(rules)]).exit_code == 0
+    assert runner.invoke(app, ["filter", "validate", str(rules)]).exit_code == 0
     assert list(ghome.iterdir()) == []
 
 
@@ -78,8 +78,8 @@ def test_a_control_dir_owned_by_someone_else_is_named_with_the_fix(ghome, monkey
 
 
 def test_a_rules_dir_whose_parent_is_foreign_names_the_parent(tmp_path, monkeypatch):
+    from glove.exports import ensure_dir as ensure_net_dir
     from glove.hardening import HardeningError
-    from glove.observe import ensure_net_dir
 
     (tmp_path / "control").mkdir()
 
@@ -95,8 +95,8 @@ def test_an_unsearchable_foreign_parent_still_gets_the_fix(tmp_path, monkeypatch
     """A root-run Layman's 0700 ``control/<env>/``: on Python 3.11/3.12
     ``Path.exists`` raises EACCES for the rules directory beneath it, which must
     not replace the HardeningError with a bare Permission denied."""
+    from glove.exports import ensure_dir as ensure_net_dir
     from glove.hardening import HardeningError
-    from glove.observe import ensure_net_dir
 
     (tmp_path / "control" / "e").mkdir(parents=True)
 

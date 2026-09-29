@@ -11,6 +11,8 @@ Kinds:
   container-healthy  the sidecar's healthcheck reports healthy (`service`, `timeout`)
   tcp-open           `host:port` accepts a connection from `network`
   http-ok            `url` answers < 400 from `network`, optionally via `proxy`
+  http-refused       `proxy` answers a request for `url` with a refusal (403) —
+                     a negative check: the proxy is up and does NOT pass it
   exit-ip-differs    the IP an echo service sees through the egress proxy differs
                      from this machine's public IP (both must be known)
 
@@ -36,7 +38,7 @@ if TYPE_CHECKING:
 PROBE_IMAGE = ("docker.io/curlimages/curl:8.22.0"
                "@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777")
 ECHO_URL = "https://am.i.mullvad.net/ip"
-KINDS = frozenset({"container-healthy", "tcp-open", "http-ok", "exit-ip-differs"})
+KINDS = frozenset({"container-healthy", "tcp-open", "http-ok", "http-refused", "exit-ip-differs"})
 
 
 class VerifyError(ConfigError):
@@ -147,6 +149,26 @@ def run_check(provider: str, plan: SessionPlan, ext: str, item: dict[str, Any],
                               + (f" via {proxy}" if proxy else "") + f" ({out or 'no answer'})",
                               service=item.get("service"))
         return f"{url} → HTTP {out}" + (f" via {proxy}" if proxy else "")
+
+    if kind == "http-refused":
+        url, proxy = str(item["url"]), str(item["proxy"])
+        # the CONNECT (https) or request (http) status the proxy itself answered
+        script = 'curl -sS -o /dev/null -m 20 -w "%{http_connect} %{http_code}" -x "$X" "$U"; true'
+
+        def answered() -> tuple[bool, str]:
+            _, out = probe(provider, plan, network, script, {"U": url, "X": proxy})
+            codes = [c for c in out.split() if c.isdigit() and c != "000"]
+            # no status at all: the proxy is not up (yet)
+            return bool(codes), codes[0] if codes else out
+
+        ok, out = _retry(retries, interval, answered, say, proxy)
+        if not ok:
+            raise VerifyError(f"verify {name}: {proxy} did not answer from {network} ({out or 'no answer'})",
+                              service=item.get("service"))
+        if out != "403":
+            raise VerifyError(f"verify {name}: {proxy} let {url} through (HTTP {out}) — it must refuse it",
+                              service=item.get("service"))
+        return f"{url} refused by {proxy}"
 
     # exit-ip-differs
     comp = plan.composition

@@ -19,8 +19,9 @@ def test_topology(tmp_path):
     plan, doc = _render(tmp_path)
     svcs = doc["services"]
     tor, privoxy = svcs["glove-s-tor"], svcs["glove-s-privoxy"]
-    # only tor reaches the internet; its SOCKS port is on the private torlink
-    assert set(tor["networks"]) == {"glove-s-wan", "glove-s-torlink"}
+    # only tor reaches the internet; its SOCKS port is on torlink and egress
+    # (observe's in-tunnel resolver), never the harness network
+    assert set(tor["networks"]) == {"glove-s-wan", "glove-s-egress", "glove-s-torlink"}
     assert tor["networks"]["glove-s-torlink"] == {"aliases": ["tor"]}
     assert set(privoxy["networks"]) == {"glove-s-egress", "glove-s-torlink"}
     assert doc["networks"]["glove-s-torlink"]["internal"] is True

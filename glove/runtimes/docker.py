@@ -16,9 +16,8 @@ from typing import TYPE_CHECKING
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ..exports import validate_export_isolation
 from ..hardening import HardeningError, validate_hardening
-from ..observe import render_context as observe_context
-from ..observe import validate_net_isolation
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
 
 if TYPE_CHECKING:
@@ -65,9 +64,10 @@ print(json.dumps(info))
 """
 
 
-def events_tmpfs_opts(uid: int, gid: int, context: str | None = None) -> str:
-    """Mount options for the netgate events tmpfs: owned by ``uid``/``gid`` as the
-    mount sees ids, with an optional SELinux ``context=`` label."""
+def tmpfs_volume_opts(uid: int, gid: int, context: str | None = None) -> str:
+    """Mount options for an extension's tmpfs volume (e.g. the netgate events
+    socket dir): owned by ``uid``/``gid`` as the mount sees ids, mode 0700, with
+    an optional SELinux ``context=`` label."""
     opts = f"size=1m,mode=0700,uid={uid},gid={gid}"
     return f'{opts},context="{context}"' if context else opts
 
@@ -131,12 +131,15 @@ class DockerRuntime:
             "userns_mode": None,
             "emit_seccomp": True,
             "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
-            # mount options of the netgate events tmpfs, owned by the plan's
+            # mount options of extension tmpfs volumes, owned by the plan's
             # uid/gid (rootful ids are the container's ids)
-            "events_tmpfs_opts": events_tmpfs_opts(plan.uid, plan.gid),
-            # SELinux relabel for the gate's net/ and control/ binds (None: none)
-            "gate_bind_selinux": None,
+            "tmpfs_volume_opts": tmpfs_volume_opts(plan.uid, plan.gid),
+            # SELinux relabel for extension sidecars' binds (None: none)
+            "bind_selinux": None,
         }
+
+    # Start sidecars one `compose up` at a time (podman); docker starts them together.
+    serial_start = False
 
     def _jinja(self) -> Environment:
         return Environment(
@@ -155,8 +158,9 @@ class DockerRuntime:
         overrides: frozenset[str] = frozenset(),
     ) -> RenderedProject:
         validate_hardening(plan, overrides=overrides)
-        # Not waivable: the agent must never see (or forge) its own flow record.
-        validate_net_isolation(plan)
+        # Not waivable: the agent must never see (or forge) its own flow record
+        # or rules (the export roots).
+        validate_export_isolation(plan)
         extra = self.compose_extra(plan)
         # Couple the seccomp hardening row to what actually renders. validate_hardening
         # only checks that the *plan* names a profile; on a runtime that omits the
@@ -190,10 +194,9 @@ class DockerRuntime:
             "passthrough_env": plan.passthrough_env,
             "policies_host_dir": plan.policies_host_dir,
             "policies_container_dir": plan.policies_container_dir,
-            "sidecars": plan.network.sidecars,
-            "external_networks": plan.network.external_networks,
-            "harness_extra_networks": plan.network.harness_extra_networks,
-            "harness_host_gateway": plan.network.harness_host_gateway,
+            "sidecars": plan.network.socat,
+            "transcripts_host_dir": plan.transcripts_host_dir,
+            "transcripts_container_dir": plan.transcripts_container_dir,
             "hostgw_network": plan.network.hostgw_network,
             "session_networks": plan.network.session_networks,
             "subnets": plan.network.subnets,
@@ -202,7 +205,6 @@ class DockerRuntime:
             "gid": plan.gid,
             "hardening": plan.hardening,
             "allow_root": plan.allow_root,
-            **observe_context(plan),
             **extra,
             **_extension_blocks(plan, extra),
         }

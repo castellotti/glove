@@ -68,9 +68,11 @@ def test_row_pids_limit(tmp_path):
     assert "pids" in {v.key for v in find_violations(plan)}
 
 
-def test_row_no_host_gateway_on_harness(tmp_path):
-    plan = _plan(tmp_path, net=["lan"])  # lan sets harness host-gateway
-    assert "host-gateway" in {v.key for v in find_violations(plan)}
+def test_harness_never_gets_a_host_gateway(tmp_path):
+    # structural since v3 M5: no config reaches the harness's network (the
+    # `net: lan|internet` opt-out is gone); validate_project re-checks renders
+    plan = _plan(tmp_path)
+    assert not hasattr(plan.network, "harness_host_gateway")
 
 
 def test_row_no_docker_sock_mount(tmp_path):

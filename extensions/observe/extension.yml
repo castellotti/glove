@@ -1,0 +1,20 @@
+api: 1
+name: observe
+summary: Network observability (read) — every forwarder becomes a netgate that records flows; exports flows and transcripts to ~/.glove/observe/<id>/.
+requires: [gate]
+provides: [forwarder]
+settings:
+  record:          { type: enum, values: [metadata, full], default: metadata }
+  record_headers:  { type: bool, default: false }       # record: full only; credentials redacted
+  resolve:         { type: enum, values: [in-tunnel, none], default: in-tunnel }
+  resolver:        { type: string }                      # dns://h:p | tor-socks://h:p (default: the egress provider's)
+  rotate_mb:       { type: number, default: 64 }
+  keep:            { type: int, default: 8 }
+  retain:          { type: string, default: none }       # 30m | 12h | 7d | none
+  exit_identity:   { type: enum, values: [via-proxy, none], default: none }
+  exit_identity_url: { type: string, default: "https://am.i.mullvad.net/json" }
+  transcripts:     { type: bool, default: true }        # export the harness transcripts too
+  skip:            { type: list, default: [] }           # endpoint names that stay plain socat
+hooks: hooks.py
+cli: cli.py
+services: compose/services.yml.j2

@@ -1,0 +1,42 @@
+services:
+  # The egress provider: a netgate in http-proxy mode that resolves and dials
+  # destinations itself (`--upstream direct`), under a static default-block
+  # policy built from the allowlist in glove-session.yml. Those allow entries
+  # are also its SSRF-guard exceptions (corporate hosts are private); this
+  # machine, the runtime's host gateway, metadata and this session's own
+  # network stay refused. It never reads rules.json.
+  corporate-proxy:
+    image: "{{ libs.gate.images.netgate }}"
+    command:
+      - forward
+      - --service
+      - corporate-proxy
+      - --mode
+      - http-proxy
+      - --listen
+      - "8888"
+      - --upstream
+      - direct
+      - --route
+      - corporate
+      - --env
+      - "{{ session.id }}"
+      - --session
+      - "{{ session.id }}"
+      - --events
+      - ""
+      - --resolver
+      - "{{ 'system' if settings.dns == 'host' else 'dns://' ~ settings.dns ~ ':53' }}"
+{% if session.subnet %}
+      - --deny-cidr
+      - "{{ session.subnet }}"
+{% endif %}
+{% for h in slot.egress.guard_hosts %}
+      - --guard-allow-host
+      - "{{ h }}"
+{% endfor %}
+{% for c in slot.egress.guard_cidrs %}
+      - --guard-allow-cidr
+      - "{{ c }}"
+{% endfor %}
+    networks: [egress, wan]

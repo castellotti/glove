@@ -9,6 +9,11 @@
  * Judged by shape only, never resolved (resolving would leak the name). A
  * public-looking name that resolves to a private address is not caught here;
  * the proxy's own filter is the backstop. Checked on every redirect hop.
+ *
+ * Under the `corporate` egress the operator's allowlist (GLOVE_FETCH_ALLOW:
+ * host globs and IPv4 CIDRs, from glove-session.yml) is let through even when
+ * private — the corporate gate enforces the same list. This machine,
+ * link-local/metadata and multicast stay refused whatever it says.
  */
 import { isIP } from "node:net";
 
@@ -42,12 +47,42 @@ function publicV6(ip: string): boolean {
   return true;
 }
 
+const HARD_NAMES = ["localhost", "host.docker.internal", "gateway.docker.internal", "host.containers.internal",
+                    "metadata.google.internal"];
+
+function hardV4(ip: string): boolean {
+  const [a, b] = v4(ip);
+  return a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254);
+}
+
+function globMatch(glob: string, host: string): boolean {
+  const re = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${re}$`).test(host);
+}
+
+function inCidr(ip: string, cidr: string): boolean {
+  const [base, bits] = cidr.split("/");
+  const n = Number(bits ?? 32);
+  if (isIP(base) !== 4 || !Number.isInteger(n) || n < 0 || n > 32) return false;
+  const span = 2 ** (32 - n);
+  const toInt = (x: string) => v4(x).reduce((acc, o) => acc * 256 + o, 0);
+  return Math.floor(toInt(ip) / span) === Math.floor(toInt(base) / span);
+}
+
+const ALLOW = (process.env.GLOVE_FETCH_ALLOW ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+
 /** Why `url` must not be fetched, or null when it may be. */
-export function refusal(url: URL): string | null {
+export function refusal(url: URL, allow: string[] = ALLOW): string | null {
   if (url.protocol !== "http:" && url.protocol !== "https:") return "not an http(s) URL";
   if (url.username || url.password) return "URLs with credentials are not fetched";
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
   const kind = isIP(host);
+  if (allow.length) {
+    if (HARD_NAMES.includes(host) || host.endsWith(".localhost")) return `${host} is this machine`;
+    if (kind === 4 && hardV4(host)) return `${host} is not a reachable address`;
+    if (kind === 4 && allow.some((a) => a.includes("/") && inCidr(host, a))) return null;
+    if (kind === 0 && allow.some((a) => !a.includes("/") && globMatch(a, host))) return null;
+  }
   if (kind === 4) return publicV4(host) ? null : `${host} is not a public address`;
   if (kind === 6) return publicV6(host) ? null : `${host} is not a public address`;
   if (!host.includes(".")) return `${host} is a local (single-label) name`;

@@ -7,36 +7,29 @@ from pathlib import Path
 import pytest
 import yaml
 
-from glove.config import Config, Service
+from glove.config import Config
 
 
 def test_defaults():
     cfg = Config()
     assert cfg.harness == "vibe"
-    assert cfg.net == ["none"]
     assert cfg.allow_root is False
-
-
-def test_service_infers_port():
-    s = Service(name="llm", to="host.docker.internal:8899")
-    assert s.port == 8899
-    assert s.host_gateway is True
-
-
-def test_service_join_network_no_host_gateway():
-    s = Service(name="search", to="searxng:8080", join_network="my-llm-net")
-    assert s.host_gateway is False
-    assert s.port == 8080
+    assert not hasattr(cfg, "services") and not hasattr(cfg, "net")  # forwarders come from extensions
 
 
 def test_effective_config_round_trips():
-    cfg = Config(harness="vibe", net=["service"], name="s")
-    cfg.services = [Service(name="llm", to="host.docker.internal:8899")]
-    dumped = cfg.to_yaml()
-    data = yaml.safe_load(dumped)
+    cfg = Config(harness="vibe", name="s", extensions={"llm": {"provider": "llama.cpp"}})
+    data = yaml.safe_load(cfg.to_yaml())
     assert data["harness"] == "vibe"
-    assert data["services"][0]["name"] == "llm"
-    assert data["services"][0]["port"] == 8899
+    assert data["extensions"] == {"llm": {"provider": "llama.cpp"}}
+
+
+def test_legacy_v2_keys_in_an_old_effective_file_are_ignored():
+    from glove.config import _coerce
+
+    cfg = _coerce({"harness": "pi", "net": ["service"], "services": [{"name": "x", "to": "a:1"}],
+                   "observe": {"enabled": True}})
+    assert cfg.harness == "pi"
 
 
 # --- secret references (keychain:/env:), resolved in memory at launch ----------

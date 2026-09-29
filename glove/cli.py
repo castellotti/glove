@@ -12,9 +12,7 @@ and otherwise uses the nearest session at or above the cwd:
 
 from __future__ import annotations
 
-import collections
 import shutil
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -207,7 +205,16 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
             for w in widened:
                 err.print(f"  [yellow]•[/yellow] {w}")
     _ensure_home()
-    # Extension state (e.g. SearXNG's settings) under .glove/ext/<name>/.
+    # Export roots (observe/<id>, control/<id>) and the grants they carry:
+    # created for the active owners, control/<id> revoked when filter is gone.
+    from . import exports
+
+    row = next((e for e in reg.load_registry() if e.id == sid), None)
+    plan.composition.grants = exports.grants(plan.composition, row.grants if row else None)
+    for note in exports.prepare(plan.composition, sd.ext):
+        err.print(f"[yellow]{note}[/yellow]")
+    # Extension state (e.g. SearXNG's settings) under .glove/ext/<name>/, and
+    # what export-root owners write there (observe: net/session.json).
     from .extensions import materialize
 
     materialize(plan.composition)
@@ -223,32 +230,8 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         from .mounts import write_placeholders
 
         plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
-    if plan.observe is not None:
-        from .observe import control_dir, ensure_net_dir, net_dir, rules_file_problem
-
-        plan.net_host_dir = str(ensure_net_dir(net_dir(sid)))
-        plan.control_host_dir = str(ensure_net_dir(control_dir(sid)))
-        problem = rules_file_problem(Path(plan.control_host_dir))
-        if problem:
-            err.print(
-                f"[bold red]⚠ rules.json:[/bold red] {problem} — the gate runs as you, so it will "
-                "reject this file (status.json rules.ok: false) and enforce no rules until it is "
-                "readable. A second writer must leave it readable by you: mode 0644, or owned by you.")
     rendered = get_runtime(cfg.runtime).render(plan, sd.state, overrides=overrides)
-    if plan.observe is not None:
-        from .observe import session_facts, write_session_facts
-
-        write_session_facts(Path(plan.net_host_dir), session_facts(plan))
-        if plan.observe.record == "full":
-            err.print(
-                "[bold red]⚠ observe.record: full[/bold red] — this session writes a browsing log to "
-                f"{plan.net_host_dir}: the method and URL of every cleartext HTTP request"
-                + (" and request headers (credentials redacted)" if plan.observe.record_headers else "")
-                + ". HTTPS paths stay invisible (no TLS interception). This trades the session's "
-                "privacy for visibility; `glove net status` and Layman badge it.")
-    from .observe import session_grants
-
-    reg.update(sid, grants=session_grants(plan))
+    reg.update(sid, grants=plan.composition.grants)
     if plan.model is None:  # unreachable: `inference` is a required slot
         raise ConfigError("no inference provider")
     sd.compose.write_text(rendered.compose_yaml)
@@ -256,6 +239,12 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     # services; `glove plan` shows its resolutions); baseline.yml is written
     # once, so the widening check compares against the session's origin.
     _, resolved = sdm.read_effective(sd.effective)
+    # what extensions resolved from the host at plan time (e.g. corporate's
+    # routes via an interface), for the record and `glove plan`
+    ext_resolved = {a.name: a.exports["resolved"] for a in plan.composition.active if a.exports.get("resolved")}
+    resolved = {k: v for k, v in resolved.items() if k != "extensions"}
+    if ext_resolved:
+        resolved["extensions"] = ext_resolved
     sdm.write_effective(sd.effective, cfg, resolved)
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)
@@ -354,7 +343,7 @@ def up(
     except subprocess.CalledProcessError as e:
         raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
                     "`glove down` removes what did start.") from e
-    _print_resume_hint(plan.profile, sd.home, since=launched_at)
+    _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
 
 
 def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
@@ -393,9 +382,9 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, sid: str):
     can hand the harness its canonical id). `--resume` (continue-last) returns
     None: glove only confirms *some* transcript exists — the harness makes the
     final choice of which conversation to continue."""
-    from .sessions import list_sessions, match_session, sessions_dir
+    from .sessions import match_session
 
-    refs = list_sessions(sessions_dir(profile, Path(home_dir)))
+    refs = _conversations(profile, home_dir, sid)
     if not refs:
         raise ConfigError(f"no previous conversation to resume in session {sid!r}; run `glove up` without "
                           "--resume/--session to start one.")
@@ -412,12 +401,23 @@ def _fmt_mtime(mtime: float) -> str:
     return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
 
-def _print_resume_hint(profile, home_dir: Path, *, since: float) -> None:
-    """After the TUI exits, show how to reopen the conversation THIS run wrote
-    (identified by mtime; a fresh one quit before any message leaves none)."""
+def _conversations(profile, home_dir: Path, sid: str):
+    """Transcripts in the harness home, plus observe's transcripts export (where
+    they are written while `transcripts: true`), newest first."""
+    from .exports import export_dirs
     from .sessions import list_sessions, sessions_dir
 
-    refs = [r for r in list_sessions(sessions_dir(profile, Path(home_dir))) if r.mtime >= since]
+    dirs = [sessions_dir(profile, Path(home_dir))]
+    if profile.transcript_subdir == profile.sessions_subdir:
+        dirs.append(export_dirs(sid)["observe"] / "transcripts")
+    refs = [r for d in dirs if d.is_dir() for r in list_sessions(d)]
+    return sorted(refs, key=lambda r: r.mtime, reverse=True)
+
+
+def _print_resume_hint(profile, home_dir: Path, sid: str, *, since: float) -> None:
+    """After the TUI exits, show how to reopen the conversation THIS run wrote
+    (identified by mtime; a fresh one quit before any message leaves none)."""
+    refs = [r for r in _conversations(profile, home_dir, sid) if r.mtime >= since]
     if not refs:
         return
     newest = refs[0]
@@ -438,18 +438,19 @@ def _print_summary(plan, home_files) -> None:
     console.print("[bold]forwarders (network allow-list)[/bold]")
     if not plan.network.sidecars:
         console.print("  [dim](none — harness is fully offline)[/dim]")
+    provider = plan.composition.slots.get("forwarder") if plan.composition else None
     for s in plan.network.sidecars:
-        gate = (
-            f"  [cyan](netgate {s.gate.mode}, tool={s.gate.tool}, "
-            f"scope={s.gate.scope or 'per-destination'})[/cyan]"
-            if s.gate else ""
-        )
-        console.print(f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{gate}")
-    if plan.observe is not None and plan.net_host_dir:
-        console.print(
-            f"[bold]network observability[/bold] (record={plan.observe.record}): flows → "
-            f"{plan.net_host_dir} [dim](collector only; no harness mount)[/dim]"
-        )
+        how = f"  [cyan]({provider.name}: {s.facts.get('summary', 'implemented')})[/cyan]" if s.impl else ""
+        console.print(f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{how}")
+    g = (plan.composition.grants if plan.composition else {}) or {}
+    if g.get("observe"):
+        root = plan.composition.export_dirs["observe"]
+        console.print(f"[bold]observe export[/bold]: {root} [dim](no harness mount except transcripts/)[/dim]"
+                      + (" — transcripts exported" if g["observe"].get("transcripts") else ""))
+        f = g.get("filter") or {}
+        console.print("[bold]filter grant[/bold]: " + (
+            f"rules.json in {plan.composition.export_dirs['control']} (ro in every gate)" if f.get("granted")
+            else "none — gates never read a rules file"))
     console.print("[bold]harness config seeded[/bold]")
     for f in home_files:
         console.print(f"  {f}")
@@ -482,6 +483,9 @@ def _print_extensions(plan) -> None:
         console.print(f"    pi extension ({ext}): {comp.pi_extension_dest(ext, src)}")
     for key, privs in comp.privileges.items():
         console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")
+    for a in comp.active:
+        for k, v in (a.exports.get("resolved") or {}).items():
+            console.print(f"    resolved ({a.name}): {k} = {v}")
     if plan.model is not None:
         m = plan.model
         console.print(f"    model: {m.model} via {m.base_url} ({m.api}; vision={m.vision}, "
@@ -555,11 +559,13 @@ def _stop(sd: SessionDir, sid: str, provider: str, *, wipe: bool) -> None:
             err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
     teardown(sid, provider=provider, wipe=wipe)
     if wipe:
-        from .observe import net_dir, wipe_flow_record
-
-        removed = wipe_flow_record(net_dir(sid))
-        if removed:
-            console.print(f"[dim]removed {removed} network-observability file(s) from {net_dir(sid)}[/dim]")
+        # the flow/exit record and status; session.json and transcripts stay
+        net = reg.observe_dir(sid) / "net"
+        gone = [f for f in (*net.glob("flows*.ndjson"), *net.glob("exit*.ndjson"), net / "status.json") if f.is_file()]
+        for f in gone:
+            f.unlink()
+        if gone:
+            console.print(f"[dim]removed {len(gone)} network-observability file(s) from {net}[/dim]")
 
 
 @app.command()
@@ -720,21 +726,19 @@ def keychain_set_cmd(service: str = typer.Argument(..., help="Keychain service n
 def build(
     harness: str | None = typer.Argument(
         None, help=f"harness image to build ({', '.join(known_harnesses())}); "
-                   "omit to build the forwarder + netgate only"
+                   "omit to build the forwarder only"
     ),
     provider: str | None = typer.Option(None),
     enforcer: str | None = typer.Option(None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
-    """Build the forwarder + netgate and (optionally) a harness base image.
-    Extension layers are composed per session by `glove up`."""
+    """Build the forwarder and (optionally) a harness base image. Extension
+    images and layers are built per session by `glove up`."""
     from .harness import get_profile
-    from .observe import build_netgate
     from .session import build_forwarder, build_harness
 
     prov = provider or _autodetect_provider()
     build_forwarder(prov, force=rebuild)
-    build_netgate(prov, force=rebuild, console=console)
     if harness:
         build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
 
@@ -811,258 +815,50 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
             console.print(f"  [yellow]![/yellow] {g}")
 
 
-# --- net (network observability; moves to the observe/filter extensions in M5) ----------
-
-net_app = typer.Typer(add_completion=False, help="Network observability: gate status, flow records, rules.")
-app.add_typer(net_app, name="net")
-
-_NET_DIR_OPT = typer.Option(None, "--dir", help="session directory (default: the nearest one)")
+# --- extension CLIs (`cli:` in a manifest → `glove <name> …`) ------------------------
 
 
-def _net_session(directory: Path | None) -> str:
-    sd = sdm.find(directory)
-    sid = sd.read_id()
-    if sid is None:
-        raise SessionError(f"{sd.root} has never been launched (no .glove/id)")
-    return sid
-
-
-@net_app.command("status")
-def net_status(
-    directory: Path | None = _NET_DIR_OPT,
-    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
-) -> None:
-    """Gate health, record mode, services, upstream and resolver state."""
-    import json as _json
-
-    from .netview import render_status, summarize
-    from .observe import net_dir
+def _mount_extension_clis() -> None:
+    """Mount every discoverable extension's Typer app at `glove <name>`. A broken
+    manifest must not break the CLI: it is reported by `glove ext`/`check`."""
+    from .extensions import ExtensionError, discover, load_module
 
     try:
-        sid = _net_session(directory)
-    except ConfigError as e:
-        raise _fail(str(e)) from e
-    ndir = net_dir(sid)
-    summary = summarize(ndir)
-    if json_out:
-        console.print_json(_json.dumps(summary))
+        manifests = discover()
+    except ExtensionError:
         return
-    for line in render_status(sid, ndir, summary):
-        console.print(line, highlight=False)
-    if not summary["observed"]:
-        raise typer.Exit(1)
+    taken = {c.name for c in app.registered_commands} | {g.name for g in app.registered_groups}
+    for name, m in sorted(manifests.items()):
+        if m.cli is None or name in taken:
+            continue
+        sub = getattr(load_module(m.cli, name), "app", None)
+        if isinstance(sub, typer.Typer):
+            app.add_typer(sub, name=name, help=m.summary)
 
 
-@net_app.command("flows")
-def net_flows(
-    directory: Path | None = _NET_DIR_OPT,
-    follow: bool = typer.Option(False, "--follow", "-f", help="keep tailing (survives rotation)"),
-    json_out: bool = typer.Option(False, "--json", help="print raw NDJSON records"),
-    tail: int | None = typer.Option(None, "--tail", "-n", help="only the last N records"),
-) -> None:
-    """Print the session's flow records (rotated files first, then live)."""
-    import json as _json
-
-    from .netview import follow_records, format_record, iter_records
-    from .observe import net_dir
+@app.command("ext")
+def ext_cmd() -> None:
+    """Every extension glove can load, with its origin and CLI."""
+    from .extensions import ExtensionError, discover
 
     try:
-        ndir = net_dir(_net_session(directory))
-    except ConfigError as e:
+        manifests = discover()
+    except ExtensionError as e:
         raise _fail(str(e)) from e
-    if not ndir.is_dir():
-        raise _fail(f"no net/ dir at {ndir} — is `observe.enabled` on for this session?")
-
-    def emit(rec: dict) -> None:
-        if json_out:
-            print(_json.dumps(rec, separators=(",", ":")), flush=True)
-        else:
-            console.print(format_record(rec), highlight=False)
-
-    if tail is None:
-        records = iter_records(ndir)
-    else:  # `--tail 0 --follow`: only new records
-        records = collections.deque(iter_records(ndir), maxlen=tail) if tail > 0 else ()
-    for rec in records:
-        emit(rec)
-    if follow:
-        try:
-            for rec in follow_records(ndir, from_end=True):
-                emit(rec)
-        except KeyboardInterrupt:
-            pass
-
-
-def _rules_target(directory: Path | None) -> tuple[str, Path]:
-    """(session id, rules.json path). The id is both the rules file's `env`
-    and its `session` (Layman handoff §3)."""
-    from .observe import control_dir
-
-    sid = _net_session(directory)
-    return sid, control_dir(sid) / "rules.json"
-
-
-@net_app.command("block")
-def net_block(
-    target: str = typer.Argument(..., help="host glob (e.g. '*.doubleclick.net'), IP, or CIDR"),
-    port: int | None = typer.Option(None, "--port", help="only this destination port"),
-    terminate: bool = typer.Option(False, "--terminate", help="also cut matching established flows"),
-    allow: bool = typer.Option(False, "--allow", help="write an allow rule instead (e.g. under default block)"),
-    note: str | None = typer.Option(None, "--note", help="free-text note shown in `glove net rules`"),
-    directory: Path | None = _NET_DIR_OPT,
-) -> None:
-    """Append a rule to the session's rules.json (the file Layman writes too).
-
-    Rules apply to new connections within ~1s; --terminate also cuts matching
-    established ones. glove's built-in SSRF guard runs first and cannot be
-    overridden by an allow rule."""
-    from .netgate.policy import PolicyError
-    from .netrules import block_rule, load, save
-
-    try:
-        sid, path = _rules_target(directory)
-        data = load(path, sid, sid)
-        rule = block_rule(target, port=port, terminate=terminate, note=note, action="allow" if allow else "block")
-        data["rules"] = [*data["rules"], rule]
-        save(path, data, sid, sid)
-    except (ConfigError, PolicyError, OSError) as e:
-        raise _fail(str(e)) from e
-    console.print(f"[green]✓[/green] {rule['action']} {rule['match']} → {rule['id']}  [dim]{path}[/dim]")
-
-
-@net_app.command("unblock")
-def net_unblock(
-    key: str = typer.Argument(..., help="rule id (r_…) or the exact host glob / IP / CIDR it matches"),
-    directory: Path | None = _NET_DIR_OPT,
-) -> None:
-    """Remove rules by id or by the exact target they match."""
-    from .netgate.policy import PolicyError
-    from .netrules import load, remove, save
-
-    try:
-        sid, path = _rules_target(directory)
-        data = load(path, sid, sid)
-        gone = remove(data, key)
-        if not gone:
-            err.print(f"[yellow]no rule matches {key!r}[/yellow]")
-            raise typer.Exit(1)
-        save(path, data, sid, sid)
-    except (ConfigError, PolicyError, OSError) as e:
-        raise _fail(str(e)) from e
-    for r in gone:
-        console.print(f"[green]✓[/green] removed {r['id']} ({r['action']} {r['match']})")
-
-
-def _rules_file_state(path: Path, st: dict) -> str:
-    """Whether the gate has enforced or rejected the bytes now on disk, by
-    SHA-256 (status.json `rules.sha256` / `rules.last_rejected.sha256`)."""
-    from .netgate.policy import PolicyError, read_file, sha256_hex
-
-    try:
-        raw = read_file(path)
-    except PolicyError as e:
-        return f"[red]{e}[/red]"
-    if raw is None:
-        return "[dim]absent (default allow)[/dim]"
-    digest = sha256_hex(raw)
-    if "sha256" not in st:
-        state = "[dim](this gate predates write confirmation)[/dim]"
-    elif digest == st.get("sha256"):
-        state = "[green]enforced[/green]"
-    elif digest == (st.get("last_rejected") or {}).get("sha256"):
-        state = "[red]rejected[/red]"
-    else:
-        state = "[yellow]pending[/yellow] (not yet read by the gate, or the gate is stopped)"
-    return f"sha256 {digest[:12]} {state}"
-
-
-@net_app.command("validate")
-def net_validate(
-    file: str = typer.Argument(..., help="rules.json to check, or - for stdin"),
-    env: str | None = typer.Option(None, "--env", help="the gate's session id: the file's `env` must equal it"),
-    session: str | None = typer.Option(None, "--session", help="the file's `session` must equal it (the session id)"),
-    json_out: bool = typer.Option(False, "--json", help="one JSON object on stdout"),
-) -> None:
-    """Check a rules file with the gate's own validator. Pure: reads only FILE —
-    no ~/.glove, no Docker, no network. Exit 0 when the gate would accept it,
-    1 when it would reject it."""
-    import json as _json
-
-    from rich.markup import escape
-
-    from .netgate.policy import PolicyError, parse_bytes, read_file, sha256_hex
-
-    raw = rs = error = None
-    try:
-        raw = sys.stdin.buffer.read() if file == "-" else read_file(file)
-        if raw is None:
-            raise PolicyError(f"cannot read {Path(file).name}: no such file or directory")
-        rs = parse_bytes(raw, env=env, session=session)
-    except PolicyError as e:
-        error = str(e)
-    result = {"ok": rs is not None, "error": error, "sha256": sha256_hex(raw) if raw is not None else None,
-              "default": rs.default if rs is not None else None,
-              "active_count": len(rs.rules) if rs is not None else None}
-    if json_out:
-        print(_json.dumps(result), flush=True)
-    elif rs is not None:
-        console.print(f"[green]✓[/green] valid: default {result['default']}, {result['active_count']} rule(s)  "
-                      f"[dim]sha256 {result['sha256']}[/dim]", highlight=False)
-    else:
-        err.print(f"[red]✗ rejected:[/red] {escape(error)}", highlight=False)
-    if rs is None:
-        raise typer.Exit(1)
-
-
-@net_app.command("rules")
-def net_rules(
-    directory: Path | None = _NET_DIR_OPT,
-    json_out: bool = typer.Option(False, "--json", help="print the rules document"),
-) -> None:
-    """Show the effective rules, their provenance, and the gate's load result."""
-    import json as _json
-
-    from .netgate.policy import PolicyError
-    from .netgate.writer import read_json_dict
-    from .netrules import load
-    from .observe import net_dir
-
-    try:
-        sid, path = _rules_target(directory)
-    except ConfigError as e:
-        raise _fail(str(e)) from e
-    try:
-        data, problem = load(path, sid, sid), None
-    except PolicyError as e:
-        data, problem = None, str(e)
-    if json_out:
-        console.print_json(_json.dumps(data or {"error": problem}))
-        return
-    status = read_json_dict(net_dir(sid) / "status.json") or {}
-    console.print(f"[bold]{sid}[/bold]  [dim]{path}[/dim]")
-    if problem:
-        console.print(f"  [red]rules.json is invalid:[/red] {problem}")
-        console.print("  [dim]the gate keeps its last known-good set until this is fixed[/dim]")
-        raise typer.Exit(1)
-    st = status.get("rules") or {}
-    if st:
-        state = "[green]loaded[/green]" if st.get("ok") else f"[red]REJECTED[/red] — {st.get('error')}"
-        console.print(f"  gate: {state}  active={st.get('active_count')}  loaded_at={st.get('loaded_at')}")
-        console.print(f"  this file: {_rules_file_state(path, st)}")
-    console.print(f"  default: {data['default']}   updated_by: {data.get('updated_by')} at {data.get('updated_at')}")
-    console.print("  [dim]then glove's built-in SSRF guard (always first, not overridable)[/dim]")
-    rules = data["rules"]
-    if not rules:
-        console.print("  [dim](no rules)[/dim]")
-    for i, r in enumerate(rules, 1):
-        extra = ("  terminate" if r.get("terminate") else "") + (f"  # {r['note']}" if r.get("note") else "")
-        console.print(f"  {i:>2}. {r['action']:<5} {r['match']}  [dim]{r['id']}[/dim]{extra}", highlight=False)
+    for name, m in sorted(manifests.items()):
+        tags = [m.taint, *(["library"] if not m.selectable else []),
+                *([f"provides {','.join(m.provides)}"] if m.provides else []),
+                *([f"cli: glove {name} …"] if m.cli else [])]
+        console.print(f"[cyan]{name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {m.summary}")
 
 
 @app.command()
 def version() -> None:
     """Print the glove version."""
     console.print(__version__)
+
+
+_mount_extension_clis()
 
 
 def main() -> None:

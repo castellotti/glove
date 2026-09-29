@@ -104,15 +104,9 @@ def find_violations(plan: SessionPlan) -> list[Violation]:
     if not h.limits.memory:
         v.append(Violation("memory", "a memory limit is required"))
 
-    # Row: internal network only — no host-gateway / host.docker.internal on the
-    # harness itself (`net: lan|internet` set this and are an explicit opt-out).
-    if plan.network.harness_host_gateway:
-        v.append(
-            Violation(
-                "host-gateway",
-                "harness must not reach host.docker.internal (net: lan/internet)",
-            )
-        )
+    # (Internal network only: the harness joins nothing but its own internal
+    # network — structural since v3 M5 removed the `net: lan|internet` opt-out;
+    # compose.validate_project re-checks the rendered project.)
 
     # Row: never mount the docker socket.
     for m in plan.mounts:

@@ -30,6 +30,9 @@ extensions:
   search: {}                   # SearXNG behind the egress (extensions/search/README.md)
   webfetch: {}                 # Pi's web_fetch through the egress
   media: {}
+  # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
+  # observe: {exit_identity: via-proxy}
+  # filter: {}                 # also let `glove filter …` / Layman block destinations (needs observe)
 harness_config:
   settings:
     defaultThinkingLevel: medium

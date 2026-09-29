@@ -1,4 +1,5 @@
-# Only privoxy (on the private torlink network) can reach this port.
+# Reachable from privoxy (torlink) and the session's egress network — never the
+# harness network. No ControlPort.
 SocksPort 0.0.0.0:9150
 SocksPolicy accept *
 DataDirectory /tmp/tor

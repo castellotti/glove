@@ -70,15 +70,15 @@ services:
       - glove-s-net
 
   # --- forwarder: llm -> host.docker.internal:8080
-  # (no host binds, so never keep-id: its uid stays an unprivileged subuid)
   glove-s-llm:
     container_name: glove-s-llm
     image: glove/forwarder:0.2.0
     command: "TCP4-LISTEN:8080,fork,reuseaddr TCP4:host.docker.internal:8080"
     restart: unless-stopped
-    # sidecar hardening (every forwarder, gate and collector): non-root, no caps,
-    # no privilege gain, read-only rootfs, pids/memory limits.
-    # Never NET_ADMIN, never the harness's network/PID namespace, never its home.
+    # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
+    # read-only rootfs, pids/memory limits. Never NET_ADMIN, never the harness's
+    # network/PID namespace, never its home. No host binds, so never keep-id:
+    # its uid stays an unprivileged subuid on rootless podman.
     user: "501:20"
     cap_drop:
       - ALL

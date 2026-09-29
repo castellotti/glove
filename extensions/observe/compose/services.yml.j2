@@ -1,0 +1,18 @@
+services:
+  # The collector: the single writer of the session's net/ export. No network
+  # at all (network_mode: none), so it can expose no API anywhere. Gates send it
+  # flow records over a unix socket on the tmpfs `events` volume.
+  netgate:
+    image: "{{ libs.gate.images.netgate }}"
+    # = gatelib.collect_command(rules=<filter active>) (a test keeps them equal)
+    command: ["collect", "--net-dir", "/var/lib/glove/net", "--events", "/run/glove-netgate/events.sock"{% if exports.control is defined %}, "--rules", "/etc/glove/netgate-control/rules.json"{% endif %}]
+    network_mode: none
+    volumes:
+      - { type: bind, source: "{{ exports.observe }}/net", target: /var/lib/glove/net }
+      - { type: volume, source: events, target: /run/glove-netgate }
+{% if exports.control is defined %}
+      # the filter grant: rules.json (read-only; its load result goes to status.json)
+      - { type: bind, source: "{{ exports.control }}", target: /etc/glove/netgate-control, read_only: true }
+{% endif %}
+volumes:
+  events: { driver_opts: { type: tmpfs } }

@@ -50,7 +50,7 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}$")
 FILE_KEYS = frozenset({
     "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions",
     "harness_config", "env", "brief", "tools", "enforcer_options", "apt_packages", "pip_packages",
-    "protect_ide_files", "allow_root", "allow_sensitive", "host_services", "observe",
+    "protect_ide_files", "allow_root", "allow_sensitive", "host_services",
 })
 V2_KEYS = {
     "name": "the session is the directory; its id is in .glove/id",
@@ -58,6 +58,7 @@ V2_KEYS = {
     "add_dirs": "use `mounts: [{path: ..., mode: ro|rw}]`",
     "net": "network access comes only from extensions",
     "services": "forwarders come only from extensions",
+    "observe": "network observability is an extension: `extensions: {observe: {}}` (plus `filter: {}` for rules)",
     "config_home_source": "the harness home is .glove/home",
     "host_setup": "use host_services",
     "provider": "set `runtime`",

@@ -145,7 +145,7 @@ def test_resume_hint_ignores_stale_pool_leftover(tmp_path, capsys):
     stale = _seed(wk, "20240101_01a09d62.jsonl")
     os.utime(stale, (1000, 1000))  # long before "now"
 
-    _print_resume_hint(pi, home, since=time_now())
+    _print_resume_hint(pi, home, "s-000000", since=time_now())
     assert "conversation saved" not in capsys.readouterr().out
 
 
@@ -161,7 +161,7 @@ def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
     fresh = _seed(wk, "20240102_deadbeef.jsonl")
     os.utime(fresh, (start + 5, start + 5))  # written during this run
 
-    _print_resume_hint(pi, home, since=start)
+    _print_resume_hint(pi, home, "s-000000", since=start)
     out = capsys.readouterr().out
     assert "conversation saved" in out and "glove up --session deadbeef" in out
     assert "deadbeef" in out
@@ -176,16 +176,14 @@ def time_now() -> float:
 # --- grant-widening -------------------------------------------------------------
 
 def test_widening_detects_broader_grants():
-    prev = Config(net=["none"], extensions={"llm": {}}, allow_root=False)
+    prev = Config(extensions={"llm": {}}, allow_root=False)
     cur = Config(
-        net=["service"],
         extensions={"llm": {"model": "x"}, "direct": {}, "search": {}},
         allow_root=True,
         add_dirs=[AddDir("/data", "rw")],
     )
     warns = widening_warnings(prev, cur)
     joined = "\n".join(warns)
-    assert "net" in joined
     assert "search" in joined
     assert "llm settings changed" in joined
     assert "allow_root" in joined
@@ -200,11 +198,11 @@ def test_widening_ro_to_rw_upgrade():
 
 
 def test_widening_no_change_silent():
-    cfg = Config(net=["service"], extensions={"direct": {}, "search": {}})
+    cfg = Config(extensions={"direct": {}, "search": {}})
     assert widening_warnings(cfg, cfg) == []
 
 
 def test_widening_narrowing_silent():
-    prev = Config(net=["service"], allow_root=True)
-    cur = Config(net=["none"], allow_root=False)
+    prev = Config(extensions={"direct": {}}, allow_root=True)
+    cur = Config(allow_root=False)
     assert widening_warnings(prev, cur) == []

@@ -14,7 +14,8 @@ Core never imports an extension: ``hooks.py``/``cli.py`` are loaded by path
 the selected extensions in dependency order, with validated settings, filled
 slots and every contribution rendered through a restricted, sandboxed Jinja
 context (``settings``, ``session``, ``slot``, ``names``, ``endpoint``, ``state``,
-``assets``, ``images``, ``harness``). No other host path reaches a template.
+``assets``, ``images``, ``libs``, ``harness``, and ``exports`` for the owners of
+an export root). No other host path reaches a template.
 """
 
 from __future__ import annotations
@@ -41,8 +42,16 @@ IN_TREE_DIR = Path(__file__).resolve().parent.parent / "extensions"
 MANIFEST = "extension.yml"
 
 # Exclusive slots core knows. `inference` is required for every harness session.
-SLOTS = frozenset({"egress", "inference", "browser"})
+# `forwarder` replaces the socat forwarder behind every endpoint (its provider's
+# `forwarder` hook renders one service per endpoint; observe's netgate).
+SLOTS = frozenset({"egress", "inference", "browser", "forwarder"})
 REQUIRED_SLOTS = frozenset({"inference"})
+
+# Export roots (§3.4): the only session data outside the session directory.
+# root → the in-tree extension that owns it. Core creates, checks (by path) and
+# revokes them; `observe` binds its root, the forwarder reads `control` (ro)
+# only while `filter` is active.
+EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
@@ -346,11 +355,18 @@ class Endpoint:
     listen_networks: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     observe: dict[str, Any] | None = None
+    # An egress consumer's hop to its target (`harness: false`): rendered only
+    # when a `forwarder` provider can interpose on it; otherwise consumers dial
+    # the target directly and `url` is the target's.
+    interpose: bool = False
+    interposed: bool = False
 
     def host(self, session: str) -> str:
         return f"glove-{session}-{self.name}"
 
     def url(self, session: str) -> str:
+        if self.interpose and not self.interposed:
+            return f"http://{self.target.host}:{self.target.port}"
         return f"http://{self.host(session)}:{self.port}"
 
 
@@ -391,6 +407,14 @@ class Composition:
     # The session directory (hooks only — never a template) and its /24.
     session_dir: Path | None = None
     subnet: str | None = None
+    has_forwarder: bool = False  # a `forwarder` provider is selected
+    # Export root → this session's host dir (created by the CLI, never here).
+    export_dirs: dict[str, Path] = field(default_factory=dict)
+    # Set once the network plan exists: one entry per forwarder (role, listen,
+    # harness, and what the forwarder provider reported), and the grants —
+    # both for hooks (observe writes them into session.json).
+    forwarders: list[dict[str, Any]] = field(default_factory=list)
+    grants: dict[str, Any] = field(default_factory=dict)
 
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
@@ -401,6 +425,23 @@ class Composition:
 
     def state_dir(self, ext: str) -> Path:
         return self.state_root / ext
+
+    def owner(self, root: str) -> Active | None:
+        """The active in-tree owner of an export root."""
+        a = self.by_name(EXPORT_ROOTS[root])
+        return a if a is not None and not a.manifest.out_of_tree else None
+
+    def export_access(self, a: Active) -> dict[str, bool]:
+        """Export roots `a` may bind: root → read-only?"""
+        out: dict[str, bool] = {}
+        if a.manifest.out_of_tree:
+            return out
+        if self.owner("observe") is a:
+            out["observe"] = False
+        filt = self.owner("control")
+        if filt is not None and (a is filt or self.slots.get("forwarder") is a):
+            out["control"] = a is not filt  # the gates only ever read rules.json
+        return out
 
     def pi_extension_dest(self, ext: str, src: Path) -> str:
         return f"/opt/glove/ext/{ext}/{src.name}"
@@ -452,13 +493,24 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
         "slot": {s: {"provider": p.name, **p.exports} for s, p in comp.slots.items()},
         "endpoint": {
             e.name: {"host": e.host(comp.session), "port": e.port, "url": e.url(comp.session),
-                     "aliases": list(e.aliases)}
+                     "aliases": list(e.aliases), "interposed": e.interposed}
             for e in comp.endpoints
         },
         "state": str(comp.state_dir(a.name)),
         "assets": str(a.manifest.path),
         "images": {k: image_tag(a, k) for k in (a.manifest.raw.get("images") or {})},
+        "libs": {lib.name: {"images": {k: image_tag(lib, k) for k in (lib.manifest.raw.get("images") or {})}}
+                 for lib in required_libs(comp, a)},
+        "exports": {root: str(comp.export_dirs[root]) for root in comp.export_access(a) if root in comp.export_dirs},
     }
+
+
+def required_libs(comp: Composition, a: Active) -> list[Active]:
+    """Active extensions `a` requires by name (e.g. `gate`): their images are
+    `a`'s to run."""
+    names = {r for kind, r in _requirements(a.manifest, {"settings": a.settings, "harness": comp.harness})
+             if kind == "extension"}
+    return [x for x in comp.active if x.name in names]
 
 
 def image_tag(a: Active, name: str) -> str:
@@ -635,19 +687,27 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         _require_trust(a, f"{where}: reaching a host port")
         target = Target(HOST_GATEWAY, int(t["host_port"]), "host", "hostgw")
     elif "address" in t:
+        # a remote host:port: the inference provider over `llm`, or the egress
+        # provider over `wan` (e.g. corporate's raw TCP endpoints)
         via = str(t.get("via", "llm"))
-        if via != "llm" or "inference" not in a.manifest.provides:
-            raise ExtensionError(f"{where}: only the inference provider may dial a remote address (via: llm)")
+        slot = {"llm": "inference", "wan": "egress"}.get(via)
+        if slot is None or slot not in a.manifest.provides:
+            raise ExtensionError(f"{where}: only the inference provider (via: llm) or the egress provider "
+                                 "(via: wan) may dial a remote address")
         _require_trust(a, f"{where}: dialling a remote address")
         host, _, port = str(t["address"]).rpartition(":")
         if not host or not port.isdigit():
             raise ExtensionError(f"{where}: address must be host:port, got {t['address']!r}")
-        target = Target(host, int(port), "remote", "llm")
+        target = Target(host, int(port), "remote", via)
     else:
         raise ExtensionError(f"{where}: target needs service|slot|host_port|address")
+    interpose = bool(spec.get("interpose", False))
+    if interpose and (harness or target.kind != "slot"):
+        raise ExtensionError(f"{where}: `interpose` is for an egress consumer's hop (harness: false, target: slot)")
     return Endpoint(
         name=name, extension=a.name, port=int(spec.get("port", target.port)), target=target, harness=harness,
         listen_networks=listen, aliases=tuple(spec.get("aliases") or ()), observe=spec.get("observe"),
+        interpose=interpose, interposed=interpose and comp.has_forwarder,
     )
 
 
@@ -704,6 +764,9 @@ def _hook_ctx(comp: Composition, a: Active) -> dict[str, Any]:
     ctx = base_context(comp, a)
     ctx["state_dir"] = comp.state_dir(a.name)
     ctx["session_dir"] = comp.session_dir
+    ctx["active"] = [x.name for x in comp.active]
+    ctx["forwarders"] = [dict(f) for f in comp.forwarders]
+    ctx["grants"] = dict(comp.grants)
     return ctx
 
 
@@ -716,11 +779,13 @@ def compose(
     manifests: dict[str, Manifest] | None = None,
     session_dir: Path | None = None,
     subnet: str | None = None,
+    export_dirs: dict[str, Path] | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, subnet=subnet)
+                       session_dir=session_dir, subnet=subnet, export_dirs=dict(export_dirs or {}),
+                       has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
         if a.manifest.hooks_path:
             a.hooks = load_module(a.manifest.hooks_path, a.name)
@@ -753,6 +818,8 @@ def compose(
             if any(e.name == ep.name for e in comp.endpoints):
                 raise ExtensionError(f"endpoint {ep.name!r} is declared twice")
             comp.endpoints.append(ep)
+            if ep.interpose and not ep.interposed:
+                continue  # no hop rendered: its consumers dial the target directly
             for net in (ep.target.network, *ep.listen_networks):
                 if net in CORE_NETWORKS and net != "net":
                     comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
@@ -762,7 +829,7 @@ def compose(
             comp.harness_env[k] = str(v)
         _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
                                       *(contributed.get("host_services") or [])])
-        for item in active_items(a.manifest.raw.get("verify"), ctx):
+        for item in active_items([*(a.manifest.raw.get("verify") or []), *(contributed.get("verify") or [])], ctx):
             if not isinstance(item, dict) or item.get("kind") not in VERIFY_KINDS:
                 raise ExtensionError(f"extension {a.name!r}: verify {item!r} needs a kind in {sorted(VERIFY_KINDS)}")
             comp.verify.append((a.name, render_value(item, ctx, f"extension {a.name!r} verify")))
@@ -860,3 +927,37 @@ def launch_env(comp: Composition) -> dict[str, str]:
                 raise ExtensionError(f"extension {a.name!r}: launch hook returned a bad env name {var!r}")
             env[var] = str(value)
     return env
+
+
+# The keys a `forwarder` hook's service may set. Core names it after the
+# endpoint, joins its networks (the harness net with its aliases, the target's
+# network) and applies the sidecar hardening set; privileges are never granted.
+FORWARDER_KEYS = frozenset({
+    "image", "command", "entrypoint", "environment", "volumes", "tmpfs", "depends_on", "healthcheck", "init",
+    "restart", "stop_grace_period", "stop_signal", "labels",
+})
+
+
+def forwarder_service(comp: Composition, ep: dict[str, Any]) -> tuple[dict, dict, list[str]] | None:
+    """(service fragment, facts, extra harness-net aliases) for one endpoint from
+    the `forwarder` slot's hook — ``forwarder(ctx, endpoint) -> {service, facts,
+    aliases} | None`` — or None: the endpoint stays a socat forwarder."""
+    a = comp.slots.get("forwarder")
+    if a is None or a.hooks is None or not hasattr(a.hooks, "forwarder"):
+        return None
+    try:
+        out = a.hooks.forwarder(_hook_ctx(comp, a), ep)
+    except ValueError as e:
+        raise ExtensionError(f"extension {a.name!r}: endpoint {ep['name']!r}: {e}") from e
+    if not out:
+        return None
+    svc = dict(out.get("service") or {})
+    bad = set(svc) - FORWARDER_KEYS
+    if bad:
+        raise ExtensionError(f"extension {a.name!r}: forwarder for {ep['name']!r} sets {sorted(bad)} "
+                             "(core owns names, networks and security keys)")
+    prefix = f"{ep['container']}-"
+    aliases = [str(x) for x in out.get("aliases") or []]
+    if any(not x.startswith(prefix) for x in aliases):
+        raise ExtensionError(f"extension {a.name!r}: forwarder aliases must start with {prefix!r}")
+    return svc, dict(out.get("facts") or {}), aliases
