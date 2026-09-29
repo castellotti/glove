@@ -348,7 +348,8 @@ def test_compose_secrets_are_declared_by_env_var_never_by_value(tmp_path, tree, 
     monkeypatch.setenv("SIDE_TOKEN", "tok-NEVER-ON-DISK")
     plan, doc = _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {"token": "env:SIDE_TOKEN"}})
     assert doc["secrets"] == {"glove-s-side-token": {"environment": "GLOVE_SECRET_SIDE_TOKEN"}}
-    assert doc["services"]["glove-s-worker"]["secrets"] == [{"source": "glove-s-side-token", "target": "token"}]
+    assert doc["services"]["glove-s-worker"]["secrets"] == [
+        {"source": "glove-s-side-token", "target": "/run/glove-secrets/token"}]
     from glove.plan import secret_env
 
     assert secret_env(plan)["GLOVE_SECRET_SIDE_TOKEN"] == "tok-NEVER-ON-DISK"

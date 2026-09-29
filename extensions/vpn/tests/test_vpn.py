@@ -28,22 +28,31 @@ def test_gluetun_privileges_secret_and_firewall(tmp_path):
     assert "user" not in g and g["read_only"] is False  # root + writable rootfs: declared privileges
     assert g["cap_add"] == ["NET_ADMIN"] and g["devices"] == ["/dev/net/tun:/dev/net/tun"]
     assert g["cap_drop"] == ["ALL"] and "no-new-privileges:true" in g["security_opt"]
+    # gluetun's DNS server on :53, the gates' resolver: podman does not allow low ports by default
+    assert g["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": 0} and "NET_BIND_SERVICE" not in g["cap_add"]
     env = g["environment"]
     assert env["VPN_SERVICE_PROVIDER"] == "mullvad" and env["WIREGUARD_ADDRESSES"] == "10.0.0.2/32"
     assert env["FIREWALL_OUTBOUND_SUBNETS"] == "172.31.7.0/24"
     assert env["HTTP_CONTROL_SERVER_ADDRESS"] == "127.0.0.1:8000"
-    assert g["secrets"] == [{"source": "glove-s-vpn-wireguard_private_key", "target": "wireguard_private_key"}]
+    assert g["secrets"] == [{"source": "glove-s-vpn-wireguard_private_key",
+                             "target": "/run/glove-secrets/wireguard_private_key"}]
+    # not /run/secrets: podman mounts its own dir there at start, hiding the file
+    assert env["WIREGUARD_PRIVATE_KEY_SECRETFILE"] == "/run/glove-secrets/wireguard_private_key"
     assert doc["secrets"]["glove-s-vpn-wireguard_private_key"] == {
         "environment": secret_env_var("vpn-wireguard_private_key")}
     assert "wireguard_key" not in yaml.safe_dump(env)  # the ref never reaches the container
     assert plan.composition.privileges["vpn/gluetun"]
     assert [v["kind"] for _, v in plan.composition.verify] == ["container-healthy", "exit-ip-differs"]
+    # stated in the fragment: podman drops the HEALTHCHECK of an OCI-manifest image
+    assert g["healthcheck"]["test"] == ["CMD-SHELL", "/gluetun-entrypoint healthcheck"]
 
 
 def test_openvpn_uses_two_secrets(tmp_path):
     _, doc = _render(tmp_path, provider="x", type="openvpn", openvpn_user="keychain:u", openvpn_password="keychain:p")
     targets = [s["target"] for s in doc["services"]["glove-s-gluetun"]["secrets"]]
-    assert targets == ["openvpn_user", "openvpn_password"]
+    assert targets == ["/run/glove-secrets/openvpn_user", "/run/glove-secrets/openvpn_password"]
+    env = doc["services"]["glove-s-gluetun"]["environment"]
+    assert (env["OPENVPN_USER_SECRETFILE"], env["OPENVPN_PASSWORD_SECRETFILE"]) == tuple(targets)
 
 
 @pytest.mark.parametrize(("settings", "match"), [

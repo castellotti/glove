@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from .extensions import CORE_NETWORKS, Active, Composition, ExtensionError, network_name, secret_env_var
+from .extensions import CORE_NETWORKS, SECRETS_DIR, Active, Composition, ExtensionError, network_name, secret_env_var
 from .extensions import active_items as _active_items
 from .extensions import base_context as _ctx
 from .extensions import image_tag as _image_tag
@@ -39,7 +39,7 @@ PRIVILEGE_ALLOWLIST = {
     "cap_add": frozenset({"NET_ADMIN", "NET_RAW", "CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"}),
     "devices": frozenset({"/dev/net/tun"}),
 }
-PRIVILEGE_KEYS = frozenset({"cap_add", "devices", "user_root", "read_only", "seccomp"})
+PRIVILEGE_KEYS = frozenset({"cap_add", "devices", "user_root", "read_only", "seccomp", "low_ports"})
 DEFAULT_LIMITS = {"pids": 256, "memory": "512m"}
 
 
@@ -79,6 +79,8 @@ def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
             merged["user_root"] = True
         if p.get("read_only") is False:
             merged["read_only"] = False
+        if p.get("low_ports") is True:
+            merged["low_ports"] = True
     if merged and not a.manifest.trusted:
         raise ExtensionError(
             f"extension {a.name!r} requests privileges {sorted(merged)} for {short!r}, but it is out-of-tree "
@@ -234,7 +236,8 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         missing = [x for x in svc["secrets"] if x not in own]
         if missing:
             raise ExtensionError(f"{where}: secret(s) {missing} are not declared (or not active)")
-        out["secrets"] = [{"source": f"glove-{comp.session}-{a.name}-{x}", "target": x} for x in svc["secrets"]]
+        out["secrets"] = [{"source": f"glove-{comp.session}-{a.name}-{x}", "target": f"{SECRETS_DIR}/{x}"}
+                          for x in svc["secrets"]]
     out.setdefault("restart", "unless-stopped")
     if not priv.get("user_root"):
         out["user"] = f"{plan.uid}:{plan.gid}"
@@ -256,6 +259,10 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         sec.append(f"seccomp={SECCOMP_DIR / (priv.get('seccomp', 'default') + '.json')}")
     out["security_opt"] = sec
     out["read_only"] = priv.get("read_only", True)
+    if priv.get("low_ports"):
+        # listen below 1024 without NET_BIND_SERVICE, in its own network
+        # namespace only: docker's default for every container, podman's not
+        out["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}
     out["ipc"] = "private"
     out["pids_limit"] = int(lim["pids"])
     out["mem_limit"] = str(lim["memory"])

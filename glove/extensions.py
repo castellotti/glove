@@ -488,7 +488,7 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
     return {
         "settings": a.settings,
         "harness": comp.harness,
-        "session": {"id": comp.session, "subnet": comp.subnet or ""},
+        "session": {"id": comp.session, "subnet": comp.subnet or "", "secrets_dir": SECRETS_DIR},
         "names": _names(comp.session),
         "slot": {s: {"provider": p.name, **p.exports} for s, p in comp.slots.items()},
         "endpoint": {
@@ -853,6 +853,12 @@ def compose(
                         comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
             comp.fragments.append((a, doc))
     return comp
+
+
+# Where compose secrets appear in a sidecar. Not /run/secrets: podman's default
+# mounts.conf mounts its subscription dir over /run/secrets at start, hiding
+# the files compose copied in (verified on podman machine 6.1).
+SECRETS_DIR = "/run/glove-secrets"
 
 
 def secret_env_var(compose_name: str) -> str:

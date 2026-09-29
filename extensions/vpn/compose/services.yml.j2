@@ -46,6 +46,13 @@ services:
       HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
       PUBLICIP_ENABLED: "off"
       VERSION_INFORMATION: "off"
+    # core mounts secrets at session.secrets_dir, not gluetun's default /run/secrets
+{% if settings.type == 'wireguard' %}
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: "{{ session.secrets_dir }}/wireguard_private_key"
+{% else %}
+      OPENVPN_USER_SECRETFILE: "{{ session.secrets_dir }}/openvpn_user"
+      OPENVPN_PASSWORD_SECRETFILE: "{{ session.secrets_dir }}/openvpn_password"
+{% endif %}
     secrets:
 {% if settings.type == 'wireguard' %}
       - wireguard_private_key
@@ -55,5 +62,13 @@ services:
 {% endif %}
     volumes:
       - { type: volume, source: data, target: /gluetun }
+    # the image's own HEALTHCHECK, restated: the image is an OCI manifest,
+    # whose config has no healthcheck field, so podman drops it (docker keeps it)
+    healthcheck:
+      test: ["CMD-SHELL", "/gluetun-entrypoint healthcheck"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 volumes:
   data: {}

@@ -26,7 +26,7 @@ extensions:
 
 Secrets are references (`keychain:<service>` or `env:<VAR>`), resolved in
 memory at `glove up` and handed to gluetun as compose secrets
-(`/run/secrets/…`). They are never in a file, `docker inspect` or the
+(`/run/glove-secrets/…`). They are never in a file, `docker inspect` or the
 session directory.
 
 ## Register hook (fresh key per launch)

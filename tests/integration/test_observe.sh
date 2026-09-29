@@ -3,15 +3,17 @@
 #
 #   bash tests/integration/test_observe.sh [direct|tor]          # Docker
 #   RT=podman bash tests/integration/test_observe.sh direct      # Podman
+#   VPN_SETTINGS='{…}' [VPN_LOCAL=<dir>] bash … vpn             # as test_egress.sh vpn
 #
 # A throwaway session dir (llm → the tool-driving stub on the host; egress +
 # search + webfetch + observe + filter) runs tests/integration/observe_live.py:
 # every forwarder a netgate, SearXNG reaching egress only through its gate, Pi's
 # tool calls recorded as flows, transcripts exported, a `glove filter block`
 # enforced and recorded, then revocation when `filter:` is removed. Uses a
-# throwaway GLOVE_HOME; tears everything down.
+# throwaway GLOVE_HOME; tears everything down (KEEP=1 leaves the stack up).
 set -u
 ROUTE="${1:-direct}"
+EG="$ROUTE: {}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18083}"
@@ -20,10 +22,15 @@ python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log
 STUB=$!; disown "$STUB"
 trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 sleep 1
-case "$ROUTE" in direct|tor) ;; *) echo "route must be direct|tor" >&2; exit 2 ;; esac
+case "$ROUTE" in
+  direct|tor) ;;
+  vpn) EG="vpn: ${VPN_SETTINGS:?set VPN_SETTINGS to the vpn extension settings (flow YAML)}" ;;
+  *) echo "route must be direct|tor|vpn" >&2; exit 2 ;;
+esac
 mkdir -p "$S/work"
-printf 'glove: 3\ntemplate: test\nruntime: %s\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  %s: {}\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
-  "$RT" "$PORT" "$ROUTE" > "$S/glove-session.yml"
+if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
+printf 'glove: 3\ntemplate: test\nruntime: %s\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
+  "$RT" "$PORT" "$EG" > "$S/glove-session.yml"
 echo "== runtime $RT, route $ROUTE"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )
 RC=$?

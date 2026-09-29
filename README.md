@@ -56,7 +56,7 @@ Docker Desktop macOS blast-radius explanation.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
-| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | implemented; hardened start verified (root + NET_ADMIN + tun, no sysctls); live tunnel run **untested** (needs the operator's VPN: `test_egress.sh vpn`) |
+| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
@@ -378,13 +378,16 @@ the agent, and optionally hardened sidecars. Core validates all of it:
 - **Settings** are typed; unknown keys, `<set-me>` placeholders and literal
   secrets are errors. Secrets are `keychain:`/`env:` references, resolved in
   memory and passed to containers only as compose secrets from glove's
-  environment.
+  environment, mounted at `/run/glove-secrets/<name>` (`session.secrets_dir`
+  in fragments; podman hides `/run/secrets` under its own mount).
 - **Slots** are exclusive: `inference` (required; `llm`), `egress`, `browser`.
   Two providers of one slot are refused.
 - **Sidecars** get the hardening set (non-root, `cap_drop: ALL`,
   `no-new-privileges`, read-only rootfs, seccomp, pids/memory limits) from core;
   a fragment cannot set a security key. Exceptions come only from the manifest's
-  `privileges:`, drawn from an allowlist, and are shown in `glove policy`.
+  `privileges:`, drawn from an allowlist, and are shown in `glove policy`
+  (`low_ports` lets a sidecar listen below 1024 in its own network namespace,
+  as docker allows every container by default and podman does not).
   No extension publishes ports, joins the harness network, mounts the docker
   socket, or binds host paths other than its own session state.
 - **The harness** only ever gets forwarders on its internal network.

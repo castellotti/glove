@@ -39,8 +39,9 @@ services: compose/services.yml.j2
 privileges:
   # gluetun configures the tunnel, routes and its kill-switch firewall itself
   # (root + NET_ADMIN + the tun device) and writes /etc/passwd at start.
-  # It never shares a network with the harness.
-  gluetun: { user_root: true, read_only: false, cap_add: [NET_ADMIN], devices: [/dev/net/tun] }
+  # It never shares a network with the harness. Its DNS server (the gates'
+  # in-tunnel resolver) listens on :53, with no NET_BIND_SERVICE: low_ports.
+  gluetun: { user_root: true, read_only: false, cap_add: [NET_ADMIN], devices: [/dev/net/tun], low_ports: true }
 limits:
   gluetun: { pids: 256, memory: 256m }
 secrets:

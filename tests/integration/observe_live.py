@@ -203,7 +203,7 @@ def main(directory: str) -> int:
     except Exception as e:  # report, then tear down
         check(f"live run ({type(e).__name__})", False, str(e)[-600:])
     finally:
-        if base is not None:
+        if base is not None and not os.environ.get("KEEP"):
             subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
     failed = [n for n, ok in results if not ok]
     print(f"== RESULT: {len(results) - len(failed)} passed, {len(failed)} failed")

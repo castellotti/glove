@@ -41,7 +41,10 @@ Every capability (the model, search, the browser, …) is an extension in
   healthchecks. Core adds the hardening set to every sidecar (non-root,
   `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, seccomp, private IPC,
   pids/memory limits). Exceptions come only from the manifest's `privileges:`,
-  from an allowlist, and `glove policy` lists them.
+  from an allowlist, and `glove policy` lists them. `low_ports` sets
+  `net.ipv4.ip_unprivileged_port_start=0` in the sidecar's own network
+  namespace (docker's default for every container; podman needs it stated),
+  rather than granting `NET_BIND_SERVICE`.
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state (or an
   export root it owns, below), or a sidecar on the harness network. The harness reaches extensions only through

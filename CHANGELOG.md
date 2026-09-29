@@ -4,6 +4,28 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### `vpn` verified live on Docker and Podman (v3 M5 follow-up)
+
+- **Compose secrets now mount at `/run/glove-secrets/<name>`** (was
+  `/run/secrets/`). Podman's default `mounts.conf` mounts its subscription
+  directory over `/run/secrets` at container start, hiding the files compose
+  had copied in: on Podman gluetun saw no WireGuard key and restarted in a
+  loop. Fragments get the path as `session.secrets_dir`; the `vpn` fragment
+  points gluetun's `*_SECRETFILE` variables at it.
+- **New sidecar privilege `low_ports`**: `net.ipv4.ip_unprivileged_port_start=0`
+  in the sidecar's own network namespace (Docker's default for every
+  container; Podman's is 1024). gluetun declares it: on Podman its DNS server
+  could not bind `:53`, so the gates' in-tunnel resolver fell back to
+  `unavailable`. Preferred over granting `NET_BIND_SERVICE`.
+- **gluetun's healthcheck is stated in the fragment.** The image is an OCI
+  manifest, whose config has no healthcheck field; Podman drops it (Docker
+  keeps it), so `verify vpn/tunnel-up` found no healthcheck.
+- `test_observe.sh` takes a `vpn` route (same `VPN_SETTINGS`/`VPN_LOCAL` as
+  `test_egress.sh vpn`) and `KEEP=1` leaves the stack up for inspection.
+- **Verified live**, WireGuard via a register hook with Keychain references:
+  `test_egress.sh vpn` 11/11 and `test_observe.sh vpn` 27/27 on both Docker and
+  Podman. **Untested:** OpenVPN, gluetun's built-in providers (no account here).
+
 ### Network observability as extensions: `observe` / `filter`; `corporate` egress (v3 M5)
 
 - **The netgate moved out of core** into extensions: the **`gate`** library
