@@ -14,7 +14,7 @@ from glove.harnessconfig import LLM_API_KEY_ENV, ModelDescriptor, build_environm
 from glove.mounts import compute_mounts
 from glove.plan import build_session_plan
 
-EXTS = {"search": {"host_port": 8888}, "playwright": {"i_accept_host_rce": True}}
+EXTS = {"direct": {}, "search": {}, "playwright": {"i_accept_host_rce": True}}
 
 
 def _home(harness: str, tmp_path, *, llm=None, extensions=EXTS, **kw):

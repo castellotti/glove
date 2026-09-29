@@ -6,7 +6,7 @@ With GLOVE_HOME set, it:
   1. renders the session exactly as `glove up` does (`cli._open` +
      `cli._materialize_plan`: .glove/ layout, registry row, subnet);
   2. does what `glove up` does next — builds images, `compose up -d` every
-     sidecar, runs the launch-time resolution (`model: auto`, `capabilities:
+     sidecar, runs the extensions' verify checks, runs the launch-time resolution (`model: auto`, `capabilities:
      auto`) from a throwaway container on the harness network, records it in
      .glove/effective.yml, and renders the harness home;
   3. instead of the interactive TUI, runs the harness once non-interactively
@@ -32,7 +32,7 @@ from glove import sessiondir
 from glove.cli import _materialize_plan, _now, _open, _resolve_extensions
 from glove.harnessconfig import render_home
 from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images
+from glove.session import _compose_base, ensure_images, start_sidecars
 
 ISOLATION = r"""
 set -u
@@ -65,9 +65,8 @@ def main(directory: str, prompt: str, isolation: bool) -> int:
     rc = 0
     try:
         ensure_images(cfg, plan, rt)
-        sidecars = [f"glove-{plan.session}-{s.role}" for s in plan.network.sidecars]
-        subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
-        print(f"== sidecars up: {', '.join(sidecars)}")
+        start_sidecars(plan, sd.compose, provider=rt, env=env)  # up + verify, as `glove up`
+        print("== sidecars up and verified")
         print("== launch-time resolution (throwaway container on the harness network)")
         _resolve_extensions(plan, rt, secrets)
         m = plan.model

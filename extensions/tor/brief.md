@@ -1,0 +1,2 @@
+- Web access (search, fetch) goes out through **Tor**: slow, and many sites block or CAPTCHA Tor exits. Expect some pages to fail; do not retry them rapidly.
+- Never take actions that would de-anonymise the session (logging into personal accounts, submitting identifying details). If a task needs that, stop and ask.

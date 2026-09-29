@@ -179,7 +179,7 @@ def test_widening_detects_broader_grants():
     prev = Config(net=["none"], extensions={"llm": {}}, allow_root=False)
     cur = Config(
         net=["service"],
-        extensions={"llm": {"model": "x"}, "search": {"host_port": 1}},
+        extensions={"llm": {"model": "x"}, "direct": {}, "search": {}},
         allow_root=True,
         add_dirs=[AddDir("/data", "rw")],
     )
@@ -200,7 +200,7 @@ def test_widening_ro_to_rw_upgrade():
 
 
 def test_widening_no_change_silent():
-    cfg = Config(net=["service"], extensions={"search": {"host_port": 1}})
+    cfg = Config(net=["service"], extensions={"direct": {}, "search": {}})
     assert widening_warnings(cfg, cfg) == []
 
 

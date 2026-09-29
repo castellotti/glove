@@ -71,6 +71,7 @@ services:
       - glove-s-net
 
   # --- forwarder: llm -> api.openai.com:443
+  # (no host binds, so never keep-id: its uid stays an unprivileged subuid)
   glove-s-llm:
     container_name: glove-s-llm
     image: glove/forwarder:0.2.0

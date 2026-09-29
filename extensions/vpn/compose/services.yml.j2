@@ -1,0 +1,59 @@
+services:
+  # gluetun: the only container on the session's wan network. Its kill-switch
+  # firewall drops anything not going through the tunnel; egress consumers use
+  # its HTTP proxy on the internal egress network.
+  gluetun:
+    image: "docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027"
+    networks: [egress, wan]
+    environment:
+      VPN_SERVICE_PROVIDER: "{{ 'custom' if settings.register_hook else settings.provider }}"
+      VPN_TYPE: "{{ settings.type }}"
+{% if settings.register_hook %}
+      # from the register hook at `glove up`, via glove's environment (never stored)
+      WIREGUARD_PUBLIC_KEY:
+      WIREGUARD_ENDPOINT_IP:
+      WIREGUARD_ENDPOINT_PORT:
+      WIREGUARD_ADDRESSES:
+{% else %}
+{% if settings.addresses %}
+      WIREGUARD_ADDRESSES: "{{ settings.addresses }}"
+{% endif %}
+{% if settings.public_key %}
+      WIREGUARD_PUBLIC_KEY: "{{ settings.public_key }}"
+{% endif %}
+{% if settings.endpoint %}
+      WIREGUARD_ENDPOINT_IP: "{{ settings.endpoint.rsplit(':', 1)[0] }}"
+      WIREGUARD_ENDPOINT_PORT: "{{ settings.endpoint.rsplit(':', 1)[1] }}"
+{% endif %}
+{% endif %}
+{% if settings.countries %}
+      SERVER_COUNTRIES: "{{ settings.countries | join(',') }}"
+{% endif %}
+{% if settings.cities %}
+      SERVER_CITIES: "{{ settings.cities | join(',') }}"
+{% endif %}
+{% if settings.hostnames %}
+      SERVER_HOSTNAMES: "{{ settings.hostnames | join(',') }}"
+{% endif %}
+      HTTPPROXY: "on"
+      HTTPPROXY_LISTENING_ADDRESS: ":8888"
+      HTTPPROXY_LOG: "off"
+      # the session's own /24: lets egress consumers on the internal egress
+      # network reach the proxy through the firewall
+{% if session.subnet %}
+      FIREWALL_OUTBOUND_SUBNETS: "{{ session.subnet }}"
+{% endif %}
+      HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+      PUBLICIP_ENABLED: "off"
+      VERSION_INFORMATION: "off"
+    secrets:
+{% if settings.type == 'wireguard' %}
+      - wireguard_private_key
+{% else %}
+      - openvpn_user
+      - openvpn_password
+{% endif %}
+    volumes:
+      - { type: volume, source: data, target: /gluetun }
+volumes:
+  data: {}

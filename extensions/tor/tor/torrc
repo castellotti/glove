@@ -1,0 +1,6 @@
+# Only privoxy (on the private torlink network) can reach this port.
+SocksPort 0.0.0.0:9150
+SocksPolicy accept *
+DataDirectory /tmp/tor
+Log notice stdout
+AvoidDiskWrites 1

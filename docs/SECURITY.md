@@ -58,6 +58,45 @@ The inference server is reached the same way: one `glove-<id>-llm` forwarder
 that dials exactly the configured host (or the host gateway, or a cloud API on
 443). The harness never gets a LAN or internet route of its own.
 
+### Egress (`vpn`, `tor`, `direct`)
+
+Web tools reach the internet only through the session's egress provider.
+Egress consumers (SearXNG, the harness's `proxy` forwarder) sit on the
+**internal** `glove-<id>-egress` network. Only the provider's tunnel container
+(gluetun, tor or tinyproxy) is on the routable `glove-<id>-wan`. If the proxy
+fails, a consumer has no other route out. v2's SearXNG, on a normal bridge with
+public DNS, could have. Measured live: SearXNG cannot resolve or reach
+`example.com` itself, and neither can a container on the harness network.
+
+- **Fail closed at launch.** `glove up` starts the harness only after the
+  provider's checks pass: gluetun healthy (a dead WireGuard handshake is told
+  apart by tun0's byte counter), Tor's SOCKS port open, and `exit-ip-differs`
+  (the exit IP seen through the proxy must differ from this machine's; an
+  unknown IP on either side fails too). A failure shows the sidecar's last log
+  lines, with key and password lines withheld, and stops the session's sidecars.
+- **Privileges.** Only gluetun takes exceptions (root, `NET_ADMIN`,
+  `/dev/net/tun`, writable rootfs; no sysctls). It is never on a network with
+  the harness. tor, privoxy, tinyproxy, SearXNG and valkey run with the full
+  sidecar hardening as the operator's uid. valkey is on a private network with
+  SearXNG only. gluetun's control server listens on loopback, and since gluetun
+  v3.40 every control route needs credentials, none of which glove configures.
+- **Secrets.** The WireGuard key (or OpenVPN user/password) is a Keychain
+  reference resolved at `glove up` and handed to gluetun as a compose secret. A
+  **register hook** (an executable that must resolve inside the session's
+  `local/`, which is never mounted, so a symlink into `work/` is refused) gets
+  the account credentials on stdin. Its key goes to gluetun the same way; nothing
+  is written to disk.
+- **No way in through the proxy.** `web_fetch` refuses non-public destinations
+  before the request is sent: non-global IP literals, single-label and local
+  names, credentials in the URL. It follows redirects itself so every hop is
+  checked. `direct`'s tinyproxy refuses the same shapes (CONNECT included) and
+  allows CONNECT only to 443/80. Tor exits and gluetun's kill switch already
+  refuse private destinations. **Known gap:** names are judged by shape and never
+  resolved, so a public name that resolves privately passes both checks under
+  `direct`. The netgate's guard (observe, M5) has the same limit.
+- **`direct` is not anonymous.** Its flows are labelled `route: direct`. Its
+  brief tells the agent so.
+
 ## Planted host-trusted files (ring 0)
 
 `/work` is writable, and some files in it are later *executed or trusted by the

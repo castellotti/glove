@@ -34,6 +34,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from .config import ConfigError, HostService, is_secret_ref
 from .userconfig import load_user_config
+from .verify import KINDS as VERIFY_KINDS
 
 API_VERSION = 1
 IN_TREE_DIR = Path(__file__).resolve().parent.parent / "extensions"
@@ -387,6 +388,9 @@ class Composition:
     secrets: dict[str, tuple[str, str]] = field(default_factory=dict)  # compose name → (ext, setting)
     verify: list[tuple[str, dict]] = field(default_factory=list)
     privileges: dict[str, list[dict]] = field(default_factory=dict)  # "ext/service" → exceptions
+    # The session directory (hooks only — never a template) and its /24.
+    session_dir: Path | None = None
+    subnet: str | None = None
 
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
@@ -443,7 +447,7 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
     return {
         "settings": a.settings,
         "harness": comp.harness,
-        "session": {"id": comp.session},
+        "session": {"id": comp.session, "subnet": comp.subnet or ""},
         "names": _names(comp.session),
         "slot": {s: {"provider": p.name, **p.exports} for s, p in comp.slots.items()},
         "endpoint": {
@@ -699,6 +703,7 @@ def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None
 def _hook_ctx(comp: Composition, a: Active) -> dict[str, Any]:
     ctx = base_context(comp, a)
     ctx["state_dir"] = comp.state_dir(a.name)
+    ctx["session_dir"] = comp.session_dir
     return ctx
 
 
@@ -709,10 +714,13 @@ def compose(
     session: str,
     state_root: Path,
     manifests: dict[str, Manifest] | None = None,
+    session_dir: Path | None = None,
+    subnet: str | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
     active = select(requested, harness=harness, manifests=manifests)
-    comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root)
+    comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
+                       session_dir=session_dir, subnet=subnet)
     for a in active:
         if a.manifest.hooks_path:
             a.hooks = load_module(a.manifest.hooks_path, a.name)
@@ -720,7 +728,12 @@ def compose(
         ctx = base_context(comp, a)
         contributed: dict[str, Any] = {}
         if a.hooks is not None and hasattr(a.hooks, "contribute"):
-            contributed = a.hooks.contribute(_hook_ctx(comp, a)) or {}
+            try:
+                contributed = a.hooks.contribute(_hook_ctx(comp, a)) or {}
+            except ExtensionError:
+                raise
+            except ValueError as e:
+                raise ExtensionError(f"extension {a.name!r}: {e}") from e
         a.exports = {**render_value(a.manifest.raw.get("exports") or {}, ctx, f"extension {a.name!r} exports"),
                      **(contributed.get("exports") or {})}
         for s in a.manifest.provides:
@@ -750,6 +763,8 @@ def compose(
         _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
                                       *(contributed.get("host_services") or [])])
         for item in active_items(a.manifest.raw.get("verify"), ctx):
+            if not isinstance(item, dict) or item.get("kind") not in VERIFY_KINDS:
+                raise ExtensionError(f"extension {a.name!r}: verify {item!r} needs a kind in {sorted(VERIFY_KINDS)}")
             comp.verify.append((a.name, render_value(item, ctx, f"extension {a.name!r} verify")))
         for sname, setting in (a.manifest.raw.get("secrets") or {}).items():
             spec = setting if isinstance(setting, dict) else {"from": setting}
@@ -777,16 +792,71 @@ def secret_env_var(compose_name: str) -> str:
     return "GLOVE_SECRET_" + re.sub(r"[^A-Z0-9]", "_", compose_name.upper())
 
 
-def resolve_secrets(comp: Composition) -> dict[str, str]:
+def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -> dict[str, str]:
     """Env for `compose up`: every declared compose secret, resolved in memory
-    (keychain:/env: refs) or generated per launch. Never written to a file."""
+    (keychain:/env: refs) or generated per launch. Never written to a file.
+    Secrets a `launch_env` hook already `provided` (by env var) are kept as is."""
     from .config import resolve_secret
 
+    provided = provided or {}
     env: dict[str, str] = {}
     for cname, (ext, setting) in comp.secrets.items():
+        var = secret_env_var(cname)
+        if var in provided:
+            env[var] = provided[var]
+            continue
         a = comp.by_name(ext)
         value = a.settings.get(setting) if a else None
         if value in (None, ""):
             raise ExtensionError(f"extension {ext!r}: secret setting {setting!r} is not set")
-        env[secret_env_var(cname)] = generate_secret() if value == "generate" else resolve_secret(value)
+        env[var] = generate_secret() if value == "generate" else resolve_secret(value)
+    return env
+
+
+# --- lifecycle hooks --------------------------------------------------------------
+#
+# Besides `contribute` (plan time, pure) and `resolve` (after the sidecars are
+# up), an extension's hooks.py may define:
+#   materialize(ctx)               — write its state under ctx["state_dir"] when the
+#                                    session is rendered (`glove plan`/`up`, never `check`);
+#   launch_env(ctx, resolve_secret) → {"secrets": {name: value}, "env": {VAR: value}}
+#                                    — host-side work at `glove up`, in memory only
+#                                    (e.g. the vpn register hook). `secrets` fill the
+#                                    extension's own compose secrets; `env` fills
+#                                    null-valued `environment:` keys of its sidecars;
+#   diagnose(ctx, check, run)      → str | None — explain a failed verify check.
+
+_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def materialize(comp: Composition) -> None:
+    for a in comp.active:
+        if a.hooks is not None and hasattr(a.hooks, "materialize"):
+            d = comp.state_dir(a.name)
+            d.mkdir(parents=True, exist_ok=True, mode=0o700)
+            a.hooks.materialize(_hook_ctx(comp, a))
+
+
+def launch_env(comp: Composition) -> dict[str, str]:
+    """Run every `launch_env` hook; returns env for `compose` (secret values
+    under their GLOVE_SECRET_* names). Held in memory by the caller only."""
+    from .config import resolve_secret
+
+    env: dict[str, str] = {}
+    for a in comp.active:
+        if a.hooks is None or not hasattr(a.hooks, "launch_env"):
+            continue
+        try:
+            out = a.hooks.launch_env(_hook_ctx(comp, a), resolve_secret) or {}
+        except ValueError as e:
+            raise ExtensionError(f"extension {a.name!r}: {e}") from e
+        own = {k.removeprefix(f"{a.name}-") for k, (ext, _) in comp.secrets.items() if ext == a.name}
+        for name, value in (out.get("secrets") or {}).items():
+            if name not in own:
+                raise ExtensionError(f"extension {a.name!r}: launch hook returned undeclared secret {name!r}")
+            env[secret_env_var(f"{a.name}-{name}")] = str(value)
+        for var, value in (out.get("env") or {}).items():
+            if not _ENV_VAR.match(var) or var.startswith("GLOVE_") or var in env:
+                raise ExtensionError(f"extension {a.name!r}: launch hook returned a bad env name {var!r}")
+            env[var] = str(value)
     return env

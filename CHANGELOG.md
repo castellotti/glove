@@ -4,6 +4,54 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### Egress, search and web fetch as extensions (v3 M4)
+
+- **Egress providers** fill the exclusive `egress` slot: **`vpn`**
+  (gluetun; WireGuard or OpenVPN; any gluetun provider or `custom`), **`tor`**
+  (tor + privoxy, built from pinned Alpine; `exit_nodes` optional) and
+  **`direct`** (tinyproxy; no tunnel, `route: direct`). Only the provider's
+  tunnel container joins the routable `glove-<id>-wan`; consumers sit on the
+  internal `glove-<id>-egress`, so egress fails closed by topology.
+- **Verify kinds (core):** `container-healthy`, `tcp-open`, `http-ok`,
+  `exit-ip-differs`, run from throwaway hardened containers on session networks
+  after the sidecars start and before the harness. A failure prints the
+  sidecar's last log lines (credential lines withheld), stops the session's
+  sidecars and aborts `glove up`. An extension's `diagnose` hook explains it
+  (vpn: a dead WireGuard handshake via tun0's byte counter).
+- **Launch-time hooks:** `materialize` (write extension state under
+  `.glove/ext/<name>/` at `glove plan`/`up`, never `check`) and `launch_env`
+  (host-side, in memory: the **vpn register hook** in the session's `local/`
+  gets account credentials on stdin and returns a fresh WireGuard key, which
+  goes to gluetun as a compose secret). Sidecars that mount a compose secret are
+  recreated on every `glove up`, so a rotated key always takes effect.
+- **`search`** now runs SearXNG + valkey in the session (valkey on a private
+  network). Settings are rendered from the v2 pi-search `configure.py` (engine
+  groups `blocks_tor`/`requires_license`/`phones_home`/`security_mode`,
+  per-engine `enable|disable`, route-specific base). Every engine request goes
+  through the egress proxy. Requires an egress provider; the interim `host_port`
+  setting is gone.
+- **`webfetch`** (new): Pi's `web_fetch` through a `proxy` forwarder to the
+  egress provider. Its npm dependencies are pinned and baked into the image.
+  It refuses non-public destinations (IP literals, local and single-label
+  names, credentials) and checks every redirect hop. `direct`'s tinyproxy
+  refuses the same shapes.
+- **Template `pi-search`** (`glove new pi-search <dir>`): llm + vpn (tor/direct
+  one line away) + search + webfetch + media.
+- `glove check` now checks every secret-type setting that is set (e.g.
+  `vpn.register_user`), still without reading any value.
+- **Podman:** `userns_mode: keep-id` is now applied only to containers that
+  write a host bind (the harness, the netgate collector, an extension sidecar
+  with a rw bind). Forwarders and other sidecars keep an unprivileged subuid.
+  Found live: Podman 6.1.2 intermittently gave concurrently started keep-id
+  containers a one-entry id map ("doesn't map GID 20").
+- Verified live on Docker and Podman: `tests/integration/test_egress.sh
+  tor|direct` (11 checks: verify incl. `exit-ip-differs`, only the provider on
+  `wan`, no direct internet for SearXNG or the harness network, search/proxy
+  endpoints, Pi `web_search`/`web_fetch` driven by the stub, refusals), and two
+  sessions concurrently (two tor on Docker; tor on Docker + tor on Podman).
+  **Untested:** a live `vpn` tunnel (gluetun's hardened start was verified with
+  a dummy peer; `test_egress.sh vpn` needs the operator's VPN) and OpenVPN.
+
 ### A session is a directory (v3 M3)
 
 - **Breaking: the v2 environment model is gone.** `glove init`, `glove run`,

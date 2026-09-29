@@ -1,0 +1,12 @@
+services:
+  # tinyproxy: the only container on the session's wan network. Egress
+  # consumers reach it on the internal egress network.
+  direct-proxy:
+    image: "{{ images.proxy }}"
+    networks: [egress, wan]
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8888"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

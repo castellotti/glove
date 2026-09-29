@@ -195,7 +195,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         prev_cfg, _ = sdm.read_effective(sd.baseline)
     plan = build_session_plan(
         cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
-        resume=want_resume, session_id=resume_id, state_dir=str(sd.ext),
+        resume=want_resume, session_id=resume_id, state_dir=str(sd.ext), session_dir=str(sd.root),
     )
     if prev_cfg is not None:
         from .sessions import widening_warnings
@@ -207,6 +207,10 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
             for w in widened:
                 err.print(f"  [yellow]•[/yellow] {w}")
     _ensure_home()
+    # Extension state (e.g. SearXNG's settings) under .glove/ext/<name>/.
+    from .extensions import materialize
+
+    materialize(plan.composition)
     # Ring-1 policies are written before render so the read-only bind source
     # exists; they live in .glove/, never inside /work, never agent-writable.
     if plan.policies:
@@ -512,7 +516,7 @@ def check(
     else:
         try:
             plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
-                                      state_dir=str(sd.ext))
+                                      state_dir=str(sd.ext), session_dir=str(sd.root))
             checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
             for label, ref in secret_refs(plan):
                 ok, detail = secret_exists(ref)
@@ -770,7 +774,8 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
     """Print the rendered ring-1 policies and the ring-0 hardening for review."""
     try:
         sd, _, sid, cfg = _open(directory, register=False)
-        plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext))
+        plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                                  session_dir=str(sd.root))
     except (ConfigError, ValueError) as e:
         raise _fail(str(e)) from e
 

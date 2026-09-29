@@ -1,0 +1,1 @@
+- `web_fetch` fetches one URL and returns its text (HTML converted, no JavaScript). It is your default way to read a page found with `web_search`. Back off on HTTP 429.

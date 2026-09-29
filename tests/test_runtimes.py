@@ -293,3 +293,21 @@ def test_doctor_host_only_json_shape():
     names = {c.name for c in checks}
     assert "enforcer: nono" in names
     assert any(n.startswith("host tool") for n in names)
+
+
+def test_podman_keep_id_only_where_a_container_writes_a_host_bind(tmp_path):
+    # Rootless podman's keep-id maps a container to the invoking user. Only the
+    # harness (and sidecars with a rw host bind) need that; forwarders and
+    # read-only sidecars keep an unprivileged subuid. (Podman 6.1 also gave
+    # concurrently started keep-id containers a one-entry id map.)
+    from glove.runtimes.podman import PodmanRuntime
+
+    rt = PodmanRuntime()
+    rt._rootless = True
+    plan = _plan(tmp_path, extensions={"direct": {}, "search": {}})
+    doc = yaml.safe_load(rt.render(plan, tmp_path).compose_yaml)
+    svcs = doc["services"]
+    assert svcs["glove-s-harness"]["userns_mode"] == "keep-id"
+    for name in ("glove-s-llm", "glove-s-search", "glove-s-searxng", "glove-s-valkey", "glove-s-direct-proxy"):
+        assert "userns_mode" not in svcs[name], name
+        assert svcs[name]["user"] == "501:20", name

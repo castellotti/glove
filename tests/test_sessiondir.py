@@ -72,3 +72,25 @@ def test_subnet_slices_are_deterministic_27s():
         "n": "172.31.4.0/27", "h": "172.31.4.32/27", "x": "172.31.4.64/27"}
     with pytest.raises(ValueError, match="room for 8"):
         slice_subnet("172.31.4.0/24", [str(i) for i in range(9)])
+
+
+def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert "pi-search" in sdm.list_templates()
+    sd, sid = sdm.materialize("pi-search", tmp_path / "ps")
+    text = sd.file.read_text()
+    assert "keychain:<set-me>" in text  # secrets are references, never values
+    filled = (text.replace("provider: <set-me>         # openai", "provider: llama.cpp  # openai")
+              .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
+              .replace("provider: <set-me>", "provider: mullvad").replace("keychain:<set-me>", "keychain:wg"))
+    sd.file.write_text(filled)
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    comp = plan.composition
+    assert [a.name for a in comp.active] == ["llm", "media", "vpn", "search", "webfetch"]
+    assert comp.slot_exports("egress")["route"] == "vpn"

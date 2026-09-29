@@ -8,6 +8,7 @@ path; this module only shells out to the provider's compose CLI.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -163,6 +164,51 @@ def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
     return [provider, "compose", "-p", project, "-f", str(compose_file)]
 
 
+_SENSITIVE = re.compile(r"private.?key|password|passwd|secret|token", re.I)
+
+
+def redact_log(text: str) -> str:
+    """A sidecar's log without lines that may carry credentials (gluetun, for
+    one, prints a truncated WireGuard private key in its settings summary)."""
+    return "\n".join(line for line in text.strip().splitlines() if not _SENSITIVE.search(line))
+
+
+def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env: dict[str, str]) -> None:
+    """`compose up -d` every sidecar, then run the extensions' verify checks.
+
+    Sidecars that mount a compose secret are always recreated: compose does not
+    notice a changed secret value (a rotated Keychain entry, a freshly
+    registered VPN key). A failed check stops the project (fail closed) after
+    showing the failing sidecar's last log lines."""
+    from .verify import VerifyError, run_verify
+
+    base = _compose_base(provider, plan.project, compose_file)
+    doc = yaml.safe_load(compose_file.read_text()) or {}
+    services = doc.get("services") or {}
+    sidecars = [n for n in services if n != plan.harness_service]
+    if not sidecars:
+        return
+    with_secrets = [n for n in sidecars if services[n].get("secrets")]
+    console.print("[bold]starting sidecars…[/bold] " + ", ".join(sidecars))
+    if with_secrets:
+        subprocess.run([*base, "up", "-d", "--force-recreate", *with_secrets], check=True, env=env)
+    subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
+    if plan.composition is None or not plan.composition.verify:
+        return
+    console.print("[bold]verifying…[/bold]")
+    try:
+        run_verify(provider, plan, lambda m: console.print(f"[dim]{m}[/dim]" if "retry" in m else m))
+    except VerifyError as e:
+        if e.service:
+            name = f"glove-{plan.session}-{e.service}"
+            logs = subprocess.run([provider, "logs", "--tail", "25", name], capture_output=True, text=True)
+            console.print(f"[dim]--- last log lines of {name} (key/password lines withheld):[/dim]")
+            console.print(redact_log(logs.stdout + logs.stderr)[-3000:], markup=False)
+        console.print("[bold red]verify failed — stopping the session's sidecars (fail closed).[/bold red]")
+        subprocess.run([*base, "down"], env=env, capture_output=True)
+        raise
+
+
 def launch(
     cfg: Config,
     plan: SessionPlan,
@@ -173,23 +219,15 @@ def launch(
     secrets: dict[str, str],
     prepare: Callable[[], None] | None = None,
 ) -> None:
-    """Build, start every sidecar, run `prepare()` (launch-time resolution and
-    the harness home), then run the harness on a PTY.
+    """Build, start and verify every sidecar, run `prepare()` (launch-time
+    resolution and the harness home), then run the harness on a PTY.
 
     `secrets` is the already-resolved secret_env(plan): it is passed to compose
     only in this process environment, never written to a file."""
-    project = plan.project
-    base = _compose_base(provider, project, compose_file)
-
-    doc = yaml.safe_load(compose_file.read_text()) or {}
-    sidecars = [n for n in (doc.get("services") or {}) if n != plan.harness_service]
-
+    base = _compose_base(provider, plan.project, compose_file)
     ensure_images(cfg, plan, provider, rebuild=rebuild)
     env = {**os.environ, **secrets}
-
-    if sidecars:
-        console.print("[bold]starting sidecars…[/bold] " + ", ".join(sidecars))
-        subprocess.run([*base, "up", "-d", *sidecars], check=True, env=env)
+    start_sidecars(plan, compose_file, provider=provider, env=env)
     if prepare is not None:
         prepare()
 

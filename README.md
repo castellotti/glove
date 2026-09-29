@@ -16,9 +16,11 @@ command the agent executes.
 > enforcer only*. Every capability is an **extension** in `extensions/<name>/`
 > (a declarative `extension.yml`), selected per session in `extensions:`. An
 > extension you don't select contributes nothing: no containers, no mounts, no
-> image layers. Today: **`llm`** (the inference engine; required), **`media`**
-> (analysis toolchain), **`search`** (SearXNG) and **`playwright`** (host
-> Chromium). See [Extensions](#extensions).
+> image layers. Today: **`llm`** (the inference engine; required), the egress
+> providers **`vpn`** (gluetun), **`tor`** and **`direct`**, **`search`**
+> (a per-session SearXNG), **`webfetch`** (Pi's `web_fetch`), **`media`**
+> (analysis toolchain) and **`playwright`** (host Chromium). See
+> [Extensions](#extensions).
 
 ## How it works - three rings (defense in depth)
 
@@ -53,6 +55,8 @@ Docker Desktop macOS blast-radius explanation.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
+| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | implemented; hardened start verified (root + NET_ADMIN + tun, no sysctls); live tunnel run **untested** (needs the operator's VPN: `test_egress.sh vpn`) |
+| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
 | Browser | `playwright` extension, `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
 | Browser | `playwright` headless / novnc sidecars | planned (v3 M7) |
 
@@ -84,7 +88,7 @@ glove up                                # build → sidecars → resolve model �
 glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-`glove new` takes a bundled template (`templates/`: `minimal`), a path to a
+`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`), a path to a
 directory or file, or a git URL. Templates are *materialized*, not inherited:
 the file is a full copy, so upgrading glove never silently widens a session.
 `glove check` warns when the template changed since, and `glove new --diff`
@@ -121,8 +125,12 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     model: auto             # or an id; auto = the single model /v1/models lists
     capabilities: auto      # or explicit keys, e.g. {vision: true}; probes fill the rest
     # api_key: keychain:my-llm   # a reference only (keychain:<service> | env:<VAR>)
+  vpn:                      # egress: exactly one of vpn | tor | direct
+    provider: mullvad       # any gluetun provider, or `custom`
+    wireguard_key: keychain:my-vpn-wg
+  search: {}                # per-session SearXNG behind the egress
+  webfetch: {}              # Pi's web_fetch through the egress
   media: {}
-  # search: { host_port: 8888 }  # a SearXNG on this Mac (interim until v3 M4)
   # playwright: { mode: host }   # headed Chrome on this Mac
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
@@ -390,6 +398,37 @@ throwaway container on the harness network (the host never contacts the
 server), and core renders the result into Pi `models.json` / Vibe `config.toml`
 (vision → `input: ["text","image"]`).
 
+### Egress: `vpn`, `tor`, `direct`
+
+Web tools reach the internet only through the session's **egress provider**,
+one of `vpn` (a [gluetun](https://github.com/qdm12/gluetun) tunnel), `tor`
+(tor + privoxy) or `direct` (a plain proxy, no anonymity). Each session gets
+its own networks:
+
+| Network | Kind | Who joins |
+|---|---|---|
+| `glove-<id>-net` | internal | the harness and its forwarders |
+| `glove-<id>-egress` | internal | egress consumers (SearXNG, the `proxy` forwarder) and the provider's proxy |
+| `glove-<id>-wan` | bridge | **only** the egress provider's tunnel container |
+
+So only the tunnel container can reach the internet. If its proxy fails,
+consumers have no other route out (egress fails closed by topology).
+
+Before the harness starts, `glove up` runs each extension's **verify** checks:
+`container-healthy`, `tcp-open`, `http-ok` and `exit-ip-differs`. The last one
+requires the exit IP seen through the proxy to differ from this machine's IP,
+and fails if either is unknown. They run from throwaway hardened containers on
+the session's networks. A failing check shows the sidecar's last log lines (key
+and password lines withheld) and stops the session's sidecars. VPN secrets are
+Keychain references handed to gluetun as compose secrets. An optional
+**register hook** in the session's `local/` can mint a fresh WireGuard key at
+every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
+
+`search` runs SearXNG and valkey in the session, with every engine request
+going through the egress proxy. `webfetch` gives Pi `web_fetch` through a
+`proxy` forwarder. Both need an egress provider. The `pi-search` template puts
+it together: `glove new pi-search <dir>`.
+
 ## Toolchain
 
 Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
@@ -405,7 +444,9 @@ bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
-# RT=podman runs test_session_dir / test_pi_nono / test_vibe_nono / test_ring0_protect on Podman
+bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
+                                              # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (8 checks)
+# RT=podman runs test_session_dir / test_pi_nono / test_vibe_nono / test_ring0_protect / test_egress on Podman
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server

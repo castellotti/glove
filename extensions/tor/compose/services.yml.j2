@@ -1,0 +1,31 @@
+services:
+  # tor: the only container on the session's wan network. Its SOCKS port is
+  # reachable only on the private torlink network (privoxy).
+  tor:
+    image: "{{ images.tor }}"
+    command:
+      - tor
+      - -f
+      - /etc/glove/torrc
+{% if settings.exit_nodes %}
+      - ExitNodes
+      - "{{ settings.exit_nodes | join(',') }}"
+      - StrictNodes
+      - "{{ 1 if settings.strict_nodes else 0 }}"
+{% endif %}
+    networks:
+      wan: {}
+      torlink: { aliases: [tor] }
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9150"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  # privoxy: the egress proxy consumers use; forwards everything to tor by
+  # hostname (Tor resolves it at the exit; nothing is resolved here).
+  privoxy:
+    image: "{{ images.privoxy }}"
+    networks: [egress, torlink]
+    tmpfs: ["/tmp"]
+    depends_on: [tor]

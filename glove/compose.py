@@ -225,7 +225,12 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
             out.setdefault("restart", "unless-stopped")
             if not priv.get("user_root"):
                 out["user"] = f"{plan.uid}:{plan.gid}"
-                if extra.get("userns_mode"):
+                # Rootless podman's keep-id only where the sidecar writes a host
+                # bind (it must own what it writes); elsewhere its uid stays an
+                # unprivileged subuid. Podman 6.1 also intermittently gives
+                # concurrently started keep-id containers a one-entry id map.
+                rw_bind = any(v.get("type") == "bind" and not v.get("read_only") for v in out.get("volumes") or [])
+                if extra.get("userns_mode") and rw_bind:
                     out["userns_mode"] = extra["userns_mode"]
             out["cap_drop"] = ["ALL"]
             if priv.get("cap_add"):

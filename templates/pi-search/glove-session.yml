@@ -1,0 +1,50 @@
+# A glove session: private web research with Pi. Edit this file, then
+# `glove check && glove up`. Schema: README "Session file".
+glove: 3
+template: pi-search
+harness: pi
+enforcer: nono
+runtime: docker                # docker | podman
+mounts: []                     # extra host dirs, e.g. [{path: ~/papers, mode: ro}]; work/ is always /work
+limits: { pids: 512, memory: 6g, cpus: 4 }
+extensions:
+  llm:                         # the model (required): see extensions/llm/README.md
+    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    location: <set-me>         # host | lan | internet   (where the server is, relative to this machine)
+    endpoint: <set-me>         # host:port for host/lan; omit for a cloud provider's default
+    model: auto                # auto → the single model the server lists, or an explicit id
+    capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
+    # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
+  # Egress: exactly one of vpn | tor | direct. See extensions/vpn/README.md.
+  vpn:
+    provider: <set-me>         # a gluetun provider name, or `custom`
+    wireguard_key: keychain:<set-me>
+    # addresses: 10.0.0.2/32   # when your provider needs WIREGUARD_ADDRESSES
+    # countries: [Sweden]
+    # Instead of wireguard_key, a hook in local/ can register a fresh key each launch:
+    # register_hook: local/<your-hook>.sh
+    # register_user: keychain:<set-me>
+    # register_pass: keychain:<set-me>
+  # tor: {}                    # replace `vpn:` with this for Tor
+  # direct: {}                 # or this: no tunnel, no anonymity
+  search: {}                   # SearXNG behind the egress (extensions/search/README.md)
+  webfetch: {}                 # Pi's web_fetch through the egress
+  media: {}
+harness_config:
+  settings:
+    defaultThinkingLevel: medium
+brief: |
+  # pi-search — session brief
+
+  You are an assistant for **private web research and document analysis**,
+  running in a locked `glove` sandbox.
+
+  ## How to research
+
+  1. `web_search` to find candidate URLs.
+  2. `web_fetch` the promising ones to read their content, then cite them.
+  3. The search index and exit IP are shared and rate-limited: do not hammer
+     them, and on a 429 back off instead of retrying.
+
+  Put your outputs in `/work`. Input files (e.g. PDFs to analyse) are placed
+  there for you.

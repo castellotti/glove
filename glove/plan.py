@@ -122,11 +122,12 @@ def secret_env_names(plan: SessionPlan) -> list[str]:
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
     """Secret env for `compose up`/`run` only: the harness's LLM key (from the
-    inference provider's secret setting) and every extension compose secret. A
-    `keychain:`/`env:` reference is resolved here, in memory, so no file holds a
-    secret."""
+    inference provider's secret setting), every extension compose secret, and
+    what extensions' `launch_env` hooks return (e.g. a freshly registered VPN
+    key). A `keychain:`/`env:` reference is resolved here, in memory, so no file
+    holds a secret."""
     from .config import resolve_secret
-    from .extensions import resolve_secrets
+    from .extensions import launch_env, resolve_secrets
 
     env: dict[str, str] = {}
     comp = plan.composition
@@ -138,7 +139,9 @@ def secret_env(plan: SessionPlan) -> dict[str, str]:
         from .harnessconfig import LLM_API_KEY_ENV
 
         env[LLM_API_KEY_ENV] = resolve_secret(inference.settings[setting])
-    env.update(resolve_secrets(comp))
+    hooked = launch_env(comp)
+    env.update(hooked)
+    env.update(resolve_secrets(comp, provided=hooked))
     return env
 
 
@@ -153,11 +156,15 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     setting = inference.exports.get("api_key_secret") if inference else None
     if setting and inference.settings.get(setting):
         out.append((f"{inference.name}.{setting}", str(inference.settings[setting])))
-    for ext, name in comp.secrets.values():
-        a = comp.by_name(ext)
-        value = a.settings.get(name) if a else None
-        if value not in (None, "", "generate"):
-            out.append((f"{ext}.{name}", str(value)))
+    # every secret-type setting that is set (compose secrets, and ones only a
+    # launch hook reads, e.g. vpn.register_user)
+    for a in comp.active:
+        for name, spec in a.manifest.settings_schema.items():
+            value = a.settings.get(name)
+            label = f"{a.name}.{name}"
+            if spec.get("type") == "secret" and value not in (None, "", "generate") and \
+                    all(lbl != label for lbl, _ in out):
+                out.append((label, str(value)))
     return out
 
 
@@ -182,6 +189,7 @@ def build_session_plan(
     resume: bool = False,
     session_id: str | None = None,
     state_dir: str | None = None,
+    session_dir: str | None = None,
 ) -> SessionPlan:
     """Resolve a ``Config`` into a runtime-agnostic ``SessionPlan``.
 
@@ -203,6 +211,7 @@ def build_session_plan(
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
+        session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]

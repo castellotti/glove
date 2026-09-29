@@ -436,7 +436,7 @@ def test_unselected_extension_contributes_nothing(tmp_path):
 
 
 def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path):
-    exts = {"media": {}, "search": {"host_port": 8888}}
+    exts = {"media": {}, "direct": {}, "search": {}}
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan, _ = render(cfg, tmp_path)
     assert plan.image.startswith("glove/pi:0.4.0-") and plan.image != "glove/pi:0.4.0"
