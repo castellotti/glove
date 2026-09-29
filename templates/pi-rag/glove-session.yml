@@ -1,0 +1,51 @@
+# A glove session: private, OFFLINE document Q&A with Pi. Edit this file, then
+# `glove rag fetch-model` (once, needs internet) and `glove check && glove up`.
+# Put documents in work/data/input/. Schema: README "Session file".
+glove: 3
+template: pi-rag
+harness: pi
+enforcer: nono
+runtime: docker                # docker | podman
+mounts: []                     # extra host dirs, e.g. [{path: ~/papers, mode: ro}]; work/ is always /work
+limits: { pids: 512, memory: 6g, cpus: 4 }
+extensions:
+  llm:                         # the model (required; vision helps with scans): see extensions/llm/README.md
+    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    location: <set-me>         # host | lan | internet   (where the server is, relative to this machine)
+    endpoint: <set-me>         # host:port for host/lan; omit for a cloud provider's default
+    model: auto                # auto → the single model the server lists, or an explicit id
+    capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
+    # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
+  # No egress provider: nothing but the model is reachable, and shell commands have no network.
+  ocr: {}                      # tesseract/ocrmypdf/poppler + glove-ocr; e.g. {languages: [eng, deu]}
+  rag:                         # kstore: keyword (Obsidian) + vector (FAISS) stores, skills rag-parse/rag-query
+    models_dir: <set-me>       # host dir for the embedding model, e.g. ~/models/fastembed (`glove rag fetch-model` fills it)
+    # embed_model: BAAI/bge-small-en-v1.5
+    # query_stores: both       # both | obsidian | llama
+    # obsidian_dir: ~/src/claude-obsidian   # optional: its wiki-ingest/… skills, read-only
+  media: {}
+  # observe: {}                # transcripts (and model-call flows) to ~/.glove/observe/<id>/ for Layman
+harness_config:
+  settings:
+    defaultThinkingLevel: xhigh
+brief: |
+  # pi-rag — session brief
+
+  You help the operator **privately and offline** turn a folder of documents
+  into a searchable, source-traceable knowledge base and answer questions from
+  it, with sources the operator can verify. Parse with `/skill:rag-parse`,
+  answer with `/skill:rag-query` (see "Knowledge stores" below): you don't need
+  the operator to name the skill.
+
+  ## Environment
+
+  - **No network of any kind in the shell** (`curl`, `pip`, `apt`, any socket):
+    enforced, don't work around it. Only you (the harness) reach the model. If a
+    task seems to need the internet, stop and tell the operator.
+  - About 6 GB of RAM: `kstore sync` bounds its own OCR; by hand, cap
+    parallelism (`xargs -P 3`) and work a few pages at a time.
+
+  ## Privacy
+
+  Everything here stays on this machine. The only thing leaving the sandbox is
+  your calls to the operator's own model.

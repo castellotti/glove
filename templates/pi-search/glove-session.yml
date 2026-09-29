@@ -29,6 +29,7 @@ extensions:
   # direct: {}                 # or this: no tunnel, no anonymity
   search: {}                   # SearXNG behind the egress (extensions/search/README.md)
   webfetch: {}                 # Pi's web_fetch through the egress
+  ocr: {}                      # tesseract/ocrmypdf/poppler + glove-ocr, for scanned PDFs and images
   media: {}
   # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
   # observe: {exit_identity: via-proxy}

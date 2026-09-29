@@ -1,0 +1,19 @@
+api: 1
+name: ocr
+summary: Text from images and scanned PDFs, offline — tesseract, ocrmypdf, poppler and a `glove-ocr` command, baked into the harness image.
+settings:
+  # tesseract language packs (Debian `tesseract-ocr-<code>`), e.g. [eng, deu, chi-sim]
+  languages: { type: list, default: [eng], pattern: "^[a-z]{3}(-[a-z]+)?$" }
+harness:
+  image:
+    "*":
+      apt:
+        - tesseract-ocr
+        - "{% for l in settings.languages %}tesseract-ocr-{{ l }} {% endfor %}"
+        - ocrmypdf
+        - poppler-utils
+        - ghostscript
+        - file
+      copy: [[bin/glove-ocr, /usr/local/bin/glove-ocr]]
+      run: ["chmod 0755 /usr/local/bin/glove-ocr"]
+  brief: brief.md

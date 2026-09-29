@@ -9,6 +9,7 @@ Tool driving (egress tests): when the last user message contains
 `CALL <tool> <json-args>` the stub answers with that tool call; when the last
 message is a tool result it answers `TOOL RESULT: <first 300 chars>`. So a
 `pi -p "CALL web_fetch {...}"` exercises the real tool path end to end.
+The skill directories Pi lists in its system prompt are logged as `skills=`.
 """
 
 from __future__ import annotations
@@ -54,6 +55,10 @@ class H(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         tools = [t.get("function", {}).get("name") for t in req.get("tools") or []]
         print(f"stub: chat model={req.get('model')} stream={req.get('stream')} tools={','.join(tools)}", flush=True)
+        system = " ".join(_text(m.get("content")) for m in req.get("messages") or [] if m.get("role") == "system")
+        skills = sorted(set(re.findall(r"(/[\w./-]+)/SKILL\.md", system)))
+        if skills:
+            print(f"stub: skills={','.join(skills)}", flush=True)
         base = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": MODEL}
         reply, call = REPLY, None
         msgs = req.get("messages") or []

@@ -92,8 +92,30 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
     plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
-    assert [a.name for a in comp.active] == ["llm", "media", "vpn", "search", "webfetch"]
+    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
     assert comp.slot_exports("egress")["route"] == "vpn"
+
+
+def test_pi_rag_template_plans_once_filled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert "pi-rag" in sdm.list_templates()
+    sd, sid = sdm.materialize("pi-rag", tmp_path / "pr")
+    (tmp_path / "models").mkdir()
+    filled = (sd.file.read_text().replace("provider: <set-me>", "provider: llama.cpp")
+              .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
+              .replace("models_dir: <set-me>", f"models_dir: {tmp_path / 'models'}"))
+    sd.file.write_text(filled)
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    comp = plan.composition
+    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "rag"]
+    assert "egress" not in comp.slots and [e.name for e in comp.endpoints] == ["llm"]  # offline
+    assert any(m.container_path == "/mnt/rag-models" and m.mode == "ro" for m in plan.mounts)
 
 
 def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):

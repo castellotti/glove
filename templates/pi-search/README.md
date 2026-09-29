@@ -16,5 +16,5 @@ SearXNG and the forwarders, then runs the verify checks. For vpn and tor the
 session starts only when the exit IP differs from this machine's. Then it
 attaches Pi.
 
-OCR tooling moves into an `ocr` extension in a later milestone. Until then,
-add `apt_packages: [tesseract-ocr, ocrmypdf, poppler-utils]` if you need it.
+OCR (`glove-ocr`, tesseract, ocrmypdf, poppler) comes from the `ocr`
+extension, offline in the shell like every tool.

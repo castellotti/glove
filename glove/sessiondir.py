@@ -201,21 +201,33 @@ def _mount(sd: SessionDir, item: Any) -> tuple[str, str]:
         raise SessionError(f"{sd.file}: mount {path!r}: mode must be ro|rw")
     host = Path(os.path.expanduser(path))
     host = Path(os.path.realpath(host if host.is_absolute() else sd.root / host))
-    # Never expose glove's own state, the private local/ assets or the session
-    # file (the agent would rewrite its own grants) — including via an ancestor —
-    # nor glove's home (every session's exports and rules.json) or another
-    # registered session's state.
+    exposed = exposes_private(sd.root, host)
+    if exposed:
+        raise SessionError(f"{sd.file}: mount {path!r} would expose {exposed[1]} ({exposed[0]}) to the harness; "
+                           "mount a directory that does not contain it")
+    return str(host), mode
+
+
+def exposes_private(root: Path | None, host: Path) -> tuple[Path, str] | None:
+    """The private path a harness mount of `host` would expose, if any.
+
+    Never glove's own state, the private local/ assets or the session file (the
+    agent would rewrite its own grants) — including via an ancestor — nor
+    glove's home (every session's exports and rules.json) or another registered
+    session's state. Used for the session's `mounts:` and extensions' mounts."""
     from .registry import RegistryError, glove_home, load_registry
 
-    private = [(sd.state, ".glove/"), (sd.local, "local/"), (sd.file, SESSION_FILE), (glove_home(), "glove's home")]
+    private = [(glove_home(), "glove's home")]
+    if root is not None:
+        private += [(root / STATE_DIR, ".glove/"), (root / "local", "local/"), (root / SESSION_FILE, SESSION_FILE)]
     with contextlib.suppress(RegistryError):
         private += [(Path(e.dir) / STATE_DIR, f"session {e.id}'s state") for e in load_registry()]
+    host = Path(os.path.realpath(host))
     for guarded, what in private:
         p = Path(os.path.realpath(guarded))
         if host == p or p.is_relative_to(host) or host.is_relative_to(p):
-            raise SessionError(f"{sd.file}: mount {path!r} would expose {what} ({p}) to the harness; "
-                               "mount a directory that does not contain it")
-    return str(host), mode
+            return p, what
+    return None
 
 
 def to_config(sd: SessionDir, raw: dict[str, Any], session_id: str, *, subnet: str | None = None,

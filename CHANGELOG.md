@@ -4,6 +4,48 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### Documents: `ocr` and `rag` extensions, `pi-rag` template (v3 M6)
+
+- **`ocr`** (new): tesseract (+ `languages:` packs), ocrmypdf, poppler,
+  ghostscript and `file` in the harness image, and `glove-ocr FILE`: an image's
+  text, or a PDF page by page (text layer where there is one, OCR where not;
+  `--pages`, `--lang`, `--dpi`, `--force-ocr`, `--json`). No `--vision`: a shell
+  command has no network, and llama_index's `image_vision_llm` is a local
+  BLIP-2 (torch), not the session's model. The brief follows the model's
+  vision capability. Fixtures (PNG, scanned PDF, text-layer PDF) and their
+  generator in `extensions/ocr/tests/fixtures/`.
+- **`rag`** (new, requires `ocr`): kstore from the `glove-pi-rag` template,
+  baked in with pinned llama-index-core 0.14.25, llama-index-vector-stores-faiss
+  0.7.0, llama-index-readers-obsidian 0.8.0, fastembed 0.8.1, faiss-cpu 1.15.1.
+  `models_dir` (required) and `obsidian_dir` (optional) are read-only mounts;
+  skills `rag-parse`/`rag-query` (+ claude-obsidian's offline skills when
+  mounted); `glove rag fetch-model` replaces `fetch-embedding-model.sh`.
+  kstore changes: `KSTORE_*` env (was `PIRAG_*`); images are OCR'd by `sync`;
+  a scanned PDF's citations name the original input, not the OCR'd cache copy;
+  llama_index's MockLLM notice no longer lands on stdout (it broke `ask --json`);
+  onnxruntime's load-time `/sys` probe errors (denied by the tool sandbox) are
+  held back unless loading fails.
+- **Template `pi-rag`** (new): llm + ocr + rag + media, no egress provider.
+  `pi-search` gains `ocr: {}` (its apt stopgap is gone).
+- **Extension API** (core):
+  - `mounts: {<name>: {setting: <path setting>}}`: a read-only harness bind at
+    `/mnt/<ext>-<name>` of a directory the user named; the setting may not have
+    a default; the same private-path guard as the session's `mounts:` (shared
+    `sessiondir.exposes_private`); `mount.<name>` in templates.
+  - `harness.pi_skills`: baked (`skills/x`, needs a `SKILL.md`) or from a
+    mount (`{mount, path}`, skipped when the mount is off); listed in Pi's
+    `settings.json` ahead of the session's own `skills`.
+  - `pip` layers work on Pi (Debian's pip3, bootstrapped once, PEP 668 flag).
+  - List settings take a per-item `pattern`; rendered `apt`/`pip`/`npm`
+    entries split on whitespace, so a template can expand a list setting.
+  - Two image sources that would stage under one name are refused (they
+    silently overwrote each other).
+- The LLM stub logs the skill directories in Pi's system prompt (`skills=`).
+- **Verified live** (`tests/integration/test_rag.sh`, Pi): 13/13 on Docker and
+  on Podman (with a claude-obsidian mount), and 12/12 on Docker from a cache
+  `glove rag fetch-model` had just filled. Regression: `test_session_dir.sh`
+  10/10 on both. **Untested:** `ocr`/`rag` with Vibe.
+
 ### `vpn` verified live on Docker and Podman (v3 M5 follow-up)
 
 - **Compose secrets now mount at `/run/glove-secrets/<name>`** (was

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import re
 import secrets as pysecrets
 from dataclasses import dataclass, field
@@ -229,6 +230,10 @@ def _coerce_setting(ext: str, key: str, spec: dict, value: Any) -> Any:
     if t == "list":
         if not isinstance(value, list):
             raise ExtensionError(f"{where} must be a list, got {value!r}")
+        pattern = spec.get("pattern")  # for every item, when given
+        bad = [v for v in value if pattern and not (isinstance(v, str) and re.fullmatch(pattern, v))]
+        if bad:
+            raise ExtensionError(f"{where}: {bad} must match {pattern!r}")
         return list(value)
     if t == "map":
         if not isinstance(value, dict):
@@ -379,6 +384,7 @@ class Active:
     auto_added: bool = False
     exports: dict[str, Any] = field(default_factory=dict)
     hooks: ModuleType | None = None
+    mounts: dict[str, str] = field(default_factory=dict)  # mount name → container path
 
     @property
     def name(self) -> str:
@@ -396,6 +402,10 @@ class Composition:
     harness_env: dict[str, str] = field(default_factory=dict)
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
     pi_extensions: list[tuple[str, Path]] = field(default_factory=list)  # (ext, src dir)
+    # (ext, src dir baked into the image or None for a path under a mount, container path)
+    pi_skills: list[tuple[str, Path | None, str]] = field(default_factory=list)
+    # (ext, host dir, container path): read-only harness binds from `mounts:`
+    harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
     vibe_mcp: list[dict] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
@@ -445,6 +455,9 @@ class Composition:
 
     def pi_extension_dest(self, ext: str, src: Path) -> str:
         return f"/opt/glove/ext/{ext}/{src.name}"
+
+    def pi_skill_dest(self, ext: str, src: Path) -> str:
+        return f"/opt/glove/skills/{ext}/{src.name}"
 
     def rendered_briefs(self) -> list[tuple[str, str]]:
         out = []
@@ -497,6 +510,7 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
             for e in comp.endpoints
         },
         "state": str(comp.state_dir(a.name)),
+        "mount": dict(a.mounts),
         "assets": str(a.manifest.path),
         "images": {k: image_tag(a, k) for k in (a.manifest.raw.get("images") or {})},
         "libs": {lib.name: {"images": {k: image_tag(lib, k) for k in (lib.manifest.raw.get("images") or {})}}
@@ -725,7 +739,13 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
     image = h.get("image") or {}
     for key in ("*", comp.harness):
         for layer in active_items([image[key]] if isinstance(image.get(key), dict) else image.get(key), ctx):
-            comp.image_layers.append((a.name, render_value(layer, ctx, where)))
+            layer = render_value(layer, ctx, where)
+            # a package name has no whitespace: a template may expand a list
+            # setting into several ("{% for l in settings.x %}pkg-{{ l }} {% endfor %}")
+            for k in ("apt", "pip", "npm"):
+                if layer.get(k):
+                    layer[k] = [p for item in layer[k] for p in str(item).split()]
+            comp.image_layers.append((a.name, layer))
     for k, v in render_value(h.get("env") or {}, ctx, where).items():
         if k in comp.harness_env:
             raise ExtensionError(f"{where}: env {k!r} is already set by another extension")
@@ -736,6 +756,23 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             if not src.is_dir():
                 raise ExtensionError(f"{where}: pi extension {src} not found")
             comp.pi_extensions.append((a.name, src))
+    if comp.harness == "pi":
+        for item in active_items(h.get("pi_skills"), ctx):
+            spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)
+            if "mount" in spec:  # {mount: <name>, path: <rel>}: a skill in one of its mounts, if mounted
+                if spec["mount"] not in a.mounts:
+                    continue
+                rel = str(spec.get("path", ""))
+                host = next(h for e, h, t in comp.harness_mounts if e == a.name and t == a.mounts[spec["mount"]])
+                bad = not rel or rel.startswith("/") or ".." in rel.split("/")
+                if bad or not Path(host, rel, "SKILL.md").is_file():
+                    raise ExtensionError(f"{where}: skill {rel!r} has no SKILL.md in mount {spec['mount']!r} ({host})")
+                comp.pi_skills.append((a.name, None, f"{a.mounts[spec['mount']]}/{rel}"))
+                continue
+            src = (a.manifest.path / str(spec["src"])).resolve()
+            if not (src / "SKILL.md").is_file() or not src.is_relative_to(a.manifest.path.resolve()):
+                raise ExtensionError(f"{where}: skill {spec['src']!r} needs a SKILL.md inside the extension")
+            comp.pi_skills.append((a.name, src, comp.pi_skill_dest(a.name, src)))
     if comp.harness == "vibe":
         comp.vibe_mcp.extend(render_value(active_items(h.get("vibe_mcp"), ctx), ctx, where))
     brief = h.get("brief")
@@ -747,6 +784,37 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             # rendered late (rendered_briefs): launch-time resolution (e.g. the
             # llm's `model: auto`) changes what a brief says
             comp.briefs.append((a.name, path.read_text()))
+
+
+def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
+    """`mounts: {<name>: {setting: <path setting>, when: …}}` — a host directory
+    the user named in a setting, bound read-only into the harness at
+    /mnt/<ext>-<name>. An empty setting mounts nothing. Plan-time checks (it
+    exists, exposes no private path) run in the planner, with the user's mounts."""
+    settings = a.manifest.raw.get("settings") or {}
+    for name, spec in (a.manifest.raw.get("mounts") or {}).items():
+        where = f"extension {a.name!r} mount {name!r}"
+        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"setting", "when"}:
+            raise ExtensionError(f"{where}: want {{setting: <a path setting>, when: …}}")
+        key = spec.get("setting")
+        if (settings.get(key) or {}).get("type") != "path":
+            raise ExtensionError(f"{where}: `setting` must name one of its `path` settings")
+        if "default" in settings[key]:  # the user names every host dir the harness sees
+            raise ExtensionError(f"{where}: setting {key!r} may not have a default")
+        value = a.settings.get(key)
+        if not value or not when_matches(spec.get("when"), ctx):
+            continue
+        host = Path(os.path.expanduser(str(value)))
+        if not host.is_absolute():
+            if comp.session_dir is None:
+                raise ExtensionError(f"{where}: {a.name}.{key} must be an absolute path here")
+            host = comp.session_dir / host
+        host = Path(os.path.realpath(host))
+        if not host.is_dir():
+            raise ExtensionError(f"{where}: {a.name}.{key} = {value!r} is not a directory ({host})")
+        target = f"/mnt/{a.name}-{name}"
+        a.mounts[name] = target
+        comp.harness_mounts.append((a.name, str(host), target))
 
 
 def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:
@@ -823,6 +891,7 @@ def compose(
             for net in (ep.target.network, *ep.listen_networks):
                 if net in CORE_NETWORKS and net != "net":
                     comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
+        _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx)
         for k, v in (contributed.get("env") or {}).items():

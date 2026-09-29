@@ -60,6 +60,7 @@ Docker Desktop macOS blast-radius explanation.
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
+| Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
 | Browser | `playwright` extension, `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile; refused with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
 | Browser | `playwright` headless / novnc sidecars | planned (v3 M7) |
 
@@ -91,7 +92,7 @@ glove up                                # build → sidecars → resolve model �
 glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `corporate`), a path to a
+`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `pi-rag`, `corporate`), a path to a
 directory or file, or a git URL. Templates are *materialized*, not inherited:
 the file is a full copy, so upgrading glove never silently widens a session.
 `glove check` warns when the template changed since, and `glove new --diff`
@@ -391,6 +392,13 @@ the agent, and optionally hardened sidecars. Core validates all of it:
   No extension publishes ports, joins the harness network, mounts the docker
   socket, or binds host paths other than its own session state.
 - **The harness** only ever gets forwarders on its internal network.
+- **Harness mounts** from an extension (`mounts: {models: {setting: models_dir}}`)
+  are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
+  `path` setting (such a setting may not have a default), checked like the
+  session's own `mounts:` (never `.glove/`, `local/`, the session file, glove's
+  home or another session's state). **Pi skills** come baked into the image
+  (`pi_skills: [skills/x]`) or from a mount (`{mount: m, path: skills/y}`,
+  skipped when that mount is off) and are listed in Pi's `settings.json`.
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
@@ -453,6 +461,26 @@ raw TCP endpoints (`glove-<id>-git-ssh:22`). `glove up` checks that
 `https://example.com` is refused through it, and that `probe_url` (if set)
 answers. Template: `glove new corporate <dir>`; details in
 [extensions/corporate/README.md](extensions/corporate/README.md).
+
+### Documents: `ocr`, `rag`
+
+**`ocr`** bakes tesseract (plus the `languages:` packs you pick), ocrmypdf,
+poppler, ghostscript and `file` into the harness image, with a small
+`glove-ocr FILE` command: an image's text, or a PDF page by page (the text
+layer where there is one, OCR where not; `--pages`, `--lang`, `--json`). There
+is no model-vision mode: a shell command has no network, so it cannot call the
+session's model. A model with vision looks at images itself, and the brief says
+which applies.
+
+**`rag`** (requires `ocr`) bakes kstore: `kstore sync` turns
+`/work/data/input` into a keyword (Obsidian vault) and a vector (FAISS) store,
+OCR'ing scans and images, and `kstore ask` retrieves passages with citations
+(file, page, char/line) back to the original. Pi gets the `rag-parse` and
+`rag-query` skills. Embeddings run in-process (fastembed) from `models_dir`, a
+read-only mount filled once by `glove rag fetch-model`; `obsidian_dir` (a
+claude-obsidian checkout, read-only) adds its vault-synthesis skills. No egress
+provider is needed. Template: `glove new pi-rag <dir>`; details in
+[extensions/rag/README.md](extensions/rag/README.md).
 
 ## Toolchain
 

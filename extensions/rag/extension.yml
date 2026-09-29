@@ -1,0 +1,45 @@
+api: 1
+name: rag
+summary: Offline, source-traceable document Q&A — kstore builds a keyword (Obsidian vault) and a vector (FAISS) store from /work/data/input; skills rag-parse / rag-query.
+requires: [ocr]
+cli: cli.py
+settings:
+  # the fastembed model cache (`glove rag fetch-model` fills it; read-only in the session)
+  models_dir:   { type: path, required: true }
+  embed_model:  { type: string, default: BAAI/bge-small-en-v1.5, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" }
+  query_stores: { type: enum, values: [both, obsidian, llama], default: both }
+  # optional: a claude-obsidian checkout (read-only) for its vault-synthesis skills
+  obsidian_dir: { type: path }
+mounts:
+  models:   { setting: models_dir }
+  obsidian: { setting: obsidian_dir }
+harness:
+  image:
+    "*":
+      pip:
+        - llama-index-core==0.14.25
+        - llama-index-vector-stores-faiss==0.7.0
+        - llama-index-readers-obsidian==0.8.0
+        - fastembed==0.8.1
+        - faiss-cpu==1.15.1
+      copy: [[kstore, /opt/glove/rag/kstore], [bin/kstore.sh, /usr/local/bin/kstore]]
+      run: ["chmod 0755 /usr/local/bin/kstore"]
+  env:
+    KSTORE_EMBED_MODEL: "{{ settings.embed_model }}"
+    KSTORE_EMBED_CACHE: "{{ mount.models }}"
+    KSTORE_QUERY_STORES: "{{ settings.query_stores }}"
+    # fastembed/huggingface must never try the network (there is none)
+    HF_HUB_OFFLINE: "1"
+    CLAUDE_OBSIDIAN_CORE: "{{ mount.obsidian ~ '/scripts/claude-obsidian.py' if mount.obsidian is defined else '' }}"
+    CLAUDE_OBSIDIAN_VAULT: /work/data/store/vault
+  pi_skills:
+    - skills/rag-parse
+    - skills/rag-query
+    # claude-obsidian's offline skills, when obsidian_dir is set (autoresearch/defuddle need the web)
+    - { mount: obsidian, path: skills/wiki-ingest }
+    - { mount: obsidian, path: skills/wiki-lint }
+    - { mount: obsidian, path: skills/wiki-mode }
+    - { mount: obsidian, path: skills/obsidian-markdown }
+    - { mount: obsidian, path: skills/canvas }
+    - { mount: obsidian, path: skills/think }
+  brief: brief.md

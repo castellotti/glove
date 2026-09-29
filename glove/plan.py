@@ -174,6 +174,26 @@ def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     return default_profile_path(), False
 
 
+def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
+    """Extensions' read-only harness mounts (`mounts:` in a manifest), under the
+    same rule as the session's own: never a private path."""
+    from .extensions import ExtensionError
+    from .sessiondir import exposes_private
+
+    out = []
+    taken = {m.container_path for m in mounts}
+    for ext, host, target in comp.harness_mounts:
+        exposed = exposes_private(comp.session_dir, Path(host))
+        if exposed:
+            raise ExtensionError(f"extension {ext!r}: mount {host} would expose {exposed[1]} ({exposed[0]}) "
+                                 "to the harness; name a directory that does not contain it")
+        if target in taken:
+            raise ExtensionError(f"extension {ext!r}: mount point {target} clashes with another mount")
+        taken.add(target)
+        out.append(Mount(host_path=host, container_path=target, mode="ro"))
+    return out
+
+
 def build_session_plan(
     cfg: Config,
     *,
@@ -220,6 +240,7 @@ def build_session_plan(
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
     )
+    mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
     mount_plan = replace(
         mount_plan, protect=protected_paths(mount_plan.mounts, protect_ide_files=cfg.protect_ide_files)
     )
@@ -253,7 +274,7 @@ def build_session_plan(
     base = f"{base}-srt" if cfg.enforcer == "srt" else base
     derived_df = None
     derived = None
-    if comp.image_layers or comp.pi_extensions:
+    if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills):
         derived_df, staged = render_dockerfile(base, profile, comp)
         derived = content_hash(derived_df, staged)
     image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)

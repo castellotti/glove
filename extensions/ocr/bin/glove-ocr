@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""glove-ocr — text from an image or a PDF, offline.
+
+    glove-ocr FILE [--lang eng] [--pages 1-3] [--dpi 200] [--force-ocr] [--json]
+
+Images go through tesseract. A PDF is read page by page: pdftotext first, and
+tesseract on a rendered page (pdftoppm) only where the page has no text layer
+(scans), or on every page with --force-ocr. Each PDF page is headed
+`=== page N (text|ocr) ===`; --json prints [{page, method, text}] instead.
+Standard library only: the heavy lifting is poppler and tesseract.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp", ".pnm", ".ppm", ".pgm"}
+
+
+def _run(cmd: list[str]) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit(f"glove-ocr: {cmd[0]} is not installed")
+    if r.returncode != 0:
+        sys.exit(f"glove-ocr: {' '.join(cmd[:2])} failed ({r.returncode}): {r.stderr.strip()[-400:]}")
+    return r.stdout
+
+
+def _tesseract(image: Path, lang: str) -> str:
+    return _run(["tesseract", str(image), "-", "-l", lang]).strip()
+
+
+def _page_count(pdf: Path) -> int:
+    m = re.search(r"^Pages:\s+(\d+)", _run(["pdfinfo", str(pdf)]), re.M)
+    return int(m.group(1)) if m else 0
+
+
+def _pages(spec: str | None, n: int) -> list[int]:
+    if not spec:
+        return list(range(1, n + 1))
+    out: list[int] = []
+    for part in spec.split(","):
+        a, _, b = part.partition("-")
+        lo, hi = int(a), int(b or a)
+        out += [p for p in range(lo, hi + 1) if 1 <= p <= n]
+    return out
+
+
+def _pdf(pdf: Path, args: argparse.Namespace) -> list[dict]:
+    n = _page_count(pdf)
+    out = []
+    with tempfile.TemporaryDirectory(prefix="glove-ocr-") as tmp:
+        for p in _pages(args.pages, n):
+            text = "" if args.force_ocr else _run(["pdftotext", "-f", str(p), "-l", str(p), "-layout", str(pdf), "-"])
+            if text.strip():
+                out.append({"page": p, "method": "text", "text": text.strip()})
+                continue
+            stem = Path(tmp) / f"p{p}"
+            _run(["pdftoppm", "-f", str(p), "-l", str(p), "-r", str(args.dpi), "-png", "-singlefile", str(pdf), str(stem)])
+            out.append({"page": p, "method": "ocr", "text": _tesseract(stem.with_suffix(".png"), args.lang)})
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="glove-ocr", description="Text from an image or a PDF (offline).")
+    ap.add_argument("file", type=Path)
+    ap.add_argument("--lang", default="eng", help="tesseract language(s), e.g. eng or eng+deu (default eng)")
+    ap.add_argument("--pages", help="PDF pages, e.g. 1-3,7 (default: all)")
+    ap.add_argument("--dpi", type=int, default=200, help="render resolution for OCR'd PDF pages (default 200)")
+    ap.add_argument("--force-ocr", action="store_true", help="OCR every PDF page, even those with a text layer")
+    ap.add_argument("--json", action="store_true", help="print [{page, method, text}]")
+    args = ap.parse_args(argv)
+
+    f: Path = args.file
+    if not f.is_file():
+        sys.exit(f"glove-ocr: no such file: {f}")
+    suffix = f.suffix.lower()
+    if suffix == ".pdf":
+        pages = _pdf(f, args)
+    elif suffix in IMAGE_SUFFIXES:
+        pages = [{"page": 1, "method": "ocr", "text": _tesseract(f, args.lang)}]
+    else:
+        mime = _run(["file", "--brief", "--mime-type", str(f)]).strip() if shutil.which("file") else "unknown"
+        sys.exit(f"glove-ocr: unsupported file type {suffix or '(none)'} ({mime}); images and PDFs only")
+
+    if args.json:
+        print(json.dumps(pages, ensure_ascii=False, indent=2))
+    elif suffix == ".pdf":
+        print("\n\n".join(f"=== page {p['page']} ({p['method']}) ===\n{p['text']}" for p in pages))
+    else:
+        print(pages[0]["text"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

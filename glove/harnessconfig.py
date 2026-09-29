@@ -163,7 +163,7 @@ def render_home(
     if cfg.harness == "vibe":
         written += _render_vibe(cfg, profile, home_dir, model, comp)
     elif cfg.harness == "pi":
-        written += _render_pi(cfg, profile, home_dir, model)
+        written += _render_pi(cfg, profile, home_dir, model, comp)
     elif cfg.harness == "claude-code":
         written += _render_claude(profile, home_dir, model)
 
@@ -306,7 +306,8 @@ def _pi_model(entry: dict[str, Any], model: ModelDescriptor) -> dict[str, Any]:
     return out
 
 
-def _render_pi(cfg: Config, profile: HarnessProfile, home_dir: Path, model: ModelDescriptor) -> list[Path]:
+def _render_pi(cfg: Config, profile: HarnessProfile, home_dir: Path, model: ModelDescriptor,
+               comp: Composition | None = None) -> list[Path]:
     cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     model_id = model.model
@@ -342,7 +343,11 @@ def _render_pi(cfg: Config, profile: HarnessProfile, home_dir: Path, model: Mode
     # extra per-model tuning if the endpoint supports it. `env` is deep-merged.
     extra_settings = dict(cfg.harness_config.get("settings", {}))
     extra_env = extra_settings.pop("env", None)
+    # extensions' skills first, then any the session file lists itself
+    skills = [dest for _, _, dest in (comp.pi_skills if comp else [])]
     settings_json.update(extra_settings)
+    if skills:
+        settings_json["skills"] = [*skills, *(s for s in extra_settings.get("skills") or [] if s not in skills)]
     if extra_env:
         settings_json.setdefault("env", {}).update(extra_env)
     model_overrides = cfg.harness_config.get("model", {})

@@ -53,6 +53,12 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile, ext_dir: Path) 
                 f"harness {profile.name!r} has no Python installer but extension {ext!r} "
                 f"requests pip packages {list(layer['pip'])}"
             )
+        if profile.pip_bootstrap:
+            lines.append(
+                "RUN command -v pip3 >/dev/null || (apt-get update "
+                f"&& apt-get install -y --no-install-recommends {_q(profile.pip_bootstrap)} "
+                "&& rm -rf /var/lib/apt/lists/*)"
+            )
         lines.append(f"RUN {' '.join(profile.pip_install)} {_q(layer['pip'])}")
     if layer.get("npm"):
         lines.append(f"RUN npm install -g {_q(layer['npm'])}")
@@ -84,6 +90,17 @@ def render_dockerfile(base_tag: str, profile: HarnessProfile, comp: Composition)
         lines.append(f"COPY {_staged(ext, src)} {dest}")
         if (src / "package.json").is_file():
             lines.append(f"RUN cd {dest} && npm install --no-audit --no-fund")
+    for ext, src, dest in comp.pi_skills:
+        if src is not None:
+            staged.append((ext, src))
+            lines.append(f"# extension: {ext} (Pi skill)")
+            lines.append(f"COPY {_staged(ext, src)} {dest}")
+    seen: dict[str, Path] = {}
+    for ext, src in staged:  # staged by name: two sources must not share one
+        other = seen.setdefault(_staged(ext, src), src)
+        if other != src:
+            raise ValueError(f"extension {ext!r}: {src} and {other} would both stage as {_staged(ext, src)!r}; "
+                             "rename one")
     return "\n".join(lines) + "\n", staged
 
 

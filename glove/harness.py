@@ -40,8 +40,11 @@ class HarnessProfile:
     runtime_paths: tuple[str, ...] = ("/usr/local",)
     # Command that installs Python packages into the image, for extension/user `pip`
     # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
-    # error). Vibe installs via uv; the Node-based harnesses have none.
+    # error). Vibe installs via uv; Pi via Debian's pip3 (see pip_bootstrap).
     pip_install: tuple[str, ...] | None = None
+    # apt packages a `pip` layer needs first (installed once, before the first
+    # pip layer), for a base image without Python.
+    pip_bootstrap: tuple[str, ...] = ()
     # Resume-flag mapping (see resume_args). `resume_continue` re-opens the most
     # recent session; `resume_session` re-opens a specific id — the literal
     # "{id}" token is replaced with the requested session id. None ⇒ the harness
@@ -117,6 +120,9 @@ _REGISTRY: dict[str, HarnessProfile] = {
             "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
             "PI_OFFLINE": "1",
         },
+        # Debian bookworm's python3 (3.11): pip needs --break-system-packages (PEP 668)
+        pip_install=("pip3", "install", "--no-cache-dir", "--break-system-packages"),
+        pip_bootstrap=("python3", "python3-pip"),
         # `pi --continue` reopens the last session; `--session <id>` accepts a
         # path or partial UUID.
         resume_continue=("--continue",),
