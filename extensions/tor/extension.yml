@@ -1,0 +1,30 @@
+api: 1
+name: tor
+summary: Route all session egress through Tor (tor + a privoxy HTTP front end); route tor.
+provides: [egress]
+settings:
+  exit_nodes: { type: list, default: [] }        # e.g. ["{us}", "{ca}"] — unset: Tor chooses
+  strict_nodes: { type: bool, default: false }
+  check_url: { type: string, default: "https://am.i.mullvad.net/ip" }
+images:
+  tor: { build: tor }
+  privoxy: { build: privoxy }
+networks:
+  torlink: { internal: true }                    # privoxy ↔ tor only
+exports:
+  proxy_host: "glove-{{ session.id }}-privoxy"
+  proxy_port: 8118
+  proxy_url: "http://glove-{{ session.id }}-privoxy:8118"
+  route: tor
+  anonymising: true
+  resolver: "tor-socks://glove-{{ session.id }}-tor:9150"
+  network: egress
+services: compose/services.yml.j2
+verify:
+  - { name: tor-socks, kind: tcp-open, host: "glove-{{ session.id }}-tor", port: 9150, network: torlink,
+      retries: 24, interval: 5, service: tor }
+  # Tor can take a minute or two to build its first circuit.
+  - { name: exit-not-host, kind: exit-ip-differs, echo_url: "{{ settings.check_url }}", retries: 30, interval: 5,
+      service: tor }
+harness:
+  brief: brief.md

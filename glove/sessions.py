@@ -90,16 +90,10 @@ def widening_warnings(prev: Config, cur: Config) -> list[str]:
     may carry prompt-injected instructions the model absorbed) into a sandbox the
     user may have widened, so those instructions would run with more reach. We
     compare the security-relevant grants and warn — never block; deliberate
-    widening is the whole point of the feature (the §7.3 safeguard). Compares net,
-    add_dirs (added paths + ro→rw upgrades), plugins, allow_root, allow_sensitive,
-    and services."""
+    widening is the whole point of the feature (the §7.3 safeguard). Compares
+    add_dirs (added paths + ro→rw upgrades), extensions, allow_root and
+    allow_sensitive (network reach comes only from extensions)."""
     warnings: list[str] = []
-
-    added_net = [n for n in cur.net if n != "none" and n not in prev.net]
-    if added_net:
-        warnings.append(
-            f"net: {list(prev.net)} → {list(cur.net)} (added {added_net})"
-        )
 
     prev_dirs = {d.path: d.mode for d in prev.add_dirs}
     for d in cur.add_dirs:
@@ -108,18 +102,16 @@ def widening_warnings(prev: Config, cur: Config) -> list[str]:
         elif prev_dirs[d.path] == "ro" and d.mode == "rw":
             warnings.append(f"add_dir: {d.path} upgraded ro → rw")
 
-    added_plugins = [p for p in cur.plugins if p not in prev.plugins]
-    if added_plugins:
-        warnings.append(f"plugins: added {added_plugins}")
+    added_exts = [e for e in cur.extensions if e not in prev.extensions]
+    if added_exts:
+        warnings.append(f"extensions: added {added_exts}")
+    for name in cur.extensions:
+        if name in prev.extensions and (cur.extensions[name] or {}) != (prev.extensions[name] or {}):
+            warnings.append(f"extensions: {name} settings changed")
 
     if cur.allow_root and not prev.allow_root:
         warnings.append("allow_root: false → true (root/sudo now permitted)")
     if cur.allow_sensitive and not prev.allow_sensitive:
         warnings.append("allow_sensitive: false → true (/ or $HOME mountable)")
-
-    prev_svcs = {s.name for s in prev.services}
-    added_svcs = [s.name for s in cur.services if s.name not in prev_svcs]
-    if added_svcs:
-        warnings.append(f"services: added {added_svcs}")
 
     return warnings

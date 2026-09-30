@@ -1,0 +1,42 @@
+api: 1
+name: search
+summary: Web search through a per-session SearXNG behind the egress slot — Pi's web_search extension / a Vibe MCP server.
+requires: [egress]
+settings:
+  # Engine groups to remove (all on by default): engines that block Tor, need
+  # a paid key, phone home at startup, or come from data-harvesting platforms.
+  groups:  { type: map, default: { blocks_tor: true, requires_license: true, phones_home: true, security_mode: true } }
+  engines: { type: map, default: {} }   # per-engine override: {"google": enable, "qwant": disable}
+hooks: hooks.py
+networks:
+  searchnet: { internal: true }         # searxng ↔ valkey, and the harness endpoint's forwarder
+services: compose/services.yml.j2
+endpoints:
+  search:
+    port: 8080
+    target: { service: searxng, network: searchnet, port: 8080 }
+  # SearXNG's hop to the egress proxy. Only rendered when a forwarder provider
+  # (observe) interposes a gate: then SearXNG leaves the egress network and
+  # reaches the proxy only through it. Otherwise SearXNG dials the proxy.
+  searxng-egress:
+    harness: false
+    interpose: true
+    target: { slot: egress }
+    listen_networks: [searchnet]
+    observe: { client: searxng }
+verify:
+  - { name: searxng-up, kind: http-ok, url: "http://glove-{{ session.id }}-searxng:8080/healthz",
+      network: searchnet, retries: 20, interval: 3, service: searxng }
+harness:
+  env:
+    SEARXNG_URL: "{{ endpoint.search.url }}"
+  image:
+    vibe: { copy: [[searxng_mcp.py, /opt/glove/ext/search/searxng_mcp.py]], pip: ["mcp<2"] }
+  pi_extensions: [pi-extension]
+  vibe_mcp:
+    - name: searxng
+      transport: stdio
+      command: python3
+      args: [/opt/glove/ext/search/searxng_mcp.py]
+      env: { SEARXNG_URL: "{{ endpoint.search.url }}" }
+  brief: brief.md

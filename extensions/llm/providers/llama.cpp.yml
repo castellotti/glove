@@ -1,0 +1,15 @@
+name: llama.cpp
+api: openai-completions          # the wire protocol the harness speaks
+base_path: /v1
+default_port: 8080
+locations: [host, lan]           # `sidecar` (llama-server in-session) is future work
+auth: { header: Authorization, scheme: Bearer, required: false }   # llama-server --api-key
+models_endpoint: /v1/models
+probes:
+  capabilities:
+    path: /props
+    # field names verified against llama.cpp tools/server/server-context.cpp (/props)
+    vision: "$.modalities.vision"
+    context_window: "$.default_generation_settings.n_ctx"
+    reasoning: "$.chat_template_caps.supports_preserve_reasoning"   # thinking templates (verify live)
+defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: false }

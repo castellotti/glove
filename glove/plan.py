@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .config import Config, ConfigError
+from .config import Config
+from .enforcers.base import srt_suffix, uses_srt
+from .exports import export_dirs, transcripts_wanted
+from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
-from .mounts import Mount, MountPlan, compute_mounts
+from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
+from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
-from .observe import ObserveSettings, netgate_image
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
+
+if TYPE_CHECKING:
+    from .harnessconfig import ModelDescriptor
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 
@@ -26,8 +34,7 @@ FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 class SessionPlan:
     """A fully-resolved, runtime-agnostic session."""
 
-    session: str  # session name; compose project = glove-<session>
-    env_id: str
+    session: str  # session id; compose project = glove-<session>
     profile: HarnessProfile
     image: str
     working_dir: str  # container path the harness starts in
@@ -38,8 +45,12 @@ class SessionPlan:
     hardening: Hardening
     uid: int
     gid: int
+    # Extensions (glove/extensions.py): the selected set with every rendered
+    # contribution.
+    composition: Composition
     runtime: str = "docker"
     enforcer: str = "nono"
+    enforcer_options: dict = field(default_factory=dict)
     forwarder_image: str = FORWARDER_IMAGE
     tools: dict = field(default_factory=dict)
     # Ring-1 enforcer artifacts (populated by build_session_plan). `command` is
@@ -54,17 +65,20 @@ class SessionPlan:
     passthrough_env: list[str] = field(default_factory=list)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
-    # Network observability (glove/observe.py). `observe` is None unless enabled;
-    # `net_host_dir` is the session's net/ (set by the CLI once materialised) —
-    # bind-mounted into the netgate collector only, never into the harness.
-    observe: ObserveSettings | None = None
-    netgate_image: str | None = None
-    net_host_dir: str | None = None
-    control_host_dir: str | None = None  # ~/.glove/control/<env>/<session>, ro into the gate
+    # Empty files/dirs bound read-only over missing protected paths (set by the
+    # CLI once materialised; placeholders are skipped while it is None).
+    placeholder_host_dir: str | None = None
+    # observe's transcripts export (glove/exports.py): the host dir bound over
+    # the harness's transcript directory (None: not exported).
+    transcripts_host_dir: str | None = None
+    transcripts_container_dir: str | None = None
+    # The inference slot's model descriptor.
+    model: ModelDescriptor | None = None
+    derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
 
     @property
     def project(self) -> str:
-        return f"glove-{self.session}"
+        return project_name(self.session)
 
     @property
     def harness_command(self) -> list[str]:
@@ -72,11 +86,15 @@ class SessionPlan:
 
     @property
     def harness_service(self) -> str:
-        return f"glove-{self.session}-harness"
+        return scoped(self.session, "harness")
 
     @property
     def mounts(self) -> list[Mount]:
         return self.mount_plan.mounts
+
+    @property
+    def protect(self) -> tuple[Protect, ...]:
+        return self.mount_plan.protect
 
     @property
     def allow_root(self) -> bool:
@@ -94,158 +112,98 @@ def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
     return merged
 
 
-def _service_env(cfg: Config, session: str, environment: dict[str, str]) -> None:
-    """Inject the service-endpoint env vars the harness extensions read.
-
-    Mirrors v1's compose logic; imported lazily to avoid an import cycle with
-    harnessconfig (which imports config/harness).
-    """
-    from .harnessconfig import service_base
-
-    # Single construction site for the browser MCP endpoint: derived from the
-    # declared `browser` service, whether it came from a browser provider
-    # (browsers.apply_browser) or was hand-wired in the config.
-    # (SEARXNG_URL is injected by the `search` plugin; see _plugin_env.)
-    browser = service_base(cfg, session, "browser")
-    if browser:
-        environment.setdefault("BROWSER_MCP_URL", f"{browser}/mcp")
-
-
-def secret_env_names(cfg: Config) -> list[str]:
+def secret_env_names(plan: SessionPlan) -> list[str]:
     """The harness's secret env var names (``SessionPlan.passthrough_env``).
     Planning needs only the names, so it never resolves a secret reference."""
     from .harnessconfig import LLM_API_KEY_ENV
 
-    return [LLM_API_KEY_ENV] if cfg.llm_api_key else []
+    return [LLM_API_KEY_ENV] if plan.model is not None and plan.model.api_key_env else []
 
 
-def secret_env(cfg: Config) -> dict[str, str]:
-    """The harness's secret env vars and their values, passed to compose at run
-    time only. A `keychain:`/`env:` reference is resolved here, in memory, so
-    the key need not be in any file. NOTE: in Phase 2 it moves into nono's
-    proxy (credential injection) and leaves the harness env too."""
+def secret_env(plan: SessionPlan) -> dict[str, str]:
+    """Secret env for `compose up`/`run` only: the harness's LLM key (from the
+    inference provider's secret setting), every extension compose secret, and
+    what extensions' `launch_env` hooks return (e.g. a freshly registered VPN
+    key). A `keychain:`/`env:` reference is resolved here, in memory, so no file
+    holds a secret."""
     from .config import resolve_secret
+    from .extensions import launch_env, resolve_secrets
 
-    names = secret_env_names(cfg)
-    return {names[0]: resolve_secret(cfg.llm_api_key)} if names else {}
+    env: dict[str, str] = {}
+    comp = plan.composition
+    inference = comp.slots.get("inference")
+    setting = inference.exports.get("api_key_secret") if inference else None
+    if setting:
+        from .harnessconfig import LLM_API_KEY_ENV
 
-
-def _plugin_env(cfg: Config, session: str, plugins, environment: dict[str, str]) -> None:
-    """Inject each enabled plugin's `env_from_services` endpoints (e.g. the
-    `search` plugin's SEARXNG_URL from the `search` sidecar)."""
-    from .harnessconfig import service_base
-
-    for plugin in plugins:
-        for var, service_name in plugin.env_from_services.items():
-            base = service_base(cfg, session, service_name)
-            if base:
-                environment.setdefault(var, base)
-
-
-def _validate_plugin_services(cfg: Config, plugins) -> None:
-    """Fail early when an enabled plugin's required forwarder service is absent —
-    the capability reaches the network only through that sidecar."""
-    declared = {s.name for s in cfg.harness_services}
-    for plugin in plugins:
-        missing = [s for s in plugin.requires_services if s not in declared]
-        if missing:
-            raise ConfigError(
-                f"plugin {plugin.name!r} requires service(s) {missing} that are "
-                "not declared — add them under `services:` and include 'service' "
-                f"in `net` (e.g. services: [{{name: {missing[0]}, to: …}}], "
-                "net: [service])."
-            )
+        env[LLM_API_KEY_ENV] = resolve_secret(inference.settings[setting])
+    hooked = launch_env(comp)
+    env.update(hooked)
+    env.update(resolve_secrets(comp, provided=hooked))
+    return env
 
 
-def _plugin_entry(cfg: Config, base_entry: list[str], plugins) -> list[str]:
-    """Augment the harness entry with each enabled plugin's contribution.
-
-    Pi loads capability code as extensions (``-e <path>``); other harnesses use
-    MCP wiring instead, so their entry is unchanged."""
-    entry = list(base_entry)
-    if cfg.harness == "pi":
-        for plugin in plugins:
-            for ext in plugin.pi_extensions:
-                entry += ["-e", ext]
-    return entry
-
-
-def _legacy_bridges(cfg: Config) -> list[tuple[str, str]]:
-    """Pre-plugin configs that imply a plugin: `(plugin_name, deprecation)`.
-
-    Single source of truth for the back-compat shim — a declared `search`
-    service implies the `search` plugin; a top-level `browser:` block (provider
-    set) implies `browser`. `_apply_plugin_config` injects the names,
-    `legacy_warnings` surfaces the messages, so the bridge rule and its warning
-    can't drift.
-    """
-    from .plugins.browser import provider_name
-
-    bridges: list[tuple[str, str]] = []
-    if any(s.name == "search" for s in cfg.harness_services) and "search" not in cfg.plugins:
-        bridges.append((
-            "search",
-            "a `search` service without `plugins: [search]` is deprecated — add "
-            "`plugins: [search]` (implied for now).",
-        ))
-    if provider_name(cfg) is not None and "browser" not in cfg.plugins:
-        bridges.append((
-            "browser",
-            "top-level `browser:` is deprecated — use `plugins: [browser]` with "
-            "`plugin_options: {browser: {…}}` (still works for now).",
-        ))
-    return bridges
-
-
-def _apply_plugin_config(cfg: Config, session: str) -> None:
-    """Expand plugin-driven config before the network/plan is built.
-
-    For the browser plugin this means running the provider wiring (host services,
-    the `browser` forwarder sidecar, harness env). Runs here — not in the CLI — so
-    every plan (run, dry-run, `policy show`, tests) composes the same session.
-
-    Back-compat: legacy configs that imply a plugin (see `_legacy_bridges`) get
-    that plugin injected here. Canonical options live in `plugin_options.browser`.
-    """
-    from .plugins.browser import apply_browser
-
-    for plugin_name, _ in _legacy_bridges(cfg):
-        cfg.plugins = [*cfg.plugins, plugin_name]
-    if "browser" in cfg.plugins:
-        opts = cfg.plugin_options.get("browser", {})
-        if opts:
-            # explicit top-level browser:/--browser wins over plugin_options
-            cfg.browser = {**opts, **(cfg.browser or {})}
-        if not (cfg.browser or {}).get("provider"):
-            cfg.browser = {**(cfg.browser or {}), "provider": "host-mcp"}  # v2 default
-        apply_browser(cfg, session)
-
-
-def legacy_warnings(cfg: Config) -> list[str]:
-    """Deprecation notices for pre-plugin config that still works via the shim."""
-    return [msg for _, msg in _legacy_bridges(cfg)]
+def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
+    """(label, reference) of every secret the session will resolve at launch,
+    for `glove check` (which verifies they exist without reading them)."""
+    comp = plan.composition
+    out: list[tuple[str, str]] = []
+    inference = comp.slots.get("inference")
+    setting = inference.exports.get("api_key_secret") if inference else None
+    if setting and inference.settings.get(setting):
+        out.append((f"{inference.name}.{setting}", str(inference.settings[setting])))
+    # every secret-type setting that is set (compose secrets, and ones only a
+    # launch hook reads, e.g. vpn.register_user)
+    for a in comp.active:
+        for name, spec in a.manifest.settings_schema.items():
+            value = a.settings.get(name)
+            label = f"{a.name}.{name}"
+            if spec.get("type") == "secret" and value not in (None, "", "generate") and \
+                    all(lbl != label for lbl, _ in out):
+                out.append((label, str(value)))
+    return out
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
-    if cfg.enforcer == "srt":
+    if uses_srt(cfg.enforcer):
         strong = str(cfg.enforcer_options.get("srt", {}).get("nested", "weak")) == "strong"
         return nested_userns_profile_path(), strong
     # nono (default) and none run under the vendored Docker default profile.
     return default_profile_path(), False
 
 
+def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
+    """Extensions' read-only harness mounts (`mounts:` in a manifest), under the
+    same rule as the session's own: never a private path."""
+    from .extensions import ExtensionError
+    from .sessiondir import exposes_private
+
+    out = []
+    taken = {m.container_path for m in mounts}
+    for ext, host, target in comp.harness_mounts:
+        exposed = exposes_private(comp.session_dir, Path(host))
+        if exposed:
+            raise ExtensionError(f"extension {ext!r}: mount {host} would expose {exposed[1]} ({exposed[0]}) "
+                                 "to the harness; name a directory that does not contain it")
+        if target in taken:
+            raise ExtensionError(f"extension {ext!r}: mount point {target} clashes with another mount")
+        taken.add(target)
+        out.append(Mount(host_path=host, container_path=target, mode="ro"))
+    return out
+
+
 def build_session_plan(
     cfg: Config,
     *,
-    env_id: str,
     home_dir: str,
     cwd: str | None = None,
     uid: int | None = None,
     gid: int | None = None,
-    forwarder_image: str = FORWARDER_IMAGE,
     resume: bool = False,
     session_id: str | None = None,
+    state_dir: str | None = None,
+    session_dir: str | None = None,
 ) -> SessionPlan:
     """Resolve a ``Config`` into a runtime-agnostic ``SessionPlan``.
 
@@ -253,15 +211,26 @@ def build_session_plan(
     harness's own resume flag to the entry (inside the ring-1 wrapper) and are
     deliberately *not* stored on ``Config`` — they must never persist into
     ``glove.effective.yaml`` or the env file. ``session_id`` implies resume;
-    ``resume`` with no id ⇒ continue the most recent session."""
+    ``resume`` with no id ⇒ continue the most recent session.
+
+    ``state_dir`` holds per-extension state (``<state_dir>/<ext>/``); it defaults
+    to ``ext/`` beside the harness home."""
     session = cfg.resolved_name()
     profile = get_profile(cfg.harness)
     uid = uid if uid is not None else os.getuid()
     gid = gid if gid is not None else os.getgid()
 
-    # Expand plugin-driven config (e.g. browser provider wiring) first, so the
-    # mount/network plans and validation below see the composed session.
-    _apply_plugin_config(cfg, session)
+    # Compose the selected extensions first: their endpoints, env, host services
+    # and image layers feed the network plan, env and image below.
+    comp = compose(
+        cfg.extensions, harness=cfg.harness, session=session,
+        state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
+        session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
+        export_dirs=export_dirs(session),
+        work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
+    )
+    own = {h.name for h in comp.host_services}
+    cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
 
     mount_plan = compute_mounts(
         cfg.workdir,
@@ -269,18 +238,15 @@ def build_session_plan(
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
     )
-    network = build_network_plan(cfg, session)
-
-    # Resolve enabled plugins (fails loudly on an unknown name) and validate that
-    # each one's required forwarder services are declared.
-    from .plugins import resolve_plugins
-
-    plugins = resolve_plugins(cfg.plugins)
-    _validate_plugin_services(cfg, plugins)
+    mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
+    mount_plan = replace(
+        mount_plan, protect=protected_paths(mount_plan.mounts, protect_ide_files=cfg.protect_ide_files)
+    )
+    network = build_network_plan(cfg, session, comp)
 
     environment = _resolve_env(cfg, profile)
-    _service_env(cfg, session, environment)
-    _plugin_env(cfg, session, plugins, environment)
+    for k, v in comp.harness_env.items():
+        environment.setdefault(k, v)  # an explicit `env:` entry wins
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -297,15 +263,22 @@ def build_session_plan(
         allow_root=cfg.allow_root,
     )
 
-    # Fold the enabled plugin set into the image tag so it gets its own composed
-    # image. srt needs bwrap/socat/srt baked in; its image gets an `-srt` suffix.
-    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, cfg.plugins)
-    if cfg.enforcer == "srt":
-        image = f"{image}-srt"
+    # Extension layers get their own content-addressed derived image. srt needs
+    # bwrap/socat/srt baked in: its image is the `-srt` overlay (enforcers/srt_image).
+    from .harnessconfig import ModelDescriptor
+    from .image import content_hash, render_dockerfile
+
+    suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
+    base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
+    derived_df = None
+    derived = None
+    if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills):
+        derived_df, staged = render_dockerfile(base, profile, comp)
+        derived = content_hash(derived_df, staged)
+    image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
     plan = SessionPlan(
         session=session,
-        env_id=env_id,
         profile=profile,
         image=image,
         working_dir=mount_plan.working_dir,
@@ -318,17 +291,23 @@ def build_session_plan(
         gid=gid,
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
-        forwarder_image=forwarder_image,
+        enforcer_options=dict(cfg.enforcer_options or {}),
         tools=dict(cfg.tools or {}),
-        passthrough_env=secret_env_names(cfg),
+        composition=comp,
+        model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
+        derived_dockerfile=derived_df,
     )
-    plan.observe = network.observe
-    if network.gated:
-        plan.netgate_image = netgate_image()
+    plan.passthrough_env = secret_env_names(plan)
+    if transcripts_wanted(comp) and profile.transcript_subdir:
+        plan.transcripts_host_dir = str(comp.export_dirs["observe"] / "transcripts")
+        plan.transcripts_container_dir = f"{profile.config_home_path}/{profile.transcript_subdir}"
 
-    # Ring-1: render policies, wrap the (plugin-augmented) harness entry, collect
-    # enforcer env/caps.
-    entry = _plugin_entry(cfg, list(profile.entry), plugins)
+    # Ring-1: render policies, wrap the (extension-augmented) harness entry,
+    # collect enforcer env/caps. Pi loads capability code as `-e <path>`.
+    entry = list(profile.entry)
+    if cfg.harness == "pi":
+        for ext, src in comp.pi_extensions:
+            entry += ["-e", comp.pi_extension_dest(ext, src)]
     # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
     # wrapper prefix. session_id=None ⇒ continue-last.
     if resume or session_id is not None:

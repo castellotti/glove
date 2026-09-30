@@ -1,0 +1,14 @@
+# Pi against an LLM server on this Mac (llama.cpp, ollama, LM Studio, …).
+# Start a session from it: glove new docs/examples/pi-local.glove-session.yml <dir>
+glove: 3
+harness: pi
+runtime: docker
+enforcer: nono          # ring-1 kernel sandbox wrapping the agent + every command
+extensions:
+  llm:
+    provider: llama.cpp          # see extensions/llm/providers/
+    location: host               # the server listens on this Mac
+    endpoint: 127.0.0.1:8080
+    model: auto                  # the single model /v1/models lists
+    capabilities: auto           # vision/context probed from the server
+    # api_key: keychain:my-llm   # only if the server needs a key (a reference, never the key)

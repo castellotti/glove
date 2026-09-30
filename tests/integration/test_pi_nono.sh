@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase 2 integration checks (PLAN §8) — nono enforcer inside the real Pi image.
 #
-# These run against Docker with the shipping `glove/pi:0.4.0` image and the
+# These run against Docker with the shipping `glove/pi:0.5.0` image and the
 # policies glove renders for a session. They exercise ring 1 (the kernel policy)
 # directly via `nono wrap`/`nono run` — i.e. exactly what the Pi enforcer
 # extension prepends to every shell command — WITHOUT needing an LLM or the TUI.
@@ -14,8 +14,9 @@
 # first match, SIGPIPE-killing docker; under pipefail that non-zero would mask a
 # real match. We want the pipeline status to be grep's.
 set -u
+RT="${RT:-docker}"   # docker | podman
 
-IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.4.0}"
+IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.5.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"
 HOMEDIR="$(mktemp -d)"
@@ -29,6 +30,10 @@ PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.pi/agent"
 hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
           --read-only --tmpfs /tmp -w /work
+          # nono's state roots on tmpfs, exactly as glove renders them
+          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
+          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
+          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777
           -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
           -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
 
@@ -36,19 +41,18 @@ ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 # --- render real glove policies for a pi session -----------------------------
-echo "== rendering glove policies (glove pi --dry-run) =="
-( cd "$WORKDIR" && uv run --project "$ROOT" glove init pi >/dev/null \
-  && uv run --project "$ROOT" glove pi --add-dir "$WORKDIR:rw" --dry-run >/dev/null )
-ENVID="$(basename "$WORKDIR")"
-POLDIR="$GLOVE_HOME/envs/$ENVID/sessions/$ENVID/enforcer"
+echo "== rendering glove policies (glove plan) =="
+. "$ROOT/tests/integration/lib_session.sh"
+new_session "$GLOVE_HOME/s" pi 'enforcer: nono\n'
+POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered to $POLDIR" || { bad "no policies rendered"; exit 1; }
 
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
-TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc)
-HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -lc)
+TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c)
+HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -c)
 
-run_tool()    { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
-run_harness() { docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" "$1" 2>&1; }
+run_tool()    { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
+run_harness() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" "$1" 2>&1; }
 
 echo "== ring-1 tool policy (shell commands) =="
 run_tool 'echo hi > /work/f && cat /work/f' | grep -q '^hi$' && ok "write /work" || bad "write /work"
@@ -76,17 +80,35 @@ echo "== ring-1 harness policy (harness process) =="
 run_harness 'echo cfg > /home/agent/.pi/agent/x && echo wrote_home_ok' | grep -q 'wrote_home_ok' \
   && ok "harness writes its config home" || bad "harness cannot write config home"
 # nested: a tool-wrapped command under the harness cannot read what the harness wrote
-docker run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" \
-  'echo topsecret > /home/agent/.pi/agent/t && nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -lc "cat /home/agent/.pi/agent/t 2>&1"' \
+"$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${HARNESS[@]}" \
+  'echo topsecret > /home/agent/.pi/agent/t && nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "cat /home/agent/.pi/agent/t 2>&1"' \
   2>&1 | grep -qi 'permission denied' && ok "nested tool denied harness transcript" || bad "nested tool read transcript"
 
 echo "== entrypoint fail-closed =="
-docker run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint validates good policies and execs" || bad "entrypoint rejected valid policies"
 BADDIR="$(mktemp -d)"; printf '{ this is not valid json ' > "$BADDIR/harness.json"; printf '{}' > "$BADDIR/tool.json"
-docker run --rm -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run --rm -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && bad "entrypoint ran with an invalid policy" || ok "entrypoint fails closed on invalid policy"
 rm -rf "$BADDIR"
+
+echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
+# a harness-like process on a real tty runs the rendered wrapper; the command
+# tries to open /dev/tty. Baseline: the same command unwrapped opens it.
+TTYCMD='perl -e '"'"'open(T, "+<", "/dev/tty") or die "TTY-REFUSED: $!\n"; print "TTY-OPENED\n"'"'"
+WRAP="$(uv run --quiet --no-project python -c 'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$POLDIR/tool-wrapper.json")"
+tty_run() { uv run --quiet --no-project python "$ROOT/tests/integration/in_pty.py" "$RT" run -it "${hardened[@]}" "${MNT[@]}" \
+  --entrypoint bash "$IMAGE" -c "$1" 2>&1; }
+tty_run "$TTYCMD" | grep -q 'TTY-OPENED' && ok "baseline: an unwrapped command opens /dev/tty" \
+  || bad "baseline could not open /dev/tty (the check cannot detect the gap)"
+# as a child of the harness (what Pi and Vibe do), and as the session leader
+for how in "a child of the harness" "the session leader"; do
+  shape="$WRAP bash -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
+  out="$(tty_run "$shape")"
+  echo "$out" | grep -q 'TTY-REFUSED: No such device' && ! echo "$out" | grep -q 'TTY-OPENED' \
+    && ok "wrapped command cannot open /dev/tty (wrapper as $how)" \
+    || bad "wrapped command opened /dev/tty ($how): $out"
+done
 
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo

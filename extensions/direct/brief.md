@@ -1,0 +1,1 @@
+- Web access (search, fetch) leaves **directly from this machine's own IP address**: nothing is anonymised. Do not assume privacy.

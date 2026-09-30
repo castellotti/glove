@@ -1,0 +1,18 @@
+# A glove session: this directory. Edit this file, then `glove check && glove up`.
+# Schema: https://github.com/castellotti/glove (README "Session file").
+glove: 3
+template: minimal
+harness: pi                    # pi | vibe
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
+runtime: docker                # docker | podman
+mounts: []                     # extra host dirs, e.g. [{path: ~/src/lib, mode: ro}]; work/ is always /work
+limits: { pids: 512, memory: 4g, cpus: 2 }
+extensions:
+  llm:                         # the model (required): see extensions/llm/README.md
+    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    location: <set-me>         # host | lan | internet   (where the server is, relative to this machine)
+    endpoint: <set-me>         # host:port for host/lan; omit for a cloud provider's default
+    model: auto                # auto → the single model the server lists, or an explicit id
+    capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
+    # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
+harness_config: {}

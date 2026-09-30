@@ -1,0 +1,19 @@
+# Mistral Vibe against an LLM server on this Mac, plus a host browser.
+# Start a session from it: glove new docs/examples/vibe-local.glove-session.yml <dir>
+glove: 3
+harness: vibe
+runtime: docker
+enforcer: nono
+extensions:
+  llm:
+    provider: llama.cpp
+    location: host
+    endpoint: 127.0.0.1:8080
+    model: auto
+    capabilities: auto
+  playwright:
+    mode: host
+    # Vibe cannot filter MCP tools, so it would get Playwright's
+    # `browser_run_code_unsafe` (arbitrary code in the host MCP process).
+    # glove refuses vibe + host mode unless you accept that explicitly:
+    i_accept_host_rce: true

@@ -47,3 +47,28 @@ def test_checked_in_profile_is_current():
     regenerated = build_nested(_default())
     on_disk = json.loads(NESTED_USERNS_PROFILE.read_text())
     assert on_disk == regenerated
+
+
+# --- chromium-userns: the `playwright` browser sidecar only -----------------------
+
+
+def _allowed(profile: dict) -> set[str]:
+    return {n for g in profile["syscalls"] for n in g.get("names", []) if is_unconditionally_allowed(profile, n)}
+
+
+def test_chromium_adds_exactly_its_four_syscalls():
+    from glove.runtimes.seccomp.make_profile import CHROMIUM, CHROMIUM_SYSCALLS
+
+    d = _default()
+    chromium = json.loads(CHROMIUM.read_text())
+    assert chromium == build_nested(d, CHROMIUM_SYSCALLS)  # checked in and current
+    assert _allowed(chromium) - _allowed(d) == {"chroot", "clone", "clone3", "unshare"}
+    for s in ("mount", "setns", "pivot_root", "umount2", *MUST_STAY_GATED):
+        assert not is_unconditionally_allowed(chromium, s), s
+
+
+def test_chromium_userns_is_a_sidecar_profile_only():
+    from glove.compose import seccomp_profiles
+    from glove.hardening import SIDECAR_ONLY_SECCOMP
+
+    assert seccomp_profiles() == {"chromium-userns"} == set(SIDECAR_ONLY_SECCOMP)

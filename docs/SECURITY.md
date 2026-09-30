@@ -11,7 +11,7 @@ README, or tool result that makes the model run a command it shouldn't.
 | Ring | Boundary | Mechanism | What it stops |
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
-| 1 — Enforcer | every process | **nono** (Landlock) by default, or **srt** (bubblewrap); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
+| 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
 | 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
@@ -19,22 +19,317 @@ attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
 container's own daemons, denied paths never opened), which is what makes a
 ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 
+## Enforcers at a glance (ring 1)
+
+| | `nono+srt` | `nono` | `srt` | `none` |
+|---|---|---|---|---|
+| Default on | Docker | Podman | — (opt-in) | — (debug) |
+| Harness process | srt (bubblewrap) + glove's seccomp | nono (Landlock) | ring 0 only | ring 0 only |
+| Every tool command | nono (Landlock), inside srt | nono (Landlock) | srt (bubblewrap) | unwrapped |
+| Tool network | none | none | none (empty allowlist) | ring 0 (forwarders) |
+| Secrets in a tool's env | stripped (`deny_vars` globs) | stripped (`deny_vars` globs) | stripped (exact names) | **present** |
+| Harness home / transcripts from a tool | denied | denied | denied | **readable** |
+| Writes outside `/work`, rw mounts, `/tmp` | denied | denied | denied | ring 0 (read-only rootfs) |
+| `.git/hooks`, `.vscode`, `.envrc`, … in `/work` | ring 0 ro binds + srt deny (present at launch) | ring 0 ro binds | ring 0 ro binds | ring 0 ro binds |
+| `.env` files in `/work` | hidden (present at launch) | readable | readable | readable |
+| Keystrokes into the TUI (TIOCSTI) | refused (`glove-pty notty`) | refused (`glove-pty notty`) | refused (bwrap `--new-session`) | **possible** |
+| User namespaces / mounts | srt only; denied below it | denied (default seccomp) | srt only; denied below it | denied (default seccomp) |
+| Container seccomp profile | `nested-userns` (relaxed) | default | `nested-userns` (relaxed) | default |
+| Podman | refused | yes | refused | yes |
+
+Details and the reasons behind each row: "`nono+srt` and `srt`" and "Planted
+host-trusted files" below. `glove policy` prints the effective policy and the
+remaining gaps for a session.
+
 ## Assets × adversaries × rings
 
 | Asset | Adversary | Defended by | Notes |
 |---|---|---|---|
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
-| LLM API key | shell cmd (`env`, reading config) | ring 1 | nono `deny_vars` / srt env masking strip secrets from wrapped commands; key never in a tool's env. (Full proxy credential-injection so the key isn't in the *harness* env either is deferred) |
+| LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
-| The operator's browser | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot |
+| The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
+| Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
+| Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
 
-## Network observability (the netgate)
+## Extensions (what a capability pack may and may not do)
 
-With `observe.enabled`, the service forwarders are replaced by the netgate
-(`docs/planning/network-observability.md`). It changes what glove *records*,
-never what the agent can *reach*:
+Every capability (the model, search, the browser, …) is an extension in
+`extensions/<name>/`. Core, not the extension, decides how its containers run:
+
+- A fragment can declare only images, commands, env, volumes, networks and
+  healthchecks. Core adds the hardening set to every sidecar (non-root,
+  `cap_drop: ALL`, `no-new-privileges`, read-only rootfs, seccomp, private IPC,
+  pids/memory limits). Exceptions come only from the manifest's `privileges:`,
+  from an allowlist, and `glove policy` lists them. `low_ports` sets
+  `net.ipv4.ip_unprivileged_port_start=0` in the sidecar's own network
+  namespace (docker's default for every container; podman needs it stated),
+  rather than granting `NET_BIND_SERVICE`.
+- Never: published ports, `privileged`, host network/PID/IPC namespaces, the
+  docker socket, host binds outside the extension's own session state (or an
+  export root it owns, below, or — trusted extensions, on a setting the user
+  chose — a named subdirectory of `work/`, never all of it), or a sidecar on
+  the harness network. The harness reaches extensions only through
+  single-purpose forwarders. Only the active egress provider joins the routable
+  `wan` network.
+- **Seccomp exceptions** name a core profile; the only one is `chromium-userns`
+  (glove's default plus unconditional `clone`, `clone3`, `unshare`, `chroot`,
+  for Chromium's namespace sandbox). The harness can never use it (a hardening
+  row). A runtime that cannot apply a requested profile refuses the session
+  (`glove check` shows it): podman's compose inlines a custom profile and
+  podman rejects it, so there it must be turned off explicitly, never dropped.
+- Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
+  containers as compose secrets from glove's environment; a literal secret in a
+  setting is refused.
+- Out-of-tree extensions (`extension_paths`) are labelled as such and get no
+  privilege exceptions, host ports or host services unless trusted.
+- `glove/` never imports `extensions/` (`uv run lint-imports`).
+- **Export roots** are the only session data outside the session directory, and
+  core owns them: `~/.glove/observe/<id>/` exists only for the in-tree
+  `observe` extension, `~/.glove/control/<id>/` only while the in-tree `filter`
+  extension is active (and then read-only in the gates). Binds are checked by
+  path; any other extension gets neither.
+- **The forwarder slot.** An extension filling `forwarder` (observe) may replace
+  the socat forwarders, but only with services core names, networks and
+  hardens: its hook cannot choose networks, aliases outside the endpoint's own
+  name, security keys or privileges.
+- **Names rendered into compose.** An extension's harness env keys (from its
+  manifest or a `contribute` hook) must match `^[A-Z][A-Z0-9_]*$` and may not
+  overwrite another extension's; endpoint and forwarder aliases must be
+  hostnames. The render refuses any harness env key that is not a plain name,
+  and the merged-project re-check fails if the harness's `cap_add`, `cap_drop`
+  or `security_opt` differ from its hardening plan.
+- **Low ports.** A forwarder listening below 1024 gets
+  `net.ipv4.ip_unprivileged_port_start=0` in its own network namespace (Docker's
+  default; Podman does not set it), so it still runs as the operator's uid with
+  no capabilities.
+
+The inference server is reached the same way: one `glove-<id>-llm` forwarder
+that dials exactly the configured host (or the host gateway, or a cloud API on
+443). The harness never gets a LAN or internet route of its own.
+
+### Egress (`vpn`, `tor`, `direct`, `corporate`)
+
+Web tools reach the internet only through the session's egress provider.
+Egress consumers (SearXNG, the harness's `proxy` forwarder) sit on the
+**internal** `glove-<id>-egress` network. Only the provider's tunnel container
+(gluetun, tor or tinyproxy) is on the routable `glove-<id>-wan`. If the proxy
+fails, a consumer has no other route out. v2's SearXNG, on a normal bridge with
+public DNS, could have. Measured live: SearXNG cannot resolve or reach
+`example.com` itself, and neither can a container on the harness network.
+
+- **Fail closed at launch.** `glove up` starts the harness only after the
+  provider's checks pass: gluetun healthy (a dead WireGuard handshake is told
+  apart by tun0's byte counter), Tor's SOCKS port open, and `exit-ip-differs`
+  (the exit IP seen through the proxy must differ from this machine's; an
+  unknown IP on either side fails too). A failure shows the sidecar's last log
+  lines, with key and password lines withheld, and stops the session's sidecars.
+- **Privileges.** Only gluetun takes exceptions (root, `NET_ADMIN`,
+  `/dev/net/tun`, writable rootfs; no sysctls). It is never on a network with
+  the harness. tor, privoxy, tinyproxy, SearXNG and valkey run with the full
+  sidecar hardening as the operator's uid. valkey is on a private network with
+  SearXNG only. gluetun's control server listens on loopback, and since gluetun
+  v3.40 every control route needs credentials, none of which glove configures.
+- **Secrets.** The WireGuard key (or OpenVPN user/password) is a Keychain
+  reference resolved at `glove up` and handed to gluetun as a compose secret. A
+  **register hook** (an executable that must resolve inside the session's
+  `local/`, which is never mounted, so a symlink into `work/` is refused) gets
+  the account credentials on stdin. Its key goes to gluetun the same way; nothing
+  is written to disk.
+- **No way in through the proxy.** `web_fetch` refuses non-public destinations
+  before the request is sent: non-global IP literals, single-label and local
+  names, credentials in the URL. It follows redirects itself so every hop is
+  checked. `direct`'s tinyproxy refuses the same shapes (CONNECT included) and
+  allows CONNECT only to 443/80. Tor exits and gluetun's kill switch already
+  refuse private destinations. **Known gap:** names are judged by shape and never
+  resolved, so a public name that resolves privately passes both checks under
+  `direct`. With observe on, the proxy gate's in-tunnel resolver closes this for
+  vpn and tor (a name resolving to a private address is refused); `direct` has
+  no in-tunnel resolver, so the gap stays there.
+- **`direct` is not anonymous.** Its flows are labelled `route: direct`. Its
+  brief tells the agent so.
+- **tor's SOCKS port** is on the private `torlink` and on the internal egress
+  network (observe's gates resolve names in-tunnel through it), never the
+  harness network. Everything on the egress network already leaves only through
+  Tor; tor has no ControlPort.
+- **`corporate`: an allowlist, not a tunnel.** Its proxy is a netgate that
+  resolves destinations itself (the host's resolver via Docker/Podman, so the
+  corporate VPN's split DNS applies), checks the **resolved address**, applies a
+  static default-block policy built from `allow_domains`/`allow_cidrs`/
+  `from_interface`, and dials that same address (never re-resolving). The
+  allowlist is also the SSRF guard's exception list, because corporate hosts are
+  private. It comes only from `glove-session.yml`, reaches the gate only on its
+  command line, and cannot come from `rules.json` (no such key; the corporate
+  gate does not read `rules.json` at all). Refused whatever the allowlist says:
+  loopback, link-local/metadata (`169.254.0.0/16`, `100.100.100.200`),
+  multicast, the runtime's host gateway (resolved from its fixed names at
+  start), the session's own /24, and names like `host.docker.internal`.
+  `web_fetch` gets the same allowlist for its own pre-check. Measured live (a
+  public host standing in for a corporate one): the allowed host is reached,
+  everything else is refused with the gate's reason, and the host gateway,
+  metadata and the session's network are refused even inside an allowed CIDR.
+  **Untested:** a real corporate VPN (split DNS and routes via the host).
+
+### Browser (`playwright`)
+
+A browser is an exfiltration channel and a code-execution surface by design:
+it runs whatever the web serves, and Playwright's MCP always offers
+`browser_run_code_unsafe` (arbitrary JavaScript in the MCP process; the MCP
+has no server-side switch for it). The controls:
+
+- **Sidecar modes (`headless`, `novnc`).** Chromium and the MCP run in a
+  sidecar as the operator's uid with no capabilities, a read-only root,
+  `no-new-privileges`, private IPC and pids/memory/cpu limits, on an internal
+  network whose only members are two forwarders. It has no DNS and no default
+  route (verified live), so a compromised renderer or MCP reaches neither the
+  internet around the egress nor the harness or its llm endpoint. The browser's
+  proxy is fixed server-side; its traffic leaves only through the egress slot,
+  and with `observe` every destination is a flow (`client: playwright`) with
+  `filter` rules and the SSRF guard applied at the gate. The MCP never gets a
+  CDP port or `--allow-unrestricted-file-access`. Chromium's own sandbox is
+  on (`chromium-userns`, above); on podman it must be `off`, and then the
+  container is the only boundary.
+- **The tool allowlist.** Pi registers only the `tools` setting (never
+  `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
+  `disabled_tools` regex hiding every other `playwright_*` tool (verified
+  live). That is a client-side filter: it keeps the model from calling the
+  tool, it is not a boundary around the MCP.
+- **Watching (`novnc`).** VNC and websockify listen on the sidecar's own
+  loopback; nothing is published. `glove playwright view` opens a loopback
+  listener only while it runs, pipes each connection through `docker|podman
+  exec … socat`, and refuses requests whose `Host` or `Origin` is not that
+  listener (other pages in the operator's browser, DNS rebinding). The two
+  VNC passwords are generated in the sidecar's tmpfs at every start (never an
+  env var, compose secret or host file) and reach noVNC in the URL fragment.
+  View-only and the clipboard are enforced by the VNC server
+  (`AcceptPointerEvents`/`AcceptKeyEvents` off unless `allow_control`;
+  `AcceptCutText`/`SendCutText` off unless `clipboard:`), verified live with a
+  raw RFB client. VncAuth is weak (8 characters, DES); it guards a listener that
+  exists only on loopback and only while `view` runs. Anything the operator
+  types in control is visible to the agent.
+- **Downloads and uploads.** What the browser saves stays in the sidecar's
+  state dir, which the agent's shell cannot read, unless `downloads: work`.
+  `browser_file_upload` is confined to an empty directory unless
+  `uploads: work` (then `work/browser-uploads/`, read-only).
+- **Host mode** runs the browser and the MCP as the operator, on the desktop,
+  with the host's network: refused when the egress is anonymising (vpn, tor),
+  and with Vibe unless `i_accept_host_rce: true`. Its CDP and MCP ports are
+  per-session loopback ports; any local process can drive them while they run.
+- **Background traffic.** Chromium still contacts Google services
+  (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
+  `www.google.com` in live runs) through the egress; `filter` can block them.
+
+## Tool commands and the terminal (TIOCSTI)
+
+nono's base policy grants `/dev/tty`, and Docker Desktop's kernel has
+`dev.tty.legacy_tiocsti = 1`: a shell command could open the harness's terminal
+and inject keystrokes into the TUI (type into Pi's prompt, answer a Vibe
+approval). Every enforcer's tool wrapper therefore starts with
+`glove-pty notty`, which gives up the controlling terminal (`TIOCNOTTY`) and
+keeps the process group, so an aborted command is still killed with its group.
+As a session leader it runs the command in a new session instead, tied to the
+parent (`PR_SET_PDEATHSIG`). `glove-pty` is a static helper baked into every
+harness image (`glove/enforcers/pty/glove-pty.c`); the entrypoint refuses to
+start if the wrapper names it and it is missing.
+
+## `nono+srt` and `srt`: what srt adds, and what glove changes in it
+
+With `enforcer: nono+srt` the harness runs as
+`glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- <harness>`
+and every shell command as `glove-pty notty -- nono wrap --profile tool.json -- …`
+inside it (srt must be outermost: bubblewrap needs mount/pivot_root, which
+Landlock cannot grant).
+
+| Property | `nono` | `nono+srt` |
+|---|---|---|
+| Harness process network | ring 0: the session's forwarders on an internal network | same (srt adds no network namespace, below) |
+| Tool command network | none (Landlock) | none (Landlock) |
+| `/work/.git/hooks`, `.git/config` | ring-0 ro binds where they exist (below) | also denied by srt |
+| `.vscode`, `.idea`, `.envrc`, `.mcp.json`, `.claude/*`, shell rc files in `/work` | only with `protect_ide_files` | denied where they exist at launch |
+| `.env` / `.env.*` in `/work` | readable | hidden from harness and tools (present at launch) |
+| Namespaces / mounts / AF_UNIX / io_uring | default seccomp: no userns | relaxed profile for srt; glove's filter denies all of these to everything below srt |
+| PID namespace around the harness and its commands | no | yes (srt's `apply-seccomp`) |
+| TIOCSTI into the harness TUI | no (`glove-pty notty`) | no (same) |
+| Kernel mechanisms between a tool and the container | Landlock | bubblewrap + seccomp + Landlock |
+| Podman | yes | refused (compose can't apply the profile) |
+
+- **glove's `apply-seccomp`.** srt's stock filter blocks AF_UNIX sockets and
+  io_uring. Under the relaxed profile a process inside srt could still call
+  `unshare(CLONE_NEWUSER)` or `clone(CLONE_NEWUSER)` (and `open_tree`), and a
+  user namespace hands back every capability, mount included: verified with
+  stock srt (`unshare -Urm` mounted a tmpfs). The `-srt` image compiles srt's
+  own `apply-seccomp.c` (pinned commit) with glove's filter
+  (`glove/enforcers/srt_image/glove-tighten.c`), which also denies any
+  `CLONE_NEW*` on `unshare`/`clone`, `clone3` (`ENOSYS`, libc falls back to
+  `clone`), `setns`, `mount`, `umount2`, `pivot_root`, `chroot` and the new mount
+  API. srt runs it via `seccomp.applyPath`; it applies to `enforcer: srt` too.
+  srt would silently fall back to its stock binary if that path were missing,
+  so the harness entrypoint refuses to start without it, and the image tag is
+  content-addressed (`-srt-<hash>`).
+- **No network namespace for the harness.** Ring 0 already puts the harness on
+  an internal network whose only hosts are the session's forwarders, with no
+  external DNS; srt's allowlist would name the same forwarders, and confining
+  the harness in srt's netns broke every client that speaks its own proxy
+  protocol (web_fetch) and raw-TCP endpoints. srt's CLI always confines the
+  network, so `glove-srt` (a small launcher on srt's library, validating the
+  settings with srt's own schema) runs srt without it.
+- **Only paths present at launch.** For a missing path bwrap creates an empty
+  placeholder where the bind lands, which in `/work` is your project on the
+  host (seen live: ~15 empty files while the session ran). `glove-srt` starts
+  srt from the container's `/tmp`, so srt's built-in list lands there, and
+  glove names only the `/work` paths that exist. A protected file created
+  during the session (e.g. a new `.vscode/`) is writable, as with `nono`.
+- **The terminal.** srt runs everything under `bwrap --new-session` (the
+  TIOCSTI defence), so a TUI loses its controlling terminal: no SIGWINCH on
+  resize, and a cooked-mode Ctrl-C signals srt. `glove-pty relay` (outside the
+  sandbox) gives srt a fresh pty and forwards resizes; `glove-pty ctty` (inside)
+  makes it the harness's terminal. The sandbox never holds an fd to your real
+  terminal.
+- **The harness env.** The harness keeps its env (it needs the LLM key); nono's
+  `deny_vars` strip secret-shaped names from every command, and Landlock hides
+  `/proc` from them. srt alone would not: an srt-only command can read the
+  harness's `/proc/<pid>/environ` (same sandbox, same uid).
+
+## Planted host-trusted files (ring 0)
+
+`/work` is writable, and some files in it are later *executed or trusted by the
+host*: git runs `.git/hooks/*` and honours `.git/config` (`core.hooksPath`,
+`core.fsmonitor`, filter drivers …) the next time you run git on your Mac, and
+IDEs and direnv act on `.vscode/`, `.envrc` and `.mcp.json`. An agent that
+plants one gets code execution **outside** the sandbox. Landlock cannot express
+"writable directory except these children", so glove adds nested read-only
+binds after each rw mount (`glove/mounts.py:protected_paths`):
+
+- **Always, at the root of every rw mount that is a git repo:** `.git/hooks`
+  and `.git/config` are read-only, and so is an in-tree `core.hooksPath`
+  directory. `.git` itself is re-bound (read-write) so that it is a mount
+  point. Renaming or deleting it fails with `EBUSY`, which stops the agent from
+  swapping in a fresh `.git` with its own hooks. Commits, branches and fetches
+  still work.
+- **With `protect_ide_files: true`:** `.vscode/`, `.envrc` and `.mcp.json` are
+  read-only. When one is missing, glove binds an empty placeholder over it,
+  which creates an empty file or directory in your repo. That side effect is
+  why this setting is opt-in.
+- Bind sources are resolved with realpath and must stay inside the mount, so a
+  symlink can't expose another host path.
+
+**Residual gaps:** paths that don't exist at start (for example `git init`
+run inside a directory with no repo yet), nested repositories and submodules
+(`.git/modules/*`), and `.git` files (worktrees) are not covered.
+`tests/integration/test_ring0_protect.sh` checks this live.
+
+## Network observability (the netgate): observe reads, filter writes
+
+With the `observe` extension, the forwarders are replaced by the netgate
+(`extensions/gate/`). It changes what glove *records*,
+never what the agent can *reach*. Writing rules is a separate grant, the
+`filter` extension: without it no gate reads a rules file, none mounts
+`~/.glove/control/`, and glove never creates `control/<id>/` (an invariant
+test). Removing `filter` revokes the grant at the next `glove up` (the rules
+file moves into the session dir, the directory goes, `status.json` stops
+reporting `rules`).
 
 - **Same reach.** Each gate forwarder has exactly the name, networks, port and
   target of the socat sidecar it replaces. A `tcp` gate dials only its configured
@@ -51,49 +346,57 @@ never what the agent can *reach*:
   upstream acts on exactly the host that was checked. Absolute-form requests are
   forced to one request per connection. **Known gap:** the guard judges a name
   by its shape and never resolves it (that would leak it). A public-looking name
-  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the gate,
-  and the upstream proxy's own policy is the backstop until the in-tunnel
-  resolver (M4). Note too that `route: vpn|tor` is the operator's declaration,
-  not a verified fact.
+  that resolves privately (DNS rebinding, `127.0.0.1.nip.io`) passes the shape
+  check; with the egress provider's in-tunnel resolver (vpn, tor) the gate
+  resolves it in-tunnel and refuses a private answer. The route is the egress
+  provider's declaration, not a verified fact.
   Measured on glove-pi-search: gluetun's HTTP proxy forwards to gluetun's own
   control server (`gluetun:8000`, and `127.0.0.1:8000` inside its namespace),
   which can reconfigure the VPN. Only gluetun's control-server auth stood in the
   way. Under the gate, those requests are refused before they reach gluetun.
-- **Listeners for the egress stack, not the agent (M5).** A `harness: false`
-  service (glove-pi-search's SearXNG fan-out listener) is rendered only on its
-  egress network. The sandbox has no route to it, it is never offered to the
-  harness, and a test asserts both. It chains to the same upstream SearXNG already
-  used, so SearXNG's reach is unchanged, and the SSRF guard now also covers
-  SearXNG's requests.
+- **SearXNG behind its own gate.** With observe on, SearXNG leaves the egress
+  network: it reaches the egress proxy only through its gate (`searxng-egress`)
+  on the search extension's private network. The gate is never on the harness
+  network and is never offered to the harness (tests and a live check assert
+  SearXNG cannot reach the proxy directly). The SSRF guard and, with filter, the
+  rules cover SearXNG's requests too.
 - **`record: full` is a deliberate privacy trade.** It writes the method and
   URL of cleartext HTTP requests (and, opted in, headers with credentials
   redacted) to disk. HTTPS paths are never visible, because there is no TLS
   interception. glove warns at launch, and the mode is carried in `session.json`,
-  `status.json` and `glove net status`. `retain` and `glove down --wipe` bound
+  `status.json` and `glove observe status`. `retain` and `glove down --wipe` bound
   how long any of it stays.
 - **No new API.** Forwarders listen only on their forward port. The collector
   has `network_mode: none`, so it has no interface at all. Records travel over
   a Unix datagram socket on a tmpfs volume that only the gate containers mount.
 - **No new privilege.** Gate containers run as the operator's uid with
   `cap_drop ALL`, `no-new-privileges`, a read-only rootfs and pids/mem limits.
+  On rootless Podman they (and the collector) run `keep-id`, because they share
+  a tmpfs volume owned by that uid; glove starts sidecars one at a time there
+  (Podman 6.1 gives concurrently started keep-id containers a one-entry id map).
   They never get `NET_ADMIN`, never share the harness's network or PID
   namespace, and never mount its home.
-- **Invisible to the agent.** Telemetry goes to the session's `net/` dir, which
-  is bind-mounted into the collector only. The render refuses (no waiver) any
-  harness mount that overlaps `net/`: the agent must neither read its own flow
-  record nor forge one.
+- **Invisible to the agent.** Telemetry goes to `~/.glove/observe/<id>/net/`,
+  which is bind-mounted into the collector only. The render refuses (no waiver)
+  any harness mount that overlaps the observe export or `control/<id>/`: the
+  agent must neither read its own flow record nor forge one. The one exception
+  is the transcripts export (`observe/<id>/transcripts/`), which the harness
+  writes as it always wrote its transcripts; a reader of that directory must
+  treat it as agent-written data.
 - **A control channel that can only say allow/block.** `rules.json`
-  (`~/.glove/control/<env>/<session>/`) is mounted read-only into the gate
-  containers and never into the harness. The same no-waiver render check applies,
+  (`~/.glove/control/<id>/`, only with the filter grant) is mounted read-only
+  into the gate containers and never into the harness. The same no-waiver render check applies,
   so the agent cannot read or rewrite its own rules. Its schema has no key for a
   path, command, mount, image or environment variable. Any unknown key rejects
   the whole file, and the gate keeps its last known-good set, so a buggy or
   compromised writer can at worst change which destinations are allowed. The
   built-in SSRF guard runs before the rules, so no rule can allow an internal
-  destination.
-- **No host DNS.** Nothing on the host resolves a destination. The gate resolves
-  only its configured target or upstream (as socat did) and glove's own ingress
-  alias. In proxy mode the destination reaches the upstream as text. This was
+  destination; only the operator's `corporate` allowlist (session file,
+  command line) widens it.
+- **No host DNS.** Nothing on the host resolves a destination. An observe gate
+  resolves only its configured target or upstream (as socat did) and glove's
+  own ingress alias; the corporate egress gate, by design, resolves destinations
+  in its container and checks the address before dialling it. In proxy mode the destination reaches the upstream as text. This was
   measured live by sniffing the gate's netns: only the upstream's name was ever
   queried. A destination IP is either a literal or reported `unavailable`.
 - **Traffic the gate itself originates (M4, when configured).** A proxy gate
@@ -144,10 +447,18 @@ Be precise about what "container root" means here:
   (macOS 26, Apple silicon) or a `utm`/`gondolin` VM gives each container its own
   kernel, so an escape yields a throwaway VM, not the shared one. glove keeps the
   runtime layer pluggable for exactly this.
-- **Choose `enforcer: nono`** (default) over `srt` unless you specifically need
-  srt: srt requires relaxing the seccomp profile to allow unprivileged user
-  namespaces (a historical source of kernel LPE bugs) and wraps tool commands
-  only, leaving the harness process on ring 0 alone.
+- **Keep the default** (`nono+srt` on Docker, `nono` on Podman) over `srt`: srt alone
+  wraps tool commands only, leaving the harness process on ring 0 alone. Both
+  srt enforcers relax the container's seccomp profile to allow unprivileged
+  user namespaces (a historical source of kernel LPE bugs) because bubblewrap
+  needs them; glove's `apply-seccomp` takes that back from everything srt
+  wraps (below), so only srt's own processes hold it.
+- **Prefer the browser sidecar modes** (`headless`, `novnc`) over `mode: host`:
+  a compromised browser or MCP stays in a cap-less container on an internal
+  network instead of running as you on your desktop. Host mode with Vibe is
+  refused unless `i_accept_host_rce: true`: Vibe hides `browser_run_code_unsafe`
+  but the MCP still serves it, on your Mac. The MCP is pinned
+  (`playwright-core@1.63.0`), never `@latest`.
 
 ## What glove does NOT defend against
 

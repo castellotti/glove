@@ -63,7 +63,7 @@ class RenderedProject:
 
     @property
     def compose_file(self) -> Path:
-        return self.project_dir / "docker-compose.yml"
+        return self.project_dir / "compose.yml"
 
 
 @dataclass(frozen=True)

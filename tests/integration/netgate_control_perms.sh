@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Who can read and write net/ and control/<env>/<name>/rules.json, live?
+# Who can read and write observe/<id>/net/ and control/<id>/rules.json, live? (v3 layout)
 # (docs/planning/network-observability-layman-followup.md item 2)
 #
 # Runs as the NON-ROOT host user that would run `glove`, against one container
 # runtime, and reports what actually happens when:
 #   - the collector (glove's gate flags: --user <host uid:gid>, cap_drop ALL,
 #     no-new-privileges, read-only rootfs, network none; + userns keep-id under
-#     rootless podman) writes net/ and reads control/…/rules.json;
-#   - the host CLI (glove.netrules, glove's real code) writes rules.json;
+#     rootless podman) writes net/ and reads control/<id>/rules.json;
+#   - the host CLI (extensions/filter/netrules.py, `glove filter`'s real code) writes rules.json;
 #   - "Layman" (a container running as root, like Layman's, with Layman's binds:
 #     ~/.glove ro and control/ rw) writes rules.json by atomic rename, in several ways;
-#   - "Layman" creates a missing control/<env>/<name>/ itself.
+#   - "Layman" creates a missing control/<id>/ itself (it must not; this shows why).
 # Each line is `RESULT <id> <value>`; the contract checks at the end PASS/FAIL.
 #
-# Usage:  RT=docker|podman GATE_IMAGE=glove/netgate:<tag> bash tests/integration/netgate_control_perms.sh
+# Usage:  RT=docker|podman [GATE_IMAGE=<tag>] bash tests/integration/netgate_control_perms.sh
+#         (GATE_IMAGE defaults to the gate extension's image, built if missing)
 #         RT may be a wrapper (e.g. a script running `sudo podman "$@"` for rootful podman).
 #         On an SELinux-enforcing host the gate's binds get `:z`, as glove renders them on
 #         podman, and so do "Layman"'s, only so that this ownership probe can run there:
@@ -24,14 +25,14 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
-IMG="${GATE_IMAGE:?set GATE_IMAGE}"
+IMG="${GATE_IMAGE:-$(cd "$ROOT" && uv run python tests/integration/gate_image.py "$RT" | tail -1)}"
 U="$(id -u)" G="$(id -g)"
 [ "$U" = 0 ] && { echo "run as the non-root host user, not root"; exit 2; }
 T="$(mktemp -d "${TMPDIR:-/tmp}/ngperm.XXXXXX")"
 H="$T/glove"                          # stands in for ~/.glove
-E=pe                                  # env id == default session name == token
-NET="$H/envs/$E/sessions/$E/net"
-CTL="$H/control/$E/$E"
+E=pe-0a0b0c                           # session id == env == session == token (v3)
+NET="$H/observe/$E/net"
+CTL="$H/control/$E"
 TAG="ngperm$$"
 PASS=0 FAIL=0
 res()   { echo "RESULT $1 $2"; }
@@ -49,7 +50,14 @@ if "$RT" --version 2>/dev/null | grep -qi podman \
   EU=0 EG=0                          # ...and namespace root is the host user
 fi
 Z=""
-[ "$(getenforce 2>/dev/null)" = Enforcing ] && Z=":z"   # glove renders `selinux: z` on podman
+# SELinux as the *runtime* sees it (a podman machine's VM enforces it even on a
+# macOS host), exactly as glove's PodmanRuntime.selinux_enabled asks
+if "$RT" --version 2>/dev/null | grep -qi podman \
+   && [ "$("$RT" info --format '{{.Host.Security.SELinuxEnabled}}' 2>/dev/null)" = true ]; then
+  Z=":z"                             # glove renders `selinux: z` on podman binds
+elif [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
+  Z=":z"
+fi
 GATE=("$RT" run --user "$U:$G" ${USERNS[@]+"${USERNS[@]}"} --cap-drop ALL --security-opt no-new-privileges
       --read-only --pids-limit 64 --memory 256m)
 # "Layman": root in its container, control/ rw, the rest of ~/.glove ro (Layman's binds;
@@ -60,7 +68,7 @@ LAYMAN=("$RT" run --rm --user 0 -v "$H:/root/.glove:ro${Z:+,z}" -v "$H/control:/
 cleanup() {
   "$RT" rm -f "$TAG-col" >/dev/null 2>&1
   "$RT" volume rm -f "$TAG-events" >/dev/null 2>&1
-  "${LAYMAN[@]}" "rm -rf /root/.glove/control/$E" >/dev/null 2>&1
+  "${LAYMAN[@]}" "rm -rf /root/.glove/control/$E /root/.glove/control/other-0a0b0c" >/dev/null 2>&1
   chmod -R u+rwx "$T" 2>/dev/null; rm -rf "$T"
 }
 trap cleanup EXIT
@@ -72,19 +80,19 @@ res platform "$RT/$(uname -s)/uid=$U/userns=${USERNS[*]+${USERNS[*]}}/selinux=${
 GLOVE_HOME="$H" hostpy "
 import os
 from pathlib import Path
-from glove.netgate.writer import write_json_atomic
+from extensions.gate.netgate.writer import write_json_atomic
 from glove.registry import ensure_home
 ensure_home()
-for p in ('$NET', '$CTL'):   # observe.ensure_net_dir (stdlib-only imports here)
+for p in ('$NET', '$CTL'):   # glove.exports.ensure_dir (stdlib-only imports here)
     Path(p).mkdir(mode=0o700, parents=True, exist_ok=True); os.chmod(p, 0o700)
 write_json_atomic('$NET/session.json', {'v': 1, 'type': 'session', 'env': '$E', 'session': '$E'})
 "
-cli() {  # the glove CLI's load → edit → save cycle (glove net block), by its real code
+cli() {  # the glove CLI's load → edit → save cycle (glove filter block), by its real code
   hostpy "
 import sys
 from pathlib import Path
-from glove.netrules import block_rule, load, save
-from glove.netgate.policy import PolicyError
+from extensions.filter.netrules import block_rule, load, save
+from extensions.gate.netgate.policy import PolicyError
 p = Path('$1/rules.json')
 try:
     d = load(p, '$E', '${2:-$E}'); d['rules'].append(block_rule('$3', port=None, terminate=False, note=None))
@@ -97,7 +105,7 @@ print('OK')
 sha() { hostpy "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1" 2>/dev/null \
         || echo unreadable; }
 status_rules() { hostpy "import json; r=json.load(open('$NET/status.json'))['rules']; print(r['ok'], r.get('sha256'), r['error'])" 2>&1; }
-res layout "net=$(owner "$NET") control-leaf=$(owner "$CTL") control-env=$(owner "$H/control/$E")"
+res layout "net=$(owner "$NET") control-leaf=$(owner "$CTL") control-root=$(owner "$H/control")"
 
 # --- 1. host CLI writes; the gate reads it and writes net/ ---------------------------
 res cli-write "$(cli "$CTL" "$E" a.example)"
@@ -126,15 +134,15 @@ s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 s.sendto(json.dumps({'v':1,'type':'flow','phase':'open','id':'f_x','service':'p'}).encode(), '/run/glove-netgate/events.sock')"
 sleep 1
 res flows-written "$( [ -s "$NET/flows.ndjson" ] && owner "$NET/flows.ndjson" || echo NO)"
-res layman-reads-net "$("${LAYMAN[@]}" "cat /root/.glove/envs/$E/sessions/$E/net/flows.ndjson >/dev/null && cat /root/.glove/control/$E/$E/rules.json >/dev/null && echo yes" 2>&1)"
+res layman-reads-net "$("${LAYMAN[@]}" "cat /root/.glove/observe/$E/net/flows.ndjson >/dev/null && cat /root/.glove/control/$E/rules.json >/dev/null && echo yes" 2>&1)"
 check "a root Layman can read net/ and the CLI's rules.json" \
-  '[ "$("${LAYMAN[@]}" "cat /root/.glove/envs/$E/sessions/$E/net/status.json >/dev/null && echo y" 2>/dev/null)" = y ]'
+  '[ "$("${LAYMAN[@]}" "cat /root/.glove/observe/$E/net/status.json >/dev/null && echo y" 2>/dev/null)" = y ]'
 
 # --- 2. "Layman" (container root) writes rules.json, several ways ----------------------
 layman_write() {  # $1 label, $2 shell prefix run before the write (umask/chown policy)
   local host="$3"
   "${LAYMAN[@]}" "
-    set -e; d=/root/.glove/control/$E/$E; $2
+    set -e; d=/root/.glove/control/$E; $2
     printf '%s\n' '{\"v\":1,\"env\":\"$E\",\"session\":\"$E\",\"updated_by\":\"layman\",\"rules\":[{\"id\":\"r_layman$1\",\"action\":\"block\",\"match\":{\"host\":\"$host\"}}]}' > \$d/rules.json.tmp
     \${CHOWN:-true} \$d/rules.json.tmp
     mv \$d/rules.json.tmp \$d/rules.json" 2>&1
@@ -165,18 +173,18 @@ check "the earlier contract (chown to the dir's owner, 0600) still works" \
   '[ "$WROTE_chown" = yes ] && [ "$CLI_chown" = OK ]'
 res "0600-without-chown" "gate-enforced=$WROTE_0600 cli=$CLI_0600 (not allowed: fails on rootful Linux)"
 
-# --- 3. "Layman" creates a missing control/<env>/<name>/ ------------------------------
-"${LAYMAN[@]}" "mkdir -p /root/.glove/control/$E/other" 2>&1
-res layman-mkdir "$(owner "$H/control/$E/other")"
+# --- 3. "Layman" creates a missing control/<id>/ (forbidden by the contract) ----------
+"${LAYMAN[@]}" "mkdir -p /root/.glove/control/other-0a0b0c" 2>&1
+res layman-mkdir "$(owner "$H/control/other-0a0b0c")"
 res glove-render-after-layman-mkdir "$(hostpy "
 import os
 from pathlib import Path
-p = Path('$H/control/$E/other')
+p = Path('$H/control/other-0a0b0c')
 try:
     p.mkdir(mode=0o700, parents=True, exist_ok=True); os.chmod(p, 0o700); print('OK')
 except OSError as e:
     print(f'ERR {e}')")"
-res cli-into-layman-dir "$(cli "$H/control/$E/other" "$E-other" y.example | tr '\n' ' ')"
+res cli-into-layman-dir "$(cli "$H/control/other-0a0b0c" other-0a0b0c y.example | tr '\n' ' ')"
 
 # --- 4. an unreadable rules.json fails closed, live (item 1) ----------------------------
 cli "$CTL" "$E" live.example >/dev/null

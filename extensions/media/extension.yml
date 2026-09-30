@@ -1,0 +1,9 @@
+api: 1
+name: media
+summary: Image/audio/video analysis toolchain (ffmpeg, imagemagick, webp, exiftool, PIL) baked into the harness image.
+harness:
+  image:
+    "*": { apt: [ffmpeg, imagemagick, webp, libimage-exiftool-perl] }
+    vibe: { pip: [Pillow] }                 # Vibe's base is python:3.12-slim with uv
+    pi: { apt: [python3, python3-pil] }     # Pi's base is node-only
+  brief: brief.md

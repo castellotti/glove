@@ -1,5 +1,8 @@
 {
   "argv": [
+    "/opt/glove/bin/glove-pty",
+    "notty",
+    "--",
     "nono",
     "wrap",
     "-s",

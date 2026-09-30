@@ -1,6 +1,6 @@
 # Repo conventions for Claude Code
 
-`glove` v2 — a sandbox launcher for agentic coding harnesses. It runs a chosen
+`glove` v3 — a sandbox launcher for agentic coding harnesses. It runs a chosen
 harness (Pi, Mistral Vibe, later Claude Code) inside a hardened container with an
 in-container kernel enforcer wrapping the agent and every command it runs.
 
@@ -20,16 +20,20 @@ in-container kernel enforcer wrapping the agent and every command it runs.
 Harness containers are always: non-root, `cap_drop: ALL`, `no-new-privileges`,
 read-only rootfs, seccomp profile, pids/memory limits, internal network only.
 **Never** mount `docker.sock`, add `host.docker.internal`/host-gateway to the
-harness, or use `--privileged`. The default in-container enforcer is **nono**
-(Landlock); **srt** is opt-in and needs the *surgical* relaxed seccomp profile
-(`glove/runtimes/seccomp/nested-userns.json`), not a coarse one.
+harness, or use `--privileged`. The default in-container enforcer is
+**nono+srt** on Docker (srt around the harness, nono/Landlock around every
+command) and **nono** on Podman; the srt enforcers need the *surgical* relaxed
+seccomp profile (`glove/runtimes/seccomp/nested-userns.json`), not a coarse one,
+and glove's own `apply-seccomp` re-denies namespaces/mounts below srt.
 
 ## Where things render
 
-- On-disk layout: `~/.glove/` (or `$GLOVE_HOME`).
-- Ring-1 policies render to
-  `~/.glove/envs/<env>/sessions/<name>/enforcer/` and mount **read-only** at
-  `/etc/glove/enforcer/` — never inside `/work`, never writable by the agent.
+- A session is a directory: `glove-session.yml`, `work/` (→ `/work`) and
+  `.glove/` (0700). Global state: `~/.glove/` (or `$GLOVE_HOME`): `config.yml`,
+  `registry.json`, `observe/<id>/`, `control/<id>/`.
+- Ring-1 policies render to `<session-dir>/.glove/enforcer/` and mount
+  **read-only** at `/etc/glove/enforcer/` — never inside `/work`, never writable
+  by the agent.
 
 ## Working agreements
 

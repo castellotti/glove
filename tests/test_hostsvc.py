@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from glove.config import Config, HostService, resolve
+from glove.config import Config, HostService, load_config
 from glove.hostsvc import _expand
 
 
@@ -16,32 +16,18 @@ def _cfg(tmp_path):
 
 
 def test_expand_placeholders(tmp_path):
-    cfg, _work = _cfg(tmp_path)
-    sdir = tmp_path / "state"
-    cmd = "mcp --allowed-hosts glove-{session}-browser:8931 --output-dir {media_dir}"
-    out = _expand(cmd, cfg, "vibe-local", sdir)
-    assert "glove-vibe-local-browser:8931" in out
-    assert out.endswith(os.path.join(str(sdir), "media"))
-
-
-def test_media_dir_never_inside_project(tmp_path):
-    # glove must not litter the project working tree — the browser output dir
-    # lives in glove's own session state, never under the workdir.
     cfg, work = _cfg(tmp_path)
-    sdir = tmp_path / "state"
-    out = _expand("{media_dir}", cfg, "vibe-local", sdir)
-    assert str(os.path.realpath(work)) not in out
-    assert "research" not in out
-    # bare expansion (no session dir) still avoids the project — falls back to ~/.glove
-    bare = _expand("{media_dir}", cfg, "vibe-local")
-    assert str(os.path.realpath(work)) not in bare
-    assert bare.startswith(os.path.join(os.path.expanduser("~"), ".glove"))
+    out = _expand("x --allowed-hosts glove-{session}-browser:8931 --in {workdir} --h {home}", cfg, "vibe-local")
+    assert "glove-vibe-local-browser:8931" in out
+    assert f"--in {os.path.realpath(work)}" in out
+    assert out.endswith(os.path.expanduser("~"))
 
 
-def test_expand_chrome_profile_and_home(tmp_path):
+def test_retired_placeholders_are_not_expanded(tmp_path):
+    # media_dir/chrome_profile moved into the playwright extension's own state
+    # (per session); core no longer knows browser paths.
     cfg, _ = _cfg(tmp_path)
-    out = _expand("chrome --user-data-dir={chrome_profile}", cfg, "vibe-local")
-    assert out.endswith(os.path.join(os.path.expanduser("~"), ".glove", "chrome-profile"))
+    assert _expand("{media_dir} {chrome_profile}", cfg, "s", tmp_path) == "{media_dir} {chrome_profile}"
 
 
 def test_host_services_coerced_from_file(tmp_path):
@@ -56,7 +42,7 @@ def test_host_services_coerced_from_file(tmp_path):
         "    ready_port: 9222\n"
         "    keep: true\n"
     )
-    cfg = resolve(env_config_path=tmp_path / "glove.yaml", overrides={})
+    cfg = load_config(tmp_path / "glove.yaml")
     assert [s.name for s in cfg.host_services] == ["model-tunnel", "chrome"]
     assert cfg.host_services[0].ready_port == 8899
     assert cfg.host_services[1].keep is True

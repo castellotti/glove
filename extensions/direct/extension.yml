@@ -1,0 +1,21 @@
+api: 1
+name: direct
+summary: Egress straight to the internet through a small HTTP proxy — no tunnel, no anonymity (route direct).
+provides: [egress]
+settings:
+  check_url: { type: string, default: "https://am.i.mullvad.net/ip" }   # verify: egress passes traffic
+images:
+  proxy: { build: image }
+exports:
+  proxy_host: "glove-{{ session.id }}-direct-proxy"
+  proxy_port: 8888
+  proxy_url: "http://glove-{{ session.id }}-direct-proxy:8888"
+  route: direct
+  resolver: none
+  network: egress
+services: compose/services.yml.j2
+verify:
+  - { name: egress-up, kind: http-ok, url: "{{ settings.check_url }}", proxy: "{{ slot.egress.proxy_url }}",
+      service: direct-proxy }
+harness:
+  brief: brief.md

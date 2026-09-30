@@ -1,0 +1,1 @@
+- `web_search` queries a private SearXNG instance. It returns titles, URLs and snippets. Use short keyword queries, and never retry quickly after a rate limit (HTTP 429): the exit IP is shared.

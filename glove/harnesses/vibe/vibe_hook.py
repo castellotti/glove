@@ -32,12 +32,14 @@ _NONO_OVERRIDE = re.compile(r"(^|[;&|(\s])NONO_[A-Z0-9_]*=")
 
 
 def _shq(s: str) -> str:
-    """POSIX single-quote so the command survives as one arg to `bash -lc`."""
+    """POSIX single-quote so the command survives as one arg to `bash -c`."""
     return "'" + s.replace("'", "'\\''") + "'"
 
 
 def wrap_command(wrapper_argv: list[str], command: str) -> str:
-    return f"{' '.join(wrapper_argv)} bash -lc {_shq(command)}"
+    # NON-login shell, same as Pi's enforcer extension: a login shell sources
+    # /etc/profile, which nono's default profile denies (deny_shell_configs).
+    return f"{' '.join(wrapper_argv)} bash -c {_shq(command)}"
 
 
 def load_wrapper_argv(path: str | None = None) -> list[str] | None:

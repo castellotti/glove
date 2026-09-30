@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# glove `playwright` sidecar entrypoint.
+#
+#   glove-pw-start headless        the Playwright MCP, Chromium headless
+#   glove-pw-start novnc           the same, headed on a TigerVNC display that
+#                                  websockify + noVNC serve on 127.0.0.1:6080
+#                                  (this container's loopback only)
+#   glove-pw-start --probe-sandbox launch Chromium with its sandbox on; exit 0
+#                                  and print "sandbox ok", or print why not
+#
+# Everything the agent could steer is fixed here, server-side: the proxy, the
+# sandbox, the profile, headless or not. The MCP never gets a CDP port
+# (Playwright launches Chromium over --remote-debugging-pipe).
+set -euo pipefail
+
+: "${PW_ALLOWED_HOST:?}" "${PW_PROXY:?}"
+PW_SANDBOX=${PW_SANDBOX:-on}
+PW_PROFILE=${PW_PROFILE:-ephemeral}
+PW_VIEWPORT=${PW_VIEWPORT:-1280x800}
+
+probe_sandbox() {
+  node -e '
+    const { chromium } = require("playwright-core");
+    (async () => {
+      try {
+        const b = await chromium.launch({ channel: "chromium", chromiumSandbox: true, headless: true });
+        const p = await b.newPage();
+        await p.goto("about:blank");
+        await b.close();
+        console.log("sandbox ok");
+      } catch (e) {
+        console.log(String(e.message || e).split("\n").filter(l => /sandbox/i.test(l)).slice(0, 4).join("\n")
+                    || String(e).slice(0, 400));
+        process.exit(1);
+      }
+    })();'
+}
+
+mcp_args() {
+  local args=(mcp --host 0.0.0.0 --port 8931 --allowed-hosts "$PW_ALLOWED_HOST"
+    --browser chromium --proxy-server "$PW_PROXY" --output-dir /data/output
+    --config /etc/glove/playwright/mcp.json --image-responses allow)
+  if [ "$PW_SANDBOX" = on ]; then args+=(--sandbox); else args+=(--no-sandbox); fi
+  if [ "$PW_PROFILE" = session ]; then args+=(--user-data-dir /data/profile); else args+=(--isolated); fi
+  printf '%s\n' "${args[@]}"
+}
+
+# With the sandbox on, prove it works before serving: a host that cannot give
+# Chromium its namespaces fails here, at `glove up` (the healthcheck never
+# passes), not at the agent's first page — and never silently without it.
+require_sandbox() {
+  [ "$PW_SANDBOX" = on ] || return 0
+  if ! out=$(probe_sandbox); then
+    printf 'glove: Chromium cannot use its sandbox here:\n%s\n' "$out" >&2
+    printf 'glove: set `playwright: {chromium_sandbox: "off"}` to run without it (the container stays the boundary)\n' >&2
+    exit 3
+  fi
+}
+
+case "${1:-headless}" in
+  --probe-sandbox)
+    probe_sandbox
+    ;;
+  headless)
+    require_sandbox
+    mapfile -t args < <(mcp_args)
+    cd /data/uploads
+    exec playwright-core "${args[@]}" --headless --viewport-size "$PW_VIEWPORT"
+    ;;
+  novnc)
+    require_sandbox
+    in=0; [ "${VNC_ACCEPT_INPUT:-false}" = true ] && in=1
+    case "${VNC_CLIPBOARD:-off}" in
+      both) cin=1 cout=1 ;;
+      to-browser) cin=1 cout=0 ;;
+      *) cin=0 cout=0 ;;
+    esac
+    # Two random passwords per start (VncAuth uses 8 characters: ~48 bits),
+    # generated here on the container's tmpfs: never in argv, env, a compose
+    # secret or a host file. `glove playwright view` reads them via exec.
+    umask 077
+    mkdir -p /tmp/vnc
+    for p in full view; do  # 6 random bytes → 8 base64url characters
+      node -e 'process.stdout.write(require("crypto").randomBytes(6).toString("base64url"))' > "/tmp/vnc/$p"
+    done
+    # TigerVNC's password file: the full-access password, then the view-only one
+    printf '%s\n%s\n' "$(cat /tmp/vnc/full)" "$(cat /tmp/vnc/view)" | vncpasswd -f > /tmp/vnc/passwd
+    Xvnc :1 -geometry "$PW_VIEWPORT" -depth 24 -localhost -rfbport 5900 -nolisten tcp \
+      -SecurityTypes VncAuth -PasswordFile /tmp/vnc/passwd -AlwaysShared \
+      -AcceptSetDesktopSize=0 -AcceptKeyEvents="$in" -AcceptPointerEvents="$in" \
+      -AcceptCutText="$cin" -SendCutText="$cout" -SetPrimary=0 -SendPrimary=0 &
+    for _ in $(seq 50); do [ -S /tmp/.X11-unix/X1 ] && break; sleep 0.1; done
+    websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900 &
+    mapfile -t args < <(mcp_args)
+    (cd /data/uploads && DISPLAY=:1 exec playwright-core "${args[@]}") &
+    # any child's death ends the container (compose restarts it)
+    wait -n
+    exit $?
+    ;;
+  *)
+    echo "usage: glove-pw-start headless|novnc|--probe-sandbox" >&2
+    exit 2
+    ;;
+esac

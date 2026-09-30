@@ -1,0 +1,54 @@
+# SearXNG base settings for egress route tor. The search hook adds
+# use_default_settings (engine removals), server.secret_key, valkey and
+# outgoing.proxies (the egress proxy) — do not set them here.
+
+server:
+  limiter: false
+  image_proxy: true
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  # Enabled over Tor (independent indexes; longer timeouts for Tor latency)
+  - name: encyclosearch
+    disabled: false
+    timeout: 12.0
+  - name: qwant
+    disabled: false
+    timeout: 12.0
+  - name: mwmbl
+    disabled: false
+    timeout: 12.0
+  - name: marginalia
+    disabled: false
+    timeout: 15.0
+  - name: wiby
+    disabled: false
+    timeout: 12.0
+
+  - name: hackernews
+    categories: [general, social media]
+    timeout: 12.0
+  - name: stackoverflow
+    categories: [general, it]
+    timeout: 12.0
+  - name: lobste.rs
+    categories: [general, it]
+    timeout: 12.0
+
+  # Disabled over Tor (block / CAPTCHA / time out)
+  - name: brave
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: mojeek
+    disabled: true
+
+outgoing:
+  # Tor adds latency: SearXNG's own Tor mode would add extra_proxy_timeout (10s)
+  # to the default 3s; the hook keeps that mode off (it needs a SOCKS proxy).
+  request_timeout: 13.0
+  max_request_timeout: 20.0

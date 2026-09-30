@@ -1,0 +1,27 @@
+services:
+  # SearXNG: sends every engine request through {{ endpoint['searxng-egress'].url }}
+  # — the egress provider's proxy, or (with observe) a gate in front of it, and
+  # then SearXNG is not on the egress network at all. Either network is
+  # internal, so it has no other way out. Its settings are rendered into
+  # .glove/ext/search/searxng/.
+  searxng:
+    image: "docker.io/searxng/searxng:2026.9.25-12f8b6515@sha256:5286edb35782454ab8a102c5eff6b54bff745853191b46aeead95f225aa6dfb6"
+{% if endpoint['searxng-egress'].interposed %}
+    networks: [searchnet]
+{% else %}
+    networks: [egress, searchnet]
+{% endif %}
+    environment:
+      GRANIAN_HOST: "0.0.0.0"
+      FORCE_OWNERSHIP: "false"
+    volumes:
+      - { type: bind, source: "{{ state }}/searxng", target: /etc/searxng, read_only: true }
+      - { type: tmpfs, target: /var/cache/searxng }
+    tmpfs: ["/tmp"]
+    depends_on: [valkey]
+  valkey:
+    image: "docker.io/valkey/valkey:9.0.6-alpine@sha256:187679e3bd4036959631e3f03983ab2ba503ab21e6fd0454d508e909db2ee989"
+    command: ["valkey-server", "--save", "", "--appendonly", "no", "--loglevel", "warning"]
+    networks: [searchnet]
+    volumes:
+      - { type: tmpfs, target: /data }

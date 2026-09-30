@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glove"
-version = "0.2.0"
+version = "3.0.0"
 description = "Sandboxed environments for agentic harnesses (Docker/Podman session manager)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.16"]
+dev = [
+    "import-linter>=2.15",
+    "pytest>=8.0",
+    "ruff>=0.16",
+]
 
 [project.scripts]
 glove = "glove.cli:main"
@@ -28,10 +32,15 @@ packages = ["glove"]
 artifacts = [
     "glove/templates/*",
     "glove/harnesses/**/*",
+    "glove/enforcers/srt_image/*",
+    "glove/enforcers/pty/*",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "extensions"]
+pythonpath = [".", "tests"]
+# importlib: extension test files share basenames (extensions/*/tests/test_*.py)
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 target-version = "py311"
@@ -46,3 +55,12 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
 # B008: Typer's API *requires* `= typer.Option(...)` / `typer.Argument(...)` in
 # defaults — the whole CLI relies on it, so it is not a smell here.
 ignore = ["B008"]
+
+[tool.importlinter]
+root_packages = ["glove", "extensions"]
+
+[[tool.importlinter.contracts]]
+name = "Core does not import extensions"
+type = "forbidden"
+source_modules = ["glove"]
+forbidden_modules = ["extensions"]

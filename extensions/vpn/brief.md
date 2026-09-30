@@ -1,0 +1,1 @@
+- Web access (search, fetch) goes out through a **VPN tunnel** with a shared exit IP. Never take actions that would de-anonymise the session (logging into personal accounts, submitting identifying details). If a task needs that, stop and ask.

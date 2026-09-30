@@ -1,0 +1,20 @@
+# SearXNG base settings for egress route vpn/direct. The search hook adds
+# use_default_settings (engine removals), server.secret_key, valkey and
+# outgoing.proxies (the egress proxy) — do not set them here.
+
+server:
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: qwant
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: encyclosearch
+    disabled: false

@@ -10,12 +10,25 @@ compute the container working_dir instead of adding a redundant mount.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
 class MountError(ValueError):
     """Raised for refused or malformed mount requests."""
+
+
+def host_path(root: Path | None, value: str) -> Path:
+    """A host path from a session file: ``~`` expanded, relative to ``root``
+    (the session directory), symlinks resolved. A relative path with no root
+    raises ValueError."""
+    p = Path(os.path.expanduser(value))
+    if not p.is_absolute():
+        if root is None:
+            raise ValueError(f"{value!r} must be an absolute path here")
+        p = root / p
+    return Path(os.path.realpath(p))
 
 
 @dataclass(frozen=True)
@@ -31,9 +44,29 @@ class Mount:
 
 
 @dataclass(frozen=True)
+class Protect:
+    """A read-only bind nested over a path inside a rw mount (ring 0).
+
+    Files the *host* later executes or trusts (git hooks and config, IDE and
+    direnv settings) must not be plantable by the agent. ``host_path`` is None
+    for a placeholder: the path does not exist yet, so an empty file/dir from
+    glove's session state is bound over it (docker creates the mountpoint)."""
+
+    container_path: str
+    host_path: str | None
+    kind: str  # "file" | "dir"
+    read_only: bool = True
+
+    @property
+    def name(self) -> str:
+        return os.path.basename(self.container_path)
+
+
+@dataclass(frozen=True)
 class MountPlan:
     mounts: list[Mount]
     working_dir: str  # container path the harness should start in
+    protect: tuple[Protect, ...] = ()  # rendered after `mounts`, so they overlay
 
 
 @dataclass(frozen=True)
@@ -144,6 +177,77 @@ def compute_mounts(
     return MountPlan(mounts=mounts, working_dir=working_dir)
 
 
+# Always protected when present at the root of a rw mount.
+GIT_PROTECTED = (".git/hooks", ".git/config")
+# Protected only with `protect_ide_files: true` (a missing one gets a
+# placeholder, which creates an empty file/dir on the host — hence opt-in).
+IDE_PROTECTED = {".vscode": "dir", ".envrc": "file", ".mcp.json": "file"}
+_HOOKS_PATH = re.compile(r"^\s*hookspath\s*=\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _inside(root: str, path: str) -> bool:
+    return _is_ancestor(Path(root), Path(path)) and path != root
+
+
+def _hooks_path(git_config: str, repo: str) -> str | None:
+    """`core.hooksPath` from a repo's .git/config, resolved against the repo
+    (git resolves a relative value against the worktree root). Best-effort: a
+    plain-text scan; quoting and includes are not followed."""
+    try:
+        text = Path(git_config).read_text(errors="replace")
+    except OSError:
+        return None
+    m = _HOOKS_PATH.search(text)
+    if not m:
+        return None
+    value = os.path.expanduser(m.group(1).strip().strip('"'))
+    return os.path.realpath(os.path.join(repo, value))
+
+
+def protected_paths(mounts: list[Mount], *, protect_ide_files: bool = False) -> tuple[Protect, ...]:
+    """Ring-0 read-only binds for every rw mount (§6.3 of the v3 plan).
+
+    Covers `.git/hooks` and `.git/config` at the mount root and, when
+    `core.hooksPath` points inside the mount, that directory too. `.git` itself
+    is re-bound read-write first, so it is a mount point: renaming or removing
+    it fails (EBUSY) — otherwise `mv .git x && git init` would replace the
+    protected hooks wholesale. Sources are realpath'd and must stay inside the
+    mount: a symlink can never turn this into a bind of some other host path.
+    Residual gap (documented): a path created later (e.g. `git init` in a
+    directory with no repo yet) or a nested repo/submodule is not covered."""
+    out: list[Protect] = []
+    seen: set[str] = set()
+
+    def add(root: Mount, host: str | None, rel: str, kind: str, read_only: bool = True) -> None:
+        cpath = os.path.normpath(os.path.join(root.container_path, rel))
+        if cpath not in seen:
+            seen.add(cpath)
+            out.append(Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only))
+
+    for m in mounts:
+        if m.mode != "rw":
+            continue
+        git = os.path.join(m.host_path, ".git")
+        if os.path.isdir(git) and not os.path.islink(git):
+            add(m, os.path.realpath(git), ".git", "dir", read_only=False)  # pin: no rename
+        for rel in GIT_PROTECTED:
+            real = os.path.realpath(os.path.join(m.host_path, rel))
+            if os.path.lexists(os.path.join(m.host_path, rel)) and os.path.exists(real) and _inside(m.host_path, real):
+                add(m, real, os.path.relpath(real, m.host_path), "dir" if os.path.isdir(real) else "file")
+        hooks = _hooks_path(os.path.join(m.host_path, ".git", "config"), m.host_path)
+        if hooks and os.path.isdir(hooks) and _inside(m.host_path, hooks):
+            add(m, hooks, os.path.relpath(hooks, m.host_path), "dir")
+        if protect_ide_files:
+            for rel, kind in IDE_PROTECTED.items():
+                path = os.path.join(m.host_path, rel)
+                real = os.path.realpath(path)
+                if not os.path.lexists(path):
+                    add(m, None, rel, kind)  # placeholder
+                elif os.path.exists(real) and _inside(m.host_path, real):
+                    add(m, real, os.path.relpath(real, m.host_path), kind)
+    return tuple(out)
+
+
 def _resolve_working_dir(
     mounts: list[Mount], cwd: str | None, workdir_real: str
 ) -> str:
@@ -164,3 +268,16 @@ def _resolve_working_dir(
     if rel == ".":
         return best.container_path
     return os.path.normpath(os.path.join(best.container_path, rel))
+
+
+def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:
+    """Create the empty file/dir sources for placeholder binds (outside /work)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for p in protect:
+        if p.host_path is None:
+            target = directory / p.name
+            if p.kind == "dir":
+                target.mkdir(exist_ok=True)
+            else:
+                target.touch(exist_ok=True)
+    return directory

@@ -1,0 +1,17 @@
+api: 1
+name: llm
+summary: The inference engine — pick a provider like a gluetun VPN provider; the harness reaches it only through one forwarder.
+provides: [inference]
+settings:
+  provider:     { type: enum, required: true,
+                  values: [openai-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter] }
+  location:     { type: enum, values: [host, lan, internet] }       # where the server is, relative to this Mac
+  endpoint:     { type: string }                                    # host:port (host/lan) or a URL (openai-compatible)
+  model:        { type: string, default: auto }                     # an id, or `auto` (the single model /v1/models lists)
+  api_key:      { type: secret }                                    # keychain:<service> | env:<VAR>
+  capabilities: { type: map, also: [auto], default: auto }          # auto, or explicit keys (probes fill the rest)
+  extra_models: { type: list, default: [] }
+  route:        { type: enum, values: [direct, egress], default: direct }   # cloud providers only
+hooks: hooks.py
+harness:
+  brief: brief.md

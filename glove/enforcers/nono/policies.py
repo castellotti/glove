@@ -39,7 +39,7 @@ import json
 from typing import TYPE_CHECKING
 
 from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR
+from ..base import ENFORCER_DIR, GLOVE_PTY
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
@@ -144,8 +144,14 @@ def render_tool_profile(plan: SessionPlan) -> dict:
 
 
 def tool_wrapper_argv() -> list[str]:
-    """The prefix the harness hooks prepend to every shell command."""
+    """The prefix the harness hooks prepend to every shell command.
+
+    `glove-pty notty` first gives up the controlling terminal (keeping the
+    process group, so an abort still kills the command): nono's base policy
+    grants /dev/tty, and with it a command could TIOCSTI keystrokes into the
+    harness TUI."""
     return [
+        GLOVE_PTY, "notty", "--",
         "nono", "wrap", "-s", "--allow-cwd",
         "--profile", f"{ENFORCER_DIR}/tool.json", "--",
     ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import make_cfg
 
 from glove.config import AddDir, Config, ConfigError
 from glove.harness import get_profile
@@ -18,7 +19,7 @@ from glove.sessions import (
 def _cfg(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    return Config(harness="pi", workdir=str(work), name="s", **kw)
+    return make_cfg(harness="pi", workdir=str(work), name="s", **kw)
 
 
 # --- HarnessProfile.resume_args -------------------------------------------------
@@ -64,7 +65,7 @@ def _after_sentinel(command: list[str]) -> list[str]:
 
 def test_plan_resume_continue_after_sentinel(tmp_path):
     plan = build_session_plan(
-        _cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"), resume=True
+        _cfg(tmp_path), home_dir=str(tmp_path / "h"), resume=True
     )
     tail = _after_sentinel(plan.command)
     assert "--continue" in tail
@@ -73,14 +74,14 @@ def test_plan_resume_continue_after_sentinel(tmp_path):
 
 def test_plan_resume_session_after_sentinel(tmp_path):
     plan = build_session_plan(
-        _cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"), session_id="abc"
+        _cfg(tmp_path), home_dir=str(tmp_path / "h"), session_id="abc"
     )
     tail = _after_sentinel(plan.command)
     assert tail[-2:] == ["--session", "abc"]
 
 
 def test_plan_no_resume_unchanged(tmp_path):
-    base = build_session_plan(_cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"))
+    base = build_session_plan(_cfg(tmp_path), home_dir=str(tmp_path / "h"))
     assert "--continue" not in base.command
     assert "--session" not in base.command
 
@@ -144,8 +145,8 @@ def test_resume_hint_ignores_stale_pool_leftover(tmp_path, capsys):
     stale = _seed(wk, "20240101_01a09d62.jsonl")
     os.utime(stale, (1000, 1000))  # long before "now"
 
-    _print_resume_hint(pi, home, "pi", since=time_now())
-    assert "session saved" not in capsys.readouterr().out
+    _print_resume_hint(pi, home, "s-000000", since=time_now())
+    assert "conversation saved" not in capsys.readouterr().out
 
 
 def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
@@ -160,9 +161,9 @@ def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
     fresh = _seed(wk, "20240102_deadbeef.jsonl")
     os.utime(fresh, (start + 5, start + 5))  # written during this run
 
-    _print_resume_hint(pi, home, "pi", since=start)
+    _print_resume_hint(pi, home, "s-000000", since=start)
     out = capsys.readouterr().out
-    assert "session saved" in out
+    assert "conversation saved" in out and "glove up --session deadbeef" in out
     assert "deadbeef" in out
 
 
@@ -175,17 +176,16 @@ def time_now() -> float:
 # --- grant-widening -------------------------------------------------------------
 
 def test_widening_detects_broader_grants():
-    prev = Config(net=["none"], plugins=[], allow_root=False)
+    prev = Config(extensions={"llm": {}}, allow_root=False)
     cur = Config(
-        net=["service"],
-        plugins=["search"],
+        extensions={"llm": {"model": "x"}, "direct": {}, "search": {}},
         allow_root=True,
         add_dirs=[AddDir("/data", "rw")],
     )
     warns = widening_warnings(prev, cur)
     joined = "\n".join(warns)
-    assert "net" in joined
     assert "search" in joined
+    assert "llm settings changed" in joined
     assert "allow_root" in joined
     assert "/data" in joined
 
@@ -198,11 +198,11 @@ def test_widening_ro_to_rw_upgrade():
 
 
 def test_widening_no_change_silent():
-    cfg = Config(net=["service"], plugins=["search"])
+    cfg = Config(extensions={"direct": {}, "search": {}})
     assert widening_warnings(cfg, cfg) == []
 
 
 def test_widening_narrowing_silent():
-    prev = Config(net=["service"], allow_root=True)
-    cur = Config(net=["none"], allow_root=False)
+    prev = Config(extensions={"direct": {}}, allow_root=True)
+    cur = Config(allow_root=False)
     assert widening_warnings(prev, cur) == []

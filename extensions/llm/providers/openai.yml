@@ -1,0 +1,8 @@
+name: openai
+api: openai-completions
+host: api.openai.com
+base_path: /v1
+locations: [internet]
+auth: { header: Authorization, scheme: Bearer, required: true }
+models_endpoint: /v1/models
+defaults: { vision: true, context_window: 128000, max_tokens: 16384, reasoning: false }

@@ -16,6 +16,16 @@
     "allowedDomains": [],
     "deniedDomains": []
   },
-  "allowUnixSockets": [],
-  "enableWeakerNestedSandbox": true
+  "credentials": {
+    "envVars": [
+      {
+        "name": "GLOVE_LLM_API_KEY",
+        "mode": "deny"
+      }
+    ]
+  },
+  "enableWeakerNestedSandbox": true,
+  "seccomp": {
+    "applyPath": "/opt/glove/srt/apply-seccomp"
+  }
 }

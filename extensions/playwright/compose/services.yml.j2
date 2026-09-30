@@ -1,0 +1,47 @@
+services:
+{% if settings.mode in ["headless", "novnc"] %}
+  # The browser sidecar: Chromium + the Playwright MCP on :8931. Only on
+  # browser-net (internal), whose other members are the harness's `browser`
+  # forwarder and the `browser-egress` hop to the egress proxy: no route off
+  # it, no CDP port, no published port. novnc's VNC/websockify listen on this
+  # container's loopback only (`glove browser view` reaches them via exec).
+  pw:
+    image: "{{ images.pw }}"
+    init: true
+    command: ["glove-pw-start", "{{ settings.mode }}"]
+    networks: [browser-net]
+    shm_size: 256m
+    tmpfs: ["/tmp:size=768m,mode=1777", "/home/pw:size=256m,mode=1777"]
+    environment:
+      HOME: /home/pw
+      TZ: "{{ settings.timezone }}"
+      PW_VIEWPORT: "{{ settings.viewport }}"
+      PW_SANDBOX: "{{ settings.chromium_sandbox }}"
+      PW_PROFILE: "{{ settings.profile }}"
+      PW_ALLOWED_HOST: "{{ endpoint.browser.host }}:8931"
+      PW_PROXY: "{{ endpoint['browser-egress'].url }}"
+{% if settings.mode == "novnc" %}
+      VNC_ACCEPT_INPUT: "{{ settings.allow_control | lower }}"
+      VNC_CLIPBOARD: "{{ settings.clipboard }}"
+{% endif %}
+    volumes:
+{% if settings.downloads == "work" %}
+      - { type: bind, source: "{{ work }}/browser-output", target: /data/output }
+{% else %}
+      - { type: bind, source: "{{ state }}/output", target: /data/output }
+{% endif %}
+      - { type: bind, source: "{{ state }}/mcp.json", target: /etc/glove/playwright/mcp.json, read_only: true }
+{% if settings.profile == "session" %}
+      - { type: bind, source: "{{ state }}/profile", target: /data/profile }
+{% endif %}
+{% if settings.uploads == "work" %}
+      - { type: bind, source: "{{ work }}/browser-uploads", target: /data/uploads, read_only: true }
+{% endif %}
+    # stated here: the base image is an OCI index, which carries no healthcheck
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8931"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+{% endif %}

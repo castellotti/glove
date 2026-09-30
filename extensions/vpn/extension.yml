@@ -1,0 +1,56 @@
+api: 1
+name: vpn
+summary: Route all session egress through a gluetun VPN tunnel (WireGuard or OpenVPN); route vpn.
+provides: [egress]
+settings:
+  provider:         { type: string, required: true }   # any gluetun VPN_SERVICE_PROVIDER, or `custom`
+  type:             { type: enum, values: [wireguard, openvpn], default: wireguard }
+  wireguard_key:    { type: secret }                    # keychain:<service> | env:<VAR>
+  addresses:        { type: string }                    # WIREGUARD_ADDRESSES, when the provider needs it
+  public_key:       { type: string }                    # custom: the server's public key
+  endpoint:         { type: string, pattern: '[0-9.]+:[0-9]{1,5}' }   # custom: server ip:port
+  openvpn_user:     { type: secret }
+  openvpn_password: { type: secret }
+  countries:        { type: list, default: [] }
+  cities:           { type: list, default: [] }
+  hostnames:        { type: list, default: [] }
+  # An executable in the session's local/ that registers a fresh WireGuard key
+  # at every `glove up` (see README): user/pass on stdin, WIREGUARD_* on stdout.
+  register_hook:    { type: path, within: session }
+  register_user:    { type: secret }
+  register_pass:    { type: secret }
+  check_url:        { type: string, default: "https://am.i.mullvad.net/ip" }
+validate:
+  - when: { type: wireguard, wireguard_key: null, register_hook: null }
+    error: "set `wireguard_key: keychain:<service>` (store it with `glove keychain set <service>`) or a `register_hook`"
+  - when: { type: openvpn, openvpn_user: null }
+    error: "type openvpn needs `openvpn_user` and `openvpn_password` (keychain:<service> refs)"
+  - when: { type: openvpn, openvpn_password: null }
+    error: "type openvpn needs `openvpn_user` and `openvpn_password` (keychain:<service> refs)"
+hooks: hooks.py
+exports:
+  proxy_host: "glove-{{ session.id }}-gluetun"
+  proxy_port: 8888
+  proxy_url: "http://glove-{{ session.id }}-gluetun:8888"
+  route: vpn
+  anonymising: true                    # hides the operator's address: browsers on the host would bypass it
+  resolver: "dns://glove-{{ session.id }}-gluetun:53"
+  network: egress
+services: compose/services.yml.j2
+privileges:
+  # gluetun configures the tunnel, routes and its kill-switch firewall itself
+  # (root + NET_ADMIN + the tun device) and writes /etc/passwd at start.
+  # It never shares a network with the harness. Its DNS server (the gates'
+  # in-tunnel resolver) listens on :53, with no NET_BIND_SERVICE: low_ports.
+  gluetun: { user_root: true, read_only: false, cap_add: [NET_ADMIN], devices: [/dev/net/tun], low_ports: true }
+limits:
+  gluetun: { pids: 256, memory: 256m }
+secrets:
+  wireguard_private_key: { from: wireguard_key, when: { type: wireguard } }
+  openvpn_user:          { from: openvpn_user, when: { type: openvpn } }
+  openvpn_password:      { from: openvpn_password, when: { type: openvpn } }
+verify:
+  - { name: tunnel-up, kind: container-healthy, service: gluetun, timeout: 120 }
+  - { name: exit-not-host, kind: exit-ip-differs, echo_url: "{{ settings.check_url }}", service: gluetun }
+harness:
+  brief: brief.md

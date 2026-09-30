@@ -1,0 +1,9 @@
+api: 1
+name: gate
+summary: The netgate (library) — instrumented forwarder, collector and corporate egress proxy image.
+# A library: added automatically by the extensions that run a gate (observe,
+# corporate); never selected on its own.
+auto: true
+selectable: false
+images:
+  netgate: { build: netgate }

@@ -28,6 +28,9 @@ class HarnessProfile:
     # `config_home_path`. Pi/Vibe nest them under `sessions/<project>/`; Claude
     # Code uses `projects/<slug>/`. sessions_dir joins this onto the host home.
     sessions_subdir: str = "sessions"
+    # The directory observe's `transcripts: true` exports (relative to
+    # `config_home_path`); None ⇒ this harness's transcripts are not exported.
+    transcript_subdir: str | None = "sessions"
     default_env: dict[str, str] = field(default_factory=dict)
     # Read-only paths the harness's own interpreter/runtime needs beyond nono's
     # default system reads — e.g. the python venv or node prefix the entry binary
@@ -35,10 +38,13 @@ class HarnessProfile:
     # can actually launch the TUI (its shebang/interpreter lives here). Omitting
     # them makes the harness exec fail with exit 127 under Landlock.
     runtime_paths: tuple[str, ...] = ("/usr/local",)
-    # Command that installs Python packages into the image, for plugin/user `pip`
+    # Command that installs Python packages into the image, for extension/user `pip`
     # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
-    # error). Vibe installs via uv; the Node-based harnesses have none.
+    # error). Vibe installs via uv; Pi via Debian's pip3 (see pip_bootstrap).
     pip_install: tuple[str, ...] | None = None
+    # apt packages a `pip` layer needs first (installed once, before the first
+    # pip layer), for a base image without Python.
+    pip_bootstrap: tuple[str, ...] = ()
     # Resume-flag mapping (see resume_args). `resume_continue` re-opens the most
     # recent session; `resume_session` re-opens a specific id — the literal
     # "{id}" token is replaced with the requested session id. None ⇒ the harness
@@ -71,9 +77,9 @@ class HarnessProfile:
 _REGISTRY: dict[str, HarnessProfile] = {
     "vibe": HarnessProfile(
         name="vibe",
-        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
-        # pre_tool hook) only. Optional capabilities are opt-in plugins.
-        image="glove/vibe:0.4.0",
+        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
+        # glove-pty, pre_tool hook) only. Optional capabilities are opt-in extensions.
+        image="glove/vibe:0.5.0",
         entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
         config_home_env="VIBE_HOME",
         config_home_path="/home/agent/.vibe",
@@ -90,16 +96,17 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # not --resume. A specific id is `--resume <id>`.
         resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),
+        transcript_subdir="logs/session",
     ),
     "pi": HarnessProfile(
         name="pi",
-        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
-        # enforcer extension) only. Optional capabilities are opt-in plugins.
-        image="glove/pi:0.4.0",
+        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
+        # glove-pty, enforcer extension) only. Optional capabilities are opt-in extensions.
+        image="glove/pi:0.5.0",
         # Load only the always-on ring-1 `enforcer` extension (deps are node
         # builtins) from a system path; the user's own extensions still load from
         # the config home. Capability extensions (search, browser) are opt-in
-        # plugins added to this entry when enabled — absent by default.
+        # extensions added to this entry when enabled — absent by default.
         entry=[
             "pi",
             "-e", "/opt/glove/pi-extensions/enforcer",
@@ -113,6 +120,9 @@ _REGISTRY: dict[str, HarnessProfile] = {
             "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
             "PI_OFFLINE": "1",
         },
+        # Debian bookworm's python3 (3.11): pip needs --break-system-packages (PEP 668)
+        pip_install=("pip3", "install", "--no-cache-dir", "--break-system-packages"),
+        pip_bootstrap=("python3", "python3-pip"),
         # `pi --continue` reopens the last session; `--session <id>` accepts a
         # path or partial UUID.
         resume_continue=("--continue",),
@@ -128,6 +138,7 @@ _REGISTRY: dict[str, HarnessProfile] = {
         default_env={"CLAUDE_CONFIG_DIR": "/home/agent/.claude"},
         # CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
         sessions_subdir="projects",
+        transcript_subdir=None,
         # Documented CC flags; image is a stub — wired but untested.
         resume_continue=("--continue",),
         resume_session=("--resume", "{id}"),
@@ -135,55 +146,24 @@ _REGISTRY: dict[str, HarnessProfile] = {
 }
 
 
-def _image_contributing_plugins(plugins: list[str], harness: str) -> list[str]:
-    """Subset of plugin names that add image layers for ``harness``.
-
-    Imported lazily: the plugins package imports ``HarnessProfile`` from here, so
-    a top-level import would cycle. Unknown names are left in place so tag
-    computation stays a pure function and the loud "unknown plugin" error still
-    surfaces where plugins are actually resolved."""
-    if not plugins:
-        return plugins
-    from .plugins import get_plugin
-
-    contributing: list[str] = []
-    for name in plugins:
-        try:
-            plugin = get_plugin(name)
-        except ValueError:
-            contributing.append(name)
-            continue
-        if plugin.layers_for(harness):
-            contributing.append(name)
-    return contributing
-
-
 def effective_image(
     profile: HarnessProfile,
     apt_packages: list[str] | None = None,
     pip_packages: list[str] | None = None,
-    plugins: list[str] | None = None,
+    derived: str | None = None,
 ) -> str:
-    """Image tag for a profile, suffixed with a hash when extra packages or
-    plugins are requested so each distinct set gets its own image (and rebuilds).
-
-    Plugin names are part of the hash: a plugin name deterministically maps to
-    its image contribution, so the set of enabled plugins uniquely identifies the
-    composed image. Only plugins that actually contribute image layers *for this
-    harness* count — one whose contribution is purely runtime wiring (e.g.
-    ``browser`` on Vibe, which adds an MCP server but no layer) leaves the image
-    byte-identical to the base, so it must not force a distinct tag and a
-    redundant derived build. With nothing extra, returns the plain minimal base
-    tag."""
+    """Image tag for a profile, suffixed with a hash when extra packages or an
+    extension-derived layer (``derived``: its content hash, see glove/image.py)
+    are requested, so each distinct composition gets its own image. With
+    nothing extra, returns the plain minimal base tag."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    plugins = _image_contributing_plugins(plugins or [], profile.name)
-    if not apt_packages and not pip_packages and not plugins:
+    if not apt_packages and not pip_packages and not derived:
         return profile.image
     payload = (
         "apt:" + ",".join(sorted(apt_packages))
         + "|pip:" + ",".join(sorted(pip_packages))
-        + "|plugins:" + ",".join(sorted(plugins))
+        + "|derived:" + (derived or "")
     )
     digest = hashlib.sha1(payload.encode()).hexdigest()[:10]
     base, sep, tag = profile.image.rpartition(":")

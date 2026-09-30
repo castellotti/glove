@@ -1,17 +1,30 @@
-"""CLI-level tests for the env workflow."""
+"""CLI-level tests for the session-directory workflow (v3 §4)."""
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
+from pathlib import Path
 
 import pytest
+import yaml
+from helpers import make_session
 from typer.testing import CliRunner
 
+from glove import registry as reg
 from glove.cli import app
-from glove.registry import session_dir
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    from glove import cli
+
+    for c in (cli.console, cli.err):
+        monkeypatch.setattr(c, "width", 400)  # no wrapping of long paths in assertions
 
 
 @pytest.fixture
@@ -21,455 +34,476 @@ def home(tmp_path, monkeypatch):
     return ghome
 
 
-def _chdir(monkeypatch, d):
-    d.mkdir(parents=True, exist_ok=True)
-    monkeypatch.chdir(d)
-    return d
+def _sid(d: Path) -> str:
+    return (d / ".glove" / "id").read_text().strip()
 
 
-def _write_llm_cfg(tmp_path):
-    """A minimal overlay declaring one `llm` service the harness dials."""
-    cfg = tmp_path / "over.yaml"
-    cfg.write_text(
-        "net: [service]\n"
-        "model: m\n"
-        "services:\n"
-        "  - { name: llm, to: example.test:8080, port: 8080 }\n"
-    )
-    return cfg
+def _lan(extra: str = "") -> str:
+    return "{provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m" + extra + "}"
 
 
-def _pi_llm_base(env_id, session):
-    """The Pi `glove` provider baseUrl from a session's rendered models.json."""
-    models_json = session_dir(env_id, session) / "home" / ".pi" / "agent" / "models.json"
-    return json.loads(models_json.read_text())["providers"]["glove"]["baseUrl"]
+# --- glove new ------------------------------------------------------------------------
 
 
-def test_init_writes_only_under_glove_home(home, tmp_path, monkeypatch):
-    wd = _chdir(monkeypatch, tmp_path / "pi-local")
-    result = runner.invoke(app, ["init", "pi"])
+def test_new_minimal_materializes_the_layout(home, tmp_path):
+    d = tmp_path / "My Research.1"
+    result = runner.invoke(app, ["new", "minimal", str(d)])
     assert result.exit_code == 0, result.output
-    # cwd untouched
-    assert list(wd.iterdir()) == []
-    # env config written under GLOVE_HOME/envs/<id>/
-    assert (home / "envs" / "pi-local" / "glove.yaml").is_file()
-    assert (home / "registry.json").is_file()
+    assert (d / "glove-session.yml").is_file() and (d / "work").is_dir()
+    assert stat.S_IMODE((d / ".glove").stat().st_mode) == 0o700
+    sid = _sid(d)
+    assert sid.startswith("my-research-1-") and len(sid.rsplit("-", 1)[1]) == 6
+    assert "extensions.llm.provider" in result.output  # the <set-me>s to fill in
+    doc = json.loads((home / "registry.json").read_text())
+    assert doc["v"] == 2
+    row = doc["sessions"][0]
+    assert row["id"] == sid and row["dir"] == str(d.resolve()) and row["template"] == "minimal"
+    assert row["harness"] == "pi" and row["grants"] == {"observe": None, "filter": None}
+    assert row["subnet"] == "172.31.0.0/24"
+    assert (home / "control").is_dir()  # Layman's overlay condition (handoff §2)
 
 
-def test_two_harnesses_one_dir_distinct_envs(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
-    ids = {d.name for d in (home / "envs").iterdir()}
-    assert ids == {"pi-local", "pi-local-vibe"}
+def test_new_refuses_an_existing_session_and_unknown_templates(home, tmp_path):
+    d = tmp_path / "s"
+    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
+    again = runner.invoke(app, ["new", "minimal", str(d)])
+    assert again.exit_code == 1 and "already" in again.output
+    bad = runner.invoke(app, ["new", "no-such-template", str(tmp_path / "t")])
+    assert bad.exit_code == 1 and "minimal" in bad.output  # lists the bundled ones
 
 
-def test_run_without_env_errors_with_hint(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "wd")
-    result = runner.invoke(app, ["run", "pi"])
-    assert result.exit_code == 1
-    assert "glove init pi" in result.output
+def test_new_from_a_path_and_diff(home, tmp_path):
+    tpl = make_session(tmp_path / "tpl")
+    d = tmp_path / "s"
+    assert runner.invoke(app, ["new", str(tpl), str(d)]).exit_code == 0
+    assert "unchanged" in runner.invoke(app, ["new", "--diff", "x", str(d)]).output
+    (tpl / "glove-session.yml").write_text((tpl / "glove-session.yml").read_text() + "brief: new\n")
+    assert "+brief: new" in runner.invoke(app, ["new", "--diff", "x", str(d)]).output
 
 
-def test_run_dry_run_renders_under_env(home, tmp_path, monkeypatch):
-    work = tmp_path / "work"
-    work.mkdir()
-    _chdir(monkeypatch, tmp_path / "vibe-local")
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
-    result = runner.invoke(
-        app, ["run", "vibe", "--workdir", str(work), "--dry-run"]
-    )
+def test_new_refuses_to_overwrite_a_v2_registry(home, tmp_path):
+    home.mkdir()
+    (home / "registry.json").write_text('[{"dir": "/x", "harness": "pi", "env_id": "x"}]')
+    result = runner.invoke(app, ["new", "minimal", str(tmp_path / "s")])
+    assert result.exit_code == 1 and "glove v2 registry" in result.output
+    assert not (tmp_path / "s").exists()
+    assert json.loads((home / "registry.json").read_text())[0]["env_id"] == "x"  # untouched
+
+
+# --- plan / up ----------------------------------------------------------------------
+
+
+def test_plan_renders_under_dot_glove(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s")
+    monkeypatch.chdir(d / "work")  # found from a subdirectory
+    result = runner.invoke(app, ["plan", "--compose"])
     assert result.exit_code == 0, result.output
-    assert "name: glove-vibe-local" in result.output
-    # compose renders under sessions/<session>/ (default session == env-id)
-    sdir = home / "envs" / "vibe-local" / "sessions" / "vibe-local"
-    assert (sdir / "docker-compose.yml").is_file()
-    # harness home seeded per-session, under the session dir (not the env root)
-    assert (sdir / "home" / ".vibe" / "config.toml").is_file()
+    sid = _sid(d)
+    compose = yaml.safe_load((d / ".glove" / "compose.yml").read_text())
+    harness = compose["services"][f"glove-{sid}-harness"]
+    sources = set()
+    for v in harness["volumes"]:
+        sources.add(v.split(":")[0] if isinstance(v, str) else v.get("source"))
+    assert str((d / "work").resolve()) in sources and str((d / ".glove" / "home").resolve()) in sources
+    # nothing else of the session dir is mounted: not the dir, not .glove/ itself
+    assert not sources & {str(d.resolve()), str((d / ".glove").resolve())}
+    # the default enforcer on docker: srt around the harness, nono per command
+    assert {p.name for p in (d / ".glove" / "enforcer").iterdir()} >= {"srt-harness.json", "tool.json"}
+    assert (d / ".glove" / "effective.yml").is_file() and (d / ".glove" / "baseline.yml").is_file()
+    nets = compose["networks"]
+    assert nets[f"glove-{sid}-net"]["ipam"]["config"][0]["subnet"] == "172.31.0.0/27"
+    assert nets[f"glove-{sid}-hostgw"]["ipam"]["config"][0]["subnet"] == "172.31.0.32/27"
+    base = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())["providers"]["glove"]["baseUrl"]
+    assert base == f"http://glove-{sid}-llm:8080/v1"
 
 
-def test_named_session_llm_base_matches_sidecar(home, tmp_path, monkeypatch):
-    # Regression: a `--name`d session's llm sidecar is glove-<env>-<name>-llm,
-    # so the Pi baseUrl must be built from the resolved session token, not the
-    # bare env-id — otherwise Pi dials a host that doesn't exist ("Connection
-    # error"). Default (unnamed) sessions happened to match and hid this.
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    cfg = _write_llm_cfg(tmp_path)
-    result = runner.invoke(
-        app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
-    )
+def test_two_sessions_get_distinct_ids_projects_and_subnets(home, tmp_path):
+    a, b = make_session(tmp_path / "a" / "proj"), make_session(tmp_path / "b" / "proj")
+    for d in (a, b):
+        assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    assert _sid(a) != _sid(b) and _sid(a).startswith("proj-") and _sid(b).startswith("proj-")
+    assert {e.subnet for e in reg.load_registry()} == {"172.31.0.0/24", "172.31.1.0/24"}
+
+
+def test_up_refuses_placeholders(home, tmp_path):
+    d = tmp_path / "s"
+    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 1 and "<set-me>" in result.output
+
+
+def test_not_a_session_errors_with_a_hint(home, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["up"])
+    assert result.exit_code == 1 and "glove new" in result.output
+
+
+@pytest.mark.parametrize(("extra", "msg"), [("workdir: .\n", "work/ directory"),
+                                            ("net: [service]\n", "only from extensions"),
+                                            ("add_dirs: [/x]\n", "mounts"), ("frobnicate: 1\n", "unknown key")])
+def test_v2_keys_and_unknown_keys_are_refused(home, tmp_path, extra, msg):
+    d = make_session(tmp_path / "s", extra)
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 1 and msg in result.output
+
+
+@pytest.mark.parametrize("mount", [".", ".glove", ".glove/home", "local", "glove-session.yml", ".."])
+def test_mounts_never_expose_the_session_state(home, tmp_path, mount):
+    d = make_session(tmp_path / "p" / "s", f"mounts: [{{path: \"{mount}\", mode: ro}}]\n")
+    (d / "local").mkdir()
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 1 and "would expose" in result.output
+
+
+def test_a_relative_mount_resolves_against_the_session_dir(home, tmp_path):
+    d = make_session(tmp_path / "s", "mounts: [{path: data, mode: ro}]\n")
+    (d / "data").mkdir()
+    result = runner.invoke(app, ["plan", str(d)])
     assert result.exit_code == 0, result.output
-    host = "glove-pi-local-feature-llm"
-    # The sidecar is named with the full token in the rendered compose...
-    assert host in result.output
-    # ...and the Pi provider baseUrl must point at that same host. The home is
-    # per-session, so the named session's config lives under sessions/feature/.
-    assert _pi_llm_base("pi-local", "feature") == f"http://{host}:8080/v1"
+    assert str((d / "data").resolve()) in result.output
 
 
-def test_coexisting_sessions_get_isolated_homes(home, tmp_path, monkeypatch):
-    # Regression: the harness home is per-session. Two sessions of one env
-    # coexisting must not share one home/, or the second render clobbers the
-    # first's models.json and repoints it at a sidecar that isn't on its
-    # network (the "Connection error" the baseUrl fix set out to eliminate).
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    cfg = _write_llm_cfg(tmp_path)
-    # Default (unnamed) session, then a --name'd one from the same env.
-    assert runner.invoke(
-        app, ["run", "pi", "--config", str(cfg), "--dry-run"]
-    ).exit_code == 0
-    assert runner.invoke(
-        app, ["run", "pi", "--name", "feature", "--config", str(cfg), "--dry-run"]
-    ).exit_code == 0
-
-    # Each session's config survived the other's render, pointing at its own llm.
-    assert _pi_llm_base("pi-local", "pi-local") == "http://glove-pi-local-llm:8080/v1"
-    assert _pi_llm_base("pi-local", "feature") == "http://glove-pi-local-feature-llm:8080/v1"
+def test_a_moved_session_keeps_its_id_and_updates_the_registry(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    sid = _sid(d)
+    moved = tmp_path / "elsewhere"
+    d.rename(moved)
+    result = runner.invoke(app, ["plan", str(moved)])
+    assert result.exit_code == 0 and "moved" in result.output
+    assert _sid(moved) == sid and reg.find(sid).dir == str(moved.resolve())
 
 
-def test_run_records_resolved_home_in_registry(home, tmp_path, monkeypatch):
-    from glove import registry
-
-    work = tmp_path / "work"
-    work.mkdir()
-    _chdir(monkeypatch, tmp_path / "vibe-local")
-    assert runner.invoke(app, ["init", "vibe"]).exit_code == 0
-    # Fresh registration has no home yet.
-    assert registry.load_registry()[0].home is None
-    result = runner.invoke(
-        app, ["run", "vibe", "--workdir", str(work), "--dry-run"]
-    )
-    assert result.exit_code == 0, result.output
-    # run records the resolved home as an abs realpath. The home is per-session
-    # (sessions/<session>/home), so the default session records its own home.
-    (entry,) = registry.load_registry()
-    expected = os.path.realpath(
-        str(home / "envs" / "vibe-local" / "sessions" / "vibe-local" / "home")
-    )
-    assert entry.home == expected
+def test_a_copied_session_is_refused_until_it_gets_its_own_id(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    copy = tmp_path / "copy"
+    shutil.copytree(d, copy)
+    result = runner.invoke(app, ["plan", str(copy)])
+    assert result.exit_code == 1 and "same session id" in result.output
+    (copy / ".glove" / "id").unlink()
+    assert runner.invoke(app, ["plan", str(copy)]).exit_code == 0
+    assert _sid(copy) != _sid(d)
 
 
-def test_forced_env_with_config_registers_and_records_home(home, tmp_path, monkeypatch):
-    # Regression: `glove <h> --env X --config Y` (no prior `glove init`) forced an
-    # env-id that _resolve_run_env returned without registering, so record_home
-    # found no row to update and the session stayed invisible to external monitors
-    # (Layman). The forced env must now be registered and its resolved (relocated)
-    # home recorded — this is the pi-rag launcher pattern.
-    from glove import registry
-
-    relocated = tmp_path / "relocated-home"
-    cfg = tmp_path / "over.yaml"
-    cfg.write_text(f"config_home_source: {relocated}\n")
-    _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
-
-    # No `glove init` first; --env forces the id, --config supplies the overlay.
-    result = runner.invoke(
-        app, ["run", "vibe", "--env", "one-off", "--config", str(cfg), "--dry-run"]
-    )
-    assert result.exit_code == 0, result.output
-
-    (entry,) = registry.load_registry()
-    assert entry.env_id == "one-off"
-    assert entry.harness == "vibe"
-    assert entry.dir == os.path.realpath(str(tmp_path / "proj"))
-    # The home recorded is the relocated one glove resolved from config_home_source.
-    assert entry.home == os.path.realpath(str(relocated))
+# --- resume ---------------------------------------------------------------------------
 
 
-def test_forced_env_registers_when_harness_comes_from_config(home, tmp_path, monkeypatch):
-    # `glove run --env X --config Y` with no positional harness is a valid
-    # invocation: the harness is resolved from the config. Registration must still
-    # happen — it is deferred until the effective harness is known — so this form
-    # is not left invisible to monitors the way the explicit-harness form was.
-    from glove import registry
-
-    relocated = tmp_path / "relocated-home"
-    cfg = tmp_path / "over.yaml"
-    cfg.write_text(f"harness: vibe\nconfig_home_source: {relocated}\n")
-    _chdir(monkeypatch, tmp_path / "proj")  # cwd not bound to any env
-
-    result = runner.invoke(
-        app, ["run", "--env", "one-off", "--config", str(cfg), "--dry-run"]
-    )
-    assert result.exit_code == 0, result.output
-
-    (entry,) = registry.load_registry()
-    assert entry.env_id == "one-off"
-    assert entry.harness == "vibe"
-    assert entry.dir == os.path.realpath(str(tmp_path / "proj"))
-    assert entry.home == os.path.realpath(str(relocated))
-
-
-def test_forced_env_selecting_existing_env_is_not_rebound(home, tmp_path, monkeypatch):
-    # `--env` selects an existing env "ignoring cwd"; registering the one-off case
-    # above must not clobber that. Init env `keep` in one dir, then `run --env keep`
-    # from a *different* cwd: the registry entry's dir stays the init dir.
-    from glove import registry
-
-    initdir = _chdir(monkeypatch, tmp_path / "keepdir")
-    assert runner.invoke(app, ["init", "vibe", "--name", "keep"]).exit_code == 0
-
-    _chdir(monkeypatch, tmp_path / "elsewhere")  # a different, unbound cwd
-    result = runner.invoke(app, ["run", "vibe", "--env", "keep", "--dry-run"])
-    assert result.exit_code == 0, result.output
-
-    (entry,) = registry.load_registry()
-    assert entry.env_id == "keep"
-    # Still bound to the init dir, not rebound to `elsewhere`.
-    assert entry.dir == os.path.realpath(str(initdir))
-
-
-def test_down_tears_down_named_sessions_too(home, tmp_path, monkeypatch):
-    # Regression: `glove down <env>` must tear down every session, including
-    # --name'd ones whose compose project is glove-<env>-<name>, not just the
-    # default unnamed session.
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-
-    sessions = home / "envs" / "pi-local" / "sessions"
-    for sname, token in (("pi-local", "pi-local"), ("feat", "pi-local-feat")):
-        sdir = sessions / sname
-        sdir.mkdir(parents=True)
-        (sdir / "glove.effective.yaml").write_text(f"harness: pi\nname: {token}\n")
-
-    torn: list[str] = []
-    import glove.session as session_mod
-
-    monkeypatch.setattr(session_mod, "teardown", lambda s, **kw: torn.append(s))
-
-    result = runner.invoke(app, ["down", "pi-local"])
-    assert result.exit_code == 0, result.output
-    assert set(torn) == {"pi-local", "pi-local-feat"}
-
-
-def test_down_name_narrows_to_one_session(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    sdir = home / "envs" / "pi-local" / "sessions" / "feat"
-    sdir.mkdir(parents=True)
-    (sdir / "glove.effective.yaml").write_text("harness: pi\nname: pi-local-feat\n")
-
-    torn: list[str] = []
-    import glove.session as session_mod
-
-    monkeypatch.setattr(session_mod, "teardown", lambda s, **kw: torn.append(s))
-
-    result = runner.invoke(app, ["down", "pi-local", "--name", "feat"])
-    assert result.exit_code == 0, result.output
-    assert torn == ["pi-local-feat"]
-
-
-def _seed_transcript(home, env_id, session, uuid="01a09d62"):
-    """Seed a fake Pi transcript under a session's persistent home."""
-    tdir = (
-        session_dir(env_id, session)
-        / "home" / ".pi" / "agent" / "sessions" / "--work--"
-    )
+def _seed_transcript(d: Path, uuid="01a09d62"):
+    tdir = d / ".glove" / "home" / ".pi" / "agent" / "sessions" / "--work--"
     tdir.mkdir(parents=True, exist_ok=True)
-    f = tdir / f"20240101_{uuid}.jsonl"
-    f.write_text("{}\n")
+    (tdir / f"20240101_{uuid}.jsonl").write_text("{}\n")
     return uuid
 
 
-def test_resume_and_session_mutually_exclusive(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    result = runner.invoke(app, ["run", "pi", "--resume", "--session", "x"])
-    assert result.exit_code == 1
-    assert "not both" in result.output
+def test_resume_and_session_mutually_exclusive(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    for cmd in ("up", "plan"):
+        result = runner.invoke(app, [cmd, str(d), "--resume", "--session", "x"])
+        assert result.exit_code == 1 and "not both" in result.output
 
 
-def test_resume_no_prior_session_errors(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
-    assert result.exit_code == 1
-    assert "no previous session to resume" in result.output
+def test_resume_no_prior_conversation_errors(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    result = runner.invoke(app, ["plan", str(d), "--resume"])
+    assert result.exit_code == 1 and "no previous conversation" in result.output
 
 
-def _compose_text(home, env_id, session):
-    return (
-        session_dir(env_id, session) / "docker-compose.yml"
-    ).read_text()
+def test_resume_renders_continue_inside_the_wrapper(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    _seed_transcript(d)
+    assert runner.invoke(app, ["plan", str(d), "--resume"]).exit_code == 0
+    compose = (d / ".glove" / "compose.yml").read_text()
+    assert "--continue" in compose and compose.index("--continue") > compose.index("--")
 
 
-def test_resume_dry_run_renders_continue(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    _seed_transcript(home, "pi-local", "pi-local")
-    result = runner.invoke(app, ["run", "pi", "--resume", "--dry-run"])
-    assert result.exit_code == 0, result.output
-    # flag lands inside the nono wrapper, after `pi -e …`
-    compose = _compose_text(home, "pi-local", "pi-local")
-    assert "--continue" in compose
-    assert compose.index("--continue") > compose.index("--")
-
-
-def test_session_dry_run_renders_id(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    uuid = _seed_transcript(home, "pi-local", "pi-local")
-    result = runner.invoke(app, ["run", "pi", "--session", uuid, "--dry-run"])
-    assert result.exit_code == 0, result.output
-    compose = _compose_text(home, "pi-local", "pi-local")
+def test_session_renders_id_and_lists_available_when_missing(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    uuid = _seed_transcript(d)
+    assert runner.invoke(app, ["plan", str(d), "--session", uuid]).exit_code == 0
+    compose = (d / ".glove" / "compose.yml").read_text()
     assert "--session" in compose and uuid in compose
+    missing = runner.invoke(app, ["plan", str(d), "--session", "nope"])
+    assert missing.exit_code == 1 and "no conversation matching" in missing.output and uuid in missing.output
 
 
-def test_session_missing_lists_available(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    uuid = _seed_transcript(home, "pi-local", "pi-local")
-    result = runner.invoke(app, ["run", "pi", "--session", "nope", "--dry-run"])
-    assert result.exit_code == 1
-    assert "no session matching" in result.output
-    assert uuid in result.output  # available ids listed
-
-
-def test_resume_composes_with_net_change(home, tmp_path, monkeypatch):
-    # Grant change (llm sidecar via --config) composes with the resume flag:
-    # both the sidecar and --session land in the rendered compose command.
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    uuid = _seed_transcript(home, "pi-local", "pi-local")
-    cfg = _write_llm_cfg(tmp_path)
-    result = runner.invoke(
-        app,
-        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
-    )
+def test_resume_grant_widening_warns_against_the_baseline(home, tmp_path):
+    d = make_session(tmp_path / "s")
+    uuid = _seed_transcript(d)
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0  # baseline: llm only
+    f = d / "glove-session.yml"
+    f.write_text(f.read_text() + "allow_sensitive: true\n")
+    result = runner.invoke(app, ["plan", str(d), "--session", uuid])
     assert result.exit_code == 0, result.output
-    compose = _compose_text(home, "pi-local", "pi-local")
-    assert "glove-pi-local-llm" in compose  # llm sidecar rendered
-    assert "--session" in compose and uuid in compose  # + resume flag
+    assert "broader access" in result.output and "allow_sensitive" in result.output
+    # the baseline is the original, not the last run: a second widened run warns again
+    assert "broader access" in runner.invoke(app, ["plan", str(d), "--session", uuid]).output
 
 
-def test_resume_grant_widening_warns(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    uuid = _seed_transcript(home, "pi-local", "pi-local")
-    # Original baseline ran with no network; resume widening to net: [service].
-    baseline = session_dir("pi-local", "pi-local") / "glove.baseline.yaml"
-    baseline.parent.mkdir(parents=True, exist_ok=True)
-    baseline.write_text("harness: pi\nname: pi-local\nnet: [none]\n")
-    cfg = _write_llm_cfg(tmp_path)
-    result = runner.invoke(
-        app,
-        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
-    )
-    assert result.exit_code == 0, result.output
-    assert "broader access" in result.output
-    assert "net" in result.output
-
-
-def test_resume_widening_compares_original_not_prev_run(home, tmp_path, monkeypatch):
-    # Regression: the baseline is the *original* session config and is not
-    # overwritten by an intervening narrower run, so widening back to the
-    # original's grants must not warn (finding 5).
-    _chdir(monkeypatch, tmp_path / "pi-local")
-    assert runner.invoke(app, ["init", "pi"]).exit_code == 0
-    uuid = _seed_transcript(home, "pi-local", "pi-local")
-    # Original session already had a network sidecar; a later run narrowed to none
-    # (effective.yaml drifted) but the baseline still records the wide original.
-    sdir = session_dir("pi-local", "pi-local")
-    sdir.mkdir(parents=True, exist_ok=True)
-    original = (
-        "harness: pi\nname: pi-local\nnet: [service]\nmodel: m\n"
-        "services:\n  - { name: llm, to: example.test:8080, port: 8080 }\n"
-    )
-    (sdir / "glove.baseline.yaml").write_text(original)
-    (sdir / "glove.effective.yaml").write_text(
-        "harness: pi\nname: pi-local\nnet: [none]\n"
-    )
-    cfg = _write_llm_cfg(tmp_path)  # net: [service] + llm, == the original
-    result = runner.invoke(
-        app,
-        ["run", "pi", "--config", str(cfg), "--session", uuid, "--dry-run"],
-    )
-    assert result.exit_code == 0, result.output
-    assert "broader access" not in result.output
-
-
-def test_ls_lists_registered_envs(home, tmp_path, monkeypatch):
-    _chdir(monkeypatch, tmp_path / "wd")
-    runner.invoke(app, ["init", "pi"])
-    result = runner.invoke(app, ["ls"])
-    assert result.exit_code == 0
-    assert "wd" in result.output
-    assert "pi" in result.output
+# --- secrets ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("harness", ["pi", "vibe"])
-def test_the_llm_key_is_written_nowhere_under_the_glove_home(home, tmp_path, monkeypatch, harness):
-    """The key stays in the user's config: the compose file names the var with no
-    value, and Pi's models.json references it ("$VAR"), never contains it."""
+def test_the_llm_key_is_written_nowhere(home, tmp_path, monkeypatch, harness):
     secret = "sk-test-0123456789abcdef"
-    _chdir(monkeypatch, tmp_path / "wd")
-    work = tmp_path / "work"
-    work.mkdir()
-    over = _write_llm_cfg(tmp_path)
-    over.write_text(over.read_text() + f"llm_api_key: {secret}\n")
-    result = runner.invoke(
-        app, ["run", harness, "--config", str(over), "--workdir", str(work), "--dry-run"]
-    )
+    monkeypatch.setenv("MY_LLM_KEY", secret)
+    d = make_session(tmp_path / "s", harness=harness, llm=_lan(", api_key: env:MY_LLM_KEY"))
+    result = runner.invoke(app, ["plan", str(d), "--compose"])
     assert result.exit_code == 0, result.output
     assert secret not in result.output
-    hits = [p for p in home.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()]
-    assert hits == []
-    compose = next(home.rglob("docker-compose.yml")).read_text()
-    assert "GLOVE_LLM_API_KEY: null" in compose
+    for root in (home, d):
+        assert [p for p in root.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()] == []
+    assert "GLOVE_LLM_API_KEY: null" in (d / ".glove" / "compose.yml").read_text()
+    assert "api_key: env:MY_LLM_KEY" in (d / ".glove" / "effective.yml").read_text()
     if harness == "pi":
-        models = next(home.rglob("models.json"))
-        assert json.loads(models.read_text())["providers"]["glove"]["apiKey"] == "$GLOVE_LLM_API_KEY"
+        models = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())
+        assert models["providers"]["glove"]["apiKey"] == "$GLOVE_LLM_API_KEY"
+
+
+def test_a_literal_key_is_refused(home, tmp_path):
+    d = make_session(tmp_path / "s", llm=_lan(", api_key: sk-literal-key"))
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 1 and "llm.api_key is a secret: use a reference" in result.output
+    assert "sk-literal-key" not in result.output
+
+
+def test_plan_never_resolves_a_keychain_reference(home, tmp_path, monkeypatch):
+    from glove import config as config_mod
+
+    def boom(*a, **k):
+        raise AssertionError("planning must not resolve the key")
+
+    monkeypatch.setattr(config_mod, "resolve_secret", boom)
+    d = make_session(tmp_path / "s", llm=_lan(", api_key: keychain:my-llm"))
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+
+
+def _launch_plan(tmp_path, api_key):
+    from helpers import STUB_LLM, make_cfg
+
+    from glove.plan import build_session_plan
+    from glove.runtimes.docker import DockerRuntime
+
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), extensions={"llm": {**STUB_LLM, "api_key": api_key}})
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
+    (tmp_path / "compose.yml").write_text(DockerRuntime().render(plan, tmp_path).compose_yaml)
+    return cfg, plan
 
 
 def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, monkeypatch):
     from glove import session as session_mod
-    from glove.config import Config, Service
+    from glove.plan import secret_env
 
     calls = []
     monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
     monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
-    cfg = Config(harness="pi", name="s", llm_api_key="sk-x", net=["service"],
-                 services=[Service(name="llm", to="example.test:8080")])
-    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
+    monkeypatch.setenv("MY_LLM_KEY", "sk-x")
+    cfg, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
+    session_mod.launch(cfg, plan, tmp_path / "compose.yml", provider="docker", rebuild=False,
+                       secrets=secret_env(plan))
     assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
     assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)
+    assert "sk-x" not in (tmp_path / "compose.yml").read_text()
 
 
-def test_a_keychain_reference_is_not_resolved_by_a_dry_run(home, tmp_path, monkeypatch):
-    """Planning needs only the env var name, so a dry-run never reads the
-    Keychain, and the effective config records the reference, not a key."""
+def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
+    from glove.plan import secret_env
+
+    monkeypatch.setenv("MY_LLM_KEY", "sk-env")
+    _, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
+    assert secret_env(plan) == {"GLOVE_LLM_API_KEY": "sk-env"}
+
+
+def test_check_reports_secrets_without_reading_them(home, tmp_path, monkeypatch):
     from glove import config as config_mod
 
     def boom(*a, **k):
-        raise AssertionError("dry-run must not resolve the key")
+        raise AssertionError("check must not resolve the key")
 
     monkeypatch.setattr(config_mod, "resolve_secret", boom)
-    _chdir(monkeypatch, tmp_path / "wd")
-    work = tmp_path / "work"
-    work.mkdir()
-    over = _write_llm_cfg(tmp_path)
-    over.write_text(over.read_text() + "llm_api_key: keychain:my-llm\n")
-    result = runner.invoke(
-        app, ["run", "pi", "--config", str(over), "--workdir", str(work), "--dry-run"]
-    )
-    assert result.exit_code == 0, result.output
-    effective = next(home.rglob("glove.effective.yaml")).read_text()
-    assert "llm_api_key: keychain:my-llm" in effective
-    compose = next(home.rglob("docker-compose.yml")).read_text()
-    assert "GLOVE_LLM_API_KEY: null" in compose
+    monkeypatch.delenv("NOT_SET_KEY", raising=False)
+    d = make_session(tmp_path / "s", llm=_lan(", api_key: env:NOT_SET_KEY"))
+    result = runner.invoke(app, ["check", str(d), "--no-container"])
+    assert result.exit_code == 1 and "NOT_SET_KEY is not set" in result.output
+    assert not (d / ".glove").exists() and not (home / "registry.json").exists()  # check writes nothing
+    monkeypatch.setenv("NOT_SET_KEY", "x")
+    result = runner.invoke(app, ["check", str(d), "--no-container"])
+    assert "secret llm.api_key" in result.output and "is not set" not in result.output
 
 
-def test_launch_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
-    from glove import session as session_mod
-    from glove.config import Config, Service
+# --- ls / down / rm / gc ----------------------------------------------------------------------
 
+
+def test_ls_shows_rows_and_their_state(home, tmp_path):
+    a, b = make_session(tmp_path / "a"), make_session(tmp_path / "b")
+    for d in (a, b):
+        assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    shutil.rmtree(b)
+    out = runner.invoke(app, ["ls"]).output
+    assert _sid(a) in out and "ok" in out and "missing" in out and "glove gc" in out
+
+
+def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
     calls = []
-    monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
-    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
-    monkeypatch.setenv("MY_LLM_KEY", "sk-env")
-    cfg = Config(harness="pi", name="s", llm_api_key="env:MY_LLM_KEY", net=["service"],
-                 services=[Service(name="llm", to="example.test:8080")])
-    session_mod.launch(cfg, tmp_path, provider="docker", rebuild=False)
-    assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-env" for _, k in calls)
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append((sid, k)))
+    assert runner.invoke(app, ["down", str(d), "--provider", "docker"]).exit_code == 0
+    assert calls == [(_sid(d), {"provider": "docker", "wipe": False})]
+
+
+def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
+    monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
+    d = make_session(tmp_path / "s", "  observe: {}\n  filter: {}\n")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    sid = _sid(d)
+    assert (home / "observe" / sid / "net" / "session.json").is_file() and (home / "control" / sid).is_dir()
+    (d / "work" / "keep.txt").write_text("x")
+    assert runner.invoke(app, ["rm", str(d), "--yes", "--provider", "docker"]).exit_code == 0
+    assert not (d / ".glove").exists() and (d / "work" / "keep.txt").is_file()
+    assert (d / "glove-session.yml").exists()
+    assert not (home / "observe" / sid).exists() and not (home / "control" / sid).exists()
+    assert reg.find(sid) is None
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0  # a fresh identity
+    assert runner.invoke(app, ["rm", str(d), "--yes", "--all", "--provider", "docker"]).exit_code == 0
+    assert not d.exists()
+
+
+def test_deleting_the_dir_leaves_only_the_row_and_exports_which_gc_removes(home, tmp_path):
+    d = make_session(tmp_path / "s", "  observe: {transcripts: false}\n")
+    keep = make_session(tmp_path / "keep", "  observe: {transcripts: false}\n")
+    for x in (d, keep):
+        assert runner.invoke(app, ["plan", str(x)]).exit_code == 0
+    sid, kept = _sid(d), _sid(keep)
+    assert reg.find(sid).grants["observe"] == {"net": True, "transcripts": False}
+    shutil.rmtree(d)
+    foreign = home / "observe" / "pi-search"  # not a v3 id: never glove v3's to remove
+    foreign.mkdir(parents=True)
+    result = runner.invoke(app, ["gc", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert reg.find(sid) is None and reg.find(kept) is not None
+    assert not (home / "observe" / sid).exists() and not (home / "control" / sid).exists()
+    assert (home / "observe" / kept).is_dir() and foreign.is_dir()
+    assert "nothing to collect" in runner.invoke(app, ["gc", "--yes"]).output
+
+
+def test_gc_refuses_a_v2_registry(home):
+    home.mkdir()
+    (home / "registry.json").write_text("[]")
+    result = runner.invoke(app, ["gc", "--yes"])
+    assert result.exit_code == 1 and "v2 registry" in result.output
+
+
+def test_keychain_set_runs_security_interactively(monkeypatch):
+    calls = []
+    monkeypatch.setattr("glove.config.keychain_set", lambda svc: calls.append(svc) or 0)
+    result = runner.invoke(app, ["keychain", "set", "my-llm"])
+    assert result.exit_code == 0 and calls == ["my-llm"] and "keychain:my-llm" in result.output
+
+
+def test_the_v2_commands_are_gone():
+    for cmd in (["init", "pi"], ["run", "pi"], ["config"], ["pi"]):
+        assert runner.invoke(app, cmd).exit_code != 0, cmd
+
+
+def test_effective_records_launch_time_resolution(home, tmp_path):
+    from glove import sessiondir
+
+    d = make_session(tmp_path / "s")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    sd = sessiondir.SessionDir(d.resolve())
+    cfg, _ = sessiondir.read_effective(sd.effective)
+    sessiondir.write_effective(sd.effective, cfg, {"at": "2026-09-28T00:00:00Z",
+                                                  "model": {"model": "qwen", "vision": True, "context_window": 131072}})
+    out = runner.invoke(app, ["plan", str(d)]).output
+    assert "resolved at last launch" in out and "qwen" in out and "131072" in out
+    assert sessiondir.read_effective(sd.effective)[1]["model"]["model"] == "qwen"  # a re-plan keeps it
+    assert os.stat(sd.state).st_mode & 0o777 == 0o700
+
+
+def test_mounts_never_expose_the_glove_home_or_another_session(home, tmp_path):
+    other = make_session(tmp_path / "other")
+    assert runner.invoke(app, ["plan", str(other)]).exit_code == 0
+    for mount in (str(home / "control"), str(home), str(other), str(other / ".glove" / "home")):
+        d = make_session(tmp_path / "s", f"mounts: [{{path: \"{mount}\", mode: rw}}]\n")
+        result = runner.invoke(app, ["plan", str(d)])
+        assert result.exit_code == 1 and "would expose" in result.output, mount
+
+
+def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_path, monkeypatch):
+    from glove.runtimes.docker import DockerRuntime
+
+    taken = {"other_default": ["172.31.0.0/24"]}
+    monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: taken)
+    d = tmp_path / "s"
+    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
+    sid = _sid(d)
+    assert reg.find(sid).subnet == "172.31.1.0/24"  # allocation skipped the runtime's network
+    taken[f"glove-{sid}-net"] = ["172.31.1.0/27"]  # its own networks are not a conflict
+    make_session(d)  # fill in the model so `up` gets as far as planning
+    monkeypatch.setattr("glove.session.launch", lambda *a, **k: None)
+    assert runner.invoke(app, ["up", str(d)]).exit_code == 0
+    assert reg.find(sid).subnet == "172.31.1.0/24"
+    taken["later_default"] = ["172.31.1.128/25"]  # a foreign network took part of it since
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 0 and "re-allocating" in result.output
+    assert reg.find(sid).subnet == "172.31.2.0/24"
+    assert "172.31.2.0/27" in (d / ".glove" / "compose.yml").read_text()
+
+
+def test_an_unsupported_runtime_enforcer_pair_is_a_clean_error(home, tmp_path):
+    d = make_session(tmp_path / "s", "runtime: podman\nenforcer: srt\n")
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 1 and "not supported on the podman runtime" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_down_and_rm_use_the_sessions_runtime_not_path(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s", "runtime: podman\n")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    monkeypatch.setattr("glove.cli.shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
+    calls = []
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append(k["provider"]))
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    (d / ".glove" / "effective.yml").unlink()  # never planned since: the session file says
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    assert runner.invoke(app, ["rm", str(d), "-y"]).exit_code == 0
+    assert calls == ["podman", "podman", "podman"]
+
+
+def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypatch):
+    from glove import sessiondir as sdm
+
+    d = make_session(tmp_path / "s")
+    eff = d / ".glove" / "effective.yml"
+
+    def launch(cfg, plan, *a, prepare, **k):
+        _, resolved = sdm.read_effective(eff)  # as a `resolved` export would have recorded it
+        sdm.write_effective(eff, cfg, {**resolved, "extensions": {"corp": {"routes": ["10.0.0.0/8"]}}})
+        prepare()
+
+    monkeypatch.setattr("glove.session.launch", launch)
+    monkeypatch.setattr("glove.cli._resolve_extensions", lambda *a, **k: None)
+    monkeypatch.setattr("glove.cli.start_host_services", lambda *a, **k: None)
+    assert runner.invoke(app, ["up", str(d)]).exit_code == 0
+    resolved = yaml.safe_load(eff.read_text())["resolved"]
+    assert resolved["extensions"] == {"corp": {"routes": ["10.0.0.0/8"]}} and resolved["model"]
+
+
+def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, monkeypatch):
+    from glove import cli
+    from glove.extensions import discover
+
+    home.mkdir()
+    (home / "config.yml").write_text("no_such_key: 1\n")
+    cli._mount_extension_clis()  # the commands that read config.yml report it
+    (home / "config.yml").unlink()
+    ext = tmp_path / "exts" / "bad"
+    ext.mkdir(parents=True)
+    (ext / "extension.yml").write_text("api: 1\nname: bad\nsummary: x\ncli: cli.py\n")
+    (ext / "cli.py").write_text("raise RuntimeError('boom')\n")
+    monkeypatch.setattr("glove.extensions.discover", lambda: discover(tmp_path / "exts"))
+    cli._mount_extension_clis()
+    assert "bad" not in {g.name for g in app.registered_groups}

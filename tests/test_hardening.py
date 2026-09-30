@@ -5,8 +5,9 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from helpers import make_cfg
 
-from glove.config import AddDir, Config
+from glove.config import AddDir
 from glove.hardening import HardeningError, find_violations, validate_hardening
 from glove.plan import build_session_plan
 
@@ -14,8 +15,8 @@ from glove.plan import build_session_plan
 def _plan(tmp_path, **cfg_kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = Config(harness="pi", workdir=str(work), name="s", **cfg_kw)
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "home"), uid=1000, gid=1000)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="s", **cfg_kw)
+    return build_session_plan(cfg, home_dir=str(tmp_path / "home"), uid=1000, gid=1000)
 
 
 def _reharden(plan, **changes):
@@ -67,9 +68,11 @@ def test_row_pids_limit(tmp_path):
     assert "pids" in {v.key for v in find_violations(plan)}
 
 
-def test_row_no_host_gateway_on_harness(tmp_path):
-    plan = _plan(tmp_path, net=["lan"])  # lan sets harness host-gateway
-    assert "host-gateway" in {v.key for v in find_violations(plan)}
+def test_harness_never_gets_a_host_gateway(tmp_path):
+    # structural since v3 M5: no config reaches the harness's network (the
+    # `net: lan|internet` opt-out is gone); validate_project re-checks renders
+    plan = _plan(tmp_path)
+    assert not hasattr(plan.network, "harness_host_gateway")
 
 
 def test_row_no_docker_sock_mount(tmp_path):
@@ -92,3 +95,10 @@ def test_refusal_and_override(tmp_path):
         validate_hardening(plan)
     # naming the row waives it
     validate_hardening(plan, overrides=frozenset({"read-only"}))
+
+
+def test_row_seccomp_never_the_sidecar_userns_profile(tmp_path):
+    from glove.runtimes.seccomp import SECCOMP_DIR
+
+    plan = _reharden(_plan(tmp_path), seccomp_profile=str(SECCOMP_DIR / "chromium-userns.json"))
+    assert any(v.key == "seccomp" and "sidecar-only" in v.message for v in find_violations(plan))

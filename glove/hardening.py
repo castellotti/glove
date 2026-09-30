@@ -14,6 +14,7 @@ testable (one unit test per row, plus the refusal path).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # avoid an import cycle: plan imports hardening
@@ -27,6 +28,10 @@ class HardeningError(ValueError):
 # Capabilities glove may ever add back. SYS_PTRACE is scoped to nono's proxy
 # mode; nothing else is permitted.
 ALLOWED_CAP_ADD: frozenset[str] = frozenset({"SYS_PTRACE"})
+
+# Core seccomp profiles only a sidecar may request (`privileges: {seccomp: …}`),
+# never the harness: Chromium's userns sandbox profile.
+SIDECAR_ONLY_SECCOMP: frozenset[str] = frozenset({"chromium-userns"})
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,9 @@ def find_violations(plan: SessionPlan) -> list[Violation]:
     # Row: a seccomp profile is applied (never unconfined).
     if not h.seccomp_profile:
         v.append(Violation("seccomp", "a seccomp profile must be applied"))
+    elif Path(h.seccomp_profile).stem in SIDECAR_ONLY_SECCOMP:
+        # the browser sidecar's userns profile is never the harness's
+        v.append(Violation("seccomp", f"{Path(h.seccomp_profile).name} is a sidecar-only profile"))
 
     # Row: private IPC namespace.
     if h.ipc != "private":
@@ -104,15 +112,9 @@ def find_violations(plan: SessionPlan) -> list[Violation]:
     if not h.limits.memory:
         v.append(Violation("memory", "a memory limit is required"))
 
-    # Row: internal network only — no host-gateway / host.docker.internal on the
-    # harness itself (`net: lan|internet` set this and are an explicit opt-out).
-    if plan.network.harness_host_gateway:
-        v.append(
-            Violation(
-                "host-gateway",
-                "harness must not reach host.docker.internal (net: lan/internet)",
-            )
-        )
+    # (Internal network only: the harness joins nothing but its own internal
+    # network — structural since v3 M5 removed the `net: lan|internet` opt-out;
+    # compose.validate_project re-checks the rendered project.)
 
     # Row: never mount the docker socket.
     for m in plan.mounts:

@@ -8,16 +8,17 @@ anything, and exposes the container/landlock probes ``glove doctor`` needs.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ..exports import validate_export_isolation
 from ..hardening import HardeningError, validate_hardening
-from ..observe import render_context as observe_context
-from ..observe import validate_net_isolation
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
 
 if TYPE_CHECKING:
@@ -31,6 +32,8 @@ PROBE_IMAGE = "docker.io/library/python:3.12-slim"
 
 # Compact probe run inside a hardened container: reports Landlock ABI, whether
 # an unprivileged user namespace is creatable, /dev/kvm, and the effective caps.
+_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 _PROBE = r"""
 import ctypes, json, os
 libc = ctypes.CDLL(None, use_errno=True)
@@ -64,11 +67,27 @@ print(json.dumps(info))
 """
 
 
-def events_tmpfs_opts(uid: int, gid: int, context: str | None = None) -> str:
-    """Mount options for the netgate events tmpfs: owned by ``uid``/``gid`` as the
-    mount sees ids, with an optional SELinux ``context=`` label."""
+def tmpfs_volume_opts(uid: int, gid: int, context: str | None = None) -> str:
+    """Mount options for an extension's tmpfs volume (e.g. the netgate events
+    socket dir): owned by ``uid``/``gid`` as the mount sees ids, mode 0700, with
+    an optional SELinux ``context=`` label."""
     opts = f"size=1m,mode=0700,uid={uid},gid={gid}"
     return f'{opts},context="{context}"' if context else opts
+
+
+def _indent(block: dict) -> str:
+    if not block:
+        return ""
+    text = yaml.safe_dump(block, sort_keys=False, default_flow_style=False)
+    return "".join(f"  {line}\n" if line else "\n" for line in text.splitlines())
+
+
+def _extension_blocks(plan: SessionPlan, extra: dict) -> dict[str, str]:
+    """Extension sidecars/volumes/secrets as YAML text for the template."""
+    from ..compose import harden_fragments
+
+    blocks = harden_fragments(plan.composition, plan, extra)
+    return {f"extension_{k}": _indent(v) for k, v in blocks.items()}
 
 
 class DockerRuntime:
@@ -113,12 +132,15 @@ class DockerRuntime:
             "userns_mode": None,
             "emit_seccomp": True,
             "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
-            # mount options of the netgate events tmpfs, owned by the plan's
+            # mount options of extension tmpfs volumes, owned by the plan's
             # uid/gid (rootful ids are the container's ids)
-            "events_tmpfs_opts": events_tmpfs_opts(plan.uid, plan.gid),
-            # SELinux relabel for the gate's net/ and control/ binds (None: none)
-            "gate_bind_selinux": None,
+            "tmpfs_volume_opts": tmpfs_volume_opts(plan.uid, plan.gid),
+            # SELinux relabel for extension sidecars' binds (None: none)
+            "bind_selinux": None,
         }
+
+    # Start sidecars one `compose up` at a time (podman); docker starts them together.
+    serial_start = False
 
     def _jinja(self) -> Environment:
         return Environment(
@@ -137,8 +159,13 @@ class DockerRuntime:
         overrides: frozenset[str] = frozenset(),
     ) -> RenderedProject:
         validate_hardening(plan, overrides=overrides)
-        # Not waivable: the agent must never see (or forge) its own flow record.
-        validate_net_isolation(plan)
+        # Not waivable: the agent must never see (or forge) its own flow record
+        # or rules (the export roots).
+        validate_export_isolation(plan)
+        # Env keys render into compose unquoted: a newline would add keys.
+        for k in (*plan.environment, *plan.enforcer_env, *plan.passthrough_env):
+            if not _ENV_KEY.match(k):
+                raise HardeningError(f"harness env key {k!r} is not a plain variable name")
         extra = self.compose_extra(plan)
         # Couple the seccomp hardening row to what actually renders. validate_hardening
         # only checks that the *plan* names a profile; on a runtime that omits the
@@ -165,25 +192,33 @@ class DockerRuntime:
             "home_dir": plan.home_dir,
             "working_dir": plan.working_dir,
             "mounts": plan.mounts,
+            "protect": plan.protect,
+            "placeholder_host_dir": plan.placeholder_host_dir,
             "environment": plan.environment,
             "enforcer_env": plan.enforcer_env,
             "passthrough_env": plan.passthrough_env,
             "policies_host_dir": plan.policies_host_dir,
             "policies_container_dir": plan.policies_container_dir,
-            "sidecars": plan.network.sidecars,
-            "external_networks": plan.network.external_networks,
-            "harness_extra_networks": plan.network.harness_extra_networks,
-            "harness_host_gateway": plan.network.harness_host_gateway,
-            "egress_network": plan.network.egress_network,
+            "sidecars": plan.network.socat,
+            "transcripts_host_dir": plan.transcripts_host_dir,
+            "transcripts_container_dir": plan.transcripts_container_dir,
+            "hostgw_network": plan.network.hostgw_network,
+            "session_networks": plan.network.session_networks,
+            "subnets": plan.network.subnets,
             "forwarder_image": plan.forwarder_image,
             "uid": plan.uid,
             "gid": plan.gid,
             "hardening": plan.hardening,
             "allow_root": plan.allow_root,
-            **observe_context(plan),
             **extra,
+            **_extension_blocks(plan, extra),
         }
         compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
+        # Not waivable: re-check §3.4 on the merged project (extension sidecars
+        # included), so a merge bug cannot ship a weaker project.
+        from ..compose import validate_project
+
+        validate_project(yaml.safe_load(compose_yaml), plan, plan.composition)
         return RenderedProject(
             session=plan.session,
             project=plan.project,
@@ -193,6 +228,23 @@ class DockerRuntime:
         )
 
     # --- lifecycle inspection ---------------------------------------------
+
+    def network_subnets(self) -> dict[str, list[str]]:
+        """Every existing network's IPv4 subnets, by name (empty when the
+        runtime is unavailable) — for subnet allocation that avoids them."""
+        if not shutil.which(self.cli):
+            return {}
+        ids = subprocess.run([self.cli, "network", "ls", "-q"], capture_output=True, text=True, check=False)
+        if ids.returncode != 0 or not ids.stdout.split():
+            return {}
+        out = subprocess.run(
+            [self.cli, "network", "inspect", "-f", "{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}",
+             *ids.stdout.split()], capture_output=True, text=True, check=False)
+        nets: dict[str, list[str]] = {}
+        for line in out.stdout.splitlines():
+            name, *subnets = line.split()
+            nets[name] = [x for x in subnets if "." in x]
+        return nets
 
     def ps(self) -> list[RunningSession]:
         if not shutil.which(self.cli):
