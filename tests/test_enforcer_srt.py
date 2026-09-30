@@ -13,7 +13,7 @@ from helpers import make_cfg
 
 from glove.config import AddDir
 from glove.enforcers import get_enforcer
-from glove.enforcers.base import ENFORCER_DIR
+from glove.enforcers.base import ENFORCER_DIR, srt_suffix
 from glove.enforcers.srt import render_settings
 from glove.plan import build_session_plan
 
@@ -84,7 +84,7 @@ def test_rw_add_dir_in_allow_write(tmp_path):
 def test_srt_does_not_wrap_harness(tmp_path):
     plan = _plan(tmp_path)
     assert plan.harness_command == list(plan.profile.entry)  # TUI unwrapped
-    assert plan.image.endswith("-srt")  # distinct image variant
+    assert plan.image.endswith(srt_suffix())  # distinct image variant
     wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
     assert wrapper[0] == "srt"
     assert f"{ENFORCER_DIR}/srt-settings.json" in wrapper

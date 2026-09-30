@@ -432,7 +432,7 @@ def test_a_harness_join_of_an_extension_network_is_refused_at_validation(tmp_pat
 def test_unselected_extension_contributes_nothing(tmp_path):
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)))
     plan, _ = render(cfg, tmp_path)
-    assert plan.image == "glove/pi:0.4.0"  # the plain base
+    assert plan.image == "glove/pi:0.5.0"  # the plain base
     assert plan.derived_dockerfile is None
     assert [a.name for a in plan.composition.active] == ["llm"]
 
@@ -441,9 +441,9 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     exts = {"media": {}, "direct": {}, "search": {}}
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan, _ = render(cfg, tmp_path)
-    assert plan.image.startswith("glove/pi:0.4.0-") and plan.image != "glove/pi:0.4.0"
+    assert plan.image.startswith("glove/pi:0.5.0-") and plan.image != "glove/pi:0.5.0"
     df = plan.derived_dockerfile
-    assert "FROM glove/pi:0.4.0" in df
+    assert "FROM glove/pi:0.5.0" in df
     assert "ffmpeg" in df and "python3-pil" in df
     assert "COPY search/pi-extension /opt/glove/ext/search/pi-extension" in df
     assert "-e" in plan.command and "/opt/glove/ext/search/pi-extension" in plan.command

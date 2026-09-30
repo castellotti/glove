@@ -35,6 +35,7 @@ from typing import Any
 import yaml
 
 from .config import Config, ConfigError, _coerce
+from .enforcers.base import default_enforcer
 
 SESSION_FILE = "glove-session.yml"
 STATE_DIR = ".glove"
@@ -235,6 +236,7 @@ def to_config(sd: SessionDir, raw: dict[str, Any], session_id: str, *, subnet: s
     """The session file as the internal ``Config`` the planner consumes."""
     data = {k: v for k, v in raw.items() if k not in ("glove", "template", "mounts")}
     data.setdefault("runtime", default_runtime)
+    data.setdefault("enforcer", default_enforcer(data["runtime"]))
     data["provider"] = data["runtime"] if data["runtime"] in ("docker", "podman") else "docker"
     data["add_dirs"] = [{"path": p, "mode": m} for p, m in (_mount(sd, x) for x in raw.get("mounts") or [])]
     data["name"] = session_id

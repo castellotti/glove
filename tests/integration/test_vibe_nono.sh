@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 3 integration checks (PLAN §8) — nono enforcer + hook inside the real
-# Vibe image. Confirms (1) the shipping glove/vibe:0.4.0 image enforces the same
+# Vibe image. Confirms (1) the shipping glove/vibe:0.5.0 image enforces the same
 # ring-1 policies as Pi, and (2) the baked /opt/glove/vibe-hook rewrites bash
 # tool calls through the per-command wrapper (what Vibe's pre_tool hook invokes).
 # The full LLM/TUI path (hook firing live, strict denial in the TUI) is manual.
@@ -10,7 +10,7 @@
 set -u
 RT="${RT:-docker}"   # docker | podman
 
-IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.4.0}"
+IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.5.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
 export GLOVE_HOME
@@ -30,7 +30,7 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 echo "== rendering glove policies (glove plan) =="
 . "$ROOT/tests/integration/lib_session.sh"
-new_session "$GLOVE_HOME/s" vibe
+new_session "$GLOVE_HOME/s" vibe 'enforcer: nono\n'
 POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered" || { bad "no policies"; exit 1; }
 MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
@@ -64,6 +64,24 @@ echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/
 echo "== entrypoint validates policies =="
 "$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
+
+echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
+# a harness-like process on a real tty runs the rendered wrapper; the command
+# tries to open /dev/tty. Baseline: the same command unwrapped opens it.
+TTYCMD='perl -e '"'"'open(T, "+<", "/dev/tty") or die "TTY-REFUSED: $!\n"; print "TTY-OPENED\n"'"'"
+WRAP="$(uv run --quiet --no-project python -c 'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$POLDIR/tool-wrapper.json")"
+tty_run() { uv run --quiet --no-project python "$ROOT/tests/integration/in_pty.py" "$RT" run -it "${hardened[@]}" "${MNT[@]}" \
+  --entrypoint bash "$IMAGE" -c "$1" 2>&1; }
+tty_run "$TTYCMD" | grep -q 'TTY-OPENED' && ok "baseline: an unwrapped command opens /dev/tty" \
+  || bad "baseline could not open /dev/tty (the check cannot detect the gap)"
+# as a child of the harness (what Pi and Vibe do), and as the session leader
+for how in "a child of the harness" "the session leader"; do
+  shape="$WRAP bash -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
+  out="$(tty_run "$shape")"
+  echo "$out" | grep -q 'TTY-REFUSED: No such device' && ! echo "$out" | grep -q 'TTY-OPENED' \
+    && ok "wrapped command cannot open /dev/tty (wrapper as $how)" \
+    || bad "wrapped command opened /dev/tty ($how): $out"
+done
 
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo

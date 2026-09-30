@@ -23,6 +23,12 @@ Verified against sandbox-runtime 0.0.77: weak mode enforces under the surgical
 profile (allowWrite honored, everything else read-only, empty allowedDomains =
 no network, denyRead hides the harness home, denied env vars absent); strong
 mode needs `systempaths=unconfined`.
+
+The `-srt` image is the overlay in ``srt_image/`` on the harness image. Its
+``apply-seccomp`` is srt's own, compiled with glove's filter
+(``srt_image/glove-tighten.c``): srt's stock filter leaves `unshare(CLONE_NEWUSER)`
+open under the relaxed container profile, so a wrapped command could make a user
+namespace and mount; glove's denies namespaces and mounts to everything below it.
 """
 
 from __future__ import annotations
@@ -42,6 +48,14 @@ if TYPE_CHECKING:
 SRT_VERSION = "0.0.77"
 SRT_PACKAGE = f"@anthropic-ai/sandbox-runtime@{SRT_VERSION}"
 SETTINGS_FILE = "srt-settings.json"
+
+# The srt layer (srt_image/Dockerfile) installs these; the entrypoint refuses to
+# start an srt session without them (srt itself would silently fall back to its
+# stock apply-seccomp, or run with no filter).
+SRT_DIR = "/opt/glove/srt"
+APPLY_SECCOMP = f"{SRT_DIR}/apply-seccomp"
+GLOVE_SRT = f"{SRT_DIR}/glove-srt.mjs"  # srt's library without a network namespace (nono+srt)
+NODE = f"{SRT_DIR}/node"
 
 TMP = "/tmp"
 # The harness home bind-mount point. srt's `--ro-bind /` does NOT downgrade a
@@ -90,6 +104,7 @@ def render_settings(plan: SessionPlan) -> dict:
         "network": {"allowedDomains": [], "deniedDomains": []},
         "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in denied_env_vars(plan)]},
         "enableWeakerNestedSandbox": weak,
+        "seccomp": {"applyPath": APPLY_SECCOMP},
     }
 
 
@@ -127,7 +142,8 @@ class SrtEnforcer:
         g = [
             "harness PROCESS is unwrapped (ring-0 only) — srt wraps tool commands only",
             "LLM key stays in the harness env (tool commands get it unset by exact name only)",
-            "runs under the relaxed nested-userns seccomp (unprivileged userns enabled)",
+            "runs under the relaxed nested-userns seccomp (unprivileged userns enabled; "
+            "re-tightened for everything srt wraps)",
             "srt cannot restrict a nested docker bind mount via allowWrite; the "
             "harness home is denied by denying its mount point (verified)",
         ]
@@ -148,20 +164,22 @@ class SrtEnforcer:
         """Run bwrap as uid 1000 under the relaxed profile in a baked -srt image.
 
         Reproduces weak mode: unprivileged userns + bind /proc. Uses
-        a locally-built `*-srt` harness image (which has bubblewrap baked) so the
+        a locally-built `*-srt-<hash>` harness image (which has bubblewrap baked) so the
         probe never needs network or root to install it; skips if none exists.
         """
         cli = getattr(runtime, "cli", "docker")
         if not shutil.which(cli):
             return Check("srt bwrap smoke", "skip", f"{cli} not available")
+        from .base import srt_suffix
+
         images = subprocess.run(
-            [cli, "images", "--filter", "reference=glove/*-srt", "--format", "{{.Repository}}:{{.Tag}}"],
+            [cli, "images", "--filter", "reference=glove/*", "--format", "{{.Repository}}:{{.Tag}}"],
             capture_output=True, text=True,
         )
-        image = next((ln for ln in images.stdout.splitlines() if ln.strip()), None)
+        image = next((ln for ln in images.stdout.splitlines() if ln.strip().endswith(srt_suffix())), None)
         if not image:
             return Check("srt bwrap smoke", "skip",
-                         "no local glove/*-srt image — run `glove build <harness> --enforcer srt`")
+                         f"no local glove/*{srt_suffix()} image — run `glove build <harness> --enforcer srt`")
         from ..runtimes.seccomp import nested_userns_profile_path
 
         proc = subprocess.run(

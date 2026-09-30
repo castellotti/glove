@@ -19,6 +19,7 @@ import yaml
 from rich.console import Console
 
 from .config import Config
+from .enforcers.base import PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, effective_image
 from .plan import FORWARDER_IMAGE
 from .runtimes.docker import TEMPLATES_DIR
@@ -59,7 +60,6 @@ def _build_base(
     profile: HarnessProfile,
     apt_packages: list[str],
     pip_packages: list[str],
-    srt: bool,
     tag: str,
     *,
     force: bool,
@@ -71,15 +71,22 @@ def _build_base(
         raise FileNotFoundError(f"no Dockerfile for harness {profile.name}: {profile.dockerfile}")
     context = profile.dockerfile.parent
     console.print(f"[bold]building base image[/bold] {tag}  (context: {context})")
-    cmd = [provider, "build", "-t", tag]
+    cmd = [provider, "build", "-t", tag, "--build-context", f"glovepty={PTY_DIR}"]
     if apt_packages:
         cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:
         cmd += ["--build-arg", f"GLOVE_PIP={' '.join(pip_packages)}"]
-    if srt:
-        cmd += ["--build-arg", "GLOVE_ENFORCER=srt"]
     cmd.append(str(context))
     subprocess.run(cmd, check=True)
+
+
+def _build_srt_layer(provider: str, base: str, tag: str, *, force: bool) -> None:
+    """`<base>-srt`: the srt overlay (srt, bubblewrap, glove's apply-seccomp and
+    glove-pty) on a harness base image."""
+    if not force and _image_exists(provider, tag):
+        return
+    console.print(f"[bold]building srt layer[/bold] {tag}  (on {base})")
+    subprocess.run([provider, "build", "-t", tag, "--build-arg", f"BASE={base}", str(SRT_IMAGE_DIR)], check=True)
 
 
 def build_harness(
@@ -97,14 +104,14 @@ def build_harness(
     top (content-addressed tag, see glove/image.py). Returns the tag to run."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
-    srt = enforcer == "srt"
-    base_tag = effective_image(profile, apt_packages, pip_packages)
-    if srt:
-        base_tag = f"{base_tag}-srt"
+    plain_tag = effective_image(profile, apt_packages, pip_packages)
+    base_tag = f"{plain_tag}{srt_suffix()}" if uses_srt(enforcer) else plain_tag
     final_tag = plan.image if plan is not None else base_tag
     if not force and _image_exists(provider, final_tag):
         return final_tag
-    _build_base(provider, profile, apt_packages, pip_packages, srt, base_tag, force=force)
+    _build_base(provider, profile, apt_packages, pip_packages, plain_tag, force=force)
+    if base_tag != plain_tag:
+        _build_srt_layer(provider, plain_tag, base_tag, force=force)
     if final_tag == base_tag or plan is None or plan.composition is None:
         return base_tag
 

@@ -5,10 +5,12 @@ from __future__ import annotations
 from .base import ENFORCER_DIR, Enforcer
 from .none import NoneEnforcer
 from .nono import NonoEnforcer
+from .nono_srt import NonoSrtEnforcer
 from .srt import SrtEnforcer
 
 _ENFORCERS: dict[str, type] = {
     "nono": NonoEnforcer,
+    "nono+srt": NonoSrtEnforcer,
     "srt": SrtEnforcer,
     "none": NoneEnforcer,
 }
@@ -33,6 +35,7 @@ __all__ = [
     "Enforcer",
     "NoneEnforcer",
     "NonoEnforcer",
+    "NonoSrtEnforcer",
     "SrtEnforcer",
     "get_enforcer",
     "known_enforcers",

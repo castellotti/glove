@@ -4,6 +4,14 @@
 # the per-command sandbox policy). Nothing else. Optional capabilities (search,
 # browser, media toolchain) are opt-in plugins composed into a per-session image
 # variant when enabled — never baked into this base.
+# glove-pty (glove/enforcers/pty, passed as the `glovepty` build context): tool
+# commands start with `glove-pty notty` so they cannot type into this TUI (TIOCSTI).
+FROM debian:bookworm-slim AS glove-pty
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=glovepty glove-pty.c /src/
+RUN gcc -static -O2 -Wall -Wextra -o /src/glove-pty /src/glove-pty.c -lutil && strip /src/glove-pty
+
 FROM node:24-bookworm-slim
 
 # Ring-1 enforcer: pinned nono binary. glove/enforcers/nono/version.py
@@ -37,15 +45,8 @@ RUN if [ -n "$GLOVE_PIP" ]; then \
         && rm -rf /var/lib/apt/lists/*)) \
       && pip3 install --break-system-packages $GLOVE_PIP; fi
 
-# Opt-in srt enforcer: baked only for the `-srt` image variant
-# (built with --build-arg GLOVE_ENFORCER=srt). Node ≥22 is already present.
-ARG GLOVE_ENFORCER=nono
-RUN if [ "$GLOVE_ENFORCER" = "srt" ]; then \
-      apt-get update \
-      && apt-get install -y --no-install-recommends bubblewrap socat \
-      && rm -rf /var/lib/apt/lists/* \
-      && npm install -g @anthropic-ai/sandbox-runtime@0.0.77; \
-    fi
+# The srt enforcers (srt, nono+srt) run on `<this image>-srt`: the overlay in
+# glove/enforcers/srt_image layered on top, never baked in here.
 
 # The always-on ring-1 enforcer extension (pure node builtins, no deps to
 # install). Loaded via `pi -e /opt/glove/pi-extensions/enforcer`. Capability
@@ -53,6 +54,7 @@ RUN if [ "$GLOVE_ENFORCER" = "srt" ]; then \
 COPY extensions/enforcer /opt/glove/pi-extensions/enforcer
 
 # Baked entrypoint validates the enforcer policies then execs the compose command.
+COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
 COPY entrypoint.sh /opt/glove/entrypoint.sh
 RUN chmod 0755 /opt/glove/entrypoint.sh
 

@@ -4,6 +4,50 @@ All notable changes to glove are documented here.
 
 ## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
 
+### Enforcer: `nono+srt` (default on Docker), TIOCSTI fix, glove's srt `apply-seccomp` (v3 M8)
+
+- **Security fix (every enforcer): tool commands can no longer type into the
+  harness.** nono's base policy grants `/dev/tty`, so a shell command could
+  inject keystrokes into the TUI (TIOCSTI; Docker Desktop's kernel allows it),
+  e.g. answer a Vibe approval. Every tool wrapper now starts with
+  `glove-pty notty`, which gives up the controlling terminal but keeps the
+  process group (aborts still kill the command). `glove-pty` is a small static
+  helper (`glove/enforcers/pty/`) baked into the harness images, which are now
+  `glove/pi:0.5.0` and `glove/vibe:0.5.0` (rebuilt on the next `glove up`).
+  `test_pi_nono.sh` 19 checks, `test_vibe_nono.sh` 13, on Docker and Podman.
+- **`enforcer: nono+srt`, now the default on Docker** (a session file that
+  names no enforcer; Podman keeps `nono`): srt (bubblewrap) wraps the harness
+  process, nono wraps every shell command inside it. Every M8 spike gate
+  passed on Docker, and every extension suite passes under it. srt makes
+  `/work/.git/hooks`, `.git/config`, `.vscode`, `.idea`, `.envrc`, `.mcp.json`,
+  `.gitmodules` and `.claude/{commands,agents,settings*.json}` read-only where
+  they exist at launch, hides `.env`/`.env.*` under /work
+  (`enforcer_options.srt.hide_env: false` turns that off), and puts the harness
+  and its commands in their own PID namespace. The harness keeps the container
+  network (ring 0 already limits it to the session's forwarders), so every
+  extension works unchanged; srt's CLI cannot skip its network namespace, so
+  glove runs srt's library through `glove-srt` (settings validated with srt's
+  schema). The TUI runs on a pty relayed by `glove-pty` (srt starts it without
+  a controlling terminal, so resize never reached it). Refused on podman (its
+  compose provider can't apply the relaxed seccomp profile).
+- **glove's `apply-seccomp`.** srt's stock filter leaves `unshare(CLONE_NEWUSER)`
+  open under the relaxed `nested-userns` container profile, so a command inside
+  srt could make a user namespace and mount (verified). The srt image now
+  compiles srt's own `apply-seccomp.c` (pinned commit of v0.0.77) with glove's
+  filter (`glove/enforcers/srt_image/glove-tighten.c`): no namespaces, no
+  mounts, no `clone3`, plus srt's AF_UNIX and io_uring rules. srt uses it via
+  `seccomp.applyPath`, for `enforcer: srt` too; the harness entrypoint refuses
+  to start if it is missing (srt would silently fall back).
+- **The srt image is an overlay** (`glove/enforcers/srt_image/Dockerfile`) on
+  any harness image, tagged `<image>-srt-<hash of the overlay>` so an image
+  built from an older layer is never reused. It brings srt, bubblewrap, socat,
+  ripgrep and its own Node, so **Vibe can run srt** (before, its `-srt` image
+  had no srt). The Pi Dockerfile's `GLOVE_ENFORCER` build arg is gone.
+- `tests/integration/test_nono_srt.sh [pi|vibe]` (29 live checks, incl. no
+  files appearing in `work/` during the session; `RT=podman` checks the
+  refusal); `test_pi_srt.sh` gains a user-namespace check (12). The egress,
+  observe, playwright and corporate scripts take `ENFORCER=`.
+
 ### Browser: `playwright` headless and noVNC sidecars, `browse-watch` template (v3 M7)
 
 - **`playwright` gains `mode: headless` (now the default) and `mode: novnc`.**

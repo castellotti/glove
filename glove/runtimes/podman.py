@@ -30,8 +30,8 @@ diverge:
   (v2) in a podman machine VM (Fedora, SELinux enforcing) on its own filesystem.
 
 Validated on rootless podman 6 (libkrun machine, Fedora VM, Landlock ABI 9).
-``srt`` is not supported on podman yet: its relaxed nested-userns profile can't
-be applied through the inlining compose provider.
+``srt`` and ``nono+srt`` are not supported on podman yet: their relaxed
+nested-userns profile can't be applied through the inlining compose provider.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ import subprocess
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from ..enforcers.base import uses_srt
 from .base import Check
 from .docker import DockerRuntime, tmpfs_volume_opts
 
@@ -145,9 +146,9 @@ class PodmanRuntime(DockerRuntime):
     # --- compatibility -----------------------------------------------------
 
     def unsupported_enforcer_reason(self, enforcer: str) -> str | None:
-        if enforcer == "srt":
+        if uses_srt(enforcer):
             return (
-                "enforcer 'srt' is not supported on the podman runtime yet: its "
+                f"enforcer {enforcer!r} is not supported on the podman runtime yet: its "
                 "relaxed seccomp profile can't be applied through podman's "
                 "inlining compose provider. Use --enforcer nono (or run srt on "
                 "the docker runtime)."

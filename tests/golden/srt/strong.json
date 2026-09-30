@@ -24,5 +24,8 @@
       }
     ]
   },
-  "enableWeakerNestedSandbox": false
+  "enableWeakerNestedSandbox": false,
+  "seccomp": {
+    "applyPath": "/opt/glove/srt/apply-seccomp"
+  }
 }

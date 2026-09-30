@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Phase 4 integration checks (PLAN §8) — the opt-in srt enforcer inside the real
-# `glove/pi:0.4.0-srt` image. Reproduces the research §5 matrix and runs the
+# `glove/pi:0.5.0-srt` image. Reproduces the research §5 matrix and runs the
 # tool-command checks: srt wraps tool commands only, under the surgically
 # relaxed nested-userns seccomp. See NOTE in test_pi_nono.sh re: pipefail.
 #
 # Usage:  bash tests/integration/test_pi_srt.sh
-# Requires: docker + `glove build pi --enforcer srt`.
+# Requires: docker + `glove build pi --enforcer srt` (the -srt-<hash> overlay image).
 set -u
 RT="${RT:-docker}"   # docker | podman
 if [ "$RT" = podman ]; then
@@ -13,8 +13,8 @@ if [ "$RT" = podman ]; then
   echo "      applied through podman's compose provider); srt is docker-only for now."; exit 2
 fi
 
-IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.4.0-srt}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.5.0$(uv run --quiet --project "$ROOT" python -c 'from glove.enforcers.base import srt_suffix; print(srt_suffix())')}"
 SECCOMP="$ROOT/glove/runtimes/seccomp/nested-userns.json"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
 export GLOVE_HOME
@@ -46,6 +46,9 @@ run_tool 'echo x > /home/agent/.pi/agent/pwn 2>&1; echo rc=$?' | grep -q 'rc=[^0
   && ok "write outside allowWrite -> denied" || bad "wrote outside allowWrite"
 run_tool 'curl -sS -m 5 https://example.com >/dev/null 2>&1; echo rc=$?' | grep -q 'rc=[^0]' \
   && ok "network blocked (empty allowedDomains)" || bad "network not blocked"
+# glove's apply-seccomp (srt_image/glove-tighten.c): stock srt lets this succeed
+run_tool 'unshare -Ur true 2>&1; echo rc=$?' | grep -q 'rc=[^0]' \
+  && ok "no user namespace for tool commands (glove's apply-seccomp)" || bad "tool command created a user namespace"
 
 echo "== srt strips the LLM key from tool commands (credentials.envVars deny) =="
 grep -q '"GLOVE_LLM_API_KEY"' "$POLDIR/srt-settings.json" && ok "settings deny GLOVE_LLM_API_KEY" || bad "key not in credentials.envVars"

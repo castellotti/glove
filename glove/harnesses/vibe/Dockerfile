@@ -1,6 +1,14 @@
 # glove/vibe — Mistral Vibe inside the sandbox.
 # Tools install to SYSTEM paths, never /home/agent: that home is a per-session
 # bind mount at runtime and would shadow anything baked into it.
+# glove-pty (glove/enforcers/pty, passed as the `glovepty` build context): tool
+# commands start with `glove-pty notty` so they cannot type into this TUI (TIOCSTI).
+FROM debian:bookworm-slim AS glove-pty
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=glovepty glove-pty.c /src/
+RUN gcc -static -O2 -Wall -Wextra -o /src/glove-pty /src/glove-pty.c -lutil && strip /src/glove-pty
+
 FROM python:3.12-slim
 
 # Ring-1 enforcer: pinned nono binary. Keep in sync with
@@ -37,6 +45,7 @@ RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
 # per-command sandbox (declared in ~/.vibe/hooks.toml by glove). Baked as an
 # executable so hooks.toml can invoke it directly.
 COPY vibe_hook.py /opt/glove/vibe-hook
+COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
 COPY entrypoint.sh /opt/glove/entrypoint.sh
 RUN chmod 0755 /opt/glove/vibe-hook /opt/glove/entrypoint.sh
 

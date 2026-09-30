@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import Config
+from .enforcers.base import srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
@@ -46,6 +47,7 @@ class SessionPlan:
     gid: int
     runtime: str = "docker"
     enforcer: str = "nono"
+    enforcer_options: dict = field(default_factory=dict)
     forwarder_image: str = FORWARDER_IMAGE
     tools: dict = field(default_factory=dict)
     # Ring-1 enforcer artifacts (populated by build_session_plan). `command` is
@@ -167,7 +169,7 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
-    if cfg.enforcer == "srt":
+    if uses_srt(cfg.enforcer):
         strong = str(cfg.enforcer_options.get("srt", {}).get("nested", "weak")) == "strong"
         return nested_userns_profile_path(), strong
     # nono (default) and none run under the vendored Docker default profile.
@@ -267,20 +269,20 @@ def build_session_plan(
     )
 
     # Extension layers get their own content-addressed derived image. srt needs
-    # bwrap/socat/srt baked in; its image gets an `-srt` suffix.
+    # bwrap/socat/srt baked in: its image is the `-srt` overlay (enforcers/srt_image).
     from .harnessconfig import ModelDescriptor
     from .image import content_hash, render_dockerfile
 
     base = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
-    base = f"{base}-srt" if cfg.enforcer == "srt" else base
+    base = f"{base}{srt_suffix()}" if uses_srt(cfg.enforcer) else base
     derived_df = None
     derived = None
     if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills):
         derived_df, staged = render_dockerfile(base, profile, comp)
         derived = content_hash(derived_df, staged)
     image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)
-    if cfg.enforcer == "srt":
-        image = f"{image}-srt"
+    if uses_srt(cfg.enforcer):
+        image = f"{image}{srt_suffix()}"
 
     plan = SessionPlan(
         session=session,
@@ -297,6 +299,7 @@ def build_session_plan(
         gid=gid,
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
+        enforcer_options=dict(cfg.enforcer_options or {}),
         forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
         composition=comp,

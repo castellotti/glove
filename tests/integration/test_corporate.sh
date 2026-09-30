@@ -24,6 +24,7 @@ cat > "$S/glove-session.yml" <<YML
 glove: 3
 template: test
 runtime: $RT
+${ENFORCER:+enforcer: $ENFORCER}
 harness: pi
 extensions:
   llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:$PORT", model: auto}

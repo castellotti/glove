@@ -11,7 +11,7 @@ README, or tool result that makes the model run a command it shouldn't.
 | Ring | Boundary | Mechanism | What it stops |
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
-| 1 — Enforcer | every process | **nono** (Landlock) by default, or **srt** (bubblewrap); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
+| 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
 | 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
@@ -193,6 +193,77 @@ has no server-side switch for it). The controls:
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
 
+## Tool commands and the terminal (TIOCSTI)
+
+nono's base policy grants `/dev/tty`, and Docker Desktop's kernel has
+`dev.tty.legacy_tiocsti = 1`: a shell command could open the harness's terminal
+and inject keystrokes into the TUI (type into Pi's prompt, answer a Vibe
+approval). Every enforcer's tool wrapper therefore starts with
+`glove-pty notty`, which gives up the controlling terminal (`TIOCNOTTY`) and
+keeps the process group, so an aborted command is still killed with its group.
+As a session leader it runs the command in a new session instead, tied to the
+parent (`PR_SET_PDEATHSIG`). `glove-pty` is a static helper baked into every
+harness image (`glove/enforcers/pty/glove-pty.c`); the entrypoint refuses to
+start if the wrapper names it and it is missing.
+
+## `nono+srt` and `srt`: what srt adds, and what glove changes in it
+
+With `enforcer: nono+srt` the harness runs as
+`glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- <harness>`
+and every shell command as `glove-pty notty -- nono wrap --profile tool.json -- …`
+inside it (srt must be outermost: bubblewrap needs mount/pivot_root, which
+Landlock cannot grant).
+
+| Property | `nono` | `nono+srt` |
+|---|---|---|
+| Harness process network | ring 0: the session's forwarders on an internal network | same (srt adds no network namespace, below) |
+| Tool command network | none (Landlock) | none (Landlock) |
+| `/work/.git/hooks`, `.git/config` | ring-0 ro binds where they exist (below) | also denied by srt |
+| `.vscode`, `.idea`, `.envrc`, `.mcp.json`, `.claude/*`, shell rc files in `/work` | only with `protect_ide_files` | denied where they exist at launch |
+| `.env` / `.env.*` in `/work` | readable | hidden from harness and tools (present at launch) |
+| Namespaces / mounts / AF_UNIX / io_uring | default seccomp: no userns | relaxed profile for srt; glove's filter denies all of these to everything below srt |
+| PID namespace around the harness and its commands | no | yes (srt's `apply-seccomp`) |
+| TIOCSTI into the harness TUI | no (`glove-pty notty`) | no (same) |
+| Kernel mechanisms between a tool and the container | Landlock | bubblewrap + seccomp + Landlock |
+| Podman | yes | refused (compose can't apply the profile) |
+
+- **glove's `apply-seccomp`.** srt's stock filter blocks AF_UNIX sockets and
+  io_uring. Under the relaxed profile a process inside srt could still call
+  `unshare(CLONE_NEWUSER)` or `clone(CLONE_NEWUSER)` (and `open_tree`), and a
+  user namespace hands back every capability, mount included: verified with
+  stock srt (`unshare -Urm` mounted a tmpfs). The `-srt` image compiles srt's
+  own `apply-seccomp.c` (pinned commit) with glove's filter
+  (`glove/enforcers/srt_image/glove-tighten.c`), which also denies any
+  `CLONE_NEW*` on `unshare`/`clone`, `clone3` (`ENOSYS`, libc falls back to
+  `clone`), `setns`, `mount`, `umount2`, `pivot_root`, `chroot` and the new mount
+  API. srt runs it via `seccomp.applyPath`; it applies to `enforcer: srt` too.
+  srt would silently fall back to its stock binary if that path were missing,
+  so the harness entrypoint refuses to start without it, and the image tag is
+  content-addressed (`-srt-<hash>`).
+- **No network namespace for the harness.** Ring 0 already puts the harness on
+  an internal network whose only hosts are the session's forwarders, with no
+  external DNS; srt's allowlist would name the same forwarders, and confining
+  the harness in srt's netns broke every client that speaks its own proxy
+  protocol (web_fetch) and raw-TCP endpoints. srt's CLI always confines the
+  network, so `glove-srt` (a small launcher on srt's library, validating the
+  settings with srt's own schema) runs srt without it.
+- **Only paths present at launch.** For a missing path bwrap creates an empty
+  placeholder where the bind lands, which in `/work` is your project on the
+  host (seen live: ~15 empty files while the session ran). `glove-srt` starts
+  srt from the container's `/tmp`, so srt's built-in list lands there, and
+  glove names only the `/work` paths that exist. A protected file created
+  during the session (e.g. a new `.vscode/`) is writable, as with `nono`.
+- **The terminal.** srt runs everything under `bwrap --new-session` (the
+  TIOCSTI defence), so a TUI loses its controlling terminal: no SIGWINCH on
+  resize, and a cooked-mode Ctrl-C signals srt. `glove-pty relay` (outside the
+  sandbox) gives srt a fresh pty and forwards resizes; `glove-pty ctty` (inside)
+  makes it the harness's terminal. The sandbox never holds an fd to your real
+  terminal.
+- **The harness env.** The harness keeps its env (it needs the LLM key); nono's
+  `deny_vars` strip secret-shaped names from every command, and Landlock hides
+  `/proc` from them. srt alone would not: an srt-only command can read the
+  harness's `/proc/<pid>/environ` (same sandbox, same uid).
+
 ## Planted host-trusted files (ring 0)
 
 `/work` is writable, and some files in it are later *executed or trusted by the
@@ -348,10 +419,12 @@ Be precise about what "container root" means here:
   (macOS 26, Apple silicon) or a `utm`/`gondolin` VM gives each container its own
   kernel, so an escape yields a throwaway VM, not the shared one. glove keeps the
   runtime layer pluggable for exactly this.
-- **Choose `enforcer: nono`** (default) over `srt` unless you specifically need
-  srt: srt requires relaxing the seccomp profile to allow unprivileged user
-  namespaces (a historical source of kernel LPE bugs) and wraps tool commands
-  only, leaving the harness process on ring 0 alone.
+- **Keep the default** (`nono+srt` on Docker, `nono` on Podman) over `srt`: srt alone
+  wraps tool commands only, leaving the harness process on ring 0 alone. Both
+  srt enforcers relax the container's seccomp profile to allow unprivileged
+  user namespaces (a historical source of kernel LPE bugs) because bubblewrap
+  needs them; glove's `apply-seccomp` takes that back from everything srt
+  wraps (below), so only srt's own processes hold it.
 - **Prefer the browser sidecar modes** (`headless`, `novnc`) over `mode: host`:
   a compromised browser or MCP stays in a cap-less container on an internal
   network instead of running as you on your desktop. Host mode with Vibe is

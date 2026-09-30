@@ -285,7 +285,7 @@ def _render_vibe(
     # Ring-1 tool hook: route every bash tool call through the enforcer's
     # per-command sandbox. Only when an in-container enforcer is
     # active — `none` has no wrapper to invoke.
-    if cfg.enforcer in ("nono", "srt"):
+    if cfg.enforcer in ("nono", "nono+srt", "srt"):
         written.append(_write_vibe_hooks(cfg_dir))
     return written
 

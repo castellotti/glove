@@ -20,9 +20,11 @@ in-container kernel enforcer wrapping the agent and every command it runs.
 Harness containers are always: non-root, `cap_drop: ALL`, `no-new-privileges`,
 read-only rootfs, seccomp profile, pids/memory limits, internal network only.
 **Never** mount `docker.sock`, add `host.docker.internal`/host-gateway to the
-harness, or use `--privileged`. The default in-container enforcer is **nono**
-(Landlock); **srt** is opt-in and needs the *surgical* relaxed seccomp profile
-(`glove/runtimes/seccomp/nested-userns.json`), not a coarse one.
+harness, or use `--privileged`. The default in-container enforcer is
+**nono+srt** on Docker (srt around the harness, nono/Landlock around every
+command) and **nono** on Podman; the srt enforcers need the *surgical* relaxed
+seccomp profile (`glove/runtimes/seccomp/nested-userns.json`), not a coarse one,
+and glove's own `apply-seccomp` re-denies namespaces/mounts below srt.
 
 ## Where things render
 

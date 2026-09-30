@@ -48,6 +48,15 @@ def test_the_schema_version_is_required(tmp_path):
         sdm.load_file(sdm.SessionDir(d))
 
 
+@pytest.mark.parametrize(("extra", "runtime", "enforcer"), [
+    ("", "docker", "nono+srt"), ("runtime: podman\n", "podman", "nono"),
+    ("enforcer: nono\n", "docker", "nono"), ("runtime: podman\nenforcer: none\n", "podman", "none")])
+def test_the_default_enforcer_follows_the_runtime(tmp_path, extra, runtime, enforcer):
+    sd = sdm.SessionDir(make_session(tmp_path / "s", extra))
+    cfg = sdm.to_config(sd, sdm.load_file(sd), "s-000000")
+    assert (cfg.runtime, cfg.enforcer) == (runtime, enforcer)
+
+
 def test_placeholders_left_names_every_path():
     raw = {"a": "<set-me>", "b": {"c": "keychain:<set-me>", "d": "ok"}, "e": ["x", "<set-me>"]}
     assert sdm.placeholders_left(raw) == ["a", "b.c", "e[1]"]

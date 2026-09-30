@@ -77,9 +77,9 @@ class HarnessProfile:
 _REGISTRY: dict[str, HarnessProfile] = {
     "vibe": HarnessProfile(
         name="vibe",
-        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
-        # pre_tool hook) only. Optional capabilities are opt-in extensions.
-        image="glove/vibe:0.4.0",
+        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
+        # glove-pty, pre_tool hook) only. Optional capabilities are opt-in extensions.
+        image="glove/vibe:0.5.0",
         entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
         config_home_env="VIBE_HOME",
         config_home_path="/home/agent/.vibe",
@@ -100,9 +100,9 @@ _REGISTRY: dict[str, HarnessProfile] = {
     ),
     "pi": HarnessProfile(
         name="pi",
-        # 0.4.0: minimal base — harness + ring-1 enforcer (baked nono binary +
-        # enforcer extension) only. Optional capabilities are opt-in extensions.
-        image="glove/pi:0.4.0",
+        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
+        # glove-pty, enforcer extension) only. Optional capabilities are opt-in extensions.
+        image="glove/pi:0.5.0",
         # Load only the always-on ring-1 `enforcer` extension (deps are node
         # builtins) from a system path; the user's own extensions still load from
         # the config home. Capability extensions (search, browser) are opt-in

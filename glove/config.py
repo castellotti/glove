@@ -59,7 +59,7 @@ class Config:
     # NEW in v2. `runtime` is the ring-0 layer (docker | podman |
     # apple-container | gondolin | utm); for docker/podman it also drives which
     # compose CLI `provider` shells out to. `enforcer` is the ring-1 in-container
-    # sandbox (nono | srt | none).
+    # sandbox (nono | nono+srt | srt | none).
     runtime: str = "docker"
     enforcer: str = "nono"
     # Internal (set from the session directory, never a session-file key):

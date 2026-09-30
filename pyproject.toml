@@ -32,6 +32,8 @@ packages = ["glove"]
 artifacts = [
     "glove/templates/*",
     "glove/harnesses/**/*",
+    "glove/enforcers/srt_image/*",
+    "glove/enforcers/pty/*",
 ]
 
 [tool.pytest.ini_options]

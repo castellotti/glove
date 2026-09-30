@@ -29,7 +29,7 @@ case "$ROUTE" in
 esac
 mkdir -p "$S/work"
 if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
-printf 'glove: 3\ntemplate: test\nruntime: %s\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
+printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
   "$RT" "$PORT" "$EG" > "$S/glove-session.yml"
 echo "== runtime $RT, route $ROUTE"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )

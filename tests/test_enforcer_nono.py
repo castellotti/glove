@@ -104,7 +104,9 @@ def test_wrap_and_wrapper_argv(tmp_path):
     assert f"{ENFORCER_DIR}/harness.json" in wrapped
 
     wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
-    assert wrapper[:2] == ["nono", "wrap"]
+    # no controlling terminal first (no TIOCSTI into the harness), then nono
+    assert wrapper[:3] == ["/opt/glove/bin/glove-pty", "notty", "--"]
+    assert wrapper[3:5] == ["nono", "wrap"]
     assert wrapper[-1] == "--"
     assert f"{ENFORCER_DIR}/tool.json" in wrapper
 

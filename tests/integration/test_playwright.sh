@@ -37,7 +37,7 @@ esac
 # SANDBOX=off: Chromium without its sandbox (the container is the only boundary)
 if [ "${SANDBOX:-on}" = off ]; then IN="${PW#\{}"; IN="${IN%\}}"; PW="{${IN}${IN:+, }chromium_sandbox: \"off\"}"; fi
 mkdir -p "$S/work"
-printf 'glove: 3\ntemplate: test\nruntime: %s\nharness: %s\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  direct: {}\n  playwright: %s\n%s' \
+printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  direct: {}\n  playwright: %s\n%s' \
   "$RT" "$HARNESS" "$PORT" "$PW" "$EXTRA" > "$S/glove-session.yml"
 echo "== runtime $RT, case $CASE"
 ( cd "$S" && STUB_LOG="$TMPROOT/stub.log" uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/playwright_live.py" . )

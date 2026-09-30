@@ -9,8 +9,9 @@ explicitly allowed, and cannot escalate privilege.
 
 The sandbox is *distributed as a container image* (Docker first) but the
 security does not rest on the container alone: a kernel-level capability
-sandbox (nono/Landlock by default) runs *inside* the container and wraps every
-command the agent executes.
+sandbox (srt/bubblewrap around the harness and nono/Landlock around every
+command on Docker; nono alone on Podman) runs *inside* the container and wraps
+every command the agent executes.
 
 > **Minimal core + extensions (v3, in progress).** The base image is *harness +
 > enforcer only*. Every capability is an **extension** in `extensions/<name>/`
@@ -36,10 +37,13 @@ must each be defeated:
   routable), and a non-negotiable hardening set - non-root, `cap_drop ALL`,
   `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc limits. Never
   `docker.sock`, never `--privileged`, never host-gateway on the harness.
-- **Ring 1 - Enforcer** (kernel policy on every process): **nono** (Landlock,
-  default) or **srt** (bubblewrap, opt-in) wraps the harness *and* every shell
-  command. A prompt-injected command can only write `/work` + exposed rw dirs,
-  cannot read the harness home / secrets, and has **no network**.
+- **Ring 1 - Enforcer** (kernel policy on every process): **nono+srt**
+  (default on Docker) puts srt (bubblewrap) around the harness and nono
+  (Landlock) around every shell command; **nono** (default on Podman) wraps the
+  harness *and* every shell command with Landlock alone; **srt** (opt-in) wraps
+  shell commands only. A prompt-injected
+  command can only write `/work` + exposed rw dirs, cannot read the harness
+  home / secrets, has **no network** and no terminal to type into the harness.
 - **Ring 2 - Harness integration**: a Pi extension / Vibe `pre_tool` hook routes
   every `bash`/`!` command through ring 1 and blocks egress tools; a generated
   context file tells the agent the rules.
@@ -47,15 +51,58 @@ must each be defeated:
 See **[docs/SECURITY.md](docs/SECURITY.md)** for the full threat model and the
 Docker Desktop macOS blast-radius explanation.
 
+### Enforcer: `nono+srt` (the default on Docker)
+
+```yaml
+enforcer: nono+srt    # what a session gets on Docker when it names no enforcer; `nono` on Podman
+```
+
+```
+glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- pi …
+  every shell command: glove-pty notty -- nono wrap --profile tool.json -- bash -c <cmd>
+```
+
+srt (bubblewrap) wraps the harness process, nono (Landlock) wraps every shell
+command inside it. What that adds over `nono`:
+
+- **Deny-inside-allow writes.** `/work` is writable, but `.git/hooks`,
+  `.git/config`, `.vscode`, `.idea`, `.envrc`, `.mcp.json`, `.gitmodules` and
+  `.claude/{commands,agents,settings*.json}` are read-only for the harness and
+  its commands (those present at launch; protecting a missing one would put
+  an empty placeholder file in your `work/`), plus srt's own list of shell rc
+  and git files where they exist.
+- **`.env` and `.env.*` under /work are hidden** from the harness and its
+  tools (files present at launch; `enforcer_options: {srt: {hide_env: false}}`
+  turns it off).
+- **No namespaces, mounts, AF_UNIX sockets or io_uring** for the harness or
+  any command: glove builds srt's `apply-seccomp` with its own filter, so only
+  srt itself can use what the relaxed container profile opens. The harness and
+  its commands also get their own PID namespace.
+- **Two kernel mechanisms** (bubblewrap + Landlock) between a command and the
+  container.
+
+The harness keeps the container network, which ring 0 already limits to the
+session's forwarders; srt's own network confinement would only repeat that and
+breaks clients with their own proxy (web_fetch). srt's CLI always confines the
+network, so glove runs srt's library through a small launcher (`glove-srt`).
+The TUI runs on a pty glove relays (srt starts it without a controlling
+terminal), so resize and Ctrl-C work.
+
+Costs: the harness container runs under the relaxed `nested-userns` seccomp
+profile (like `srt`); the harness starts ~0.1 s slower; the image is
+`<harness image>-srt-<hash>` (srt, bubblewrap and its own Node layered on).
+Refused on podman: its compose provider can't apply the profile.
+
 ### Runtime / enforcer / browser support
 
 | Component | Option | Status |
 |---|---|---|
 | Runtime | docker | hardened + doctor probes |
-| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): session lifecycle 10/10, nono Pi 16/16, Vibe 10/10, ring-0 15/15; srt is refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
+| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): session lifecycle 10/10, nono Pi 19/19, Vibe 13/13, ring-0 15/15; srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
-| Enforcer | nono (Landlock) - default | nono 0.78.0; Pi wired + verified (16-check integration) |
-| Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77; Pi wired + verified (11-check integration, incl. env/`/proc` key leaks); tool commands only |
+| Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi wired + verified (19-check integration), Vibe (13) |
+| Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi and Vibe (29 checks each: `test_nono_srt.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |
+| Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi wired + verified (12-check integration, incl. env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS); OpenVPN and built-in gluetun providers **untested** |
@@ -121,7 +168,7 @@ glove: 3
 template: minimal           # provenance only
 harness: pi                 # pi | vibe | claude-code (experimental)
 runtime: docker             # docker | podman | apple-container|gondolin|utm (stub)
-enforcer: nono              # nono (Landlock, default) | srt (bubblewrap) | none
+enforcer: nono+srt          # default: nono+srt on docker, nono on podman | nono | srt | none
 mounts:                     # explicit extra host dirs; work/ is always /work
   - { path: ~/src/shared-lib, mode: ro }
 extensions:                 # name → settings; unlisted = nothing in the session
@@ -143,7 +190,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
-enforcer_options: { srt: { nested: weak } }
+enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true)
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 ```
 
@@ -179,7 +226,7 @@ glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exp
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove keychain set <service>                 # store a secret, prompting (never in argv)
-glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt] | version
+glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
 glove observe status [--dir D] [--json]      # (observe) gate health + per-service totals
 glove observe flows  [--dir D] [--follow] [--json] [--tail N]
@@ -520,9 +567,10 @@ uv run ruff check glove extensions tests   # lint
 uv run pytest -q                           # unit suite (includes the layering check)
 uv run lint-imports                        # core (glove/) must not import extensions/
 # integration (need Docker; build the images first):
-bash tests/integration/test_pi_nono.sh    # nono / Pi  (16 checks)
-bash tests/integration/test_vibe_nono.sh  # nono / Vibe (10 checks)
-bash tests/integration/test_pi_srt.sh     # srt  / Pi  (11 checks)
+bash tests/integration/test_pi_nono.sh    # nono / Pi  (19 checks)
+bash tests/integration/test_vibe_nono.sh  # nono / Vibe (13 checks)
+bash tests/integration/test_pi_srt.sh     # srt  / Pi  (12 checks)
+bash tests/integration/test_nono_srt.sh pi    # nono+srt in a real session (29 checks; also: vibe)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
@@ -531,7 +579,7 @@ bash tests/integration/test_observe.sh direct # observe + filter end to end (als
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
-# RT=podman runs every script above except test_pi_srt on Podman
+# RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal)
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server

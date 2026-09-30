@@ -107,7 +107,8 @@ def test_plan_renders_under_dot_glove(home, tmp_path, monkeypatch):
     assert str((d / "work").resolve()) in sources and str((d / ".glove" / "home").resolve()) in sources
     # nothing else of the session dir is mounted: not the dir, not .glove/ itself
     assert not sources & {str(d.resolve()), str((d / ".glove").resolve())}
-    assert (d / ".glove" / "enforcer" / "harness.json").is_file()
+    # the default enforcer on docker: srt around the harness, nono per command
+    assert {p.name for p in (d / ".glove" / "enforcer").iterdir()} >= {"srt-harness.json", "tool.json"}
     assert (d / ".glove" / "effective.yml").is_file() and (d / ".glove" / "baseline.yml").is_file()
     nets = compose["networks"]
     assert nets[f"glove-{sid}-net"]["ipam"]["config"][0]["subnet"] == "172.31.0.0/27"

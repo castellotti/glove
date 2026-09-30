@@ -736,7 +736,7 @@ def build(
                    "omit to build the forwarder only"
     ),
     provider: str | None = typer.Option(None),
-    enforcer: str | None = typer.Option(None, "--enforcer", help="build the enforcer variant (e.g. srt → -srt image)"),
+    enforcer: str | None = typer.Option(None, "--enforcer", help="enforcer variant (srt, nono+srt → -srt image)"),
     rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
 ) -> None:
     """Build the forwarder and (optionally) a harness base image. Extension
@@ -753,7 +753,7 @@ def build(
 @app.command()
 def doctor(
     runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
-    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | srt | none"),
+    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | nono+srt | srt | none"),
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
     no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
 ) -> None:
@@ -763,8 +763,10 @@ def doctor(
     from rich.markup import escape
 
     from .doctor import run_doctor, worst_status
+    from .enforcers.base import default_enforcer
 
-    rt, enf = runtime or "docker", enforcer or "nono"
+    rt = runtime or "docker"
+    enf = enforcer or default_enforcer(rt)
     try:
         checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
     except ValueError as e:
