@@ -397,3 +397,15 @@ def test_podman_tmpfs_owner_and_selinux_bind_labels(tmp_path, monkeypatch, rootl
     for name, svc in gates(doc).items():
         assert svc.get("userns_mode") == ("keep-id" if rootless else None), name
     assert "userns_mode" not in doc["services"]["glove-ps-valkey"]
+
+
+@pytest.mark.parametrize("extra", [{}, {"filter": {}}])
+def test_glove_check_extension_checks_render_with_observe(extra):
+    """`glove check` composes the extensions once more without a session (M9 bug:
+    the collector's export bind was undefined there, so every observe session failed)."""
+    from glove.doctor import extension_checks
+
+    llm = {"provider": "llama.cpp", "location": "host", "endpoint": "127.0.0.1:8080"}
+    checks = extension_checks({"llm": llm, **PI_SEARCH, "observe": {}, **extra}, harness="pi")
+    assert [c for c in checks if c.status == "fail"] == []
+    assert not Path("/nonexistent").exists()

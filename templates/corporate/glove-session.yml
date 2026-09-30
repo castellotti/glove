@@ -4,7 +4,7 @@
 glove: 3
 template: corporate
 harness: pi
-enforcer: nono
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
 runtime: docker                # docker | podman
 # Corporate repos the agent may read (never mount a credentials dir):
 mounts: []                     # e.g. [{path: ~/src/corp-repo, mode: ro}]; work/ is always /work

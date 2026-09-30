@@ -3,7 +3,7 @@
 glove: 3
 template: minimal
 harness: pi                    # pi | vibe
-enforcer: nono                 # nono (Landlock) | srt | none
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
 runtime: docker                # docker | podman
 mounts: []                     # extra host dirs, e.g. [{path: ~/src/lib, mode: ro}]; work/ is always /work
 limits: { pids: 512, memory: 4g, cpus: 2 }

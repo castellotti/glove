@@ -19,6 +19,28 @@ attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
 container's own daemons, denied paths never opened), which is what makes a
 ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 
+## Enforcers at a glance (ring 1)
+
+| | `nono+srt` | `nono` | `srt` | `none` |
+|---|---|---|---|---|
+| Default on | Docker | Podman | — (opt-in) | — (debug) |
+| Harness process | srt (bubblewrap) + glove's seccomp | nono (Landlock) | ring 0 only | ring 0 only |
+| Every tool command | nono (Landlock), inside srt | nono (Landlock) | srt (bubblewrap) | unwrapped |
+| Tool network | none | none | none (empty allowlist) | ring 0 (forwarders) |
+| Secrets in a tool's env | stripped (`deny_vars` globs) | stripped (`deny_vars` globs) | stripped (exact names) | **present** |
+| Harness home / transcripts from a tool | denied | denied | denied | **readable** |
+| Writes outside `/work`, rw mounts, `/tmp` | denied | denied | denied | ring 0 (read-only rootfs) |
+| `.git/hooks`, `.vscode`, `.envrc`, … in `/work` | ring 0 ro binds + srt deny (present at launch) | ring 0 ro binds | ring 0 ro binds | ring 0 ro binds |
+| `.env` files in `/work` | hidden (present at launch) | readable | readable | readable |
+| Keystrokes into the TUI (TIOCSTI) | refused (`glove-pty notty`) | refused (`glove-pty notty`) | refused (bwrap `--new-session`) | **possible** |
+| User namespaces / mounts | srt only; denied below it | denied (default seccomp) | srt only; denied below it | denied (default seccomp) |
+| Container seccomp profile | `nested-userns` (relaxed) | default | `nested-userns` (relaxed) | default |
+| Podman | refused | yes | refused | yes |
+
+Details and the reasons behind each row: "`nono+srt` and `srt`" and "Planted
+host-trusted files" below. `glove policy` prints the effective policy and the
+remaining gaps for a session.
+
 ## Assets × adversaries × rings
 
 | Asset | Adversary | Defended by | Notes |
@@ -295,7 +317,7 @@ run inside a directory with no repo yet), nested repositories and submodules
 ## Network observability (the netgate): observe reads, filter writes
 
 With the `observe` extension, the forwarders are replaced by the netgate
-(`docs/planning/network-observability.md`). It changes what glove *records*,
+(`extensions/gate/`). It changes what glove *records*,
 never what the agent can *reach*. Writing rules is a separate grant, the
 `filter` extension: without it no gate reads a rules file, none mounts
 `~/.glove/control/`, and glove never creates `control/<id>/` (an invariant

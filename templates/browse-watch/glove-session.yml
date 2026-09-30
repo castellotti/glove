@@ -4,7 +4,7 @@
 glove: 3
 template: browse-watch
 harness: pi
-enforcer: nono
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
 runtime: docker                # docker | podman (podman: set chromium_sandbox: "off" below)
 mounts: []
 limits: { pids: 512, memory: 6g, cpus: 4 }

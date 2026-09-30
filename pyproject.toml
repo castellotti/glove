@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "glove"
-version = "0.2.0"
+version = "3.0.0"
 description = "Sandboxed environments for agentic harnesses (Docker/Podman session manager)"
 readme = "README.md"
 requires-python = ">=3.11"

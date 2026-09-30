@@ -2,7 +2,54 @@
 
 All notable changes to glove are documented here.
 
-## [Unreleased] — v3: minimal core + extensions + session directories (in progress)
+## [3.0.0] — 2026-09-29 — minimal core + extensions + session directories
+
+A clean break from v2 (no automatic migration; v2 state is refused, not
+guessed at). In short:
+
+- **A session is a directory** (`glove new <template> <dir>`, `glove up`):
+  `glove-session.yml`, `work/` and a private `.glove/`. `glove init/run`,
+  `--name`, `~/.glove/envs/` and `~/.glove/homes/` are gone.
+- **Minimal core + in-tree extensions**: `llm` (required), `vpn`, `tor`,
+  `direct`, `corporate`, `search`, `webfetch`, `observe`, `filter`, `media`,
+  `ocr`, `rag`, `playwright`, each validated and hardened by core, which never
+  imports them.
+- **Bundled templates** (`minimal`, `pi-search`, `pi-rag`, `browse-watch`,
+  `corporate`) replace the separate template repositories.
+- **`nono+srt` is the default enforcer on Docker** (`nono` on Podman); tool
+  commands can no longer type into the harness under any enforcer.
+- **Podman** is supported alongside Docker (srt enforcers refused there).
+
+See "Upgrading from v2" in the README. The milestone sections below are the
+detailed record.
+
+### Release (v3 M9)
+
+- The README leads with the session-directory workflow (install, quick start,
+  templates, the session file, CLI), then extensions, the security rings and
+  the support matrix, and gains an "Upgrading from v2" section. Links into
+  git-ignored planning notes are gone.
+- `docs/SECURITY.md` gains "Enforcers at a glance", one table comparing
+  `nono+srt`, `nono`, `srt` and `none`.
+- `vpn` verified live under `nono+srt` on Docker (`test_egress.sh vpn` 11/11,
+  `test_observe.sh vpn` 27/27).
+- **Fix: the bundled templates pinned `enforcer: nono`**, so a session made
+  from one never got the Docker default. They now name no enforcer (a comment
+  lists the choices): `nono+srt` on Docker, `nono` on Podman.
+- **Fix: `glove check` failed for every session with `observe`** (`'dict
+  object' has no attribute 'observe'`): its extension check composed the
+  extensions without export roots. It now passes stand-in paths (nothing is
+  created); covered by a unit test.
+- Verified by migrating a real v2 pi-search instance (openai-compatible server
+  on the LAN, `vpn` with a register hook, `search` groups, `observe`) to a
+  session directory: `glove check` passes, and a live run under `nono+srt`
+  brought up the tunnel (exit ≠ host), resolved the model and vision, and Pi
+  answered with `web_search` + `web_fetch` through the VPN. Its v2
+  transcripts, moved into the session, resolve with `glove up --session`.
+- Package version 3.0.0 (was 0.2.0).
+- Core size: 7.7k lines of Python (`find glove -name '*.py' | xargs wc -l`),
+  above the ~5k the design aimed for; `extensions.py` (1044), `cli.py` (878),
+  `compose.py` and `harnessconfig.py` (~430 each) are the largest.
 
 ### Enforcer: `nono+srt` (default on Docker), TIOCSTI fix, glove's srt `apply-seccomp` (v3 M8)
 

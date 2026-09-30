@@ -4,7 +4,7 @@
 glove: 3
 template: pi-rag
 harness: pi
-enforcer: nono
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
 runtime: docker                # docker | podman
 mounts: []                     # extra host dirs, e.g. [{path: ~/papers, mode: ro}]; work/ is always /work
 limits: { pids: 512, memory: 6g, cpus: 4 }

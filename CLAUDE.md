@@ -1,6 +1,6 @@
 # Repo conventions for Claude Code
 
-`glove` v2 — a sandbox launcher for agentic coding harnesses. It runs a chosen
+`glove` v3 — a sandbox launcher for agentic coding harnesses. It runs a chosen
 harness (Pi, Mistral Vibe, later Claude Code) inside a hardened container with an
 in-container kernel enforcer wrapping the agent and every command it runs.
 

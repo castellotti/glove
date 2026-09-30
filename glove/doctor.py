@@ -80,7 +80,10 @@ def extension_checks(requested: dict, *, harness: str) -> list[Check]:
     from .extensions import base_context, compose
 
     try:
-        comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"))
+        # Stand-in paths: nothing is created; export roots only need to render
+        # (observe/filter fragments bind them).
+        comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"),
+                       export_dirs={r: Path("/nonexistent") / r for r in ("observe", "control")})
     except ValueError as e:
         return [Check("extensions", "fail", str(e))]
     checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
