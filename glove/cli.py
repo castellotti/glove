@@ -331,7 +331,9 @@ def up(
         from dataclasses import asdict
 
         _resolve_extensions(plan, cfg.provider, secrets)
-        sdm.write_effective(sd.effective, cfg, {"at": _now(), "model": asdict(plan.model)})
+        # keeps what plan time recorded (the extensions' resolutions)
+        _, resolved = sdm.read_effective(sd.effective)
+        sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
         render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
 
     import subprocess
@@ -554,10 +556,25 @@ def check(
 # --- down / rm / ls / ps / gc -----------------------------------------------------------
 
 
-def _stop(sd: SessionDir, sid: str, provider: str, *, wipe: bool) -> None:
+def _session_provider(sd: SessionDir, cfg) -> str:
+    """The compose provider the session last ran under (effective.yml), else its
+    session file's runtime — never a guess from PATH while either says otherwise."""
+    from .userconfig import load_user_config
+
+    if cfg is not None:
+        return cfg.provider
+    try:
+        runtime = sdm.load_file(sd).get("runtime") or load_user_config().runtime
+    except (SessionError, ConfigError):
+        return _autodetect_provider()
+    return runtime if runtime in ("docker", "podman") else _autodetect_provider()
+
+
+def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool) -> None:
     from .session import teardown
 
     cfg, _ = sdm.read_effective(sd.effective)
+    provider = provider or _session_provider(sd, cfg)
     if cfg is not None and cfg.host_services:
         console.print("[bold]stopping host services…[/bold]")
         try:
@@ -589,7 +606,7 @@ def down(
     sid = sd.read_id()
     if sid is None:
         raise _fail(f"{sd.root} has never been launched (no .glove/id)")
-    _stop(sd, sid, provider or _autodetect_provider(), wipe=wipe)
+    _stop(sd, sid, provider, wipe=wipe)
 
 
 def _remove_exports(sid: str) -> list[Path]:
@@ -619,7 +636,7 @@ def rm(
     if not yes and not typer.confirm(f"Remove session {sid or '(never launched)'}: {what}?", default=False):
         raise typer.Exit(1)
     if sid is not None:
-        _stop(sd, sid, provider or _autodetect_provider(), wipe=True)
+        _stop(sd, sid, provider, wipe=True)
         for p in _remove_exports(sid):
             console.print(f"[dim]removed {p}[/dim]")
         try:
@@ -830,17 +847,23 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
 def _mount_extension_clis() -> None:
     """Mount every discoverable extension's Typer app at `glove <name>`. A broken
     manifest must not break the CLI: it is reported by `glove ext`/`check`."""
+    from rich.markup import escape
+
     from .extensions import ExtensionError, discover, load_module
 
-    try:
+    try:  # a malformed config.yml too: the commands that read it report it
         manifests = discover()
-    except ExtensionError:
+    except (ExtensionError, ConfigError):
         return
     taken = {c.name for c in app.registered_commands} | {g.name for g in app.registered_groups}
     for name, m in sorted(manifests.items()):
         if m.cli is None or name in taken:
             continue
-        sub = getattr(load_module(m.cli, name), "app", None)
+        try:
+            sub = getattr(load_module(m.cli, name), "app", None)
+        except Exception as e:  # an extension's own code: anything can go wrong
+            err.print(f"[yellow]warn:[/yellow] extension {name!r} CLI ({m.cli}) failed to load: {escape(str(e))}")
+            continue
         if isinstance(sub, typer.Typer):
             app.add_typer(sub, name=name, help=m.summary)
 

@@ -8,6 +8,7 @@ anything, and exposes the container/landlock probes ``glove doctor`` needs.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,6 +32,8 @@ PROBE_IMAGE = "docker.io/library/python:3.12-slim"
 
 # Compact probe run inside a hardened container: reports Landlock ABI, whether
 # an unprivileged user namespace is creatable, /dev/kvm, and the effective caps.
+_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 _PROBE = r"""
 import ctypes, json, os
 libc = ctypes.CDLL(None, use_errno=True)
@@ -161,6 +164,10 @@ class DockerRuntime:
         # Not waivable: the agent must never see (or forge) its own flow record
         # or rules (the export roots).
         validate_export_isolation(plan)
+        # Env keys render into compose unquoted: a newline would add keys.
+        for k in (*plan.environment, *plan.enforcer_env, *plan.passthrough_env):
+            if not _ENV_KEY.match(k):
+                raise HardeningError(f"harness env key {k!r} is not a plain variable name")
         extra = self.compose_extra(plan)
         # Couple the seccomp hardening row to what actually renders. validate_hardening
         # only checks that the *plan* names a profile; on a runtime that omits the

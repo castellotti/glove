@@ -95,6 +95,12 @@ Every capability (the model, search, the browser, …) is an extension in
   the socat forwarders, but only with services core names, networks and
   hardens: its hook cannot choose networks, aliases outside the endpoint's own
   name, security keys or privileges.
+- **Names rendered into compose.** An extension's harness env keys (from its
+  manifest or a `contribute` hook) must match `^[A-Z][A-Z0-9_]*$` and may not
+  overwrite another extension's; endpoint and forwarder aliases must be
+  hostnames. The render refuses any harness env key that is not a plain name,
+  and the merged-project re-check fails if the harness's `cap_add`, `cap_drop`
+  or `security_opt` differ from its hardening plan.
 - **Low ports.** A forwarder listening below 1024 gets
   `net.ipv4.ip_unprivileged_port_start=0` in its own network namespace (Docker's
   default; Podman does not set it), so it still runs as the operator's uid with

@@ -401,6 +401,14 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition | None) -> 
                     bind = isinstance(v, dict) and v.get("type") == "bind"
                     if bind and _within(str(v["source"]), str(comp.state_root)):
                         raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
+            h = plan.hardening
+            if set(svc.get("cap_add") or []) != set(h.cap_add) or set(svc.get("cap_drop") or []) != set(h.cap_drop):
+                raise ExtensionError("the harness's capabilities differ from its hardening plan")
+            allowed_opts = {"no-new-privileges:true", f"seccomp={h.seccomp_profile}",
+                            *(["systempaths=unconfined"] if h.systempaths_unconfined else [])}
+            opts = set(svc.get("security_opt") or [])
+            if not opts <= allowed_opts or "no-new-privileges:true" not in opts:
+                raise ExtensionError("the harness's security_opt differs from its hardening plan")
             continue
         if svc.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in (svc.get("security_opt") or []):
             raise ExtensionError(f"sidecar {name!r} is missing the hardening set")

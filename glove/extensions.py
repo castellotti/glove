@@ -62,6 +62,7 @@ MANIFEST_KEYS = frozenset({
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 PLACEHOLDER = "<set-me>"
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 class ExtensionError(ConfigError):
@@ -724,9 +725,21 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         raise ExtensionError(f"{where}: `interpose` is for an egress consumer's hop (harness: false, target: slot)")
     return Endpoint(
         name=name, extension=a.name, port=int(spec.get("port", target.port)), target=target, harness=harness,
-        listen_networks=listen, aliases=tuple(spec.get("aliases") or ()), observe=spec.get("observe"),
+        listen_networks=listen, aliases=_aliases(spec.get("aliases"), where), observe=spec.get("observe"),
         interpose=interpose, interposed=interpose and comp.has_forwarder,
     )
+
+
+_HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+
+
+def _aliases(items: Any, where: str) -> tuple[str, ...]:
+    """Network aliases (DNS names on the harness network), rendered into compose as-is."""
+    out = tuple(str(x) for x in items or ())
+    bad = [x for x in out if not _HOSTNAME.match(x)]
+    if bad:
+        raise ExtensionError(f"{where}: aliases must be hostnames, got {bad!r}")
+    return out
 
 
 def require_trust(a: Active, what: str) -> None:
@@ -735,6 +748,16 @@ def require_trust(a: Active, what: str) -> None:
             f"{what} is a privilege; out-of-tree extension {a.name!r} is not in `trusted_extensions` "
             "(~/.glove/config.yml)"
         )
+
+
+def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
+    """One harness env var from an extension (manifest or `contribute` hook):
+    the key is rendered into compose as-is, so it must be a plain name."""
+    if not isinstance(k, str) or not _ENV_VAR.match(k):
+        raise ExtensionError(f"{where}: env key {k!r} must match {_ENV_VAR.pattern}")
+    if k in comp.harness_env:
+        raise ExtensionError(f"{where}: env {k!r} is already set by another extension")
+    comp.harness_env[k] = str(v)
 
 
 def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
@@ -751,9 +774,7 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
     for k, v in render_value(h.get("env") or {}, ctx, where).items():
-        if k in comp.harness_env:
-            raise ExtensionError(f"{where}: env {k!r} is already set by another extension")
-        comp.harness_env[k] = str(v)
+        set_harness_env(comp, where, k, v)
     if comp.harness == "pi":
         for item in active_items(h.get("pi_extensions"), ctx):
             src = a.manifest.path / (item["src"] if isinstance(item, dict) else item)
@@ -901,7 +922,7 @@ def compose(
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx)
         for k, v in (contributed.get("env") or {}).items():
-            comp.harness_env[k] = str(v)
+            set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
         _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
                                       *(contributed.get("host_services") or [])])
         for item in active_items([*(a.manifest.raw.get("verify") or []), *(contributed.get("verify") or [])], ctx):
@@ -974,7 +995,6 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 #                                    null-valued `environment:` keys of its sidecars;
 #   diagnose(ctx, check, run)      → str | None — explain a failed verify check.
 
-_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def materialize(comp: Composition) -> None:
@@ -1038,7 +1058,7 @@ def forwarder_service(comp: Composition, ep: dict[str, Any]) -> tuple[dict, dict
         raise ExtensionError(f"extension {a.name!r}: forwarder for {ep['name']!r} sets {sorted(bad)} "
                              "(core owns names, networks and security keys)")
     prefix = f"{ep['container']}-"
-    aliases = [str(x) for x in out.get("aliases") or []]
+    aliases = list(_aliases(out.get("aliases"), f"extension {a.name!r} forwarder"))
     if any(not x.startswith(prefix) for x in aliases):
         raise ExtensionError(f"extension {a.name!r}: forwarder aliases must start with {prefix!r}")
     return svc, dict(out.get("facts") or {}), aliases

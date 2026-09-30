@@ -458,3 +458,52 @@ def test_an_unsupported_runtime_enforcer_pair_is_a_clean_error(home, tmp_path):
     result = runner.invoke(app, ["plan", str(d)])
     assert result.exit_code == 1 and "not supported on the podman runtime" in result.output
     assert "Traceback" not in result.output
+
+
+def test_down_and_rm_use_the_sessions_runtime_not_path(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s", "runtime: podman\n")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    monkeypatch.setattr("glove.cli.shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
+    calls = []
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append(k["provider"]))
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    (d / ".glove" / "effective.yml").unlink()  # never planned since: the session file says
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    assert runner.invoke(app, ["rm", str(d), "-y"]).exit_code == 0
+    assert calls == ["podman", "podman", "podman"]
+
+
+def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypatch):
+    from glove import sessiondir as sdm
+
+    d = make_session(tmp_path / "s")
+    eff = d / ".glove" / "effective.yml"
+
+    def launch(cfg, plan, *a, prepare, **k):
+        _, resolved = sdm.read_effective(eff)  # as a `resolved` export would have recorded it
+        sdm.write_effective(eff, cfg, {**resolved, "extensions": {"corp": {"routes": ["10.0.0.0/8"]}}})
+        prepare()
+
+    monkeypatch.setattr("glove.session.launch", launch)
+    monkeypatch.setattr("glove.cli._resolve_extensions", lambda *a, **k: None)
+    monkeypatch.setattr("glove.cli.start_host_services", lambda *a, **k: None)
+    assert runner.invoke(app, ["up", str(d)]).exit_code == 0
+    resolved = yaml.safe_load(eff.read_text())["resolved"]
+    assert resolved["extensions"] == {"corp": {"routes": ["10.0.0.0/8"]}} and resolved["model"]
+
+
+def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, monkeypatch):
+    from glove import cli
+    from glove.extensions import discover
+
+    home.mkdir()
+    (home / "config.yml").write_text("no_such_key: 1\n")
+    cli._mount_extension_clis()  # the commands that read config.yml report it
+    (home / "config.yml").unlink()
+    ext = tmp_path / "exts" / "bad"
+    ext.mkdir(parents=True)
+    (ext / "extension.yml").write_text("api: 1\nname: bad\nsummary: x\ncli: cli.py\n")
+    (ext / "cli.py").write_text("raise RuntimeError('boom')\n")
+    monkeypatch.setattr("glove.extensions.discover", lambda: discover(tmp_path / "exts"))
+    cli._mount_extension_clis()
+    assert "bad" not in {g.name for g in app.registered_groups}

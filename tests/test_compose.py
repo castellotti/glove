@@ -141,3 +141,29 @@ def test_docker_compose_config_parses(tmp_path):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_the_merged_project_rechecks_the_harness_caps_and_security_opt(tmp_path):
+    from glove.compose import validate_project
+    from glove.extensions import ExtensionError
+
+    plan, text = render(make_cfg(harness="pi", name="s", workdir=str(tmp_path)), tmp_path)
+    validate_project(yaml.safe_load(text), plan, plan.composition)
+    for key, value in (("cap_add", ["SYS_ADMIN"]), ("security_opt", ["no-new-privileges:true", "apparmor=unconfined"]),
+                       ("security_opt", [f"seccomp={plan.hardening.seccomp_profile}"])):
+        doc = yaml.safe_load(text)
+        doc["services"][plan.harness_service][key] = value
+        with pytest.raises(ExtensionError, match="hardening plan"):
+            validate_project(doc, plan, plan.composition)
+
+
+def test_a_harness_env_key_that_is_not_a_plain_name_refuses_to_render(tmp_path):
+    import dataclasses
+
+    from glove.hardening import HardeningError
+    from glove.runtimes.docker import DockerRuntime
+
+    plan, _ = render(make_cfg(harness="pi", name="s", workdir=str(tmp_path)), tmp_path)
+    plan = dataclasses.replace(plan, environment={**plan.environment, "A: x\n      privileged": "true"})
+    with pytest.raises(HardeningError, match="not a plain variable name"):
+        DockerRuntime().render(plan, tmp_path)

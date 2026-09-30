@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import textwrap
 from pathlib import Path
@@ -456,3 +457,49 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
 
 def test_config_error_is_an_extension_error():
     assert issubclass(ExtensionError, ConfigError)
+
+
+# --- harness env keys and aliases render unquoted: they must be plain names ---------------
+
+
+@pytest.mark.parametrize("key", ["A: x\n    cap_add: [SYS_ADMIN]\n    B", "lower", "1X", "A-B"])
+def test_a_harness_env_key_must_be_a_plain_name(tree, key):
+    _ext(tree, "e", f"""\
+        api: 1
+        name: e
+        summary: x
+        harness:
+          env: {{ {json.dumps(key)}: v }}
+        """)
+    with pytest.raises(ExtensionError, match="must match"):
+        compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+
+
+def test_a_contribute_hook_env_is_checked_like_a_manifest_env(tree):
+    _ext(tree, "a", "api: 1\nname: a\nsummary: x\nharness:\n  env: { SHARED: from-a }\n")
+    hooks = 'def contribute(ctx):\n    return {"env": ENV}\n'
+    _ext(tree, "b", "api: 1\nname: b\nsummary: x\nhooks: hooks.py\n",
+         {"hooks.py": hooks.replace("ENV", '{"SHARED": "from-b"}')})
+    with pytest.raises(ExtensionError, match="'SHARED' is already set"):
+        compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+    (tree / "b" / "hooks.py").write_text(hooks.replace("ENV", '{"X\\n    privileged": "true"}'))
+    with pytest.raises(ExtensionError, match="must match"):
+        compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+
+
+def test_endpoint_aliases_must_be_hostnames(tree):
+    _egress(tree)
+    _ext(tree, "fetch", """\
+        api: 1
+        name: fetch
+        summary: x
+        requires: [egress]
+        endpoints:
+          proxy: { port: 8888, target: { slot: egress }, aliases: ["proxy.internal\\n    privileged: true"] }
+        """)
+    with pytest.raises(ExtensionError, match="aliases must be hostnames"):
+        compose({"llm": STUB_LLM, "egress-a": {}, "fetch": {}}, harness="pi", session="s",
+                state_root=Path("/x"), manifests=discover(tree))

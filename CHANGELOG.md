@@ -23,6 +23,24 @@ guessed at). In short:
 See "Upgrading from v2" in the README. The milestone sections below are the
 detailed record.
 
+### Review fixes (v3 M9)
+
+- `glove down`/`rm` tear down under the runtime the session last ran with
+  (`effective.yml`, else the session file), not whichever of docker/podman is
+  on PATH. On a host with both, `rm` of a podman session no longer orphans its
+  running containers.
+- Extension harness env keys (manifest or `contribute` hook) must be plain
+  variable names, and a hook's env can no longer silently overwrite another
+  extension's. Endpoint/forwarder aliases must be hostnames. The Docker/Podman
+  render refuses a harness env key that is not a plain name, and the
+  merged-project re-check now also covers the harness's capabilities and
+  `security_opt`.
+- A malformed `~/.glove/config.yml` or an extension `cli.py` that fails to
+  import no longer breaks every `glove` command. The broken CLI is skipped
+  with a warning.
+- `glove up` keeps what extensions resolved at plan time (e.g. corporate's
+  routes) in `effective.yml`, next to the launch-time model.
+
 ### Release (v3 M9)
 
 - The README leads with the session-directory workflow (install, quick start,
