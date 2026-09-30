@@ -57,7 +57,7 @@ def _plan_with(tree, tmp_path, exts, monkeypatch):
     real = plan_mod.compose
     monkeypatch.setattr(plan_mod, "compose", lambda *a, **k: real(*a, **{**k, "manifests": discover(tree)}))
     cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), extensions=exts)
-    return plan_mod.build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return plan_mod.build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def test_forwarder_hook_replaces_socat_and_gets_hardened(tree, tmp_path, monkeypatch):

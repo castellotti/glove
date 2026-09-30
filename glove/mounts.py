@@ -19,6 +19,18 @@ class MountError(ValueError):
     """Raised for refused or malformed mount requests."""
 
 
+def host_path(root: Path | None, value: str) -> Path:
+    """A host path from a session file: ``~`` expanded, relative to ``root``
+    (the session directory), symlinks resolved. A relative path with no root
+    raises ValueError."""
+    p = Path(os.path.expanduser(value))
+    if not p.is_absolute():
+        if root is None:
+            raise ValueError(f"{value!r} must be an absolute path here")
+        p = root / p
+    return Path(os.path.realpath(p))
+
+
 @dataclass(frozen=True)
 class Mount:
     host_path: str  # realpath on the host

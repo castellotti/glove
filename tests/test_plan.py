@@ -17,7 +17,7 @@ def _cfg(tmp_path, **kw):
 
 
 def test_plan_basic_shape(tmp_path):
-    plan = build_session_plan(_cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"), uid=501, gid=20)
+    plan = build_session_plan(_cfg(tmp_path), home_dir=str(tmp_path / "h"), uid=501, gid=20)
     assert plan.project == "glove-s"
     assert plan.harness_service == "glove-s-harness"
     assert plan.hardening.user == "501:20"
@@ -26,7 +26,7 @@ def test_plan_basic_shape(tmp_path):
 
 
 def test_nono_uses_default_seccomp(tmp_path):
-    plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), env_id="s", home_dir=str(tmp_path / "h"))
+    plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), home_dir=str(tmp_path / "h"))
     assert plan.hardening.seccomp_profile == str(DEFAULT_PROFILE)
     assert plan.hardening.systempaths_unconfined is False
 
@@ -43,14 +43,14 @@ def test_srt_uses_nested_seccomp(tmp_path):
 
 
 def test_nono_wraps_harness_command(tmp_path):
-    plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), env_id="s", home_dir=str(tmp_path / "h"))
+    plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), home_dir=str(tmp_path / "h"))
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
     assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
     assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json"}
 
 
 def test_none_enforcer_leaves_command_bare(tmp_path):
-    plan = build_session_plan(_cfg(tmp_path, enforcer="none"), env_id="s", home_dir=str(tmp_path / "h"))
+    plan = build_session_plan(_cfg(tmp_path, enforcer="none"), home_dir=str(tmp_path / "h"))
     assert plan.harness_command == list(plan.profile.entry)
     assert plan.policies == {}
 
@@ -58,14 +58,14 @@ def test_none_enforcer_leaves_command_bare(tmp_path):
 def test_limits_flow_through(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.limits = Limits(pids=100, memory="2g", cpus=1)
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"))
     assert plan.hardening.limits.pids == 100
     assert plan.hardening.limits.memory == "2g"
 
 
 def test_browser_endpoint_reaches_environment(tmp_path):
     cfg = _cfg(tmp_path, extensions={"playwright": {"mode": "host", "port": 8931}})
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"))
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"))
     assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
 
 
@@ -74,7 +74,7 @@ def test_add_dir_modes(tmp_path):
     ro.mkdir()
     plan = build_session_plan(
         _cfg(tmp_path, add_dirs=[AddDir(str(ro), "ro")]),
-        env_id="s", home_dir=str(tmp_path / "h"),
+        home_dir=str(tmp_path / "h"),
     )
     ro_mounts = [m for m in plan.mounts if m.container_path.startswith("/mnt/")]
     assert ro_mounts and all(m.read_only for m in ro_mounts)

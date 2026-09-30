@@ -65,7 +65,7 @@ def _after_sentinel(command: list[str]) -> list[str]:
 
 def test_plan_resume_continue_after_sentinel(tmp_path):
     plan = build_session_plan(
-        _cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"), resume=True
+        _cfg(tmp_path), home_dir=str(tmp_path / "h"), resume=True
     )
     tail = _after_sentinel(plan.command)
     assert "--continue" in tail
@@ -74,14 +74,14 @@ def test_plan_resume_continue_after_sentinel(tmp_path):
 
 def test_plan_resume_session_after_sentinel(tmp_path):
     plan = build_session_plan(
-        _cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"), session_id="abc"
+        _cfg(tmp_path), home_dir=str(tmp_path / "h"), session_id="abc"
     )
     tail = _after_sentinel(plan.command)
     assert tail[-2:] == ["--session", "abc"]
 
 
 def test_plan_no_resume_unchanged(tmp_path):
-    base = build_session_plan(_cfg(tmp_path), env_id="s", home_dir=str(tmp_path / "h"))
+    base = build_session_plan(_cfg(tmp_path), home_dir=str(tmp_path / "h"))
     assert "--continue" not in base.command
     assert "--session" not in base.command
 

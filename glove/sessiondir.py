@@ -36,6 +36,8 @@ import yaml
 
 from .config import Config, ConfigError, _coerce
 from .enforcers.base import default_enforcer
+from .exports import ensure_dir
+from .mounts import host_path
 
 SESSION_FILE = "glove-session.yml"
 STATE_DIR = ".glove"
@@ -151,8 +153,7 @@ def new_id(dirname: str) -> str:
 
 def ensure_state(sd: SessionDir) -> tuple[str, bool]:
     """Create ``.glove/`` (0700) and its id if missing. Returns (id, created)."""
-    sd.state.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(sd.state, 0o700)
+    ensure_dir(sd.state)
     ignore = sd.state / ".gitignore"
     if not ignore.exists():
         ignore.write_text("# glove session state: never commit\n*\n")
@@ -200,8 +201,7 @@ def _mount(sd: SessionDir, item: Any) -> tuple[str, str]:
         raise SessionError(f"{sd.file}: bad mount {item!r} (want {{path: <dir>, mode: ro|rw}})")
     if mode not in ("ro", "rw"):
         raise SessionError(f"{sd.file}: mount {path!r}: mode must be ro|rw")
-    host = Path(os.path.expanduser(path))
-    host = Path(os.path.realpath(host if host.is_absolute() else sd.root / host))
+    host = host_path(sd.root, path)
     exposed = exposes_private(sd.root, host)
     if exposed:
         raise SessionError(f"{sd.file}: mount {path!r} would expose {exposed[1]} ({exposed[0]}) to the harness; "
@@ -229,6 +229,24 @@ def exposes_private(root: Path | None, host: Path) -> tuple[Path, str] | None:
         if host == p or p.is_relative_to(host) or host.is_relative_to(p):
             return p, what
     return None
+
+
+def autodetect_provider() -> str:
+    return "podman" if not shutil.which("docker") and shutil.which("podman") else "docker"
+
+
+def session_provider(sd: SessionDir, cfg: Config | None = None) -> str:
+    """The compose provider the session last ran under (effective.yml), else its
+    session file's runtime — never a guess from PATH while either says otherwise."""
+    from .userconfig import load_user_config
+
+    if cfg is not None:
+        return cfg.provider
+    try:
+        runtime = load_file(sd).get("runtime") or load_user_config().runtime
+    except ConfigError:
+        return autodetect_provider()
+    return runtime if runtime in ("docker", "podman") else autodetect_provider()
 
 
 def to_config(sd: SessionDir, raw: dict[str, Any], session_id: str, *, subnet: str | None = None,

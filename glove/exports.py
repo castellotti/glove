@@ -99,7 +99,7 @@ def prepare(comp: Composition, state_root: Path) -> list[str]:
         rules = control / "rules.json"
         if rules.is_file():
             keep = state_root / "filter"
-            keep.mkdir(parents=True, exist_ok=True, mode=0o700)
+            ensure_dir(keep)
             shutil.move(str(rules), keep / "rules.revoked.json")
             notes.append(f"filter removed: {rules} moved to {keep / 'rules.revoked.json'}")
         shutil.rmtree(control)

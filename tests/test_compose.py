@@ -75,7 +75,7 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
     from glove.plan import build_session_plan
     from glove.runtimes import get_runtime
 
-    plan = build_session_plan(cfg, env_id="e", home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20,
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20,
                               state_dir=str(tmp_path / "ext"))
     plan.placeholder_host_dir = str(tmp_path / "ph")
     doc = yaml.safe_load(get_runtime("docker").render(plan, tmp_path).compose_yaml)

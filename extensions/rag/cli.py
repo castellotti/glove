@@ -7,7 +7,6 @@ then mounts read-only.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -15,6 +14,9 @@ import typer
 from rich.console import Console
 
 from glove import sessiondir as sdm
+from glove.config import ConfigError
+from glove.extensions import discover, validate_settings
+from glove.mounts import host_path
 
 app = typer.Typer(add_completion=False, help="Offline RAG (kstore): host-side helpers.")
 err = Console(stderr=True)
@@ -33,12 +35,12 @@ def rag_settings(directory: Path | None) -> tuple[Path, str]:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
     rag = (raw.get("extensions") or {}).get("rag")
-    if not isinstance(rag, dict) or not rag.get("models_dir") or rag["models_dir"] == "<set-me>":
-        err.print(f"[red]error:[/red] {sd.file}: set `extensions: {{rag: {{models_dir: <dir>}}}}` first")
-        raise typer.Exit(1)
-    models = Path(os.path.expanduser(str(rag["models_dir"])))
-    model = str(rag.get("embed_model") or "BAAI/bge-small-en-v1.5")
-    return (models if models.is_absolute() else sd.root / models), model
+    try:
+        settings = validate_settings(discover()["rag"], rag if isinstance(rag, dict) else {})
+    except ConfigError as e:
+        err.print(f"[red]error:[/red] {sd.file}: {e} (set `extensions: {{rag: {{models_dir: <dir>}}}}`)")
+        raise typer.Exit(1) from e
+    return host_path(sd.root, settings["models_dir"]), settings["embed_model"]
 
 
 @app.command("fetch-model")

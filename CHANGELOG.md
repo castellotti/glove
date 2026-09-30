@@ -23,6 +23,21 @@ guessed at). In short:
 See "Upgrading from v2" in the README. The milestone sections below are the
 detailed record.
 
+### Cleanup (v3 M9)
+
+- `glove rag fetch-model` validates its settings against the `rag` manifest,
+  so it uses the manifest's `embed_model` default and pattern instead of its
+  own copy. `glove playwright view` picks the runtime the same way
+  `glove down` does.
+- `glove up` asks the runtime for foreign subnets before taking the registry
+  lock, renders the harness home once instead of twice, and `glove check`
+  reuses the plan's composition for the extension doctor hooks.
+- Internal: one helper each for session-scoped names (`glove/naming.py`),
+  session-file host paths (`mounts.host_path`) and 0700 state dirs
+  (`exports.ensure_dir`). Removed the unused `Config.rebuild`,
+  `SessionPlan.env_id` and `build_session_plan(forwarder_image=)`.
+  `SessionPlan.composition` is now always set.
+
 ### Review fixes (v3 M9)
 
 - `glove down`/`rm` tear down under the runtime the session last ran with

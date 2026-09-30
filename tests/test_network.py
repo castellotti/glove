@@ -9,7 +9,7 @@ from glove.plan import build_session_plan
 
 def _plan(tmp_path, exts=None):
     cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), extensions=exts or {}, subnet="172.31.4.0/24")
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def test_the_inference_endpoint_is_the_only_forwarder_by_default(tmp_path):

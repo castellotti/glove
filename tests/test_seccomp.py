@@ -68,6 +68,7 @@ def test_chromium_adds_exactly_its_four_syscalls():
 
 
 def test_chromium_userns_is_a_sidecar_profile_only():
-    from glove.compose import SIDECAR_SECCOMP, seccomp_profiles
+    from glove.compose import seccomp_profiles
+    from glove.hardening import SIDECAR_ONLY_SECCOMP
 
-    assert seccomp_profiles() == {"chromium-userns"} == set(SIDECAR_SECCOMP)
+    assert seccomp_profiles() == {"chromium-userns"} == set(SIDECAR_ONLY_SECCOMP)

@@ -132,7 +132,7 @@ def test_observe_labels_the_llm_forwarder(tmp_path):
         cfg.extensions = {**_llm(**SCENARIOS[scenario]), "observe": {}}
         from glove.plan import build_session_plan
 
-        plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / scenario / "h"),
+        plan = build_session_plan(cfg, home_dir=str(tmp_path / scenario / "h"),
                                   state_dir=str(tmp_path / scenario / "ext"))
         facts = next(s.facts for s in plan.network.sidecars if s.role == "llm")
         assert (facts["tool"], facts["scope"]) == ("llm", scope)

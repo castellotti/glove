@@ -18,7 +18,7 @@ def _plan(tmp_path, harness="pi", egress=("direct", {}), **settings):
     work.mkdir(exist_ok=True)
     exts = {egress[0]: egress[1], "search": settings} if egress else {"search": settings}
     cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions=exts, subnet="172.31.3.0/24")
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def test_requires_an_egress_provider(tmp_path):

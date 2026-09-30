@@ -37,7 +37,7 @@ def _plan(tmp_path, harness="pi", **rag):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions={"ocr": {}, "rag": rag})
-    return cfg, build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return cfg, build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def test_rag_pulls_in_ocr_and_bakes_kstore(tmp_path, models):

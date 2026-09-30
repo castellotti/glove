@@ -16,7 +16,7 @@ from glove.verify import VerifyError, run_check, run_verify
 
 def _plan(tmp_path, exts=None):
     cfg = make_cfg(name="s", workdir=str(tmp_path), extensions=exts or {"tor": {}})
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def _quiet(_msg: str) -> None:

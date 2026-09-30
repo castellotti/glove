@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-import os
 import re
 import secrets as pysecrets
 from dataclasses import dataclass, field
@@ -35,6 +34,10 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from .config import ConfigError, HostService, is_secret_ref
+from .exports import ensure_dir
+from .mounts import host_path
+from .naming import project_name, scoped
+from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
 from .verify import KINDS as VERIFY_KINDS
 
@@ -60,7 +63,6 @@ MANIFEST_KEYS = frozenset({
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
-PLACEHOLDER = "<set-me>"
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -368,7 +370,7 @@ class Endpoint:
     interposed: bool = False
 
     def host(self, session: str) -> str:
-        return f"glove-{session}-{self.name}"
+        return scoped(session, self.name)
 
     def url(self, session: str) -> str:
         if self.interpose and not self.interposed:
@@ -493,10 +495,9 @@ def _requirements(m: Manifest, ctx: dict[str, Any]) -> list[tuple[str, str]]:
 
 def _names(session: str) -> dict[str, Any]:
     return {
-        "project": f"glove-{session}",
-        "harness_network": f"glove-{session}-net",
-        "container": {},  # filled lazily by callers that need it
-        "prefix": f"glove-{session}-",
+        "project": project_name(session),
+        "harness_network": scoped(session, "net"),
+        "prefix": scoped(session, ""),
     }
 
 
@@ -657,8 +658,7 @@ def _toposort(chosen: dict[str, Active], slots: dict[str, Active], harness: str)
 
 def generate_secret() -> str:
     """A random per-launch secret for `default: generate` secret settings."""
-    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-    return "".join(pysecrets.choice(alphabet) for _ in range(24))
+    return pysecrets.token_urlsafe(18)  # 24 chars
 
 
 # --- contributions --------------------------------------------------------------
@@ -676,10 +676,6 @@ CORE_NETWORKS = {
 HOST_GATEWAY = "host.docker.internal"
 
 
-def network_name(session: str, logical: str) -> str:
-    return f"glove-{session}-{logical}"
-
-
 def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
     where = f"extension {a.name!r} endpoint {name!r}"
     if not _NAME.match(name):
@@ -695,7 +691,7 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         net = t.get("network")
         if not net:
             raise ExtensionError(f"{where}: a service target needs the `network` the service is on")
-        target = Target(f"glove-{comp.session}-{svc}", int(t["port"]), "service", net)
+        target = Target(scoped(comp.session, svc), int(t["port"]), "service", net)
     elif "slot" in t:
         slot = str(t["slot"])
         ex = comp.slot_exports(slot)
@@ -781,7 +777,6 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             if not src.is_dir():
                 raise ExtensionError(f"{where}: pi extension {src} not found")
             comp.pi_extensions.append((a.name, src))
-    if comp.harness == "pi":
         for item in active_items(h.get("pi_skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)
             if "mount" in spec:  # {mount: <name>, path: <rel>}: a skill in one of its mounts, if mounted
@@ -829,12 +824,10 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         value = a.settings.get(key)
         if not value or not when_matches(spec.get("when"), ctx):
             continue
-        host = Path(os.path.expanduser(str(value)))
-        if not host.is_absolute():
-            if comp.session_dir is None:
-                raise ExtensionError(f"{where}: {a.name}.{key} must be an absolute path here")
-            host = comp.session_dir / host
-        host = Path(os.path.realpath(host))
+        try:
+            host = host_path(comp.session_dir, str(value))
+        except ValueError:
+            raise ExtensionError(f"{where}: {a.name}.{key} must be an absolute path here") from None
         if not host.is_dir():
             raise ExtensionError(f"{where}: {a.name}.{key} = {value!r} is not a directory ({host})")
         target = f"/mnt/{a.name}-{name}"
@@ -1000,8 +993,7 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 def materialize(comp: Composition) -> None:
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "materialize"):
-            d = comp.state_dir(a.name)
-            d.mkdir(parents=True, exist_ok=True, mode=0o700)
+            ensure_dir(comp.state_dir(a.name))
             a.hooks.materialize(_hook_ctx(comp, a))
 
 

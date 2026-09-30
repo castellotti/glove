@@ -24,7 +24,7 @@ def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness=kw.pop("harness", "pi"), workdir=str(work), name="s", enforcer="nono+srt", **kw)
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
                               state_dir=str(tmp_path / "ext"))
 
 

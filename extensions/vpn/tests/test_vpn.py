@@ -129,7 +129,7 @@ def test_hook_values_reach_compose_only_through_the_environment(tmp_path, monkey
         "register_user": "env:U", "register_pass": "env:P"}})
     from glove.plan import build_session_plan, secret_env
 
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
                               session_dir=str(session))
     from glove.runtimes.docker import DockerRuntime
 

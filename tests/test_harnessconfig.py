@@ -26,7 +26,7 @@ def _home(harness: str, tmp_path, *, llm=None, extensions=EXTS, **kw):
         exts["llm"] = llm
     cfg = make_cfg(harness=harness, workdir=str(work), name=f"{harness}-sess",
                    brief="Write output to /mnt/x.", extensions=exts, **kw)
-    plan = build_session_plan(cfg, env_id="e", home_dir=str(tmp_path / "home"), uid=1000, gid=1000,
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), uid=1000, gid=1000,
                               state_dir=str(tmp_path / "ext"))
     home = tmp_path / "home"
     render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)

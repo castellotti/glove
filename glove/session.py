@@ -21,6 +21,7 @@ from rich.console import Console
 from .config import Config
 from .enforcers.base import PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, effective_image
+from .naming import project_name, scoped
 from .plan import FORWARDER_IMAGE
 from .runtimes.docker import TEMPLATES_DIR
 
@@ -112,7 +113,7 @@ def build_harness(
     _build_base(provider, profile, apt_packages, pip_packages, plain_tag, force=force)
     if base_tag != plain_tag:
         _build_srt_layer(provider, plain_tag, base_tag, force=force)
-    if final_tag == base_tag or plan is None or plan.composition is None:
+    if final_tag == base_tag or plan is None:
         return base_tag
 
     from .image import render_dockerfile, stage_context
@@ -135,8 +136,6 @@ def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = Fa
     """Build every image an active extension declares (`images:` in its manifest)."""
     from .extensions import image_tag, when_matches
 
-    if plan.composition is None:
-        return
     for a in plan.composition.active:
         for name, spec in (a.manifest.raw.get("images") or {}).items():
             ctx = {"settings": a.settings, "harness": plan.composition.harness}
@@ -210,14 +209,14 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
         console.print("[bold red]starting the sidecars failed — stopping the session's sidecars.[/bold red]")
         subprocess.run([*base, "down"], env=env, capture_output=True)
         raise
-    if plan.composition is None or not plan.composition.verify:
+    if not plan.composition.verify:
         return
     console.print("[bold]verifying…[/bold]")
     try:
         run_verify(provider, plan, lambda m: console.print(f"[dim]{m}[/dim]" if "retry" in m else m))
     except VerifyError as e:
         if e.service:
-            name = f"glove-{plan.session}-{e.service}"
+            name = scoped(plan.session, e.service)
             logs = subprocess.run([provider, "logs", "--tail", "25", name], capture_output=True, text=True)
             console.print(f"[dim]--- last log lines of {name} (key/password lines withheld):[/dim]")
             console.print(redact_log(logs.stdout + logs.stderr)[-3000:], markup=False)
@@ -291,7 +290,7 @@ def probe_http(
 
 
 def teardown(session: str, *, provider: str, wipe: bool) -> None:
-    project = f"glove-{session}"
+    project = project_name(session)
     cmd = [provider, "compose", "-p", project, "down"]
     if wipe:
         cmd.append("--volumes")

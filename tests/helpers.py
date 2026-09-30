@@ -28,7 +28,7 @@ def render(cfg: Config, tmp_path, *, cwd=None, uid=501, gid=20, overrides=frozen
     from glove.runtimes.docker import DockerRuntime
 
     plan = build_session_plan(
-        cfg, env_id=cfg.resolved_name(), home_dir=str(tmp_path / "home"), cwd=cwd, uid=uid, gid=gid,
+        cfg, home_dir=str(tmp_path / "home"), cwd=cwd, uid=uid, gid=gid,
         state_dir=str(tmp_path / "ext"),
     )
     return plan, DockerRuntime().render(plan, Path(tmp_path), overrides=overrides).compose_yaml

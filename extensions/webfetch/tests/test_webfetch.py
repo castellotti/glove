@@ -15,7 +15,7 @@ from glove.plan import build_session_plan
 
 def _plan(tmp_path, exts, harness="pi"):
     cfg = make_cfg(harness=harness, name="s", workdir=str(tmp_path), extensions=exts)
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 def test_proxy_endpoint_targets_the_egress_proxy(tmp_path):

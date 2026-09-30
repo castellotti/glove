@@ -98,7 +98,7 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
     from glove.plan import build_session_plan
 
     cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
-    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
     assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
@@ -119,7 +119,7 @@ def test_pi_rag_template_plans_once_filled(tmp_path, monkeypatch):
     from glove.plan import build_session_plan
 
     cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
-    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
     assert [a.name for a in comp.active] == ["llm", "media", "ocr", "rag"]
@@ -139,7 +139,7 @@ def test_browse_watch_template_plans_once_filled(tmp_path, monkeypatch):
     from glove.plan import build_session_plan
 
     cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
-    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
     assert comp.slots["browser"].name == "playwright" and comp.slots["egress"].name == "direct"
@@ -161,7 +161,7 @@ def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
     from glove.plan import build_session_plan
 
     cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
-    plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
     assert {a.name for a in comp.active} == {"llm", "gate", "corporate", "webfetch", "observe"}

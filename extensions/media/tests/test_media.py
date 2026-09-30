@@ -12,7 +12,7 @@ def test_media_is_an_image_layer_only(tmp_path):
         work = tmp_path / harness
         work.mkdir()
         cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions={"media": {}})
-        plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+        plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
         assert "ffmpeg" in plan.derived_dockerfile and pkg in plan.derived_dockerfile
         assert [e.name for e in plan.composition.endpoints] == ["llm"]
         assert not plan.composition.fragments

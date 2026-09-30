@@ -22,7 +22,7 @@ import typer
 from rich.console import Console
 
 from glove import sessiondir as sdm
-from glove.userconfig import load_user_config
+from glove.naming import scoped
 
 app = typer.Typer(add_completion=False, help="The playwright browser sidecar: watch or drive it (novnc).")
 console = Console(highlight=False)
@@ -51,8 +51,7 @@ def _session(directory: Path | None) -> tuple[str, str, dict]:
     pw = (raw.get("extensions") or {}).get("playwright")
     if not isinstance(pw, dict):
         raise _fail(f"{sd.file}: the playwright extension is not enabled")
-    runtime = str(raw.get("runtime") or load_user_config().runtime)
-    return (runtime if runtime in ("docker", "podman") else "docker"), f"glove-{sid}-pw", pw
+    return sdm.session_provider(sd), scoped(sid, "pw"), pw
 
 
 def _running(runtime: str, container: str) -> bool:

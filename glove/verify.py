@@ -31,6 +31,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .config import ConfigError
+from .naming import scoped
 
 if TYPE_CHECKING:
     from .plan import SessionPlan
@@ -49,15 +50,11 @@ class VerifyError(ConfigError):
         self.service = service  # short name of the sidecar whose logs explain it
 
 
-def _net(plan: SessionPlan, logical: str) -> str:
-    return f"glove-{plan.session}-{logical}"
-
-
 def probe(provider: str, plan: SessionPlan, network: str, script: str, env: dict[str, str],
           *, timeout: int = 60) -> tuple[int, str]:
     """Run `sh -c script` in a hardened throwaway curl container on `network`.
     Values travel as env vars, never interpolated into the script."""
-    cmd = [provider, "run", "--rm", "--network", _net(plan, network),
+    cmd = [provider, "run", "--rm", "--network", scoped(plan.session, network),
            "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL",
            "--security-opt", "no-new-privileges:true", "--read-only", "--pids-limit", "64",
            "--memory", "128m", *[a for k in env for a in ("-e", k)],
@@ -111,7 +108,7 @@ def run_check(provider: str, plan: SessionPlan, ext: str, item: dict[str, Any],
 
     if kind == "container-healthy":
         svc = str(item["service"])
-        container = f"glove-{plan.session}-{svc}"
+        container = scoped(plan.session, svc)
         n = max(1, int(item.get("timeout", 120)) // 5)
 
         def healthy() -> tuple[bool, str]:
@@ -201,7 +198,7 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
     """Every active extension's checks, in extension order. On failure the
     extension's `diagnose` hook (if any) adds an explanation."""
     comp = plan.composition
-    if comp is None or not comp.verify:
+    if not comp.verify:
         return
     from .extensions import _hook_ctx
 
@@ -213,7 +210,7 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
             a = comp.by_name(ext)
             if a is not None and a.hooks is not None and hasattr(a.hooks, "diagnose"):
                 def run(service: str, argv: list[str]) -> tuple[int, str]:
-                    r = subprocess.run([provider, "exec", f"glove-{plan.session}-{service}", *argv],
+                    r = subprocess.run([provider, "exec", scoped(plan.session, service), *argv],
                                        capture_output=True, text=True, check=False)
                     return r.returncode, r.stdout.strip()
 

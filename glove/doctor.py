@@ -12,9 +12,13 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .runtimes import get_runtime
 from .runtimes.base import Check
+
+if TYPE_CHECKING:
+    from .extensions import Composition
 
 # Docker Desktop's default File sharing list when no explicit key is set.
 _DEFAULT_FILE_SHARING = ["/Users", "/Volumes", "/private", "/tmp", "/var/folders"]
@@ -75,17 +79,19 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
-def extension_checks(requested: dict, *, harness: str) -> list[Check]:
-    """Selection/settings validation plus each extension's own `doctor` hook."""
+def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None) -> list[Check]:
+    """Selection/settings validation plus each extension's own `doctor` hook.
+    ``comp``: the session plan's composition, when it already built one."""
     from .extensions import base_context, compose
 
-    try:
-        # Stand-in paths: nothing is created; export roots only need to render
-        # (observe/filter fragments bind them).
-        comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"),
-                       export_dirs={r: Path("/nonexistent") / r for r in ("observe", "control")})
-    except ValueError as e:
-        return [Check("extensions", "fail", str(e))]
+    if comp is None:
+        try:
+            # Stand-in paths: nothing is created; export roots only need to render
+            # (observe/filter fragments bind them).
+            comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"),
+                           export_dirs={r: Path("/nonexistent") / r for r in ("observe", "control")})
+        except ValueError as e:
+            return [Check("extensions", "fail", str(e))]
     checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "doctor"):

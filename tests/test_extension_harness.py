@@ -39,7 +39,7 @@ def _plan(tree, tmp_path, monkeypatch, exts, harness="pi"):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions=exts)
-    return plan_mod.build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
+    return plan_mod.build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
                                        session_dir=str(tmp_path))
 
 

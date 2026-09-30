@@ -84,8 +84,6 @@ def _indent(block: dict) -> str:
 
 def _extension_blocks(plan: SessionPlan, extra: dict) -> dict[str, str]:
     """Extension sidecars/volumes/secrets as YAML text for the template."""
-    if plan.composition is None:
-        return {"extension_services": "", "extension_volumes": "", "extension_secrets": ""}
     from ..compose import harden_fragments
 
     blocks = harden_fragments(plan.composition, plan, extra)

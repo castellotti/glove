@@ -27,8 +27,8 @@ from .extensions import (
     Active,
     Composition,
     ExtensionError,
-    network_name,
     require_trust,
+    required_libs,
     secret_env_var,
 )
 from .extensions import active_items as _active_items
@@ -36,6 +36,7 @@ from .extensions import base_context as _ctx
 from .extensions import image_tag as _image_tag
 from .extensions import render_value as _render
 from .hardening import SIDECAR_ONLY_SECCOMP
+from .naming import scoped
 from .runtimes.seccomp import SECCOMP_DIR
 
 if TYPE_CHECKING:
@@ -57,13 +58,10 @@ PRIVILEGE_META = frozenset({"hint"})
 DEFAULT_LIMITS = {"pids": 256, "memory": "512m"}
 
 
-# Core-owned profiles a sidecar may request by name (an extension never ships
-# its own JSON). `nested-userns` stays harness-only (srt); these never are.
-SIDECAR_SECCOMP = SIDECAR_ONLY_SECCOMP
-
-
 def seccomp_profiles() -> set[str]:
-    return {p.stem for p in SECCOMP_DIR.glob("*.json")} & SIDECAR_SECCOMP
+    """Core-owned profiles a sidecar may request by name (an extension never
+    ships its own JSON). `nested-userns` stays harness-only (srt); these never are."""
+    return {p.stem for p in SECCOMP_DIR.glob("*.json")} & SIDECAR_ONLY_SECCOMP
 
 
 def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
@@ -137,7 +135,7 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
         elif t == "volume":
             if v.get("source") not in declared:
                 raise ExtensionError(f"{where}: named volume must be declared in the fragment's `volumes:`")
-            out.append({**v, "source": f"glove-{comp.session}-{a.name}-{v['source']}"})
+            out.append({**v, "source": scoped(comp.session, f"{a.name}-{v['source']}")})
         elif t == "bind":
             src = str(v.get("source", ""))
             if "docker.sock" in src:
@@ -198,7 +196,7 @@ def _networks(comp: Composition, a: Active, short: str, svc: dict) -> dict | Non
             )
         if logical in CORE_NETWORKS:
             comp.networks.setdefault(logical, {**CORE_NETWORKS[logical], "owner": "core"})
-        out[network_name(comp.session, logical)] = dict(spec or {})
+        out[scoped(comp.session, logical)] = dict(spec or {})
     if not out:
         raise ExtensionError(f"extension {a.name!r} service {short!r}: needs `networks` or `network_mode: none`")
     return out
@@ -215,7 +213,7 @@ def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
                 f"extension {a.name!r}: volume {vname!r} may only be a plain or tmpfs volume "
                 "(`driver_opts: {type: tmpfs}`; core sets its size, mode and owner)"
             )
-        full = f"glove-{comp.session}-{a.name}-{vname}"
+        full = scoped(comp.session, f"{a.name}-{vname}")
         if opts:
             # owned by the session uid as the mount sees ids, mode 0700
             opts = {"type": "tmpfs", "device": "tmpfs", "o": extra.get("tmpfs_volume_opts", "size=1m,mode=0700")}
@@ -230,7 +228,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     choice for a forwarder; fragment services declare logical networks."""
     where = f"extension {a.name!r} service {short!r}"
     image = str(svc.get("image", ""))
-    built = {_image_tag(x, k) for x in (a, *_required_libs(comp, a)) for k in (x.manifest.raw.get("images") or {})}
+    built = {_image_tag(x, k) for x in (a, *required_libs(comp, a)) for k in (x.manifest.raw.get("images") or {})}
     if "@sha256:" not in image and image not in built:
         raise ExtensionError(f"{where}: image must be pinned by digest (@sha256:…) or built by the extension")
     priv = _privileges(comp, a, short) if networks is None else {}
@@ -238,7 +236,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
                                        f"{where} limits")}
     if svc.get("dns") and "wan" not in (svc.get("networks") or []):
         raise ExtensionError(f"{where}: `dns` is only meaningful on the egress provider's wan network")
-    name = f"glove-{comp.session}-{short}"
+    name = scoped(comp.session, short)
     out: dict[str, Any] = {"container_name": name, **{k: v for k, v in svc.items() if k not in (
         "volumes", "networks", "depends_on", "secrets", "network_mode")}}
     if networks is not None:
@@ -254,14 +252,14 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
-        out["depends_on"] = {f"glove-{comp.session}-{d}": (c or {"condition": "service_started"})
+        out["depends_on"] = {scoped(comp.session, d): (c or {"condition": "service_started"})
                              for d, c in items}
     if svc.get("secrets"):
         own = {k.removeprefix(f"{a.name}-") for k, (ext, _) in comp.secrets.items() if ext == a.name}
         missing = [x for x in svc["secrets"] if x not in own]
         if missing:
             raise ExtensionError(f"{where}: secret(s) {missing} are not declared (or not active)")
-        out["secrets"] = [{"source": f"glove-{comp.session}-{a.name}-{x}", "target": f"{SECRETS_DIR}/{x}"}
+        out["secrets"] = [{"source": scoped(comp.session, f"{a.name}-{x}"), "target": f"{SECRETS_DIR}/{x}"}
                           for x in svc["secrets"]]
     out.setdefault("restart", "unless-stopped")
     if not priv.get("user_root"):
@@ -304,12 +302,6 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     return out
 
 
-def _required_libs(comp: Composition, a: Active) -> list[Active]:
-    from .extensions import required_libs
-
-    return required_libs(comp, a)
-
-
 def _tmpfs(volumes: dict[str, Any]) -> frozenset[str]:
     return frozenset(n for n, v in volumes.items() if (v.get("driver_opts") or {}).get("type") == "tmpfs")
 
@@ -331,7 +323,7 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     extension fragments plus the `forwarder` provider's per-endpoint services."""
     services: dict[str, Any] = {}
     volumes: dict[str, Any] = {}
-    reserved = {f"glove-{comp.session}-{e.name}" for e in comp.endpoints} | {plan.harness_service}
+    reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service}
     declared_by: dict[str, set[str]] = {}
     for a, doc in comp.fragments:
         bad_top = set(doc) - {"services", "volumes"}
@@ -347,7 +339,7 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
             bad = set(svc) - ALLOWED_SERVICE_KEYS
             if bad:
                 raise ExtensionError(f"{where}: key(s) {sorted(bad)} are not allowed (core sets security keys)")
-            name = f"glove-{comp.session}-{short}"
+            name = scoped(comp.session, short)
             if name in services or name in reserved:
                 raise ExtensionError(f"{where}: name {name!r} is already used")
             services[name] = _harden_service(comp, a, short, svc, plan, extra, declared,
@@ -355,7 +347,7 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     provider = comp.slots.get("forwarder")
     for s in plan.network.implemented:
         assert provider is not None
-        name = f"glove-{comp.session}-{s.role}"
+        name = scoped(comp.session, s.role)
         if name in services:
             raise ExtensionError(f"forwarder {name!r} clashes with an extension service")
         services[name] = _harden_service(comp, provider, s.role, dict(s.impl or {}), plan, extra,
@@ -366,7 +358,7 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
         if s.listen_port < 1024:
             # a low port as non-root: podman does not default this (docker does)
             services[name]["sysctls"] = {"net.ipv4.ip_unprivileged_port_start": 0}
-    secrets = {f"glove-{comp.session}-{c}": {"environment": secret_env_var(c)} for c in comp.secrets}
+    secrets = {scoped(comp.session, c): {"environment": secret_env_var(c)} for c in comp.secrets}
     return {"services": services, "volumes": volumes, "secrets": secrets}
 
 
@@ -375,11 +367,11 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
 FORBIDDEN_ANYWHERE = ("privileged", "ports")
 
 
-def validate_project(doc: dict, plan: SessionPlan, comp: Composition | None) -> None:
+def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
     """§3.4, re-checked on the merged project (defence against merge bugs)."""
     services = doc.get("services") or {}
     session = plan.session
-    harness_net = f"glove-{session}-net"
+    harness_net = scoped(session, "net")
     for name, svc in services.items():
         for key in FORBIDDEN_ANYWHERE:
             if svc.get(key):
@@ -393,14 +385,13 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition | None) -> 
         if name == plan.harness_service:
             nets = svc.get("networks") or []
             nets = list(nets) if isinstance(nets, list) else list(nets.keys())
-            extension_nets = {network_name(session, n) for n in (comp.networks if comp else {})}
+            extension_nets = {scoped(session, n) for n in comp.networks}
             if any(n in extension_nets for n in nets):
                 raise ExtensionError("the harness joins no extension network — only its own internal network")
-            if comp is not None:
-                for v in svc.get("volumes") or []:
-                    bind = isinstance(v, dict) and v.get("type") == "bind"
-                    if bind and _within(str(v["source"]), str(comp.state_root)):
-                        raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
+            for v in svc.get("volumes") or []:
+                bind = isinstance(v, dict) and v.get("type") == "bind"
+                if bind and _within(str(v["source"]), str(comp.state_root)):
+                    raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
             h = plan.hardening
             if set(svc.get("cap_add") or []) != set(h.cap_add) or set(svc.get("cap_drop") or []) != set(h.cap_drop):
                 raise ExtensionError("the harness's capabilities differ from its hardening plan")
@@ -412,22 +403,20 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition | None) -> 
             continue
         if svc.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in (svc.get("security_opt") or []):
             raise ExtensionError(f"sidecar {name!r} is missing the hardening set")
-    if comp is None:
-        return
-    wan = network_name(session, "wan")
+    wan = scoped(session, "wan")
     egress_provider = comp.slots.get("egress")
     for name, svc in services.items():
         nets = svc.get("networks") or {}
         nets = set(nets) if not isinstance(nets, dict) else set(nets.keys())
         if wan in nets:
-            short = name.removeprefix(f"glove-{session}-")
+            short = name.removeprefix(scoped(session, ""))
             owner = next((a for a, d in comp.fragments if short in (d.get("services") or {})), None)
             # ...or the forwarder of an endpoint the egress provider declared (a raw TCP hop)
             ep_owner = next((comp.by_name(e.extension) for e in comp.endpoints if e.name == short), None)
             if egress_provider is None or egress_provider not in (owner, ep_owner):
                 raise ExtensionError(f"service {name!r} joins the wan network, which only the egress provider may")
         if harness_net in nets and name != plan.harness_service:
-            role = name.removeprefix(f"glove-{session}-")
+            role = name.removeprefix(scoped(session, ""))
             if not any(e.name == role and e.harness for e in comp.endpoints) and role not in {
                 s.role for s in plan.network.sidecars if s.harness
             }:

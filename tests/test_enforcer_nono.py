@@ -25,7 +25,7 @@ def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness="pi", workdir=str(work), name="s", **kw)
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
 
 
 def _assert_matches_golden(plan, scenario):
@@ -89,7 +89,7 @@ def test_vibe_harness_policy_grants_uv_venv(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     cfg = make_cfg(harness="vibe", workdir=str(work), name="s")
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000)
     harness = json.loads(plan.policies["harness.json"])
     reads = harness["filesystem"]["read"]
     assert "/opt/uv" in reads and "/usr/local" in reads

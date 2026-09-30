@@ -16,7 +16,7 @@ def _plan(tmp_path, harness="pi", extra=None, **settings):
     work.mkdir(parents=True, exist_ok=True)
     cfg = make_cfg(harness=harness, name="s", workdir=str(work),
                    extensions={"playwright": {"mode": "host", **settings}, **(extra or {})})
-    return cfg, build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
+    return cfg, build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
 
 
 def _ports(cfg):

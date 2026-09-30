@@ -77,7 +77,6 @@ class Config:
     # Ring-0 ro binds over .vscode/.envrc/.mcp.json in rw mounts; a missing one
     # gets an empty placeholder (creates it on the host), hence opt-in.
     protect_ide_files: bool = False
-    rebuild: bool = False
     harness_config: dict[str, Any] = field(default_factory=dict)
     env: dict[str, Any] = field(default_factory=dict)
     # Free-text session brief appended to the harness context file, e.g.

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .config import ConfigError
+from .naming import scoped
 
 if TYPE_CHECKING:
     from .config import Config
@@ -104,9 +105,9 @@ def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...]) -> dict
 def build_network_plan(cfg: Config, session: str, comp: Composition | None = None) -> NetworkPlan:
     """Extension endpoints → forwarder sidecars (socat, or the forwarder slot's
     implementation), plus the session's networks."""
-    from .extensions import forwarder_service, network_name
+    from .extensions import forwarder_service
 
-    internal_net = f"glove-{session}-net"
+    internal_net = scoped(session, "net")
     sidecars: list[Sidecar] = []
     session_networks: dict[str, bool] = {}
     for ep in comp.endpoints if comp else []:
@@ -114,8 +115,8 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
             continue
         nets = []
         for logical in (ep.target.network, *ep.listen_networks):
-            if logical and logical not in ("net", "hostgw") and network_name(session, logical) not in nets:
-                nets.append(network_name(session, logical))
+            if logical and logical not in ("net", "hostgw") and scoped(session, logical) not in nets:
+                nets.append(scoped(session, logical))
         impl = forwarder_service(comp, endpoint_info(ep, session, tuple(nets)))
         sidecars.append(Sidecar(
             role=ep.name, listen_port=ep.port, target=f"{ep.target.host}:{ep.target.port}",
@@ -125,10 +126,10 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
         ))
     for logical, spec in (comp.networks if comp else {}).items():
         if logical not in ("net", "hostgw"):
-            session_networks[network_name(session, logical)] = bool(spec.get("internal", True))
+            session_networks[scoped(session, logical)] = bool(spec.get("internal", True))
 
     # Any sidecar that reaches host.docker.internal needs a routable bridge.
-    hostgw_network = f"glove-{session}-hostgw" if any(s.host_gateway for s in sidecars) else None
+    hostgw_network = scoped(session, "hostgw") if any(s.host_gateway for s in sidecars) else None
     owned = [internal_net, *([hostgw_network] if hostgw_network else []), *sorted(session_networks)]
     plan = NetworkPlan(
         subnets=slice_subnet(cfg.subnet, owned) if cfg.subnet else {},
@@ -139,7 +140,7 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
     )
     if comp is not None:
         comp.forwarders = [
-            {"service": s.role, "listen": f"glove-{session}-{s.role}:{s.listen_port}", "harness": s.harness,
+            {"service": s.role, "listen": f"{scoped(session, s.role)}:{s.listen_port}", "harness": s.harness,
              "target": s.target, "observed": s.impl is not None, **s.facts}
             for s in sidecars
         ]

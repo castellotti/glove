@@ -17,7 +17,7 @@ def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness="pi", workdir=str(work), name="s", **kw)
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), uid=501, gid=20)
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=501, gid=20)
 
 
 def test_registry_lists_all_backends():

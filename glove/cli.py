@@ -29,6 +29,7 @@ from .hardening import HardeningError
 from .harness import known_harnesses
 from .harnessconfig import render_home
 from .hostsvc import describe_host_services, start_host_services, stop_host_services
+from .naming import scoped
 from .plan import build_session_plan
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
@@ -55,12 +56,18 @@ def _ensure_home() -> None:
         err.print(f"[yellow]⚠[/yellow] {w}")
 
 
-def _autodetect_provider() -> str:
-    if shutil.which("docker"):
-        return "docker"
-    if shutil.which("podman"):
-        return "podman"
-    return "docker"
+def _print_checks(title: str, checks: list) -> None:
+    """Print `glove check`/`glove doctor` results; exit 1 if any failed."""
+    from rich.markup import escape
+
+    from .doctor import worst_status
+
+    glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
+             "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
+    console.print(f"{title}\n")
+    for c in checks:
+        console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
+    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
 
 
 def _now() -> str:
@@ -73,7 +80,7 @@ def _foreign_subnets(raw: dict, sid: str) -> set[str]:
         nets = get_runtime(raw.get("runtime") or "docker").network_subnets()
     except (ValueError, AttributeError, OSError):
         return set()
-    return {x for name, subnets in nets.items() if not name.startswith(f"glove-{sid}-") for x in subnets}
+    return {x for name, subnets in nets.items() if not name.startswith(scoped(sid, "")) for x in subnets}
 
 
 def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = False) -> reg.SessionEntry:
@@ -91,6 +98,8 @@ def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool =
 
     root = str(sd.root)
     _ensure_home()
+    # Asking the runtime can be slow: not under the lock (except a first allocation).
+    foreign = _foreign_subnets(raw, sid) if check_runtime else None
     with reg.registry_lock():
         entries = reg.load_registry()
         row = next((e for e in entries if e.id == sid), None)
@@ -107,7 +116,8 @@ def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool =
             entries.append(row)
         row.harness = raw["harness"]
         row.template = raw.get("template")
-        foreign = _foreign_subnets(raw, sid) if (check_runtime or not row.subnet) else set()
+        if foreign is None:
+            foreign = set() if row.subnet else _foreign_subnets(raw, sid)
         if row.subnet and any(ipaddress.ip_network(row.subnet).overlaps(ipaddress.ip_network(f, strict=False))
                               for f in foreign):
             err.print(f"[yellow]⚠[/yellow] subnet {row.subnet} is now used by another network; re-allocating")
@@ -177,6 +187,7 @@ def new(
 
 
 def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
+                      home: bool = True,
                       overrides: frozenset[str] = frozenset()):
     """Build the plan and write everything the session needs under .glove/
     (policies, placeholders, compose.yml, effective/baseline, the harness home).
@@ -192,7 +203,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
             resume_id = ref.id
         prev_cfg, _ = sdm.read_effective(sd.baseline)
     plan = build_session_plan(
-        cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
+        cfg, home_dir=str(sd.home), cwd=str(sd.work),
         resume=want_resume, session_id=resume_id, state_dir=str(sd.ext), session_dir=str(sd.root),
     )
     if prev_cfg is not None:
@@ -249,8 +260,13 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)
     home_files = render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan,
-                             comp=plan.composition)
+                             comp=plan.composition) if home else []
     return plan, rendered.compose_yaml, home_files
+
+
+def _one_resume(resume: bool, session: str | None) -> None:
+    if resume and session is not None:
+        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
 
 
 _IKNOW = typer.Option([], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)")
@@ -265,8 +281,7 @@ def plan_cmd(
     iknow: list[str] = _IKNOW,
 ) -> None:
     """Render the session (writes .glove/, launches nothing) and show what it grants."""
-    if resume and session is not None:
-        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
+    _one_resume(resume, session)
     try:
         sd, _, sid, cfg = _open(directory)
         plan, compose_yaml, home_files = _materialize_plan(sd, sid, cfg, resume=resume, session=session,
@@ -300,8 +315,7 @@ def up(
     iknow: list[str] = _IKNOW,
 ) -> None:
     """Build, start the sidecars, resolve launch-time settings, attach the harness."""
-    if resume and session is not None:
-        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
+    _one_resume(resume, session)
     try:
         sd, _, sid, cfg = _open(directory, check_runtime=True)
         todo = sdm.placeholders_left(sdm.load_file(sd))
@@ -309,7 +323,9 @@ def up(
             raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {sdm.PLACEHOLDER})")
         if cfg.runtime not in ("docker", "podman"):
             raise ConfigError(f"runtime {cfg.runtime!r} is not implemented yet; use docker or podman")
-        plan, _, _ = _materialize_plan(sd, sid, cfg, resume=resume, session=session, overrides=frozenset(iknow))
+        # the harness home is rendered in prepare(), once the model is resolved
+        plan, _, _ = _materialize_plan(sd, sid, cfg, resume=resume, session=session, home=False,
+                                       overrides=frozenset(iknow))
         from .plan import secret_env
 
         # Resolve secret references (keychain:/env:) now, in memory, so a
@@ -440,11 +456,11 @@ def _print_summary(plan, home_files) -> None:
     console.print("[bold]forwarders (network allow-list)[/bold]")
     if not plan.network.sidecars:
         console.print("  [dim](none — harness is fully offline)[/dim]")
-    provider = plan.composition.slots.get("forwarder") if plan.composition else None
+    provider = plan.composition.slots.get("forwarder")
     for s in plan.network.sidecars:
         how = f"  [cyan]({provider.name}: {s.facts.get('summary', 'implemented')})[/cyan]" if s.impl else ""
-        console.print(f"  glove-{plan.session}-{s.role}:{s.listen_port}  →  {s.target}{how}")
-    g = (plan.composition.grants if plan.composition else {}) or {}
+        console.print(f"  {scoped(plan.session, s.role)}:{s.listen_port}  →  {s.target}{how}")
+    g = plan.composition.grants or {}
     if g.get("observe"):
         root = plan.composition.export_dirs["observe"]
         console.print(f"[bold]observe export[/bold]: {root} [dim](no harness mount except transcripts/)[/dim]"
@@ -504,10 +520,9 @@ def check(
 ) -> None:
     """Validate the session file, check its secrets exist (never reads them),
     and run doctor for its runtime, enforcer and extensions."""
-    from rich.markup import escape
 
     from .config import secret_exists
-    from .doctor import extension_checks, run_doctor, worst_status
+    from .doctor import extension_checks, run_doctor
     from .plan import secret_refs
     from .runtimes.base import Check
 
@@ -516,12 +531,13 @@ def check(
     except (ConfigError, ValueError) as e:
         raise _fail(str(e)) from e
     checks: list[Check] = [Check("session file", "ok", f"{sd.file} (schema v{sdm.SCHEMA_VERSION})")]
+    plan = None
     todo = sdm.placeholders_left(raw)
     if todo:
         checks.append(Check("placeholders", "fail", f"still {sdm.PLACEHOLDER}: {', '.join(todo)}"))
     else:
         try:
-            plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work),
+            plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work),
                                       state_dir=str(sd.ext), session_dir=str(sd.root))
             checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
             import yaml
@@ -542,39 +558,21 @@ def check(
                             f"{drift[0]} changed since `glove new`; review with `glove new --diff`"))
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
-        checks += extension_checks(cfg.extensions, harness=cfg.harness)
+        checks += extension_checks(cfg.extensions, harness=cfg.harness,
+                                   comp=plan.composition if plan is not None else None)
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
-    glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
-             "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
-    console.print(f"[bold]glove check[/bold]  {sid}  ({sd.root})\n")
-    for c in checks:
-        console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
-    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+    _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)
 
 
 # --- down / rm / ls / ps / gc -----------------------------------------------------------
-
-
-def _session_provider(sd: SessionDir, cfg) -> str:
-    """The compose provider the session last ran under (effective.yml), else its
-    session file's runtime — never a guess from PATH while either says otherwise."""
-    from .userconfig import load_user_config
-
-    if cfg is not None:
-        return cfg.provider
-    try:
-        runtime = sdm.load_file(sd).get("runtime") or load_user_config().runtime
-    except (SessionError, ConfigError):
-        return _autodetect_provider()
-    return runtime if runtime in ("docker", "podman") else _autodetect_provider()
 
 
 def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool) -> None:
     from .session import teardown
 
     cfg, _ = sdm.read_effective(sd.effective)
-    provider = provider or _session_provider(sd, cfg)
+    provider = provider or sdm.session_provider(sd, cfg)
     if cfg is not None and cfg.host_services:
         console.print("[bold]stopping host services…[/bold]")
         try:
@@ -680,7 +678,7 @@ def list_cmd() -> None:
 @app.command("ps")
 def ps_cmd(runtime: str | None = typer.Option(None, "--runtime", help="docker | podman")) -> None:
     """Running glove sessions (compose projects) and their directories."""
-    rt = get_runtime(runtime or _autodetect_provider())
+    rt = get_runtime(runtime or sdm.autodetect_provider())
     running = rt.ps()
     if not running:
         console.print("[dim]no running glove sessions[/dim]")
@@ -761,7 +759,7 @@ def build(
     from .harness import get_profile
     from .session import build_forwarder, build_harness
 
-    prov = provider or _autodetect_provider()
+    prov = provider or sdm.autodetect_provider()
     build_forwarder(prov, force=rebuild)
     if harness:
         build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
@@ -777,8 +775,6 @@ def doctor(
     """Probe host + runtime + enforcer readiness (`glove check` adds a session's extensions)."""
     import json as _json
 
-    from rich.markup import escape
-
     from .doctor import run_doctor, worst_status
     from .enforcers.base import default_enforcer
 
@@ -791,11 +787,7 @@ def doctor(
     if json_out:
         console.print_json(_json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]}))
     else:
-        glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
-                 "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
-        console.print(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}\n")
-        for c in checks:
-            console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
+        _print_checks(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}", checks)
     raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
 
 
@@ -804,7 +796,7 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
     """Print the rendered ring-1 policies and the ring-0 hardening for review."""
     try:
         sd, _, sid, cfg = _open(directory, register=False)
-        plan = build_session_plan(cfg, env_id=sid, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+        plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                                   session_dir=str(sd.root))
     except (ConfigError, ValueError) as e:
         raise _fail(str(e)) from e

@@ -19,7 +19,7 @@ def _plan(tmp_path, harness="pi", ocr=None, extra=None):
     work = tmp_path / harness
     work.mkdir(exist_ok=True)
     cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions={"ocr": ocr or {}, **(extra or {})})
-    return build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
 
 
 @pytest.mark.parametrize("harness", ["pi", "vibe"])

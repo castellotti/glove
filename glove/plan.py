@@ -20,6 +20,7 @@ from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, effective_image, get_profile
 from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
+from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
@@ -33,8 +34,7 @@ FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 class SessionPlan:
     """A fully-resolved, runtime-agnostic session."""
 
-    session: str  # session name; compose project = glove-<session>
-    env_id: str
+    session: str  # session id; compose project = glove-<session>
     profile: HarnessProfile
     image: str
     working_dir: str  # container path the harness starts in
@@ -45,6 +45,9 @@ class SessionPlan:
     hardening: Hardening
     uid: int
     gid: int
+    # Extensions (glove/extensions.py): the selected set with every rendered
+    # contribution.
+    composition: Composition
     runtime: str = "docker"
     enforcer: str = "nono"
     enforcer_options: dict = field(default_factory=dict)
@@ -69,15 +72,13 @@ class SessionPlan:
     # the harness's transcript directory (None: not exported).
     transcripts_host_dir: str | None = None
     transcripts_container_dir: str | None = None
-    # Extensions (glove/extensions.py): the selected set with every rendered
-    # contribution, and the inference slot's model descriptor.
-    composition: Composition | None = None
+    # The inference slot's model descriptor.
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
 
     @property
     def project(self) -> str:
-        return f"glove-{self.session}"
+        return project_name(self.session)
 
     @property
     def harness_command(self) -> list[str]:
@@ -85,7 +86,7 @@ class SessionPlan:
 
     @property
     def harness_service(self) -> str:
-        return f"glove-{self.session}-harness"
+        return scoped(self.session, "harness")
 
     @property
     def mounts(self) -> list[Mount]:
@@ -130,8 +131,6 @@ def secret_env(plan: SessionPlan) -> dict[str, str]:
 
     env: dict[str, str] = {}
     comp = plan.composition
-    if comp is None:
-        return env
     inference = comp.slots.get("inference")
     setting = inference.exports.get("api_key_secret") if inference else None
     if setting:
@@ -148,8 +147,6 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     """(label, reference) of every secret the session will resolve at launch,
     for `glove check` (which verifies they exist without reading them)."""
     comp = plan.composition
-    if comp is None:
-        return []
     out: list[tuple[str, str]] = []
     inference = comp.slots.get("inference")
     setting = inference.exports.get("api_key_secret") if inference else None
@@ -199,12 +196,10 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
 def build_session_plan(
     cfg: Config,
     *,
-    env_id: str,
     home_dir: str,
     cwd: str | None = None,
     uid: int | None = None,
     gid: int | None = None,
-    forwarder_image: str = FORWARDER_IMAGE,
     resume: bool = False,
     session_id: str | None = None,
     state_dir: str | None = None,
@@ -231,7 +226,7 @@ def build_session_plan(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
-        export_dirs=export_dirs(env_id),
+        export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
     )
     own = {h.name for h in comp.host_services}
@@ -273,20 +268,17 @@ def build_session_plan(
     from .harnessconfig import ModelDescriptor
     from .image import content_hash, render_dockerfile
 
-    base = effective_image(profile, cfg.apt_packages, cfg.pip_packages)
-    base = f"{base}{srt_suffix()}" if uses_srt(cfg.enforcer) else base
+    suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
+    base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
     derived_df = None
     derived = None
     if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills):
         derived_df, staged = render_dockerfile(base, profile, comp)
         derived = content_hash(derived_df, staged)
-    image = effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)
-    if uses_srt(cfg.enforcer):
-        image = f"{image}{srt_suffix()}"
+    image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
     plan = SessionPlan(
         session=session,
-        env_id=env_id,
         profile=profile,
         image=image,
         working_dir=mount_plan.working_dir,
@@ -300,7 +292,6 @@ def build_session_plan(
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
         enforcer_options=dict(cfg.enforcer_options or {}),
-        forwarder_image=forwarder_image,
         tools=dict(cfg.tools or {}),
         composition=comp,
         model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,

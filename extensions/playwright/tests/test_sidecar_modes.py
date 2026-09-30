@@ -25,7 +25,7 @@ def _cfg(tmp_path, egress=("direct", {}), harness="pi", extra=None, **settings):
 
 
 def _plan(tmp_path, **kw):
-    return build_session_plan(_cfg(tmp_path, **kw), env_id="s", home_dir=str(tmp_path / "h"),
+    return build_session_plan(_cfg(tmp_path, **kw), home_dir=str(tmp_path / "h"),
                               state_dir=str(tmp_path / "ext"))
 
 
@@ -214,10 +214,10 @@ def test_podman_refuses_the_sandbox_profile_it_cannot_apply(tmp_path, monkeypatc
 
     monkeypatch.setattr(podman_mod, "_host_info", lambda cli: {})
     cfg = _cfg(tmp_path)
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
     with pytest.raises(ExtensionError, match=r'cannot apply .*chromium_sandbox: "off"'):
         PodmanRuntime().render(plan, tmp_path)
     cfg = _cfg(tmp_path / "off", chromium_sandbox="off")
-    plan = build_session_plan(cfg, env_id="s", home_dir=str(tmp_path / "h2"), state_dir=str(tmp_path / "ext2"))
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h2"), state_dir=str(tmp_path / "ext2"))
     pw = yaml.safe_load(PodmanRuntime().render(plan, tmp_path / "off").compose_yaml)["services"]["glove-s-pw"]
     assert not any("seccomp" in o for o in pw["security_opt"])  # podman's built-in default applies

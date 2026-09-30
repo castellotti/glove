@@ -37,7 +37,7 @@ def plan_for(tmp_path, *, exts=None, observe=None, home=None, add_dirs=None, har
     if add_dirs:
         cfg.add_dirs = add_dirs
     sdir = tmp_path / "sess" / ".glove"
-    return build_session_plan(cfg, env_id=SID, home_dir=str(home or sdir / "home"), cwd=str(work), uid=501,
+    return build_session_plan(cfg, home_dir=str(home or sdir / "home"), cwd=str(work), uid=501,
                               gid=20, state_dir=str(sdir / "ext"), session_dir=str(tmp_path / "sess"))
 
 

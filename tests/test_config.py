@@ -95,7 +95,7 @@ def test_examples_plan(example, tmp_path):
 
     sd, sid = sessiondir.materialize(str(example), tmp_path / "s")
     cfg = sessiondir.to_config(sd, sessiondir.load_file(sd), sid)
-    plan = build_session_plan(cfg, env_id="ex", home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
     assert plan.model is not None
 
 
