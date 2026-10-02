@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Config, ConfigError
+from .config import Config
 from .enforcers.base import srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
@@ -32,7 +32,6 @@ FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 # already lets the harness and its commands read (nono: GLOVE_READ; srt: the
 # whole rootfs is readable), so trusting it needs no policy change.
 CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
-PEM_CERT = b"-----BEGIN CERTIFICATE-----"
 
 
 @dataclass
@@ -173,32 +172,12 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     return out
 
 
-def resolve_corporate_ca(value: str, session_dir: Path | None) -> str:
-    """`corporate_ca` as a validated absolute host path: a regular file holding
-    at least one PEM certificate, and not the session file or anything in the
-    session's private state. Checked at plan time, so `glove check` fails early."""
-    from .mounts import host_path
-    from .sessiondir import SESSION_FILE, STATE_DIR
+def resolve_corporate_ca(value: object, session_dir: Path | None) -> str:
+    """`corporate_ca` as a validated absolute host path (glove/cafile.py).
+    Checked at plan time, so `glove check` fails early."""
+    from .cafile import resolve_ca_file
 
-    try:
-        host = host_path(session_dir, value)
-    except ValueError:
-        raise ConfigError(f"corporate_ca: {value!r} must be an absolute path here") from None
-    if not host.exists():
-        raise ConfigError(f"corporate_ca: {value!r} does not exist ({host})")
-    if not host.is_file():
-        raise ConfigError(f"corporate_ca: {value!r} is not a regular file ({host})")
-    if session_dir is not None:
-        root = Path(os.path.realpath(session_dir))
-        if host == root / SESSION_FILE or host.is_relative_to(root / STATE_DIR):
-            raise ConfigError(f"corporate_ca: {value!r} must not be the session file or inside {STATE_DIR}/")
-    try:
-        pem = host.read_bytes()
-    except OSError as e:
-        raise ConfigError(f"corporate_ca: cannot read {host}: {e}") from e
-    if PEM_CERT not in pem:
-        raise ConfigError(f"corporate_ca: {host} holds no PEM certificate ({PEM_CERT.decode()})")
-    return str(host)
+    return str(resolve_ca_file("corporate_ca", value, session_dir))
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:

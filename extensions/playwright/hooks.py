@@ -28,7 +28,6 @@ PORTS_FILE = "host-ports.json"
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 # `ca`: staged into this extension's state, bound read-only into the sidecar.
 CA_FILE = "corporate-ca.pem"
-PEM_CERT = b"-----BEGIN CERTIFICATE-----"
 
 
 def _chrome():
@@ -64,22 +63,15 @@ def host_ports(ctx: dict[str, Any]) -> dict[str, int]:
 
 def corporate_ca(ctx: dict[str, Any]) -> Path | None:
     """The `ca` setting as a validated host path (sidecar modes only: host mode
-    runs the host's Chrome, which already has the host's trust store). Relative
-    to the session directory; must be a regular file holding a PEM certificate."""
+    runs the host's Chrome, which already has the host's trust store). The same
+    checks as the harness's `corporate_ca` (glove/cafile.py)."""
+    from glove.cafile import resolve_ca_file
+
     s = ctx["settings"]
     if not s.get("ca") or s["mode"] == "host":
         return None
-    p = Path(s["ca"]).expanduser()
-    if not p.is_absolute():
-        if ctx.get("session_dir") is None:
-            raise ValueError(f"playwright.ca: {s['ca']!r} must be an absolute path here")
-        p = Path(ctx["session_dir"]) / p
-    p = p.resolve()
-    if not p.is_file():
-        raise ValueError(f"playwright.ca: {s['ca']!r} is not a regular file ({p})")
-    if PEM_CERT not in p.read_bytes():
-        raise ValueError(f"playwright.ca: {p} holds no PEM certificate ({PEM_CERT.decode()})")
-    return p
+    sd = ctx.get("session_dir")
+    return resolve_ca_file("playwright.ca", s["ca"], Path(sd) if sd else None)
 
 
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:

@@ -137,8 +137,9 @@ replacement.
 proxy whose certificates come from a private CA, set `corporate_ca` to a PEM
 bundle (relative to the session directory; `local/` is a good home). glove checks
 at plan time (`glove check`) that it is a regular file with at least one
-`-----BEGIN CERTIFICATE-----` block, and not the session file or anything in
-`.glove/`. It then binds the file read-only at `/etc/glove/corporate-ca.pem` and
+`-----BEGIN CERTIFICATE-----` block and **no private key** (a combined
+cert-and-key PEM is refused, since the agent can read whatever is bound), and not
+the session file or anything in `.glove/`. It then binds the file read-only at `/etc/glove/corporate-ca.pem` and
 sets `NODE_EXTRA_CA_CERTS` to that path (an explicit `env:` entry wins). Node adds
 these certificates to its built-in roots, so the public roots stay trusted and
 **TLS verification is never turned off**. The PEM is a public certificate, not a

@@ -71,7 +71,9 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   `update.googleapis.com` and `www.google.com`. With `filter`, block them.
 - **A private CA** (`ca: <pem>`, unset by default) is for sites behind a
   TLS-intercepting proxy. The path is relative to the session directory and is
-  checked at plan time: it must be a regular file with a PEM certificate. glove
+  checked at plan time with the same rules as `corporate_ca`: a regular file
+  with a PEM certificate and no private key, not the session file or anything
+  in `.glove/`. glove
   copies it into `.glove/ext/playwright/corporate-ca.pem` and binds it read-only
   at `/etc/glove/playwright/corporate-ca.pem`. The MCP's Node trusts it through
   `NODE_EXTRA_CA_CERTS`. Before Chromium starts, `glove-pw-start` imports every

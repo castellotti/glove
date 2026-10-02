@@ -14,6 +14,7 @@ from glove.runtimes.docker import DockerRuntime
 
 PW = IN_TREE_DIR / "playwright"
 PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+KEY = "-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n"
 BOUND = "/etc/glove/playwright/corporate-ca.pem"
 BYPASS = ("--ignore-certificate-errors", "ignoreHTTPSErrors", "NODE_TLS_REJECT_UNAUTHORIZED",
           "--ignore-https-errors", "--disable-web-security")
@@ -61,14 +62,23 @@ def test_set_stages_binds_read_only_and_trusts(tmp_path, mode):
 
 
 @pytest.mark.parametrize("make, err", [
-    (lambda p: None, "not a regular file"),
+    (lambda p: None, "does not exist"),
     (lambda p: p.mkdir(), "not a regular file"),
     (lambda p: p.write_text("nope\n"), "no PEM certificate"),
+    (lambda p: p.write_text(PEM + KEY), "private key"),
 ])
 def test_bad_ca_fails_at_plan_time(tmp_path, make, err):
     make(tmp_path / "ca.pem")
     with pytest.raises(ExtensionError, match=err):
         _plan(tmp_path, ca="ca.pem")
+
+
+def test_never_the_session_file_or_private_state(tmp_path):
+    # the same rule as the harness's corporate_ca: no copying .glove/ out
+    (tmp_path / ".glove").mkdir()
+    (tmp_path / ".glove" / "ca.pem").write_text(PEM)
+    with pytest.raises(ExtensionError, match=r"session file or inside \.glove/"):
+        _plan(tmp_path, ca=".glove/ca.pem")
 
 
 def test_host_mode_ignores_ca(tmp_path):

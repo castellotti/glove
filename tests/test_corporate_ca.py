@@ -13,6 +13,8 @@ from glove.enforcers.nono.policies import GLOVE_READ
 from glove.plan import CORPORATE_CA_PATH, build_session_plan
 
 PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+KEYS = [f"-----BEGIN {kind}PRIVATE KEY-----\nMIIEfake\n-----END {kind}PRIVATE KEY-----\n"
+        for kind in ("", "RSA ", "EC ", "ENCRYPTED ", "OPENSSH ")]
 # Tokens that would disable TLS verification; none may ever be rendered.
 BYPASS = ("NODE_TLS_REJECT_UNAUTHORIZED", "--ignore-certificate-errors", "ignoreHTTPSErrors",
           "PYTHONHTTPSVERIFY", "GIT_SSL_NO_VERIFY", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
@@ -92,6 +94,20 @@ def test_bad_inputs_fail_at_plan_time(tmp_path, make, err):
     make(tmp_path / "ca.pem")
     with pytest.raises(ConfigError, match=err):
         _plan(tmp_path, corporate_ca="ca.pem")
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_a_bundle_with_a_private_key_is_refused(tmp_path, key):
+    # a combined cert+key PEM would hand the key to the agent
+    (tmp_path / "ca.pem").write_text(PEM + key)
+    with pytest.raises(ConfigError, match="private key"):
+        _plan(tmp_path, corporate_ca="ca.pem")
+
+
+@pytest.mark.parametrize("value", [True, 123, ["ca.pem"], {"path": "ca.pem"}])
+def test_a_non_string_value_is_a_config_error(tmp_path, value):
+    with pytest.raises(ConfigError, match="must be a path string"):
+        _plan(tmp_path, corporate_ca=value)
 
 
 def test_never_the_session_file_or_private_state(tmp_path):
