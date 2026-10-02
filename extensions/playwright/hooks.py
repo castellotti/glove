@@ -26,6 +26,8 @@ PLAYWRIGHT_MCP = f"playwright-core@{PLAYWRIGHT_VERSION}"
 PORTS_FILE = "host-ports.json"
 # A second layer under the network one: no UDP (WebRTC) around the proxy.
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+# `ca`: staged into this extension's state, bound read-only into the sidecar.
+CA_FILE = "corporate-ca.pem"
 
 
 def _chrome():
@@ -59,9 +61,22 @@ def host_ports(ctx: dict[str, Any]) -> dict[str, int]:
     return {"mcp": int(mcp), "cdp": int(cdp)}
 
 
+def corporate_ca(ctx: dict[str, Any]) -> Path | None:
+    """The `ca` setting as a validated host path (sidecar modes only: host mode
+    runs the host's Chrome, which already has the host's trust store). The same
+    checks as the harness's `corporate_ca` (glove/cafile.py)."""
+    from glove.cafile import resolve_ca_file
+
+    s = ctx["settings"]
+    if not s.get("ca") or s["mode"] == "host":
+        return None
+    return resolve_ca_file("playwright.ca", s["ca"], ctx.get("session_dir"))
+
+
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     s = ctx["settings"]
     if s["mode"] != "host":
+        corporate_ca(ctx)  # fail at plan time (`glove check`), not at `up`
         return {}
     ports = host_ports(ctx)
     state = Path(ctx["state"])
@@ -110,6 +125,10 @@ def materialize(ctx: dict[str, Any]) -> None:
         (state / PORTS_FILE).write_text(json.dumps(ports) + "\n")
         return
     (state / "mcp.json").write_text(json.dumps(mcp_config(s), indent=1) + "\n")
+    ca = corporate_ca(ctx)
+    if ca is not None:  # the fragment may bind only from this state dir
+        shutil.copyfile(ca, state / CA_FILE)
+        (state / CA_FILE).chmod(0o644)
     if s["profile"] == "session":
         (state / "profile").mkdir(mode=0o700, exist_ok=True)
     for setting, sub in (("downloads", "browser-output"), ("uploads", "browser-uploads")):

@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
+# `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
+# already lets the harness and its commands read (nono: GLOVE_READ; srt: the
+# whole rootfs is readable), so trusting it needs no policy change.
+CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
 
 
 @dataclass
@@ -75,6 +79,9 @@ class SessionPlan:
     # The inference slot's model descriptor.
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
+    # `corporate_ca`: the validated host PEM, bound read-only at
+    # CORPORATE_CA_PATH (None: unset, nothing rendered).
+    corporate_ca_host_path: str | None = None
 
     @property
     def project(self) -> str:
@@ -222,10 +229,11 @@ def build_session_plan(
 
     # Compose the selected extensions first: their endpoints, env, host services
     # and image layers feed the network plan, env and image below.
+    sd_path = Path(session_dir) if session_dir else None
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
-        session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
+        session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
     )
@@ -247,6 +255,16 @@ def build_session_plan(
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
+    corporate_ca = None
+    if cfg.corporate_ca:
+        from .cafile import resolve_ca_file
+
+        # checked at plan time, so `glove check` fails early
+        corporate_ca = str(resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path))
+        # Node *adds* these to its built-in roots: trust is widened, never
+        # replaced, and verification is never turned off. Non-Node tools
+        # (curl, python) keep the image's store (README: corporate_ca).
+        environment.setdefault("NODE_EXTRA_CA_CERTS", CORPORATE_CA_PATH)
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -296,6 +314,7 @@ def build_session_plan(
         composition=comp,
         model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
+        corporate_ca_host_path=corporate_ca,
     )
     plan.passthrough_env = secret_env_names(plan)
     if transcripts_wanted(comp) and profile.transcript_subdir:

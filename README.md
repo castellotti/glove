@@ -124,6 +124,7 @@ tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true)
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
+# corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
 ```
 
 Relative mount paths resolve against the session directory. A mount that would
@@ -131,6 +132,24 @@ expose `.glove/`, `local/`, `glove-session.yml`, glove's home (`~/.glove`) or
 another session's state is refused. The v2 keys (`workdir`, `add_dirs`, `net`,
 `services`, `observe`, `name`, …) are refused with a pointer to their
 replacement.
+
+**Private CA trust (`corporate_ca`, off by default).** Behind a TLS-intercepting
+proxy whose certificates come from a private CA, set `corporate_ca` to a PEM
+bundle (relative to the session directory; `local/` is a good home). glove checks
+at plan time (`glove check`) that it is a regular file with at least one
+`-----BEGIN CERTIFICATE-----` block and **no private key** (a combined
+cert-and-key PEM is refused, since the agent can read whatever is bound), and not
+the session file or anything in `.glove/`. It then binds the file read-only at `/etc/glove/corporate-ca.pem` and
+sets `NODE_EXTRA_CA_CERTS` to that path (an explicit `env:` entry wins). Node adds
+these certificates to its built-in roots, so the public roots stay trusted and
+**TLS verification is never turned off**. The PEM is a public certificate, not a
+secret, so it never goes through the Keychain. Every enforcer can already read
+`/etc/glove`, so no policy changes. This covers Node-based harnesses and tools
+(Pi, Claude Code, `web_fetch`). Non-Node tools in the box (curl, Python
+`requests`, Vibe's Python client) keep the image's trust store and won't trust
+the CA. The browser sidecar is a separate container: set
+`playwright: {ca: …}` as well (see Browser below). Unset, nothing renders
+differently.
 
 Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
 `172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of
@@ -484,7 +503,10 @@ it in your browser through a loopback tunnel that lives only while the command
 runs, view-only unless `allow_control: true` (enforced by the VNC server).
 **`host`** drives a Chrome on your desktop (refused behind vpn/tor). The agent
 gets only the `tools` allowlist: Pi registers just those, Vibe hides every
-other `playwright_*` tool (`browser_run_code_unsafe` included). Template:
+other `playwright_*` tool (`browser_run_code_unsafe` included). A private CA
+for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
+`corporate_ca`, so set both when the browser is used. The sidecar's Node trusts it
+through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 

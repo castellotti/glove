@@ -57,18 +57,40 @@ require_sandbox() {
   fi
 }
 
+# `playwright: {ca: …}`: Chromium verifies TLS against NSS, not Node's store,
+# so import each certificate of the bound bundle into the user's NSS db ($HOME
+# is a tmpfs) as a trusted CA. Trust is only added; verification stays on.
+trust_corporate_ca() {
+  local ca="${NODE_EXTRA_CA_CERTS:-}" db="$HOME/.pki/nssdb" dir f
+  [ -n "$ca" ] && [ -f "$ca" ] || return 0
+  mkdir -p "$db"
+  [ -f "$db/cert9.db" ] || certutil -d "sql:$db" -N --empty-password
+  dir=$(mktemp -d)
+  awk -v dir="$dir" '/-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("%s/%03d.pem", dir, n) }
+                     out { print > out } /-----END CERTIFICATE-----/ { close(out); out = "" }' "$ca"
+  set -- "$dir"/*.pem
+  [ -f "$1" ] || set --
+  for f; do
+    certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"
+  done
+  rm -rf "$dir"
+  echo "glove: trusting $# corporate CA certificate(s) from $ca" >&2
+}
+
 case "${1:-headless}" in
   --probe-sandbox)
     probe_sandbox
     ;;
   headless)
     require_sandbox
+    trust_corporate_ca
     mapfile -t args < <(mcp_args)
     cd /data/uploads
     exec playwright-core "${args[@]}" --headless --viewport-size "$PW_VIEWPORT"
     ;;
   novnc)
     require_sandbox
+    trust_corporate_ca
     in=0; [ "${VNC_ACCEPT_INPUT:-false}" = true ] && in=1
     case "${VNC_CLIPBOARD:-off}" in
       both) cin=1 cout=1 ;;

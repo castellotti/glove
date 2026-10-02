@@ -82,6 +82,10 @@ class Config:
     # Free-text session brief appended to the harness context file, e.g.
     # what the agent should work on in /work.
     brief: str | None = None
+    # Optional PEM bundle of a private (e.g. TLS-intercepting proxy) CA the
+    # harness should trust *in addition to* the public roots; bound read-only.
+    # A public certificate, never a secret. Relative to the session dir.
+    corporate_ca: str | None = None
     # Host-side helpers glove auto-starts in detached tmux sessions:
     # SSH model tunnel, headed Chrome, Playwright MCP. Managed lifecycle:
     # port-deduped, health-checked, torn down on `glove down` (unless keep).

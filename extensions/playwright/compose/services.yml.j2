@@ -20,6 +20,12 @@ services:
       PW_PROFILE: "{{ settings.profile }}"
       PW_ALLOWED_HOST: "{{ endpoint.browser.host }}:8931"
       PW_PROXY: "{{ endpoint['browser-egress'].url }}"
+{% if settings.ca %}
+      # trust a private CA in addition to the public roots: Node (the MCP)
+      # here, Chromium via an NSS import of the same file in glove-pw-start;
+      # never a bypass
+      NODE_EXTRA_CA_CERTS: /etc/glove/playwright/corporate-ca.pem
+{% endif %}
 {% if settings.mode == "novnc" %}
       VNC_ACCEPT_INPUT: "{{ settings.allow_control | lower }}"
       VNC_CLIPBOARD: "{{ settings.clipboard }}"
@@ -31,6 +37,10 @@ services:
       - { type: bind, source: "{{ state }}/output", target: /data/output }
 {% endif %}
       - { type: bind, source: "{{ state }}/mcp.json", target: /etc/glove/playwright/mcp.json, read_only: true }
+{% if settings.ca %}
+      - { type: bind, source: "{{ state }}/corporate-ca.pem", target: /etc/glove/playwright/corporate-ca.pem,
+          read_only: true }
+{% endif %}
 {% if settings.profile == "session" %}
       - { type: bind, source: "{{ state }}/profile", target: /data/profile }
 {% endif %}

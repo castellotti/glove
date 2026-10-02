@@ -559,7 +559,7 @@ def check(
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
         checks += extension_checks(cfg.extensions, harness=cfg.harness,
-                                   comp=plan.composition if plan is not None else None)
+                                   comp=plan.composition if plan is not None else None, session_dir=sd.root)
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
     _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)
