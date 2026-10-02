@@ -9,7 +9,7 @@ services:
     container_name: glove-s-harness
     image: glove/pi:0.5.0
     working_dir: /work
-    command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "pi", "-e", "/opt/glove/pi-extensions/enforcer"]
+    command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer"]
     stdin_open: true
     tty: true
     # --- hardening set (PLAN §3.2); `allow_root` only drops the non-root user --

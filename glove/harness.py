@@ -107,8 +107,10 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # builtins) from a system path; the user's own extensions still load from
         # the config home. Capability extensions (search, browser) are opt-in
         # extensions added to this entry when enabled — absent by default.
+        # Pi runs on the image's node by path, not via its `#!/usr/bin/env node`
+        # shebang: a `toolchains` node block puts a pinned node first on PATH.
         entry=[
-            "pi",
+            "/usr/local/bin/node", "/usr/local/bin/pi",
             "-e", "/opt/glove/pi-extensions/enforcer",
         ],
         config_home_env="PI_CODING_AGENT_DIR",

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Config
+from .config import Config, ConfigError
 from .enforcers.base import srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
@@ -26,6 +26,7 @@ from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
+    from .toolchains import Toolchain
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
 # `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
@@ -79,9 +80,12 @@ class SessionPlan:
     # The inference slot's model descriptor.
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
+    derived_staged: list[tuple[str, Path]] = field(default_factory=list)  # its build-context sources
     # `corporate_ca`: the validated host PEM, bound read-only at
     # CORPORATE_CA_PATH (None: unset, nothing rendered).
     corporate_ca_host_path: str | None = None
+    # `toolchains`: the validated blocks baked into the derived image ([]: unset).
+    toolchains: list[Toolchain] = field(default_factory=list)
 
     @property
     def project(self) -> str:
@@ -255,6 +259,17 @@ def build_session_plan(
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
+    toolchains: list[Toolchain] = []
+    if cfg.toolchains:
+        from . import toolchains as tcs
+
+        # checked at plan time, so `glove check` fails early (every mount
+        # target is /work, /mnt/… or the home: none can shadow tcs.ROOT)
+        toolchains = tcs.resolve(cfg.toolchains, sd_path)
+        for k, v in tcs.harness_env(toolchains).items():
+            if k in comp.harness_env:
+                raise ConfigError(f"toolchains: env {k!r} is also set by an extension")
+            environment.setdefault(k, v)
     corporate_ca = None
     if cfg.corporate_ca:
         from .cafile import resolve_ca_file
@@ -288,11 +303,8 @@ def build_session_plan(
 
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
     base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
-    derived_df = None
-    derived = None
-    if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills):
-        derived_df, staged = render_dockerfile(base, profile, comp)
-        derived = content_hash(derived_df, staged)
+    derived_df, staged = render_dockerfile(base, profile, comp, toolchains)
+    derived = content_hash(derived_df, staged) if derived_df is not None else None
     image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
     plan = SessionPlan(
@@ -314,7 +326,9 @@ def build_session_plan(
         composition=comp,
         model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
+        derived_staged=staged,
         corporate_ca_host_path=corporate_ca,
+        toolchains=toolchains,
     )
     plan.passthrough_env = secret_env_names(plan)
     if transcripts_wanted(comp) and profile.transcript_subdir:

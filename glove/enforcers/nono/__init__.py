@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 
 class NonoEnforcer:
     name = "nono"
+    # Chromium can't start under nono's tool profile: it is denied /proc/self/maps,
+    # /proc/sys and /etc/fonts, and its own sandbox setup aborts. Widening that is
+    # a policy decision (/proc is where the harness's env, with the LLM key, lives).
+    tools_run_browsers = False
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return policies.render_all(plan)

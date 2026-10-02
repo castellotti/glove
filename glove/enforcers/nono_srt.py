@@ -97,6 +97,7 @@ def render_harness_settings(plan: SessionPlan) -> dict:
 
 class NonoSrtEnforcer:
     name = "nono+srt"
+    tools_run_browsers = False  # its tool sandbox is nono's (see NonoEnforcer)
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         out = nono_policies.render_all(plan)

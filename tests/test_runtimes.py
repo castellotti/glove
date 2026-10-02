@@ -260,7 +260,7 @@ def test_render_none_enforcer_no_policies_mount(tmp_path):
     plan = _plan(tmp_path, enforcer="none")
     doc = yaml.safe_load(DockerRuntime().render(plan, tmp_path).compose_yaml)
     h = doc["services"]["glove-s-harness"]
-    assert h["command"][0] == "pi"  # bare entry, not wrapped
+    assert h["command"] == list(plan.profile.entry)  # bare entry, not wrapped
     binds = {v["target"] for v in h["volumes"] if v["type"] == "bind"}
     assert "/etc/glove/enforcer" not in binds
 

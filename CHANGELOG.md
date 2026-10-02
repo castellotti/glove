@@ -4,8 +4,53 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Pi always starts as `/usr/local/bin/node /usr/local/bin/pi`, and Vibe's
+  `pre_tool` hook always runs as `/usr/local/bin/python3 /opt/glove/vibe-hook`.
+  The harness never depends on whichever `node`/`python3` is first on `PATH`
+  (e.g. a `toolchains` runtime).
+- Each enforcer now reports whether a browser can start in its per-command
+  sandbox (`tools_run_browsers`), replacing a hard-coded list.
+- Derived-image hashing prunes `node_modules`/`.venv`/`.git`/`__pycache__` while
+  walking a staged directory instead of walking and then discarding them.
+  `glove build` reuses the plan's rendered Dockerfile instead of rendering it
+  again.
+
 ### Added
 
+- **`toolchains`** (session file, off by default): version-pinned language
+  runtimes and their packages, installed at image build time into the derived
+  harness image so they work in the no-egress box. There are two handlers,
+  `node` and `python`, and `lang` is a registry, so a new ecosystem is a new
+  handler.
+  - `node`: an exact `X.Y.Z` from the official tarball, SHASUMS256-checked, with
+    `npm`/`pnpm`/`yarn` (Yarn 1.x only: `yarn@2+` is refused at plan time, since
+    Berry isn't the npm `yarn` package), global `packages`, and Playwright
+    `browsers` (installed by the project's `playwright` if it depends on one,
+    else by the global one from `packages`).
+  - `python`: a uv-managed CPython `X.Y[.Z]` (uv pinned by checksum) with a
+    seeded venv (so `pip` is the venv's in every mode) via
+    `uv sync --locked --no-install-project`, `uv pip` or `pip`.
+  - A `project` contributes only its manifest and lockfile to the image (a
+    symlinked one is refused), installed lockfile-strict by default. So the tag
+    tracks those files, not the project's source, and source edits rebuild
+    nothing. Layers run every block's runtime, then global tools, then project
+    installs. Each step makes only what it wrote readable, with no blanket
+    `chmod -R` layer. Everything lives under `/opt/glove/toolchains/`, never
+    under a mount and readable by every enforcer with no policy change.
+  - `PATH` comes from the image, `VIRTUAL_ENV`/`PLAYWRIGHT_BROWSERS_PATH` from the
+    harness env (set if absent). There is no `NODE_PATH`, since nono strips it from
+    wrapped commands; a node project's deps are linked into the pinned node's
+    global folder (`<runtime>/lib/node`), so `require` resolves them from any
+    directory under every enforcer.
+  - Validated at plan time, so `glove check` fails early. The agent's context
+    file gains a "Toolchains" section that explains the `/work` node_modules
+    shadow and its symlink fix.
+  - Known limit: Playwright engines start from a shell command under
+    `enforcer: srt` but not under nono's per-command profile (`nono`, `nono+srt`).
+  - Unset, nothing toolchain-specific renders. New integration script:
+    `tests/integration/test_toolchains.sh`.
 - **`corporate_ca`** (session file, off by default): a PEM bundle of a private
   CA (e.g. a TLS-intercepting proxy's) that the harness trusts on top of the
   public roots. It is validated at plan time (a path string naming a regular

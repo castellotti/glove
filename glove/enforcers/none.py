@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 class NoneEnforcer:
     name = "none"
+    tools_run_browsers = True
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return {}
