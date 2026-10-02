@@ -51,6 +51,10 @@ class HarnessProfile:
     # can't resume that way, and resume_args raises.
     resume_continue: tuple[str, ...] | None = None
     resume_session: tuple[str, ...] | None = None
+    # The entry binary as (image node, script) for a harness that runs on Node via
+    # `#!/usr/bin/env node`: used in place of entry[0] when a `toolchains` node
+    # block puts a pinned node first on PATH, so the harness keeps its own.
+    node_entry: tuple[str, ...] | None = None
 
     @property
     def dockerfile(self) -> Path:
@@ -127,6 +131,7 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # path or partial UUID.
         resume_continue=("--continue",),
         resume_session=("--session", "{id}"),
+        node_entry=("/usr/local/bin/node", "/usr/local/bin/pi"),
     ),
     "claude-code": HarnessProfile(
         name="claude-code",

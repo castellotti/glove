@@ -6,6 +6,29 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`toolchains`** (session file, off by default): version-pinned language
+  runtimes and their packages, installed at image build time into the derived
+  harness image so they work in the no-egress box. There are two handlers,
+  `node` and `python`, and `lang` is a registry, so a new ecosystem is a new
+  handler.
+  - `node`: an exact `X.Y.Z` from the official tarball, SHASUMS256-checked, with
+    `npm`/`pnpm`/`yarn`, global `packages`, and Playwright `browsers`.
+  - `python`: a uv-managed CPython `X.Y[.Z]` (uv pinned by checksum) with a venv
+    via `uv sync --locked`, `uv pip` or `pip`.
+  - A `project` is staged without host `node_modules`/`.venv`/`.git` (symlinks
+    stay links) and installed lockfile-strict by default. Everything lives under
+    `/opt/glove/toolchains/` (never under a mount; readable by every enforcer
+    with no policy change).
+  - `PATH` comes from the image, `NODE_PATH`/`VIRTUAL_ENV`/`PLAYWRIGHT_BROWSERS_PATH`
+    from the harness env (set if absent). Pi and Vibe's hook keep the image's
+    own interpreter.
+  - Validated at plan time, so `glove check` fails early. The agent's context
+    file gains a "Toolchains" section that explains the `/work` node_modules
+    shadow and its symlink fix.
+  - Known limit: Playwright engines start from a shell command under
+    `enforcer: srt` but not under nono's per-command profile (`nono`, `nono+srt`).
+  - Unset, every rendered artifact is byte-identical. New integration script:
+    `tests/integration/test_toolchains.sh`.
 - **`corporate_ca`** (session file, off by default): a PEM bundle of a private
   CA (e.g. a TLS-intercepting proxy's) that the harness trusts on top of the
   public roots. It is validated at plan time (a path string naming a regular

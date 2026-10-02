@@ -123,6 +123,10 @@ def build_environment_context(
     )
     lines.append("- You cannot read the LLM API key or any secret from a shell (`env` hides them).")
     lines += ["", "## Privileged host commands", "", SUDO_RELAY_BODY]
+    if cfg.toolchains:
+        from .toolchains import brief, parse
+
+        lines += ["", brief(parse(cfg.toolchains), cfg.enforcer)]
     briefs = comp.rendered_briefs() if comp is not None else []
     if briefs:
         lines += ["", "## Capabilities", ""]
@@ -286,7 +290,7 @@ def _render_vibe(
     # per-command sandbox. Only when an in-container enforcer is
     # active — `none` has no wrapper to invoke.
     if cfg.enforcer in ("nono", "nono+srt", "srt"):
-        written.append(_write_vibe_hooks(cfg_dir))
+        written.append(_write_vibe_hooks(cfg_dir, pinned_python=_has_toolchain(cfg, "python")))
     return written
 
 
@@ -305,9 +309,22 @@ description = "glove ring-1 sandbox: wrap shell commands, deny web egress tools.
 """
 
 
-def _write_vibe_hooks(cfg_dir: Path) -> Path:
+# The hook's shebang is `/usr/bin/env python3`: with a `toolchains` python block
+# first on PATH, run it on the image's own interpreter instead (Vibe runs hook
+# commands through a shell).
+VIBE_HOOK_PINNED = "/usr/local/bin/python3 /opt/glove/vibe-hook"
+
+
+def _has_toolchain(cfg: Config, lang: str) -> bool:
+    return any(isinstance(b, dict) and b.get("lang") == lang for b in cfg.toolchains or [])
+
+
+def _write_vibe_hooks(cfg_dir: Path, *, pinned_python: bool = False) -> Path:
     path = cfg_dir / "hooks.toml"
-    path.write_text(VIBE_HOOKS_TOML)
+    text = VIBE_HOOKS_TOML
+    if pinned_python:
+        text = text.replace('command = "/opt/glove/vibe-hook"', f'command = "{VIBE_HOOK_PINNED}"')
+    path.write_text(text)
     return path
 
 

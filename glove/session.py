@@ -118,12 +118,13 @@ def build_harness(
 
     from .image import render_dockerfile, stage_context
 
-    dockerfile, staged = render_dockerfile(base_tag, profile, plan.composition)
+    dockerfile, staged = render_dockerfile(base_tag, profile, plan.composition, plan.toolchains)
     with tempfile.TemporaryDirectory(prefix="glove-build-") as ctx:
         ctx_dir = Path(ctx)
         stage_context(ctx_dir, staged)
         (ctx_dir / "Dockerfile").write_text(dockerfile)
-        names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}))
+        names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}
+                                 | {f"toolchain-{tc.lang}" for tc in plan.toolchains}))
         console.print(f"[bold]composing extension image[/bold] {final_tag}  (extensions: {names})")
         subprocess.run(
             [provider, "build", "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir)],

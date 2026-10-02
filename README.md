@@ -125,6 +125,8 @@ limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true)
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
+# toolchains:                              # pinned runtimes + deps baked into the image (see below)
+#   - { lang: node, version: "22.23.3", project: projects/web }
 ```
 
 Relative mount paths resolve against the session directory. A mount that would
@@ -150,6 +152,75 @@ secret, so it never goes through the Keychain. Every enforcer can already read
 the CA. The browser sidecar is a separate container: set
 `playwright: {ca: …}` as well (see Browser below). Unset, nothing renders
 differently.
+
+**Language toolchains (`toolchains`, off by default).** Shell commands have no
+network, so `npm install`/`pip install` can't run in the box. `toolchains` declares
+pinned runtimes and their packages, and glove installs them **at image build
+time** (the build has network) into the session's derived image:
+
+```yaml
+toolchains:                       # a list; order is install and PATH order; one block per lang
+  - lang: node
+    version: "22.23.3"            # required, exact X.Y.Z (official tarball, SHASUMS256-checked)
+    manager: npm                  # npm (default) | pnpm[@ver] | yarn[@ver] (yarn = classic)
+    project: projects/web         # optional; relative to the session dir; staged into the image
+    install: ci                   # npm: ci (default) | install; pnpm/yarn: frozen (default) | install
+    packages: ["tsx@4.19.2"]      # optional global tools
+    browsers: [chromium]          # optional Playwright engines (chromium | firefox | webkit)
+  - lang: python
+    version: "3.12"               # required, X.Y or X.Y.Z (uv-managed CPython; uv is pinned by glove)
+    manager: uv                   # uv (default) | pip
+    project: projects/tool
+    install: sync                 # uv: sync (default, `uv sync --locked`) | requirements; pip: requirements
+    packages: ["rich==15.0.0"]
+```
+
+- **Everything lands under `/opt/glove/toolchains/`.** That path is on the
+  read-only rootfs and never under a runtime mount (anything baked under `/work`
+  or the harness home would be hidden by the bind). Every enforcer already lets
+  the harness and its commands read `/opt/glove`, so no policy changes. A mount
+  over that path is refused.
+- **The runtime finds it through env.** The image prepends the bins to `PATH`
+  (Node's `bin` plus the project's `node_modules/.bin`, then the Python venv's
+  `bin`). The harness env adds `NODE_PATH`, `PLAYWRIGHT_BROWSERS_PATH` and
+  `VIRTUAL_ENV`. These are set only if absent, so an explicit `env:` entry wins.
+  The harness itself keeps the image's own interpreter: Pi starts as
+  `/usr/local/bin/node /usr/local/bin/pi` when a node block is set, and Vibe's
+  hook runs on `/usr/local/bin/python3` when a python block is set. Claude Code
+  (experimental) has no such pin.
+- **Lockfile-strict by default.** `npm ci`, `pnpm install --frozen-lockfile`,
+  `yarn install --frozen-lockfile` and `uv sync --locked` are the defaults.
+  `glove check` fails early on an unknown `lang`/`manager`/`install`, a missing
+  `version`, or a missing lockfile. It also refuses a `project` that isn't a
+  directory or that exposes a private path (`.glove/`, `local/`, the session
+  file, `~/.glove`), since the project is baked into an image the agent can read.
+- **Staging.** A host `node_modules`, `.venv`, `.git` and `__pycache__` are never
+  staged or hashed (they're the wrong OS/arch). Symlinks stay links, so nothing
+  outside the project is ever copied in.
+- **Content-addressed.** The derived image tag changes with any block field and
+  any staged project file, so a stale image is never reused. Point `project` at a
+  stable copy (e.g. `projects/`, outside `work/`), because every change to a
+  staged file means a rebuild.
+- **The workspace shadow.** The baked dependencies live at
+  `/opt/glove/toolchains/node/project/node_modules`, not inside `/work`.
+  `NODE_PATH` serves plain `require`, and the CLIs are on `PATH`, but a
+  bundler, dev server or test runner resolves `./node_modules` from the project
+  root. So the agent's context file tells it to run `ln -s
+  /opt/glove/toolchains/node/project/node_modules node_modules` in its copy under
+  `/work` (the project in `/work` must match the baked lockfile). Python has no
+  such problem: the venv is active wherever the command runs.
+- **Browsers.** `browsers` runs `playwright install --with-deps` at build time,
+  which installs the engines and their OS libraries. The engines launch offline
+  from a shell command under `enforcer: srt` (with `chromiumSandbox: false`, after
+  `mkdir -p "$TMPDIR"`). Under `nono` and the default `nono+srt`, nono's
+  per-command profile stops Chromium starting: it is denied `/proc/self/maps`,
+  `/proc/sys` and `/etc/fonts`. Widening that profile would expose `/proc`, so
+  it isn't done; the agent is told. For a browser under the default enforcer,
+  use the `playwright` extension (a sidecar).
+- **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
+
+Unset, nothing renders differently (byte-identical image tags, compose,
+policies and harness home).
 
 Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
 `172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of
@@ -656,13 +727,14 @@ bash tests/integration/test_observe.sh direct # observe + filter end to end (als
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
+bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (24 checks)
 # RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal)
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers
 bash tests/integration/test_llm_lan.sh HOST:PORT [KEYCHAIN_SERVICE]  # llm location: lan vs your server
 ```
 
-The core in `glove/` is kept minimal (about 7.7k lines of Python); in-tree
+The core in `glove/` is kept minimal (about 8.5k lines of Python); in-tree
 extensions live in `extensions/`, templates in `templates/`. The import boundary is enforced by
 [import-linter](https://import-linter.readthedocs.io/): `glove` must never import
 `extensions`, the same way a kernel never depends on its modules.
