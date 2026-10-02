@@ -137,7 +137,7 @@ class Toolchain:
 class Mode:
     files: tuple[tuple[str, ...], ...]  # required files (each: any of), the ones baked
     cmd: str  # run in the project dir; `{…}` fields filled by the handler
-    flags: frozenset[str] = frozenset()  # `install_flags` allow-list (`--name` / `--name=`)
+    flags: frozenset[str] | None = None  # `install_flags` allow-list; None: the manager's
 
 
 @dataclass(frozen=True)
@@ -146,6 +146,16 @@ class Manager:
     default: str  # the lockfile-strict mode
     versioned: bool = False  # takes `manager: name@X.Y.Z`
     add: str = ""  # installs `packages` ({pkgs}), when not a global npm install
+    flags: frozenset[str] = frozenset()  # `install_flags` allow-list (`--name` / `--name=`) of its modes
+
+    def allowed(self, install: str) -> frozenset[str]:
+        mode = self.modes[install].flags
+        return self.flags if mode is None else mode
+
+    def disallowed(self, install: str, flags: tuple[str, ...]) -> list[str]:
+        """The flags not on `install`'s allow-list: a name ending in `=` takes a value."""
+        allowed = self.allowed(install)
+        return [f for f in flags if "".join(f.partition("=")[:2]) not in allowed]
 
 
 class Handler:
@@ -175,6 +185,11 @@ class Handler:
     def check(self, tc: Toolchain, where: str) -> None:
         """Extra checks on a block (resolved, when it has a project)."""
 
+    def install(self, tc: Toolchain, **fields: str) -> str:
+        """The project install command (`{…}` fields filled) plus the block's `install_flags`."""
+        cmd = self.managers[tc.manager].modes[tc.install].cmd.format(**fields)
+        return f"{cmd} {_q(tc.install_flags)}" if tc.install_flags else cmd
+
 
 def _run(tc: Toolchain, *steps: str) -> str:
     """A build step that leaves everything it wrote under the block's prefix
@@ -203,11 +218,6 @@ def _fetch(tc: Toolchain, arch: dict[str, str], name: str, url: str, verify: str
     )
 
 
-def _install(tc: Toolchain, cmd: str) -> str:
-    """The project install command plus the block's `install_flags`."""
-    return f"{cmd} {_q(tc.install_flags)}" if tc.install_flags else cmd
-
-
 def _copy_project(tc: Toolchain) -> str:
     return f"COPY {json.dumps([*(_staged(tc.label, f) for f in tc.project_files), tc.project_dir + '/'])}"
 
@@ -218,19 +228,17 @@ class NodeHandler(Handler):
     version_hint = "an exact X.Y.Z, e.g. 22.11.0"
     managers: ClassVar[dict[str, Manager]] = {
         "npm": Manager({"ci": Mode((("package.json",), ("package-lock.json", "npm-shrinkwrap.json")),
-                                   f"npm ci {_NPM_FLAGS}", _NPM_ALLOWED),
-                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}", _NPM_ALLOWED)},
-                       "ci"),
+                                   f"npm ci {_NPM_FLAGS}"),
+                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}")},
+                       "ci", flags=_NPM_ALLOWED),
         "pnpm": Manager({"frozen": Mode((("package.json",), ("pnpm-lock.yaml",)),
-                                        "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store", _PNPM_ALLOWED),
-                         "install": Mode((("package.json",),), "pnpm install --store-dir /tmp/pnpm-store",
-                                         _PNPM_ALLOWED)},
-                        "frozen", versioned=True),
+                                        "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store"),
+                         "install": Mode((("package.json",),), "pnpm install --store-dir /tmp/pnpm-store")},
+                        "frozen", versioned=True, flags=_PNPM_ALLOWED),
         "yarn": Manager({"frozen": Mode((("package.json",), ("yarn.lock",)),
-                                        "yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache", _YARN_ALLOWED),
-                         "install": Mode((("package.json",),), "yarn install --cache-folder /tmp/yarn-cache",
-                                         _YARN_ALLOWED)},
-                        "frozen", versioned=True),
+                                        "yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache"),
+                         "install": Mode((("package.json",),), "yarn install --cache-folder /tmp/yarn-cache")},
+                        "frozen", versioned=True, flags=_YARN_ALLOWED),
     }
     default_manager = "npm"
     browsers = frozenset({"chromium", "firefox", "webkit"})
@@ -266,7 +274,7 @@ class NodeHandler(Handler):
         if tc.project_files:
             # `<prefix>/lib/node` is in the pinned node's global require path: deps resolve from anywhere
             project += [_copy_project(tc), _run(tc, path, f"cd {tc.project_dir}",
-                                                _install(tc, self.managers[tc.manager].modes[tc.install].cmd),
+                                                self.install(tc),
                                                 "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
                                                 f"ln -s {tc.project_dir}/node_modules {rt}/lib/node")]
         if tc.browsers:
@@ -323,9 +331,8 @@ class PythonHandler(Handler):
                                             "{uv} pip install --python {py} -r requirements.txt", _UV_PIP_ALLOWED)},
                       "sync", add=_UV_ADD),
         "pip": Manager({"requirements": Mode((("requirements.txt",),),
-                                             "{py} -m pip install --no-cache-dir -r requirements.txt",
-                                             _PIP_ALLOWED)},
-                       "requirements", add="{py} -m pip install --no-cache-dir {pkgs}"),
+                                             "{py} -m pip install --no-cache-dir -r requirements.txt")},
+                       "requirements", add="{py} -m pip install --no-cache-dir {pkgs}", flags=_PIP_ALLOWED),
     }
     default_manager = "uv"
 
@@ -349,9 +356,7 @@ class PythonHandler(Handler):
         manager = self.managers[tc.manager]
         project = []
         if tc.project_files:
-            project += [_copy_project(tc),
-                        _run(tc, env, f"cd {tc.project_dir}",
-                             _install(tc, manager.modes[tc.install].cmd.format(**fields)))]
+            project += [_copy_project(tc), _run(tc, env, f"cd {tc.project_dir}", self.install(tc, **fields))]
         if tc.packages:  # after the project: `uv sync` is exact and would remove them
             project.append(_run(tc, env, manager.add.format(**fields, pkgs=_q(tc.packages))))
         return runtime, [], project
@@ -452,9 +457,9 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
         if value and project is None:
             raise ConfigError(f"{where}: `{key}` needs a `project` to install")
     if install_flags:
-        allowed = modes[install].flags
-        bad = [f for f in install_flags if (f.partition("=")[0] + "=" if "=" in f else f) not in allowed]
+        bad = h.managers[manager].disallowed(install, install_flags)
         if bad:
+            allowed = h.managers[manager].allowed(install)
             raise ConfigError(f"{where}: `install_flags` {bad} are not allowed for `{manager}` `{install}` "
                               f"(allowed: {', '.join(sorted(allowed))}; a name ending in `=` takes a value)")
         leaked = [f for f in install_flags if _URL_USERINFO.search(f)]
@@ -500,6 +505,12 @@ def _depends_on_playwright(project: Path) -> bool:
     return any(n in deps for n in NodeHandler.PLAYWRIGHT)
 
 
+def _bakeable(where: str, found: Path) -> Path:
+    if found.is_symlink():  # never bake what a link points at
+        raise ConfigError(f"{where}: {found} is a symlink; make it a regular file")
+    return found
+
+
 def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
     """`parse` plus the plan-time project checks: it resolves (``~``, relative to
     the session dir, symlinks), is a directory exposing no private path, and has
@@ -532,16 +543,12 @@ def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
             if found is None:
                 raise ConfigError(f"{where}: `{tc.manager}` install `{tc.install}` needs {' or '.join(any_of)} "
                                   f"in {project}{hint}")
-            if found.is_symlink():  # never bake what a link points at
-                raise ConfigError(f"{where}: {found} is a symlink; make it a regular file")
-            files.append(found)
+            files.append(_bakeable(where, found))
         for name in tc.config_files:
             found = project / name
             if found in files:
                 raise ConfigError(f"{where}: `config_files` entry {name!r} is already baked by `{tc.install}`")
-            if found.is_symlink():
-                raise ConfigError(f"{where}: {found} is a symlink; make it a regular file")
-            if not found.is_file():
+            if not _bakeable(where, found).is_file():
                 raise ConfigError(f"{where}: `config_files` entry {name!r} is not a file in {project}")
             where_secret = _credential(found)
             if where_secret:

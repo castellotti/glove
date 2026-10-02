@@ -338,15 +338,12 @@ def test_install_flags_are_appended_to_every_managers_install(tmp_path):
     assert "-m pip install --no-cache-dir -r requirements.txt --no-deps \\\n" in df
 
 
-def _linked_npmrc(root: Path) -> None:
-    (root / "elsewhere").write_text(NPMRC)
-    (_node_project(root / "app") / ".npmrc").symlink_to(root / "elsewhere")
-
-
 @pytest.mark.parametrize(("setup", "config_files", "match"), [
     (lambda app: None, [".npmrc"], "is not a file"),
     (lambda app: (app / ".npmrc").mkdir(), [".npmrc"], "is not a file"),
     (lambda app: None, ["package-lock.json"], "already baked"),
+    (lambda app: ((app.parent / "elsewhere").write_text(NPMRC), (app / ".npmrc").symlink_to(app.parent / "elsewhere")),
+     [".npmrc"], "is a symlink"),
     (lambda app: (app / ".npmrc").write_text("//registry.example.com/:_authToken=abc123\n"), [".npmrc"],
      r"carries a credential \(line 1\)"),
     (lambda app: (app / ".npmrc").write_text("registry=https://x/\n_auth=dXNlcjpwYXNz\n"), [".npmrc"],
@@ -372,12 +369,6 @@ def test_config_file_validation(tmp_path, setup, config_files, match):
     setup(_node_project(tmp_path / "app"))
     with pytest.raises(ConfigError, match=match):
         _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": config_files}])
-
-
-def test_config_file_symlink_is_refused(tmp_path):
-    _linked_npmrc(tmp_path)
-    with pytest.raises(ConfigError, match="is a symlink"):
-        _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
 
 
 def test_config_file_credential_check_ignores_comments_and_values(tmp_path):
