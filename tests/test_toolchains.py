@@ -93,6 +93,8 @@ def test_session_file_accepts_the_key_and_still_refuses_bogus_ones(tmp_path):
     ({**PY, "manager": "pyenv"}, "`manager` must be one of"),
     ({**NODE, "manager": "npm@10.0.0"}, "only pnpm/yarn take a version"),
     ({**NODE, "manager": "pnpm@latest; rm -rf /"}, "only pnpm/yarn take a version"),
+    ({**NODE, "manager": "yarn@4.5.0"}, "only Yarn 1.x"),
+    ({**NODE, "manager": "yarn@2.0.0-rc.1"}, "only Yarn 1.x"),
     ({**NODE, "install": "ci"}, "`install` needs a `project`"),
     ({**NODE, "project": "app", "install": "frozen"}, "for npm must be one of"),
     ({**PY, "project": "app", "manager": "pip", "install": "sync"}, "for pip must be one of"),
@@ -170,6 +172,13 @@ def test_node_managers_and_browsers(tmp_path):
     plan = _plan(tmp_path, toolchains=[{**NODE, "packages": ["playwright@1.50.0"], "browsers": ["firefox"]}])
     assert " playwright install --with-deps firefox" in plan.derived_dockerfile
     assert "NODE_PATH" not in plan.environment
+    # a project without playwright: the global one from `packages` installs the browsers
+    _node_project(tmp_path / "plain")
+    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "plain", "packages": ["playwright@1.50.0"],
+                                        "browsers": ["chromium"]}])
+    df = plan.derived_dockerfile
+    assert "browsers playwright install --with-deps chromium" in df
+    assert "node_modules/.bin/playwright" not in df
 
 
 def test_python_block_renders_uv_sync_into_a_venv(tmp_path):
@@ -180,7 +189,8 @@ def test_python_block_renders_uv_sync_into_a_venv(tmp_path):
     assert all(sha in df for sha in tcs.UV_SHA256.values())
     assert "python install --no-bin 3.12" in df
     assert "uv sync --locked --python 3.12" in df and "UV_PROJECT_ENVIRONMENT=/opt/glove/toolchains/python/venv" in df
-    assert "uv venv" not in df  # sync creates it
+    # seeded even for sync, so `pip` on PATH is the venv's
+    assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
     assert "pip install --python /opt/glove/toolchains/python/venv/bin/python rich==13.9.4" in df
     assert "ENV PATH=/opt/glove/toolchains/python/venv/bin:$PATH" in df
     assert plan.environment["VIRTUAL_ENV"] == "/opt/glove/toolchains/python/venv"

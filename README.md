@@ -162,7 +162,7 @@ time** (the build has network) into the session's derived image:
 toolchains:                       # a list; order is install and PATH order; one block per lang
   - lang: node
     version: "22.23.3"            # required, exact X.Y.Z (official tarball, SHASUMS256-checked)
-    manager: npm                  # npm (default) | pnpm[@ver] | yarn[@ver] (yarn = classic)
+    manager: npm                  # npm (default) | pnpm[@ver] | yarn[@1.x] (classic only; 2+ refused)
     project: projects/web         # optional; relative to the session dir; staged into the image
     install: ci                   # npm: ci (default) | install; pnpm/yarn: frozen (default) | install
     packages: ["tsx@4.19.2"]      # optional global tools
@@ -216,7 +216,9 @@ toolchains:                       # a list; order is install and PATH order; one
   per-command profile stops Chromium starting: it is denied `/proc/self/maps`,
   `/proc/sys` and `/etc/fonts`. Widening that profile would expose `/proc`, so
   it isn't done; the agent is told. For a browser under the default enforcer,
-  use the `playwright` extension (a sidecar).
+  use the `playwright` extension (a sidecar). The engines are installed by the
+  project's own `playwright` when its `package.json` depends on it, otherwise by
+  the global one from `packages`.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
 
 Unset, nothing renders differently (byte-identical image tags, compose,

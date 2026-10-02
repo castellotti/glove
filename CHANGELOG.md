@@ -12,9 +12,13 @@ All notable changes to glove are documented here.
   `node` and `python`, and `lang` is a registry, so a new ecosystem is a new
   handler.
   - `node`: an exact `X.Y.Z` from the official tarball, SHASUMS256-checked, with
-    `npm`/`pnpm`/`yarn`, global `packages`, and Playwright `browsers`.
-  - `python`: a uv-managed CPython `X.Y[.Z]` (uv pinned by checksum) with a venv
-    via `uv sync --locked`, `uv pip` or `pip`.
+    `npm`/`pnpm`/`yarn` (Yarn 1.x only: `yarn@2+` is refused at plan time, since
+    Berry isn't the npm `yarn` package), global `packages`, and Playwright
+    `browsers` (installed by the project's `playwright` if it depends on one,
+    else by the global one from `packages`).
+  - `python`: a uv-managed CPython `X.Y[.Z]` (uv pinned by checksum) with a
+    seeded venv (so `pip` is the venv's in every mode) via `uv sync --locked`,
+    `uv pip` or `pip`.
   - A `project` is staged without host `node_modules`/`.venv`/`.git` (symlinks
     stay links) and installed lockfile-strict by default. Everything lives under
     `/opt/glove/toolchains/` (never under a mount; readable by every enforcer

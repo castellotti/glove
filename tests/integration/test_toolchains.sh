@@ -106,6 +106,9 @@ out="$(tool "python --version; cd $TC/python/project && python check.py; cd /wor
 echo "$out" | grep -q "^Python $PY_V\." && echo "$out" | grep -q "prefix=$TC/python/venv" \
   && echo "$out" | grep -q rich-from-work && ok "tool: python $PY_V venv + project deps (from /work too)" \
   || bad "tool: python: $out"
+out="$(tool 'command -v pip; pip --version')"
+echo "$out" | head -1 | grep -qx "$TC/python/venv/bin/pip" && echo "$out" | grep -q "python/venv" \
+  && ok "tool: pip is the uv-sync venv's own" || bad "tool: pip: $out"
 out="$(tool 'pip install --no-cache-dir six 2>&1; echo rc=$?')"
 echo "$out" | tail -1 | grep -q 'rc=[^0]' && ok "tool: a runtime pip install fails" || bad "tool: pip install worked"
 cleanup

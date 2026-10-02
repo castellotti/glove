@@ -152,6 +152,9 @@ class NodeHandler(Handler):
     def _has_playwright(self, tc: Toolchain, project: Path | None) -> bool:
         if any(p == n or p.startswith(f"{n}@") for p in tc.packages for n in self._PLAYWRIGHT):
             return True
+        return self._project_has_playwright(project)
+
+    def _project_has_playwright(self, project: Path | None) -> bool:
         if project is None:
             return False
         try:
@@ -197,7 +200,9 @@ class NodeHandler(Handler):
                             "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache"))
         if tc.browsers:
             # --with-deps apt-installs the engines' shared libraries (build runs as root)
-            cli = f"{self.project_dir(tc)}/node_modules/.bin/playwright" if tc.project is not None else "playwright"
+            # the project's own playwright when it has one, else the global from `packages`
+            cli = (f"{self.project_dir(tc)}/node_modules/.bin/playwright"
+                   if self._project_has_playwright(tc.project) else "playwright")
             out.append(_run(path, f"PLAYWRIGHT_BROWSERS_PATH={self.browsers_dir(tc)} "
                                   f"{cli} install --with-deps {_q(tc.browsers)}",
                             "rm -rf /var/lib/apt/lists/*"))
@@ -272,10 +277,9 @@ class PythonHandler(Handler):
             f'tar -xzf "$f" -C {p}/bin --strip-components=1 --no-same-owner "uv-$t-unknown-linux-gnu/uv"',
             'rm "$f"',
         )]
-        steps = [env, f"{uv} python install --no-bin {shlex.quote(tc.version)}"]
-        if tc.install != "sync":
-            steps.append(f"{uv} venv --seed --python {shlex.quote(tc.version)} {venv}")
-        out.append(_run(*steps))
+        # seeded in every mode (`uv sync` keeps the seed packages), so the brief's `pip` is the venv's
+        out.append(_run(env, f"{uv} python install --no-bin {shlex.quote(tc.version)}",
+                        f"{uv} venv --seed --python {shlex.quote(tc.version)} {venv}"))
         if tc.project is not None:
             dest = self.project_dir(tc)
             out.append(f"COPY {json.dumps([f'{tc.label}/{tc.project.name}', dest])}")
@@ -352,6 +356,9 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
     if mver and (lang != "node" or manager == "npm" or not _MANAGER_VERSION.match(mver)):
         raise ConfigError(f"{where}: `manager: {manager_raw}` — only pnpm/yarn take a version (`pnpm@9.15.0`); "
                           "npm comes with the Node runtime and uv is pinned by glove")
+    if manager == "yarn" and mver and int(re.match(r"\d+", mver).group()) >= 2:
+        raise ConfigError(f"{where}: `manager: {manager_raw}` — only Yarn 1.x (`yarn@1.22.22`) is supported; "
+                          "Yarn 2+ (Berry) is not published as the npm `yarn` package")
     project = raw.get("project")
     if project is not None and (not isinstance(project, str) or not project):
         raise ConfigError(f"{where}: `project` must be a directory path, got {project!r}")
