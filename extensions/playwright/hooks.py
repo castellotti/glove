@@ -26,6 +26,9 @@ PLAYWRIGHT_MCP = f"playwright-core@{PLAYWRIGHT_VERSION}"
 PORTS_FILE = "host-ports.json"
 # A second layer under the network one: no UDP (WebRTC) around the proxy.
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+# `ca`: staged into this extension's state, bound read-only into the sidecar.
+CA_FILE = "corporate-ca.pem"
+PEM_CERT = b"-----BEGIN CERTIFICATE-----"
 
 
 def _chrome():
@@ -59,9 +62,30 @@ def host_ports(ctx: dict[str, Any]) -> dict[str, int]:
     return {"mcp": int(mcp), "cdp": int(cdp)}
 
 
+def corporate_ca(ctx: dict[str, Any]) -> Path | None:
+    """The `ca` setting as a validated host path (sidecar modes only: host mode
+    runs the host's Chrome, which already has the host's trust store). Relative
+    to the session directory; must be a regular file holding a PEM certificate."""
+    s = ctx["settings"]
+    if not s.get("ca") or s["mode"] == "host":
+        return None
+    p = Path(s["ca"]).expanduser()
+    if not p.is_absolute():
+        if ctx.get("session_dir") is None:
+            raise ValueError(f"playwright.ca: {s['ca']!r} must be an absolute path here")
+        p = Path(ctx["session_dir"]) / p
+    p = p.resolve()
+    if not p.is_file():
+        raise ValueError(f"playwright.ca: {s['ca']!r} is not a regular file ({p})")
+    if PEM_CERT not in p.read_bytes():
+        raise ValueError(f"playwright.ca: {p} holds no PEM certificate ({PEM_CERT.decode()})")
+    return p
+
+
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     s = ctx["settings"]
     if s["mode"] != "host":
+        corporate_ca(ctx)  # fail at plan time (`glove check`), not at `up`
         return {}
     ports = host_ports(ctx)
     state = Path(ctx["state"])
@@ -110,6 +134,10 @@ def materialize(ctx: dict[str, Any]) -> None:
         (state / PORTS_FILE).write_text(json.dumps(ports) + "\n")
         return
     (state / "mcp.json").write_text(json.dumps(mcp_config(s), indent=1) + "\n")
+    ca = corporate_ca(ctx)
+    if ca is not None:  # the fragment may bind only from this state dir
+        shutil.copyfile(ca, state / CA_FILE)
+        (state / CA_FILE).chmod(0o644)
     if s["profile"] == "session":
         (state / "profile").mkdir(mode=0o700, exist_ok=True)
     for setting, sub in (("downloads", "browser-output"), ("uploads", "browser-uploads")):

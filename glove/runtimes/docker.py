@@ -202,6 +202,8 @@ class DockerRuntime:
             "sidecars": plan.network.socat,
             "transcripts_host_dir": plan.transcripts_host_dir,
             "transcripts_container_dir": plan.transcripts_container_dir,
+            "corporate_ca_host_path": plan.corporate_ca_host_path,
+            "corporate_ca_container_path": plan.corporate_ca_container_path,
             "hostgw_network": plan.network.hostgw_network,
             "session_networks": plan.network.session_networks,
             "subnets": plan.network.subnets,

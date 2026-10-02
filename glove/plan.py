@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Config
+from .config import Config, ConfigError
 from .enforcers.base import srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
@@ -28,6 +28,11 @@ if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
 
 FORWARDER_IMAGE = "glove/forwarder:0.2.0"
+# `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
+# already lets the harness and its commands read (nono: GLOVE_READ; srt: the
+# whole rootfs is readable), so trusting it needs no policy change.
+CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
+PEM_CERT = b"-----BEGIN CERTIFICATE-----"
 
 
 @dataclass
@@ -75,6 +80,10 @@ class SessionPlan:
     # The inference slot's model descriptor.
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
+    # `corporate_ca`: the validated host PEM, bound read-only at
+    # CORPORATE_CA_PATH (None: unset, nothing rendered).
+    corporate_ca_host_path: str | None = None
+    corporate_ca_container_path: str = CORPORATE_CA_PATH
 
     @property
     def project(self) -> str:
@@ -164,6 +173,34 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     return out
 
 
+def resolve_corporate_ca(value: str, session_dir: Path | None) -> str:
+    """`corporate_ca` as a validated absolute host path: a regular file holding
+    at least one PEM certificate, and not the session file or anything in the
+    session's private state. Checked at plan time, so `glove check` fails early."""
+    from .mounts import host_path
+    from .sessiondir import SESSION_FILE, STATE_DIR
+
+    try:
+        host = host_path(session_dir, value)
+    except ValueError:
+        raise ConfigError(f"corporate_ca: {value!r} must be an absolute path here") from None
+    if not host.exists():
+        raise ConfigError(f"corporate_ca: {value!r} does not exist ({host})")
+    if not host.is_file():
+        raise ConfigError(f"corporate_ca: {value!r} is not a regular file ({host})")
+    if session_dir is not None:
+        root = Path(os.path.realpath(session_dir))
+        if host == root / SESSION_FILE or host.is_relative_to(root / STATE_DIR):
+            raise ConfigError(f"corporate_ca: {value!r} must not be the session file or inside {STATE_DIR}/")
+    try:
+        pem = host.read_bytes()
+    except OSError as e:
+        raise ConfigError(f"corporate_ca: cannot read {host}: {e}") from e
+    if PEM_CERT not in pem:
+        raise ConfigError(f"corporate_ca: {host} holds no PEM certificate ({PEM_CERT.decode()})")
+    return str(host)
+
+
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
     if uses_srt(cfg.enforcer):
@@ -247,6 +284,13 @@ def build_session_plan(
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
+    corporate_ca = None
+    if cfg.corporate_ca:
+        corporate_ca = resolve_corporate_ca(cfg.corporate_ca, Path(session_dir) if session_dir else None)
+        # Node *adds* these to its built-in roots: trust is widened, never
+        # replaced, and verification is never turned off. Non-Node tools
+        # (curl, python) keep the image's store (README: corporate_ca).
+        environment.setdefault("NODE_EXTRA_CA_CERTS", CORPORATE_CA_PATH)
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -296,6 +340,7 @@ def build_session_plan(
         composition=comp,
         model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
+        corporate_ca_host_path=corporate_ca,
     )
     plan.passthrough_env = secret_env_names(plan)
     if transcripts_wanted(comp) and profile.transcript_subdir:

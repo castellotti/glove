@@ -82,6 +82,14 @@ services:
         target: {{ policies_container_dir }}
         read_only: true
 {% endif %}
+{% if corporate_ca_host_path %}
+      # corporate_ca: a public CA certificate the harness trusts in addition to
+      # the public roots (NODE_EXTRA_CA_CERTS); read-only, never a secret
+      - type: bind
+        source: {{ corporate_ca_host_path | tojson }}
+        target: {{ corporate_ca_container_path }}
+        read_only: true
+{% endif %}
 {% for m in mounts %}
       - type: bind
         source: {{ m.host_path | tojson }}

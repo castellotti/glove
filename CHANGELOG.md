@@ -2,6 +2,30 @@
 
 All notable changes to glove are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`corporate_ca`** (session file, off by default): a PEM bundle of a private
+  CA (e.g. a TLS-intercepting proxy's) that the harness trusts on top of the
+  public roots. It is validated at plan time (regular file, at least one PEM
+  certificate, not the session file or `.glove/`), bound read-only at
+  `/etc/glove/corporate-ca.pem`, and wired up with `NODE_EXTRA_CA_CERTS`.
+  Node-based clients only; curl and Python keep the image's store. No enforcer
+  policy change is needed (`/etc/glove` is already readable).
+- **`playwright: {ca: <pem>}`** (sidecar modes): staged into the extension's
+  state and bound read-only into the sidecar. The MCP trusts it through
+  `NODE_EXTRA_CA_CERTS`, and `glove-pw-start` imports each certificate into
+  Chromium's NSS db. The sidecar image gains `libnss3-tools`, so its tag
+  changes. TLS verification is never disabled; tests assert that no bypass
+  flag is rendered.
+
+### Fixed
+
+- `glove check`: when the plan fails, the extensions row resolves relative
+  path settings against the session directory instead of reporting them as
+  "must be an absolute path".
+
 ## [3.0.0] — 2026-09-29 — minimal core + extensions + session directories
 
 A clean break from v2 (no automatic migration; v2 state is refused, not

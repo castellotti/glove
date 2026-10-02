@@ -8,6 +8,7 @@ FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b7
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tigervnc-standalone-server tigervnc-tools novnc python3-websockify socat fonts-noto-core \
+      libnss3-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/glove/pw

@@ -52,7 +52,7 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}$")
 # for the v2 keys that v3 replaced.
 FILE_KEYS = frozenset({
     "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions",
-    "harness_config", "env", "brief", "tools", "enforcer_options", "apt_packages", "pip_packages",
+    "harness_config", "env", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
     "protect_ide_files", "allow_root", "allow_sensitive", "host_services",
 })
 V2_KEYS = {
