@@ -121,6 +121,24 @@ def test_session_file_accepts_the_key_and_still_refuses_bogus_ones(tmp_path):
     ({**NODE, "project": "a", "install_flags": ["-f"]}, "not single long options"),
     ({**NODE, "project": "a", "install_flags": ["--registry=`id`"]}, "not single long options"),
     ({**PY, "project": "a", "install_flags": "--offline"}, "must be a list of strings"),
+    # the per-mode allow-list: nothing that moves the install or weakens the lockfile
+    ({**NODE, "project": "a", "install_flags": ["--prefix=/work"]}, "not allowed for `npm` `ci`"),
+    ({**NODE, "project": "a", "install_flags": ["--global"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--userconfig=/tmp/x"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--legacy-peer-deps=true"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--registry"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "pnpm", "install_flags": ["--no-frozen-lockfile"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "yarn", "install_flags": ["--modules-folder=/work"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "yarn", "install_flags": ["--legacy-peer-deps"]}, "not allowed"),
+    ({**PY, "project": "a", "install_flags": ["--frozen"]}, "not allowed for `uv` `sync`"),
+    ({**PY, "project": "a", "install_flags": ["--no-deps"]}, "not allowed for `uv` `sync`"),
+    ({**PY, "project": "a", "install": "requirements", "install_flags": ["--target=/work"]}, "not allowed"),
+    ({**PY, "project": "a", "manager": "pip", "install_flags": ["--trusted-host=evil"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=https://u:p@r.example.com/"]}, "URL credentials"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=https://ghp_abc123@npm.pkg.github.com/"]},
+     "URL credentials"),
+    ({**PY, "project": "a", "install_flags": ["--index-url=https://tok@pypi.example.com/simple"]},
+     "URL credentials"),
     ("node", "must be a mapping"),
 ])
 def test_bad_blocks_are_refused(block, match):
@@ -338,6 +356,17 @@ def _linked_npmrc(root: Path) -> None:
     (lambda app: (app / ".yarnrc.yml").write_text('npmAuthToken: "abc"\n'), [".yarnrc.yml"], "credential"),
     (lambda app: (app / "pip.conf").write_text("[global]\nindex-url = https://u:p@pypi.example.com/simple\n"),
      ["pip.conf"], "credential"),
+    # yarn v1 writes `key "value"`: the `:` inside the registry URL is part of the key
+    (lambda app: (app / ".yarnrc").write_text('"//registry.npmjs.org/:_authToken" "npm_abc123"\n'),
+     [".yarnrc"], r"credential \(line 1\)"),
+    (lambda app: (app / ".yarnrc").write_text("registry \"https://r.example.com/\"\n_authToken npm_abc\n"),
+     [".yarnrc"], r"credential \(line 2\)"),
+    (lambda app: (app / ".npmrc").write_text("//r.example.com/:_password = c2VjcmV0\n"), [".npmrc"], "credential"),
+    # a token as the bare URL username
+    (lambda app: (app / ".npmrc").write_text("registry=https://ghp_abc123@npm.pkg.github.com/\n"),
+     [".npmrc"], "credential"),
+    (lambda app: (app / "uv.toml").write_text('[[index]]\nurl = "https://tok@pypi.example.com/simple"\n'),
+     ["uv.toml"], "credential"),
 ])
 def test_config_file_validation(tmp_path, setup, config_files, match):
     setup(_node_project(tmp_path / "app"))
@@ -354,7 +383,9 @@ def test_config_file_symlink_is_refused(tmp_path):
 def test_config_file_credential_check_ignores_comments_and_values(tmp_path):
     app = _node_project(tmp_path / "app")
     (app / ".npmrc").write_text("# _authToken goes in ~/.npmrc, never here\n; password too\n"
-                                "registry=https://tokens.example.com:8443/npm/\nalways-auth=false\n")
+                                "registry=https://tokens.example.com:8443/npm/\nalways-auth=false\n"
+                                "git-tag-version = false\nscope-registry ssh://git@github.com/org/repo\n"
+                                'yarn-path "/opt/token-free/yarn.js"\n')
     plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
     assert "toolchain-node/.npmrc" in plan.derived_dockerfile
 

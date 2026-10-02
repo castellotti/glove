@@ -220,15 +220,23 @@ toolchains:                       # a list; order is install and PATH order; one
   mode. Config files are **public build inputs**: image layers are not secret
   storage, so `glove check` refuses one with a credential-like key (`_auth`,
   `_authToken`, `npmAuthToken`, `password`, `token`, `secret`, …, even an
-  `${ENV}` reference) or a URL with a password. A registry that needs a token
-  can't be baked. `install_flags` appends flags to the project install command
-  (every manager: npm, pnpm, yarn, uv, pip), never to the global `packages`
-  step. Each flag is a single long option, `--flag` or `--flag=value` (value:
-  letters, digits, `._/@:-`), so `--legacy-peer-deps`, `--force` and
-  `--registry=https://…` pass, while spaces and shell metacharacters (`;`, `&&`,
-  `$()`, backticks) are refused at plan time. A baked `.npmrc` applies only to
-  the project install too. Both feed the image tag (the file's contents, the
-  flags), and a block without them renders exactly as before.
+  `${ENV}` reference, including yarn v1's quoted `"//host/:_authToken" "…"`) or
+  a URL with userinfo (`user:pass@`, or a bare token as `https://ghp_…@host`;
+  only ssh's `git@` passes). A registry that needs a token can't be baked.
+  `install_flags` appends flags to the project install command (every manager:
+  npm, pnpm, yarn, uv, pip), never to the global `packages` step. Each flag is a
+  single long option, `--flag` or `--flag=value` (value: letters, digits,
+  `._/@:-`), and must be on the **install mode's allow-list**: e.g.
+  `--legacy-peer-deps`, `--force`, `--ignore-scripts`, `--registry=…` (npm);
+  `--no-dev`, `--extra=…`, `--index-url=…` (uv sync); `--no-deps`,
+  `--require-hashes` (pip). Flags that move the install (`--prefix`, `--global`,
+  `--target`), weaken the lockfile (`--no-frozen-lockfile`, uv's `--frozen`) or
+  TLS (`--trusted-host`), or load another config file are not on it; the error
+  lists what is. Shell metacharacters (`;`, `&&`, `$()`, backticks) are refused,
+  and so is a URL value with credentials. All of this is checked at plan time.
+  A baked `.npmrc` applies only to the project install too. Both feed the image
+  tag (the file's contents, the flags), and a block without them renders
+  exactly as before.
 - **Content-addressed and layered for the cache.** The derived image tag changes
   with any block field and the manifest and lockfile contents, so a stale image
   is never reused. Editing the project's source never rebuilds anything. Layers

@@ -27,12 +27,17 @@ All notable changes to glove are documented here.
     beside the manifest and lockfile, before the install runs. Each entry must be
     a plain file name (no path), a regular file (never a symlink), and not already
     baked. Config files are public build inputs, so one with a credential-like
-    key (`_auth`, `_authToken`, `npmAuthToken`, `password`, `token`, …) or a URL
-    with a password is refused at plan time.
+    key (`_auth`, `_authToken`, `npmAuthToken`, `password`, `token`, …, also as
+    yarn v1's quoted `"//host/:_authToken" "…"`) or a URL with any userinfo
+    (`user:pass@` or a bare token `https://ghp_…@host`; ssh's `git@` passes) is
+    refused at plan time.
   - `install_flags: ["--legacy-peer-deps"]` appends flags to the project install
     for every manager (npm, pnpm, yarn, uv, pip). Each must be one long option
-    (`--flag` or `--flag=value`, no whitespace or shell metacharacters) and is
-    shell-quoted. They never apply to the global `packages` install.
+    (`--flag` or `--flag=value`, no whitespace or shell metacharacters) on the
+    install mode's allow-list (nothing that moves the install, weakens the
+    lockfile or TLS, or loads another config file), with no credentials in a URL
+    value. Flags are shell-quoted and never apply to the global `packages`
+    install.
   - Both feed the image tag. A block without them renders byte-identically (same
     Dockerfile, same tag). The integration script gains a lockfile that needs
     legacy-peer-deps, installed once via a baked `.npmrc` and once via the flag.

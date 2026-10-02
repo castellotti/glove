@@ -24,8 +24,8 @@ Two rules shape the layout:
 The surface is declarative: glove owns every command, there is no free-form
 script. A project's install may add its own config files (``config_files``:
 public build inputs, refused if they look like they carry a credential) and
-flags (``install_flags``: single option tokens from an allow-list), but never a
-command. ``lang`` is a registry (``HANDLERS``); adding Ruby or Go is a new
+flags (``install_flags``: single long options from the install mode's
+allow-list), but never a command. ``lang`` is a registry (``HANDLERS``); adding Ruby or Go is a new
 handler, not a schema change. Unset, nothing renders differently.
 """
 
@@ -62,11 +62,43 @@ _NPM_FLAGS = "--no-audit --no-fund --cache /tmp/npm-cache"
 # An install flag: one long option, optionally `=value`; no whitespace or shell
 # metacharacters, so it can only ever be an argument to the install command.
 _INSTALL_FLAG = re.compile(r"^--[a-z][a-z0-9-]*(=[\w./@:-]+)?\Z", re.ASCII)
+# Per-mode install flag allow-lists: a name ending in `=` takes a value
+# (`--registry=…`), any other is a bare switch. Left out on purpose: anything that
+# moves the install (`--prefix`, `--global`, `--target`, caches/stores glove sets),
+# weakens the lockfile (`--no-frozen-lockfile`, `uv --frozen`/`--upgrade`) or TLS
+# (`--trusted-host`, `--strict-ssl`), and `--config`/`--userconfig` files.
+_SOURCE = ("--registry=", "--fetch-retries=", "--fetch-timeout=")
+_NPM_ALLOWED = frozenset({
+    *_SOURCE, "--legacy-peer-deps", "--strict-peer-deps", "--force", "--ignore-scripts",
+    "--foreground-scripts", "--prefer-offline", "--prefer-online", "--offline", "--engine-strict",
+    "--install-links", "--no-optional", "--omit=", "--include=", "--loglevel="})
+_PNPM_ALLOWED = frozenset({
+    *_SOURCE, "--force", "--ignore-scripts", "--prefer-offline", "--offline", "--prod", "--dev",
+    "--no-optional", "--strict-peer-dependencies", "--no-strict-peer-dependencies",
+    "--shamefully-hoist", "--node-linker=", "--network-concurrency=", "--reporter=", "--loglevel="})
+_YARN_ALLOWED = frozenset({
+    "--registry=", "--network-timeout=", "--network-concurrency=", "--force", "--ignore-scripts",
+    "--ignore-engines", "--ignore-optional", "--ignore-platform", "--prefer-offline", "--offline",
+    "--production", "--check-files", "--non-interactive", "--silent"})
+_UV_INDEX = ("--index=", "--default-index=", "--index-url=", "--extra-index-url=", "--index-strategy=",
+             "--no-build", "--no-binary=", "--only-binary=", "--no-build-isolation", "--prerelease=",
+             "--compile-bytecode", "--offline", "--no-sources")
+_UV_SYNC_ALLOWED = frozenset({*_UV_INDEX, "--no-dev", "--only-dev", "--extra=", "--all-extras",
+                              "--group=", "--no-group=", "--all-groups", "--no-default-groups"})
+_UV_PIP_ALLOWED = frozenset({*_UV_INDEX, "--no-deps", "--require-hashes"})
+_PIP_ALLOWED = frozenset({"--index-url=", "--extra-index-url=", "--no-deps", "--require-hashes",
+                          "--no-binary=", "--only-binary=", "--prefer-binary", "--no-build-isolation",
+                          "--pre", "--timeout=", "--retries="})
 # A config file is named directly in the project dir: never a path, so it can't escape it.
 _CONFIG_FILE = re.compile(r"^(?!\.\.?\Z)[^/\\\x00\n]+\Z")
-# Config keys (lowercased) that carry a credential, and a URL with userinfo.
+# Config keys (lowercased) that carry a credential, and a URL with any userinfo
+# (`user:pass@` or a bare token `ghp_…@`), bar the ssh convention `git@`.
 _SECRET_KEYS = ("_auth", "authtoken", "authident", "password", "passwd", "token", "secret")
-_URL_USERINFO = re.compile(r"://[^\s/@:]+:[^\s/@]+@")
+_URL_USERINFO = re.compile(r"://(?!git@)[^\s/@]+@")
+# A config line's key: quoted (yarn v1's `"//host/:_authToken" "tok"`) or a run in
+# which a `:` not followed by space stays part of it (`//host/:_authToken=tok`),
+# ending at `=`, `: ` or whitespace (`key value`, `key: value`, `key = value`).
+_CONFIG_KEY = re.compile(r"""\s*("[^"]*"|'[^']*'|[^\s=:]*(?::(?!\s)[^\s=:]*)*)""")
 
 
 @dataclass(frozen=True)
@@ -105,6 +137,7 @@ class Toolchain:
 class Mode:
     files: tuple[tuple[str, ...], ...]  # required files (each: any of), the ones baked
     cmd: str  # run in the project dir; `{…}` fields filled by the handler
+    flags: frozenset[str] = frozenset()  # `install_flags` allow-list (`--name` / `--name=`)
 
 
 @dataclass(frozen=True)
@@ -185,15 +218,18 @@ class NodeHandler(Handler):
     version_hint = "an exact X.Y.Z, e.g. 22.11.0"
     managers: ClassVar[dict[str, Manager]] = {
         "npm": Manager({"ci": Mode((("package.json",), ("package-lock.json", "npm-shrinkwrap.json")),
-                                   f"npm ci {_NPM_FLAGS}"),
-                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}")}, "ci"),
+                                   f"npm ci {_NPM_FLAGS}", _NPM_ALLOWED),
+                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}", _NPM_ALLOWED)},
+                       "ci"),
         "pnpm": Manager({"frozen": Mode((("package.json",), ("pnpm-lock.yaml",)),
-                                        "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store"),
-                         "install": Mode((("package.json",),), "pnpm install --store-dir /tmp/pnpm-store")},
+                                        "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store", _PNPM_ALLOWED),
+                         "install": Mode((("package.json",),), "pnpm install --store-dir /tmp/pnpm-store",
+                                         _PNPM_ALLOWED)},
                         "frozen", versioned=True),
         "yarn": Manager({"frozen": Mode((("package.json",), ("yarn.lock",)),
-                                        "yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache"),
-                         "install": Mode((("package.json",),), "yarn install --cache-folder /tmp/yarn-cache")},
+                                        "yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache", _YARN_ALLOWED),
+                         "install": Mode((("package.json",),), "yarn install --cache-folder /tmp/yarn-cache",
+                                         _YARN_ALLOWED)},
                         "frozen", versioned=True),
     }
     default_manager = "npm"
@@ -282,12 +318,13 @@ class PythonHandler(Handler):
     managers: ClassVar[dict[str, Manager]] = {
         # --no-install-project: only the manifest + lockfile are baked, not the project itself
         "uv": Manager({"sync": Mode((("pyproject.toml",), ("uv.lock",)),
-                                    "{uv} sync --locked --no-install-project --python {v}"),
+                                    "{uv} sync --locked --no-install-project --python {v}", _UV_SYNC_ALLOWED),
                        "requirements": Mode((("requirements.txt",),),
-                                            "{uv} pip install --python {py} -r requirements.txt")},
+                                            "{uv} pip install --python {py} -r requirements.txt", _UV_PIP_ALLOWED)},
                       "sync", add=_UV_ADD),
         "pip": Manager({"requirements": Mode((("requirements.txt",),),
-                                             "{py} -m pip install --no-cache-dir -r requirements.txt")},
+                                             "{py} -m pip install --no-cache-dir -r requirements.txt",
+                                             _PIP_ALLOWED)},
                        "requirements", add="{py} -m pip install --no-cache-dir {pkgs}"),
     }
     default_manager = "uv"
@@ -354,12 +391,12 @@ def _strings(where: str, key: str, value: Any, pattern: re.Pattern | None = None
 
 def _credential(path: Path) -> str | None:
     """The first line of a config file that looks like it carries a credential
-    (a key naming one, or a URL with a password), else None."""
+    (a key naming one, or a URL with userinfo), else None."""
     for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
         line = line.strip()
         if not line or line.startswith(("#", ";")):
             continue
-        key = line.partition("=")[0] if "=" in line else line.partition(":")[0]
+        key = _CONFIG_KEY.match(line).group(1)
         if any(w in key.lower() for w in _SECRET_KEYS) or _URL_USERINFO.search(line):
             return f"line {n}"
     return None
@@ -414,6 +451,16 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
     for key, value in (("config_files", config_files), ("install_flags", install_flags)):
         if value and project is None:
             raise ConfigError(f"{where}: `{key}` needs a `project` to install")
+    if install_flags:
+        allowed = modes[install].flags
+        bad = [f for f in install_flags if (f.partition("=")[0] + "=" if "=" in f else f) not in allowed]
+        if bad:
+            raise ConfigError(f"{where}: `install_flags` {bad} are not allowed for `{manager}` `{install}` "
+                              f"(allowed: {', '.join(sorted(allowed))}; a name ending in `=` takes a value)")
+        leaked = [f for f in install_flags if _URL_USERINFO.search(f)]
+        if leaked:
+            raise ConfigError(f"{where}: `install_flags` {leaked} carry URL credentials; flags are baked "
+                              "into the image, which is not secret storage")
     if len(set(config_files)) != len(config_files):
         raise ConfigError(f"{where}: `config_files` lists a file twice: {list(config_files)}")
     browsers = _strings(where, "browsers", raw.get("browsers"))

