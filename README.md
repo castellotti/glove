@@ -165,6 +165,8 @@ toolchains:                       # a list; order is install and PATH order; one
     manager: npm                  # npm (default) | pnpm[@ver] | yarn[@1.x] (classic only; 2+ refused)
     project: projects/web         # optional; relative to the session dir; its manifest + lockfile are baked
     install: ci                   # npm: ci (default) | install; pnpm/yarn: frozen (default) | install
+    config_files: [.npmrc]        # optional project config baked beside the manifest (public, no credentials)
+    install_flags: ["--legacy-peer-deps"]  # optional flags appended to the project install
     packages: ["tsx@4.19.2"]      # optional global tools
     browsers: [chromium]          # optional Playwright engines (chromium | firefox | webkit)
   - lang: python
@@ -206,9 +208,35 @@ toolchains:                       # a list; order is install and PATH order; one
   outside the project is ever copied in. The project's own package is not
   installed (`--no-install-project`). The agent works on its copy under `/work`.
   So an install that needs more than those files fails at build time: npm/pnpm
-  workspaces, `file:`/path dependencies, a root `postinstall` script, a
-  `requirements.txt` that includes another file, or a private registry set in
-  `.npmrc`.
+  workspaces, `file:`/path dependencies, a root `postinstall` script, or a
+  `requirements.txt` that includes another file.
+- **Project config and install flags (`config_files`, `install_flags`, off by
+  default).** Some projects only install with their own settings, e.g. a
+  committed `.npmrc` with `legacy-peer-deps = true` or a private `registry`.
+  `config_files` names extra files in the project directory to bake beside the
+  manifest, before the install runs (`.npmrc`, `.yarnrc`, `pnpm-workspace.yaml`,
+  `uv.toml`, …). Each must be a plain file name (no path, so it can't leave the
+  project), a regular file (not a symlink), and not already baked by the install
+  mode. Config files are **public build inputs**: image layers are not secret
+  storage, so `glove check` refuses one with a credential-like key (`_auth`,
+  `_authToken`, `npmAuthToken`, `password`, `token`, `secret`, …, even an
+  `${ENV}` reference, including yarn v1's quoted `"//host/:_authToken" "…"`) or
+  a URL with userinfo (`user:pass@`, or a bare token as `https://ghp_…@host`;
+  only ssh's `git@` passes). A registry that needs a token can't be baked.
+  `install_flags` appends flags to the project install command (every manager:
+  npm, pnpm, yarn, uv, pip), never to the global `packages` step. Each flag is a
+  single long option, `--flag` or `--flag=value` (value: letters, digits,
+  `._/@:-`), and must be on the **install mode's allow-list**: e.g.
+  `--legacy-peer-deps`, `--force`, `--ignore-scripts`, `--registry=…` (npm);
+  `--no-dev`, `--extra=…`, `--index-url=…` (uv sync); `--no-deps`,
+  `--require-hashes` (pip). Flags that move the install (`--prefix`, `--global`,
+  `--target`), weaken the lockfile (`--no-frozen-lockfile`, uv's `--frozen`) or
+  TLS (`--trusted-host`), or load another config file are not on it; the error
+  lists what is. Shell metacharacters (`;`, `&&`, `$()`, backticks) are refused,
+  and so is a URL value with credentials. All of this is checked at plan time.
+  A baked `.npmrc` applies only to the project install too. Both feed the image
+  tag (the file's contents, the flags), and a block without them renders
+  exactly as before.
 - **Content-addressed and layered for the cache.** The derived image tag changes
   with any block field and the manifest and lockfile contents, so a stale image
   is never reused. Editing the project's source never rebuilds anything. Layers
@@ -742,7 +770,7 @@ bash tests/integration/test_observe.sh direct # observe + filter end to end (als
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
-bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (24 checks)
+bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (35 checks)
 # RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal)
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers

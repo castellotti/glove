@@ -22,7 +22,10 @@ Two rules shape the layout:
   so a node project's deps are linked into that node's own global folder.
 
 The surface is declarative: glove owns every command, there is no free-form
-script. ``lang`` is a registry (``HANDLERS``); adding Ruby or Go is a new
+script. A project's install may add its own config files (``config_files``:
+public build inputs, refused if they look like they carry a credential) and
+flags (``install_flags``: single long options from the install mode's
+allow-list), but never a command. ``lang`` is a registry (``HANDLERS``); adding Ruby or Go is a new
 handler, not a schema change. Unset, nothing renders differently.
 """
 
@@ -40,7 +43,8 @@ from .config import ConfigError
 from .image import _apt_bootstrap, _q, _staged
 
 ROOT = "/opt/glove/toolchains"
-BLOCK_KEYS = frozenset({"lang", "version", "manager", "project", "install", "packages", "browsers"})
+BLOCK_KEYS = frozenset({"lang", "version", "manager", "project", "install", "packages", "browsers",
+                        "config_files", "install_flags"})
 
 # uv drives Python installs (interpreter, venv, `sync`). Pinned with its release
 # checksums so the build trusts no download it did not expect.
@@ -55,6 +59,46 @@ UV_SHA256 = {
 _PACKAGE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/+:=<>!~,\[\]-]*$")
 _MANAGER_VERSION = re.compile(r"^[0-9][0-9A-Za-z.+-]*$")
 _NPM_FLAGS = "--no-audit --no-fund --cache /tmp/npm-cache"
+# An install flag: one long option, optionally `=value`; no whitespace or shell
+# metacharacters, so it can only ever be an argument to the install command.
+_INSTALL_FLAG = re.compile(r"^--[a-z][a-z0-9-]*(=[\w./@:-]+)?\Z", re.ASCII)
+# Per-mode install flag allow-lists: a name ending in `=` takes a value
+# (`--registry=…`), any other is a bare switch. Left out on purpose: anything that
+# moves the install (`--prefix`, `--global`, `--target`, caches/stores glove sets),
+# weakens the lockfile (`--no-frozen-lockfile`, `uv --frozen`/`--upgrade`) or TLS
+# (`--trusted-host`, `--strict-ssl`), and `--config`/`--userconfig` files.
+_SOURCE = ("--registry=", "--fetch-retries=", "--fetch-timeout=")
+_NPM_ALLOWED = frozenset({
+    *_SOURCE, "--legacy-peer-deps", "--strict-peer-deps", "--force", "--ignore-scripts",
+    "--foreground-scripts", "--prefer-offline", "--prefer-online", "--offline", "--engine-strict",
+    "--install-links", "--no-optional", "--omit=", "--include=", "--loglevel="})
+_PNPM_ALLOWED = frozenset({
+    *_SOURCE, "--force", "--ignore-scripts", "--prefer-offline", "--offline", "--prod", "--dev",
+    "--no-optional", "--strict-peer-dependencies", "--no-strict-peer-dependencies",
+    "--shamefully-hoist", "--node-linker=", "--network-concurrency=", "--reporter=", "--loglevel="})
+_YARN_ALLOWED = frozenset({
+    "--registry=", "--network-timeout=", "--network-concurrency=", "--force", "--ignore-scripts",
+    "--ignore-engines", "--ignore-optional", "--ignore-platform", "--prefer-offline", "--offline",
+    "--production", "--check-files", "--non-interactive", "--silent"})
+_UV_INDEX = ("--index=", "--default-index=", "--index-url=", "--extra-index-url=", "--index-strategy=",
+             "--no-build", "--no-binary=", "--only-binary=", "--no-build-isolation", "--prerelease=",
+             "--compile-bytecode", "--offline", "--no-sources")
+_UV_SYNC_ALLOWED = frozenset({*_UV_INDEX, "--no-dev", "--only-dev", "--extra=", "--all-extras",
+                              "--group=", "--no-group=", "--all-groups", "--no-default-groups"})
+_UV_PIP_ALLOWED = frozenset({*_UV_INDEX, "--no-deps", "--require-hashes"})
+_PIP_ALLOWED = frozenset({"--index-url=", "--extra-index-url=", "--no-deps", "--require-hashes",
+                          "--no-binary=", "--only-binary=", "--prefer-binary", "--no-build-isolation",
+                          "--pre", "--timeout=", "--retries="})
+# A config file is named directly in the project dir: never a path, so it can't escape it.
+_CONFIG_FILE = re.compile(r"^(?!\.\.?\Z)[^/\\\x00\n]+\Z")
+# Config keys (lowercased) that carry a credential, and a URL with any userinfo
+# (`user:pass@` or a bare token `ghp_…@`), bar the ssh convention `git@`.
+_SECRET_KEYS = ("_auth", "authtoken", "authident", "password", "passwd", "token", "secret")
+_URL_USERINFO = re.compile(r"://(?!git@)[^\s/@]+@")
+# A config line's key: quoted (yarn v1's `"//host/:_authToken" "tok"`) or a run in
+# which a `:` not followed by space stays part of it (`//host/:_authToken=tok`),
+# ending at `=`, `: ` or whitespace (`key value`, `key: value`, `key = value`).
+_CONFIG_KEY = re.compile(r"""\s*("[^"]*"|'[^']*'|[^\s=:]*(?::(?!\s)[^\s=:]*)*)""")
 
 
 @dataclass(frozen=True)
@@ -71,6 +115,8 @@ class Toolchain:
     project_playwright: bool = False  # resolve(): the project depends on playwright
     packages: tuple[str, ...] = ()
     browsers: tuple[str, ...] = ()
+    config_files: tuple[str, ...] = ()  # extra project files baked beside the manifest (resolve() adds them)
+    install_flags: tuple[str, ...] = ()  # appended to the project install command
 
     @property
     def prefix(self) -> str:
@@ -91,6 +137,7 @@ class Toolchain:
 class Mode:
     files: tuple[tuple[str, ...], ...]  # required files (each: any of), the ones baked
     cmd: str  # run in the project dir; `{…}` fields filled by the handler
+    flags: frozenset[str] | None = None  # `install_flags` allow-list; None: the manager's
 
 
 @dataclass(frozen=True)
@@ -99,6 +146,16 @@ class Manager:
     default: str  # the lockfile-strict mode
     versioned: bool = False  # takes `manager: name@X.Y.Z`
     add: str = ""  # installs `packages` ({pkgs}), when not a global npm install
+    flags: frozenset[str] = frozenset()  # `install_flags` allow-list (`--name` / `--name=`) of its modes
+
+    def allowed(self, install: str) -> frozenset[str]:
+        mode = self.modes[install].flags
+        return self.flags if mode is None else mode
+
+    def disallowed(self, install: str, flags: tuple[str, ...]) -> list[str]:
+        """The flags not on `install`'s allow-list: a name ending in `=` takes a value."""
+        allowed = self.allowed(install)
+        return [f for f in flags if "".join(f.partition("=")[:2]) not in allowed]
 
 
 class Handler:
@@ -127,6 +184,11 @@ class Handler:
 
     def check(self, tc: Toolchain, where: str) -> None:
         """Extra checks on a block (resolved, when it has a project)."""
+
+    def install(self, tc: Toolchain, **fields: str) -> str:
+        """The project install command (`{…}` fields filled) plus the block's `install_flags`."""
+        cmd = self.managers[tc.manager].modes[tc.install].cmd.format(**fields)
+        return f"{cmd} {_q(tc.install_flags)}" if tc.install_flags else cmd
 
 
 def _run(tc: Toolchain, *steps: str) -> str:
@@ -167,15 +229,16 @@ class NodeHandler(Handler):
     managers: ClassVar[dict[str, Manager]] = {
         "npm": Manager({"ci": Mode((("package.json",), ("package-lock.json", "npm-shrinkwrap.json")),
                                    f"npm ci {_NPM_FLAGS}"),
-                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}")}, "ci"),
+                        "install": Mode((("package.json",),), f"npm install {_NPM_FLAGS}")},
+                       "ci", flags=_NPM_ALLOWED),
         "pnpm": Manager({"frozen": Mode((("package.json",), ("pnpm-lock.yaml",)),
                                         "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store"),
                          "install": Mode((("package.json",),), "pnpm install --store-dir /tmp/pnpm-store")},
-                        "frozen", versioned=True),
+                        "frozen", versioned=True, flags=_PNPM_ALLOWED),
         "yarn": Manager({"frozen": Mode((("package.json",), ("yarn.lock",)),
                                         "yarn install --frozen-lockfile --cache-folder /tmp/yarn-cache"),
                          "install": Mode((("package.json",),), "yarn install --cache-folder /tmp/yarn-cache")},
-                        "frozen", versioned=True),
+                        "frozen", versioned=True, flags=_YARN_ALLOWED),
     }
     default_manager = "npm"
     browsers = frozenset({"chromium", "firefox", "webkit"})
@@ -211,7 +274,7 @@ class NodeHandler(Handler):
         if tc.project_files:
             # `<prefix>/lib/node` is in the pinned node's global require path: deps resolve from anywhere
             project += [_copy_project(tc), _run(tc, path, f"cd {tc.project_dir}",
-                                                self.managers[tc.manager].modes[tc.install].cmd,
+                                                self.install(tc),
                                                 "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
                                                 f"ln -s {tc.project_dir}/node_modules {rt}/lib/node")]
         if tc.browsers:
@@ -263,13 +326,13 @@ class PythonHandler(Handler):
     managers: ClassVar[dict[str, Manager]] = {
         # --no-install-project: only the manifest + lockfile are baked, not the project itself
         "uv": Manager({"sync": Mode((("pyproject.toml",), ("uv.lock",)),
-                                    "{uv} sync --locked --no-install-project --python {v}"),
+                                    "{uv} sync --locked --no-install-project --python {v}", _UV_SYNC_ALLOWED),
                        "requirements": Mode((("requirements.txt",),),
-                                            "{uv} pip install --python {py} -r requirements.txt")},
+                                            "{uv} pip install --python {py} -r requirements.txt", _UV_PIP_ALLOWED)},
                       "sync", add=_UV_ADD),
         "pip": Manager({"requirements": Mode((("requirements.txt",),),
                                              "{py} -m pip install --no-cache-dir -r requirements.txt")},
-                       "requirements", add="{py} -m pip install --no-cache-dir {pkgs}"),
+                       "requirements", add="{py} -m pip install --no-cache-dir {pkgs}", flags=_PIP_ALLOWED),
     }
     default_manager = "uv"
 
@@ -293,8 +356,7 @@ class PythonHandler(Handler):
         manager = self.managers[tc.manager]
         project = []
         if tc.project_files:
-            project += [_copy_project(tc),
-                        _run(tc, env, f"cd {tc.project_dir}", manager.modes[tc.install].cmd.format(**fields))]
+            project += [_copy_project(tc), _run(tc, env, f"cd {tc.project_dir}", self.install(tc, **fields))]
         if tc.packages:  # after the project: `uv sync` is exact and would remove them
             project.append(_run(tc, env, manager.add.format(**fields, pkgs=_q(tc.packages))))
         return runtime, [], project
@@ -320,15 +382,29 @@ HANDLERS: dict[str, Handler] = {h.lang: h for h in (NodeHandler(), PythonHandler
 # --- parse + resolve -----------------------------------------------------------------
 
 
-def _strings(where: str, key: str, value: Any, pattern: re.Pattern | None = None) -> tuple[str, ...]:
+def _strings(where: str, key: str, value: Any, pattern: re.Pattern | None = None,
+             what: str = "package names") -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(x, str) and x for x in value):
         raise ConfigError(f"{where}: `{key}` must be a list of strings, got {value!r}")
     bad = [x for x in value if pattern is not None and not pattern.match(x)]
     if bad:
-        raise ConfigError(f"{where}: `{key}` entries {bad} are not package names")
+        raise ConfigError(f"{where}: `{key}` entries {bad} are not {what}")
     return tuple(value)
+
+
+def _credential(path: Path) -> str | None:
+    """The first line of a config file that looks like it carries a credential
+    (a key naming one, or a URL with userinfo), else None."""
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        key = _CONFIG_KEY.match(line).group(1)
+        if any(w in key.lower() for w in _SECRET_KEYS) or _URL_USERINFO.search(line):
+            return f"line {n}"
+    return None
 
 
 def _parse_block(i: int, raw: Any) -> Toolchain:
@@ -373,6 +449,25 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
         raise ConfigError(f"{where}: `install` for {manager} must be one of {sorted(modes)}, got {install!r}")
     if project is not None and install is None:
         install = h.managers[manager].default
+    config_files = _strings(where, "config_files", raw.get("config_files"), _CONFIG_FILE,
+                            "file names in the project directory")
+    install_flags = _strings(where, "install_flags", raw.get("install_flags"), _INSTALL_FLAG,
+                             "single long options (`--flag` or `--flag=value`)")
+    for key, value in (("config_files", config_files), ("install_flags", install_flags)):
+        if value and project is None:
+            raise ConfigError(f"{where}: `{key}` needs a `project` to install")
+    if install_flags:
+        bad = h.managers[manager].disallowed(install, install_flags)
+        if bad:
+            allowed = h.managers[manager].allowed(install)
+            raise ConfigError(f"{where}: `install_flags` {bad} are not allowed for `{manager}` `{install}` "
+                              f"(allowed: {', '.join(sorted(allowed))}; a name ending in `=` takes a value)")
+        leaked = [f for f in install_flags if _URL_USERINFO.search(f)]
+        if leaked:
+            raise ConfigError(f"{where}: `install_flags` {leaked} carry URL credentials; flags are baked "
+                              "into the image, which is not secret storage")
+    if len(set(config_files)) != len(config_files):
+        raise ConfigError(f"{where}: `config_files` lists a file twice: {list(config_files)}")
     browsers = _strings(where, "browsers", raw.get("browsers"))
     if browsers and not h.browsers:
         raise ConfigError(f"{where}: `browsers` is only for lang: node")
@@ -381,7 +476,7 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
         raise ConfigError(f"{where}: unknown browser(s) {bad} (known: {sorted(h.browsers)})")
     tc = Toolchain(lang=lang, version=version, manager=manager, manager_version=mver or None, install=install,
                    project_spec=project, packages=_strings(where, "packages", raw.get("packages"), _PACKAGE),
-                   browsers=browsers)
+                   browsers=browsers, config_files=config_files, install_flags=install_flags)
     if project is None:  # a project is checked once resolved
         h.check(tc, where)
     return tc
@@ -410,10 +505,17 @@ def _depends_on_playwright(project: Path) -> bool:
     return any(n in deps for n in NodeHandler.PLAYWRIGHT)
 
 
+def _bakeable(where: str, found: Path) -> Path:
+    if found.is_symlink():  # never bake what a link points at
+        raise ConfigError(f"{where}: {found} is a symlink; make it a regular file")
+    return found
+
+
 def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
     """`parse` plus the plan-time project checks: it resolves (``~``, relative to
     the session dir, symlinks), is a directory exposing no private path, and has
-    the files its install mode needs — regular files, which are what is baked."""
+    the files its install mode needs plus its `config_files` — regular files,
+    which are what is baked, and never a config file carrying a credential."""
     from .mounts import existing_host_path
     from .sessiondir import exposes_private
 
@@ -441,8 +543,18 @@ def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
             if found is None:
                 raise ConfigError(f"{where}: `{tc.manager}` install `{tc.install}` needs {' or '.join(any_of)} "
                                   f"in {project}{hint}")
-            if found.is_symlink():  # never bake what a link points at
-                raise ConfigError(f"{where}: {found} is a symlink; make it a regular file")
+            files.append(_bakeable(where, found))
+        for name in tc.config_files:
+            found = project / name
+            if found in files:
+                raise ConfigError(f"{where}: `config_files` entry {name!r} is already baked by `{tc.install}`")
+            if not _bakeable(where, found).is_file():
+                raise ConfigError(f"{where}: `config_files` entry {name!r} is not a file in {project}")
+            where_secret = _credential(found)
+            if where_secret:
+                raise ConfigError(f"{where}: {found} looks like it carries a credential ({where_secret}); "
+                                  "config files are baked into image layers, which are not secret storage — "
+                                  "remove the credential from it")
             files.append(found)
         tc = replace(tc, project=project, project_files=tuple(files),
                      project_playwright=tc.lang == "node" and _depends_on_playwright(project))

