@@ -1,0 +1,8 @@
+{
+  "name": "glove-peer-fixture",
+  "private": true,
+  "dependencies": {
+    "react": "19.0.0",
+    "react-dom": "18.3.1"
+  }
+}

