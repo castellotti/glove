@@ -20,19 +20,15 @@ def resolve_ca_file(label: str, value: object, session_dir: Path | None) -> Path
     directory, symlinks resolved): a regular file holding at least one PEM
     certificate and no private key, and not the session file or anything in
     the session's private state. Raises ConfigError naming `label`."""
-    from .mounts import host_path
+    from .mounts import existing_host_path
     from .sessiondir import SESSION_FILE, STATE_DIR
 
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{label}: must be a path string, got {value!r}")
     try:
-        host = host_path(session_dir, value)
-    except ValueError:
-        raise ConfigError(f"{label}: {value!r} must be an absolute path here") from None
-    if not host.exists():
-        raise ConfigError(f"{label}: {value!r} does not exist ({host})")
-    if not host.is_file():
-        raise ConfigError(f"{label}: {value!r} is not a regular file ({host})")
+        host = existing_host_path(session_dir, value, "file")
+    except ValueError as e:
+        raise ConfigError(f"{label}: {e}") from None
     if session_dir is not None:
         root = Path(os.path.realpath(session_dir))
         if host == root / SESSION_FILE or host.is_relative_to(root / STATE_DIR):

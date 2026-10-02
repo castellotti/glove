@@ -62,6 +62,8 @@ echo "== session 1: pi (default enforcer) + node $NODE_V (npm ci, chromium) + py
 S1="$SESSIONS/s1"
 mkdir -p "$S1/projects"
 cp -R "$FIX/node-app" "$FIX/py-app" "$S1/projects/"
+# the agent's working copies: only the manifests + lockfiles are baked
+mkdir -p "$S1/work" && cp -R "$FIX/node-app" "$FIX/py-app" "$S1/work/"
 new_session "$S1" pi "toolchains:
   - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
   - {lang: python, version: \"$PY_V\", project: projects/py-app}
@@ -87,22 +89,25 @@ echo "$out" | grep -q 'Version 7.0.2' && ok "tool: tsc (project devDependency CL
 # nono's tool profile stops Chromium (denied /proc/self/maps, /proc/sys, /etc/fonts):
 # here the engine is checked at container level (same image, env, hardening, no
 # network); session 3 runs it inside a shell command under `enforcer: srt`.
-out="$(crun bash -c "cd $TC/node/project && node check.js")"
+out="$(crun bash -c "ls $TC/node/project $TC/python/project")"
+echo "$out" | grep -q check && bad "project source was baked: $out" \
+  || ok "only manifests + lockfiles baked: $(echo $out)"
+out="$(crun bash -c "cd /work/node-app && node check.js")"
 echo "$out" | grep -q 'is-number=true title=glove-offline' \
   && ok "container: deps resolve + baked Chromium launches offline (no download)" || bad "container: check.js: $out"
-out="$(tool "cd $TC/node/project && node -e 'console.log(require(\"is-number\")(1))'")"
+out="$(tool "cd /work && node -e 'console.log(require(\"is-number\")(1))'")"
 echo "$out" | grep -q '^true$' && ok "tool: project deps resolve" || bad "tool: require: $out"
 out="$(tool "mkdir -p /work/app && cd /work/app && ln -sfn $TC/node/project/node_modules node_modules \
   && echo 'console.log(require(\"./node_modules/is-number\")(2))' > m.js && node m.js")"
 echo "$out" | grep -q '^true$' && ok "tool: workspace-shadow strategy (symlink) works from /work" \
   || bad "tool: from /work: $out"
-out="$(tool "cd $TC/node/project && node check.js")"
+out="$(tool "cd /work/node-app && node check.js")"
 echo "$out" | grep -q 'glove-offline' && bad "tool: Chromium unexpectedly starts under nono (update the docs)" \
   || ok "tool: Chromium refused under nono's tool sandbox (documented)"
 out="$(tool 'npm install --no-audit left-pad 2>&1; echo rc=$?')"
 echo "$out" | tail -1 | grep -q 'rc=[^0]' && ok "tool: a runtime npm install fails (no network)" || bad "tool: npm install worked"
 
-out="$(tool "python --version; cd $TC/python/project && python check.py; cd /work && python -c 'import rich; print(\"rich-from-work\")'")"
+out="$(tool "python --version; cd /work/py-app && python check.py; cd /work && python -c 'import rich; print(\"rich-from-work\")'")"
 echo "$out" | grep -q "^Python $PY_V\." && echo "$out" | grep -q "prefix=$TC/python/venv" \
   && echo "$out" | grep -q rich-from-work && ok "tool: python $PY_V venv + project deps (from /work too)" \
   || bad "tool: python: $out"
@@ -136,6 +141,7 @@ echo "== session 3: pi + enforcer: srt — the baked Chromium inside a shell com
 S3="$SESSIONS/s3"
 mkdir -p "$S3/projects"
 cp -R "$FIX/node-app" "$S3/projects/"
+mkdir -p "$S3/work" && cp -R "$FIX/node-app" "$S3/work/"
 new_session "$S3" pi "enforcer: srt
 toolchains:
   - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
@@ -144,7 +150,7 @@ trap cleanup EXIT
 IMAGE="$(build "$S3" | tail -1)"
 [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "srt build failed"
 # srt points TMPDIR at /tmp/claude without creating it
-out="$(tool "mkdir -p \"\$TMPDIR\" && cd $TC/node/project && node check.js")"
+out="$(tool "mkdir -p \"\$TMPDIR\" && cd /work/node-app && node check.js")"
 echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (srt): baked Chromium launches offline" \
   || bad "tool (srt): check.js: $out"
 cleanup

@@ -135,9 +135,8 @@ def test_unset_leaves_plan_and_render_untouched(tmp_path):
     assert plan.toolchains == []
     assert plan.derived_dockerfile is None and plan.image == plan.profile.image
     harness = _harness(plan, tmp_path)
-    assert not {"NODE_PATH", "VIRTUAL_ENV", "PLAYWRIGHT_BROWSERS_PATH", "PATH"} & set(harness["environment"])
+    assert not {"VIRTUAL_ENV", "PLAYWRIGHT_BROWSERS_PATH", "PATH"} & set(harness["environment"])
     assert tcs.ROOT not in json.dumps(harness)
-    assert "/usr/local/bin/node" not in plan.command
 
 
 def test_node_block_renders_pinned_runtime_and_strict_install(tmp_path):
@@ -145,15 +144,20 @@ def test_node_block_renders_pinned_runtime_and_strict_install(tmp_path):
     plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app"}])
     df = plan.derived_dockerfile
     assert "https://nodejs.org/dist/v22.11.0/$f" in df and "SHASUMS256.txt" in df and "sha256sum -c -" in df
-    assert 'COPY ["toolchain-node/app", "/opt/glove/toolchains/node/project"]' in df
+    # only the manifest + lockfile are baked, never the project's tree
+    assert ('COPY ["toolchain-node/package.json", "toolchain-node/package-lock.json", '
+            '"/opt/glove/toolchains/node/project/"]') in df
     assert "npm ci --no-audit" in df
     assert ("ENV PATH=/opt/glove/toolchains/node/22.11.0/bin:"
             "/opt/glove/toolchains/node/project/node_modules/.bin:$PATH") in df
-    assert plan.environment["NODE_PATH"] == "/opt/glove/toolchains/node/project/node_modules"
+    # deps resolve via the pinned node's global folder, not NODE_PATH (nono strips it)
+    assert ("ln -s /opt/glove/toolchains/node/project/node_modules /opt/glove/toolchains/node/22.11.0/lib/node"
+            in df)
+    assert "NODE_PATH" not in plan.environment
     assert "PLAYWRIGHT_BROWSERS_PATH" not in plan.environment
     assert [tc.project for tc in plan.toolchains] == [(tmp_path / "app").resolve()]
-    # Pi keeps the image's own node (the pinned one is first on PATH)
-    assert "/usr/local/bin/node" in plan.command and "/usr/local/bin/pi" in plan.command
+    # Pi always runs on the image's own node (the pinned one is first on PATH)
+    assert plan.profile.entry[:2] == ["/usr/local/bin/node", "/usr/local/bin/pi"]
     assert _harness(plan, tmp_path)["image"] == plan.image
 
 
@@ -162,8 +166,8 @@ def test_node_managers_and_browsers(tmp_path):
     plan = _plan(tmp_path, toolchains=[{**NODE, "manager": "pnpm@9.15.0", "project": "app",
                                         "packages": ["typescript@5.6.3"], "browsers": ["chromium"]}])
     df = plan.derived_dockerfile
-    assert "npm install -g --no-audit --no-fund --cache /tmp/npm-cache pnpm@9.15.0" in df
-    assert "typescript@5.6.3" in df
+    # the manager and global packages in one step
+    assert "npm install -g --no-audit --no-fund --cache /tmp/npm-cache pnpm@9.15.0 typescript@5.6.3" in df
     assert "pnpm install --frozen-lockfile" in df
     assert ("PLAYWRIGHT_BROWSERS_PATH=/opt/glove/toolchains/node/browsers "
             "/opt/glove/toolchains/node/project/node_modules/.bin/playwright install --with-deps chromium") in df
@@ -171,7 +175,7 @@ def test_node_managers_and_browsers(tmp_path):
     # browsers via a global playwright, no project
     plan = _plan(tmp_path, toolchains=[{**NODE, "packages": ["playwright@1.50.0"], "browsers": ["firefox"]}])
     assert " playwright install --with-deps firefox" in plan.derived_dockerfile
-    assert "NODE_PATH" not in plan.environment
+    assert "lib/node" not in plan.derived_dockerfile
     # a project without playwright: the global one from `packages` installs the browsers
     _node_project(tmp_path / "plain")
     plan = _plan(tmp_path, toolchains=[{**NODE, "project": "plain", "packages": ["playwright@1.50.0"],
@@ -188,7 +192,8 @@ def test_python_block_renders_uv_sync_into_a_venv(tmp_path):
     assert f"releases/download/{tcs.UV_VERSION}/$f" in df
     assert all(sha in df for sha in tcs.UV_SHA256.values())
     assert "python install --no-bin 3.12" in df
-    assert "uv sync --locked --python 3.12" in df and "UV_PROJECT_ENVIRONMENT=/opt/glove/toolchains/python/venv" in df
+    assert "uv sync --locked --no-install-project --python 3.12" in df
+    assert "UV_PROJECT_ENVIRONMENT=/opt/glove/toolchains/python/venv" in df
     # seeded even for sync, so `pip` on PATH is the venv's
     assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
     assert "pip install --python /opt/glove/toolchains/python/venv/bin/python rich==13.9.4" in df
@@ -212,6 +217,23 @@ def test_block_order_is_install_and_path_order(tmp_path):
     assert ("ENV PATH=/opt/glove/toolchains/python/venv/bin:/opt/glove/toolchains/node/22.11.0/bin:$PATH") in df
 
 
+def test_layers_are_phased_across_blocks_and_never_chmod_everything(tmp_path):
+    _node_project(tmp_path / "app")
+    _py_project(tmp_path / "tool")
+    df = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "packages": ["tsx@4.19.2"]},
+                                     {**PY, "project": "tool"}]).derived_dockerfile
+    # every runtime, then global tools, then project installs: a lockfile bump rebuilds no runtime
+    runtimes = max(df.index("nodejs.org/dist"), df.index("venv --seed"))
+    assert runtimes < df.index("npm install -g") < df.index("npm ci") < df.index("uv sync")
+    assert "chmod -R" not in df and "-exec chmod a+rX {} +" in df
+
+
+def _linked_lock(root: Path, target_exists: bool) -> None:
+    if target_exists:
+        (root / "elsewhere.json").write_text("{}")
+    (_node_project(root / "app", lock=None) / "package-lock.json").symlink_to(root / "elsewhere.json")
+
+
 @pytest.mark.parametrize(("setup", "block", "match"), [
     (lambda r: None, {**NODE, "project": "missing"}, "does not exist"),
     (lambda r: (r / "file").write_text("x"), {**NODE, "project": "file"}, "is not a directory"),
@@ -224,6 +246,8 @@ def test_block_order_is_install_and_path_order(tmp_path):
     (lambda r: (r / "py").mkdir() or (r / "py" / "pyproject.toml").write_text(""), {**PY, "project": "py"},
      "needs uv.lock"),
     (lambda r: _node_project(r / "app"), {**NODE, "project": "app", "browsers": ["chromium"]}, "needs playwright"),
+    (lambda r: _linked_lock(r, target_exists=False), {**NODE, "project": "app"}, "needs package-lock.json"),
+    (lambda r: _linked_lock(r, target_exists=True), {**NODE, "project": "app"}, "is a symlink"),
 ])
 def test_project_validation(tmp_path, setup, block, match):
     (tmp_path / "work").mkdir(exist_ok=True)
@@ -245,27 +269,9 @@ def test_non_strict_install_mode_needs_only_the_manifest(tmp_path):
 
 
 def test_explicit_env_wins(tmp_path):
-    _node_project(tmp_path / "app")
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app"}], env={"NODE_PATH": "/mine"})
-    assert plan.environment["NODE_PATH"] == "/mine"
-
-
-def test_a_mount_over_the_toolchain_root_is_refused(tmp_path, monkeypatch):
-    assert tcs.mount_clash(["/work", "/home/agent", "/mnt/x"]) is None
-    assert tcs.mount_clash(["/opt"]) == "/opt"
-    assert tcs.mount_clash(["/opt/glove/toolchains/node"]) == "/opt/glove/toolchains/node"
-    from glove import plan as planmod
-    from glove.mounts import Mount, MountPlan
-
-    real = planmod.compute_mounts
-
-    def with_opt(*a, **kw):
-        mp = real(*a, **kw)
-        return MountPlan(**{**mp.__dict__, "mounts": [*mp.mounts, Mount(str(tmp_path), "/opt/glove", "ro")]})
-
-    monkeypatch.setattr(planmod, "compute_mounts", with_opt)
-    with pytest.raises(ConfigError, match="would shadow /opt/glove/toolchains"):
-        _plan(tmp_path, toolchains=[NODE])
+    _py_project(tmp_path / "tool")
+    plan = _plan(tmp_path, toolchains=[{**PY, "project": "tool"}], env={"VIRTUAL_ENV": "/mine"})
+    assert plan.environment["VIRTUAL_ENV"] == "/mine"
 
 
 # --- render invariants ------------------------------------------------------------------------
@@ -302,7 +308,7 @@ def test_no_install_runs_at_run_time(tmp_path):
     assert not any(w in runtime for w in ("install", "curl", "sync"))
 
 
-def test_content_hash_tracks_version_and_project_but_not_host_artifacts(tmp_path):
+def test_content_hash_tracks_version_and_manifests_only(tmp_path):
     app = _node_project(tmp_path / "app")
 
     def tag(version="22.11.0"):
@@ -316,8 +322,9 @@ def test_content_hash_tracks_version_and_project_but_not_host_artifacts(tmp_path
     (app / "node_modules" / "x" / "index.js").write_text("darwin build")
     (app / ".venv").mkdir()
     (app / ".venv" / "pyvenv.cfg").write_text("home = /opt/homebrew")
+    (app / "index.js").write_text("console.log(1)")  # source edits never rebuild the installs
     assert tag() == base
-    (app / "index.js").write_text("console.log(1)")
+    (app / "package-lock.json").write_text('{"lockfileVersion": 3}')
     assert tag() != base
 
 
@@ -358,13 +365,17 @@ def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, war
     assert ("cannot start inside a shell command" in text) is warned
 
 
-@pytest.mark.parametrize("toolchains", [[], [NODE], [PY]])
-def test_vibe_hook_runs_on_the_image_python_only_when_python_is_pinned(tmp_path, toolchains):
+@pytest.mark.parametrize("toolchains", [[], [PY]])
+def test_vibe_hook_always_runs_on_the_image_python(tmp_path, toolchains):
     plan = _plan(tmp_path, harness="vibe", toolchains=toolchains)
     cfg = _cfg(tmp_path, harness="vibe", toolchains=toolchains)
     render_home(cfg, plan.profile, tmp_path / "home", plan.model, mount_plan=plan.mount_plan,
-                comp=plan.composition)
+                comp=plan.composition, toolchains=plan.toolchains)
     hooks = (tmp_path / "home" / ".vibe" / "hooks.toml").read_text()
-    pinned = any(b["lang"] == "python" for b in toolchains)
-    assert ('command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks) is pinned
-    assert ('command = "/opt/glove/vibe-hook"' in hooks) is not pinned
+    assert 'command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks
+
+
+def test_context_file_uses_the_plans_resolved_toolchains(tmp_path):
+    cfg = _cfg(tmp_path, toolchains=[{**NODE, "project": "app"}])  # unresolvable: never re-read from cfg
+    text = build_environment_context(cfg, toolchains=tcs.parse([PY]))
+    assert "Python 3.12" in text and "Node" not in text

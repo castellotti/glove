@@ -51,10 +51,6 @@ class HarnessProfile:
     # can't resume that way, and resume_args raises.
     resume_continue: tuple[str, ...] | None = None
     resume_session: tuple[str, ...] | None = None
-    # The entry binary as (image node, script) for a harness that runs on Node via
-    # `#!/usr/bin/env node`: used in place of entry[0] when a `toolchains` node
-    # block puts a pinned node first on PATH, so the harness keeps its own.
-    node_entry: tuple[str, ...] | None = None
 
     @property
     def dockerfile(self) -> Path:
@@ -111,8 +107,10 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # builtins) from a system path; the user's own extensions still load from
         # the config home. Capability extensions (search, browser) are opt-in
         # extensions added to this entry when enabled — absent by default.
+        # Pi runs on the image's node by path, not via its `#!/usr/bin/env node`
+        # shebang: a `toolchains` node block puts a pinned node first on PATH.
         entry=[
-            "pi",
+            "/usr/local/bin/node", "/usr/local/bin/pi",
             "-e", "/opt/glove/pi-extensions/enforcer",
         ],
         config_home_env="PI_CODING_AGENT_DIR",
@@ -131,7 +129,6 @@ _REGISTRY: dict[str, HarnessProfile] = {
         # path or partial UUID.
         resume_continue=("--continue",),
         resume_session=("--session", "{id}"),
-        node_entry=("/usr/local/bin/node", "/usr/local/bin/pi"),
     ),
     "claude-code": HarnessProfile(
         name="claude-code",

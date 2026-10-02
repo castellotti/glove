@@ -31,6 +31,17 @@ def host_path(root: Path | None, value: str) -> Path:
     return Path(os.path.realpath(p))
 
 
+def existing_host_path(root: Path | None, value: str, kind: str) -> Path:
+    """`host_path`, which must exist as a `kind` ("file": regular file, or
+    "dir"). Raises ValueError naming `value`."""
+    p = host_path(root, value)
+    if not p.exists():
+        raise ValueError(f"{value!r} does not exist ({p})")
+    if not (p.is_file() if kind == "file" else p.is_dir()):
+        raise ValueError(f"{value!r} is not a {'regular file' if kind == 'file' else 'directory'} ({p})")
+    return p
+
+
 @dataclass(frozen=True)
 class Mount:
     host_path: str  # realpath on the host

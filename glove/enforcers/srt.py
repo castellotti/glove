@@ -114,6 +114,7 @@ def tool_wrapper_argv() -> list[str]:
 
 class SrtEnforcer:
     name = "srt"
+    tools_run_browsers = True
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return {

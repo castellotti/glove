@@ -80,6 +80,7 @@ class SessionPlan:
     # The inference slot's model descriptor.
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
+    derived_staged: list[tuple[str, Path]] = field(default_factory=list)  # its build-context sources
     # `corporate_ca`: the validated host PEM, bound read-only at
     # CORPORATE_CA_PATH (None: unset, nothing rendered).
     corporate_ca_host_path: str | None = None
@@ -261,13 +262,10 @@ def build_session_plan(
     toolchains: list[Toolchain] = []
     if cfg.toolchains:
         from . import toolchains as tcs
-        from .harnessconfig import CONTAINER_HOME
 
-        # checked at plan time, so `glove check` fails early
+        # checked at plan time, so `glove check` fails early (every mount
+        # target is /work, /mnt/… or the home: none can shadow tcs.ROOT)
         toolchains = tcs.resolve(cfg.toolchains, sd_path)
-        clash = tcs.mount_clash([*(m.container_path for m in mount_plan.mounts), CONTAINER_HOME])
-        if clash:
-            raise ConfigError(f"toolchains: the mount at {clash} would shadow {tcs.ROOT}")
         for k, v in tcs.harness_env(toolchains).items():
             if k in comp.harness_env:
                 raise ConfigError(f"toolchains: env {k!r} is also set by an extension")
@@ -305,11 +303,8 @@ def build_session_plan(
 
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
     base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
-    derived_df = None
-    derived = None
-    if comp.image_layers or comp.pi_extensions or any(src for _, src, _ in comp.pi_skills) or toolchains:
-        derived_df, staged = render_dockerfile(base, profile, comp, toolchains)
-        derived = content_hash(derived_df, staged)
+    derived_df, staged = render_dockerfile(base, profile, comp, toolchains)
+    derived = content_hash(derived_df, staged) if derived_df is not None else None
     image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
     plan = SessionPlan(
@@ -331,6 +326,7 @@ def build_session_plan(
         composition=comp,
         model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
+        derived_staged=staged,
         corporate_ca_host_path=corporate_ca,
         toolchains=toolchains,
     )
@@ -342,9 +338,6 @@ def build_session_plan(
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
     # collect enforcer env/caps. Pi loads capability code as `-e <path>`.
     entry = list(profile.entry)
-    if profile.node_entry and any(tc.lang == "node" for tc in toolchains):
-        # the pinned node is first on PATH: the harness keeps the image's own
-        entry = [*profile.node_entry, *entry[1:]]
     if cfg.harness == "pi":
         for ext, src in comp.pi_extensions:
             entry += ["-e", comp.pi_extension_dest(ext, src)]

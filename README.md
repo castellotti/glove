@@ -163,7 +163,7 @@ toolchains:                       # a list; order is install and PATH order; one
   - lang: node
     version: "22.23.3"            # required, exact X.Y.Z (official tarball, SHASUMS256-checked)
     manager: npm                  # npm (default) | pnpm[@ver] | yarn[@1.x] (classic only; 2+ refused)
-    project: projects/web         # optional; relative to the session dir; staged into the image
+    project: projects/web         # optional; relative to the session dir; its manifest + lockfile are baked
     install: ci                   # npm: ci (default) | install; pnpm/yarn: frozen (default) | install
     packages: ["tsx@4.19.2"]      # optional global tools
     browsers: [chromium]          # optional Playwright engines (chromium | firefox | webkit)
@@ -171,41 +171,54 @@ toolchains:                       # a list; order is install and PATH order; one
     version: "3.12"               # required, X.Y or X.Y.Z (uv-managed CPython; uv is pinned by glove)
     manager: uv                   # uv (default) | pip
     project: projects/tool
-    install: sync                 # uv: sync (default, `uv sync --locked`) | requirements; pip: requirements
+    install: sync                 # uv: sync (default, `uv sync --locked --no-install-project`) | requirements; pip: requirements
     packages: ["rich==15.0.0"]
 ```
 
 - **Everything lands under `/opt/glove/toolchains/`.** That path is on the
   read-only rootfs and never under a runtime mount (anything baked under `/work`
   or the harness home would be hidden by the bind). Every enforcer already lets
-  the harness and its commands read `/opt/glove`, so no policy changes. A mount
-  over that path is refused.
+  the harness and its commands read `/opt/glove`, so no policy changes. No mount
+  can land there: glove's mount points are only `/work`, `/mnt/…` and the
+  harness home.
 - **The runtime finds it through env.** The image prepends the bins to `PATH`
   (Node's `bin` plus the project's `node_modules/.bin`, then the Python venv's
-  `bin`). The harness env adds `NODE_PATH`, `PLAYWRIGHT_BROWSERS_PATH` and
-  `VIRTUAL_ENV`. These are set only if absent, so an explicit `env:` entry wins.
-  The harness itself keeps the image's own interpreter: Pi starts as
-  `/usr/local/bin/node /usr/local/bin/pi` when a node block is set, and Vibe's
-  hook runs on `/usr/local/bin/python3` when a python block is set. Claude Code
-  (experimental) has no such pin.
+  `bin`). The harness env adds `PLAYWRIGHT_BROWSERS_PATH` and `VIRTUAL_ENV`.
+  These are set only if absent, so an explicit `env:` entry wins. There is no
+  `NODE_PATH`, because nono strips it (and `NODE_OPTIONS`/`PYTHONPATH`) from every
+  wrapped command. Instead a node project's `node_modules` is linked into the
+  pinned node's own global folder (`<runtime>/lib/node`), so `require` finds the
+  deps from any directory under every enforcer. The harness always runs on the
+  image's own interpreter, toolchain or not: Pi starts as
+  `/usr/local/bin/node /usr/local/bin/pi`, and Vibe's hook runs as
+  `/usr/local/bin/python3 /opt/glove/vibe-hook`. Claude Code (experimental) has
+  no such pin.
 - **Lockfile-strict by default.** `npm ci`, `pnpm install --frozen-lockfile`,
-  `yarn install --frozen-lockfile` and `uv sync --locked` are the defaults.
+  `yarn install --frozen-lockfile` and `uv sync --locked --no-install-project`
+  are the defaults.
   `glove check` fails early on an unknown `lang`/`manager`/`install`, a missing
   `version`, or a missing lockfile. It also refuses a `project` that isn't a
   directory or that exposes a private path (`.glove/`, `local/`, the session
-  file, `~/.glove`), since the project is baked into an image the agent can read.
-- **Staging.** A host `node_modules`, `.venv`, `.git` and `__pycache__` are never
-  staged or hashed (they're the wrong OS/arch). Symlinks stay links, so nothing
-  outside the project is ever copied in.
-- **Content-addressed.** The derived image tag changes with any block field and
-  any staged project file, so a stale image is never reused. Point `project` at a
-  stable copy (e.g. `projects/`, outside `work/`), because every change to a
-  staged file means a rebuild.
+  file, `~/.glove`).
+- **Only the manifest and lockfile are baked** (`package.json` plus its lockfile,
+  `pyproject.toml` plus `uv.lock`, or `requirements.txt`), never the project's
+  tree, source, `.npmrc` or `.git`. A symlinked manifest is refused, so nothing
+  outside the project is ever copied in. The project's own package is not
+  installed (`--no-install-project`). The agent works on its copy under `/work`.
+  So an install that needs more than those files fails at build time: npm/pnpm
+  workspaces, `file:`/path dependencies, a root `postinstall` script, a
+  `requirements.txt` that includes another file, or a private registry set in
+  `.npmrc`.
+- **Content-addressed and layered for the cache.** The derived image tag changes
+  with any block field and the manifest and lockfile contents, so a stale image
+  is never reused. Editing the project's source never rebuilds anything. Layers
+  run every block's runtime first, then global tools, then project installs and
+  browsers, so a lockfile bump never re-downloads a runtime.
 - **The workspace shadow.** The baked dependencies live at
   `/opt/glove/toolchains/node/project/node_modules`, not inside `/work`.
-  `NODE_PATH` serves plain `require`, and the CLIs are on `PATH`, but a
-  bundler, dev server or test runner resolves `./node_modules` from the project
-  root. So the agent's context file tells it to run `ln -s
+  Plain `require` finds them from anywhere and the CLIs are on `PATH`, but a
+  bundler, dev server, test runner or ES `import` resolves `./node_modules` from
+  the project root. So the agent's context file tells it to run `ln -s
   /opt/glove/toolchains/node/project/node_modules node_modules` in its copy under
   `/work` (the project in `/work` must match the baked lockfile). Python has no
   such problem: the venv is active wherever the command runs.
@@ -221,8 +234,8 @@ toolchains:                       # a list; order is install and PATH order; one
   the global one from `packages`.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
 
-Unset, nothing renders differently (byte-identical image tags, compose,
-policies and harness home).
+Unset, nothing toolchain-specific renders: image tags, compose env, policies and
+the context file are unchanged.
 
 Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
 `172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of

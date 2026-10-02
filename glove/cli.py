@@ -260,6 +260,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)
     home_files = render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan,
+                             toolchains=plan.toolchains,
                              comp=plan.composition) if home else []
     return plan, rendered.compose_yaml, home_files
 
@@ -350,7 +351,8 @@ def up(
         # keeps what plan time recorded (the extensions' resolutions)
         _, resolved = sdm.read_effective(sd.effective)
         sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
+                    toolchains=plan.toolchains)
 
     import subprocess
 

@@ -116,15 +116,15 @@ def build_harness(
     if final_tag == base_tag or plan is None:
         return base_tag
 
-    from .image import render_dockerfile, stage_context
+    from .image import stage_context
 
-    dockerfile, staged = render_dockerfile(base_tag, profile, plan.composition, plan.toolchains)
+    dockerfile, staged = plan.derived_dockerfile, plan.derived_staged
     with tempfile.TemporaryDirectory(prefix="glove-build-") as ctx:
         ctx_dir = Path(ctx)
         stage_context(ctx_dir, staged)
         (ctx_dir / "Dockerfile").write_text(dockerfile)
         names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}
-                                 | {f"toolchain-{tc.lang}" for tc in plan.toolchains}))
+                                 | {tc.label for tc in plan.toolchains}))
         console.print(f"[bold]composing extension image[/bold] {final_tag}  (extensions: {names})")
         subprocess.run(
             [provider, "build", "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir)],
