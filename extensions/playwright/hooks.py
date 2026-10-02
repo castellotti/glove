@@ -70,8 +70,7 @@ def corporate_ca(ctx: dict[str, Any]) -> Path | None:
     s = ctx["settings"]
     if not s.get("ca") or s["mode"] == "host":
         return None
-    sd = ctx.get("session_dir")
-    return resolve_ca_file("playwright.ca", s["ca"], Path(sd) if sd else None)
+    return resolve_ca_file("playwright.ca", s["ca"], ctx.get("session_dir"))
 
 
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:

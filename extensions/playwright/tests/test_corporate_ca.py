@@ -38,7 +38,7 @@ def test_unset_renders_no_ca(tmp_path):
     plan = _plan(tmp_path)
     materialize(plan.composition)
     pw, _ = _pw(tmp_path, plan)
-    assert "NODE_EXTRA_CA_CERTS" not in pw["environment"] and "PW_CORPORATE_CA" not in pw["environment"]
+    assert "NODE_EXTRA_CA_CERTS" not in pw["environment"]
     assert BOUND not in {v["target"] for v in pw["volumes"]}
     assert not (tmp_path / "ext" / "playwright" / "corporate-ca.pem").exists()
 
@@ -55,7 +55,6 @@ def test_set_stages_binds_read_only_and_trusts(tmp_path, mode):
     binds = {v["target"]: v for v in pw["volumes"]}
     assert binds[BOUND] == {"type": "bind", "source": str(staged), "target": BOUND, "read_only": True}
     assert pw["environment"]["NODE_EXTRA_CA_CERTS"] == BOUND
-    assert pw["environment"]["PW_CORPORATE_CA"] == BOUND
     assert not any(tok in text for tok in BYPASS)
     # the harness is untouched by the sidecar's setting (set corporate_ca for it)
     assert "NODE_EXTRA_CA_CERTS" not in plan.environment
@@ -89,7 +88,7 @@ def test_host_mode_ignores_ca(tmp_path):
 
 def test_entrypoint_imports_into_nss_in_both_modes_and_never_bypasses():
     src = (PW / "image" / "glove-pw-start").read_text()
-    assert 'certutil -d "sql:$db" -A -n "glove-corporate-ca-$n" -t "C,," -i "$f"' in src
+    assert 'certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"' in src
     assert src.count("    trust_corporate_ca\n") == 2  # headless and novnc
     assert "libnss3-tools" in (PW / "image" / "Dockerfile").read_text()
     for path in (PW / "image" / "glove-pw-start", PW / "compose" / "services.yml.j2", PW / "hooks.py"):

@@ -184,6 +184,8 @@ class DockerRuntime:
                 "apply a validated built-in default — the container would run "
                 "unpinned. Refusing to render."
             )
+        from ..plan import CORPORATE_CA_PATH
+
         ctx = {
             "session": plan.session,
             "harness": plan.profile,
@@ -203,7 +205,7 @@ class DockerRuntime:
             "transcripts_host_dir": plan.transcripts_host_dir,
             "transcripts_container_dir": plan.transcripts_container_dir,
             "corporate_ca_host_path": plan.corporate_ca_host_path,
-            "corporate_ca_container_path": plan.corporate_ca_container_path,
+            "corporate_ca_container_path": CORPORATE_CA_PATH,
             "hostgw_network": plan.network.hostgw_network,
             "session_networks": plan.network.session_networks,
             "subnets": plan.network.subnets,

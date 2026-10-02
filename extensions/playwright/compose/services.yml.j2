@@ -22,9 +22,9 @@ services:
       PW_PROXY: "{{ endpoint['browser-egress'].url }}"
 {% if settings.ca %}
       # trust a private CA in addition to the public roots: Node (the MCP)
-      # here, Chromium via an NSS import in glove-pw-start; never a bypass
+      # here, Chromium via an NSS import of the same file in glove-pw-start;
+      # never a bypass
       NODE_EXTRA_CA_CERTS: /etc/glove/playwright/corporate-ca.pem
-      PW_CORPORATE_CA: /etc/glove/playwright/corporate-ca.pem
 {% endif %}
 {% if settings.mode == "novnc" %}
       VNC_ACCEPT_INPUT: "{{ settings.allow_control | lower }}"

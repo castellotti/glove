@@ -82,7 +82,6 @@ class SessionPlan:
     # `corporate_ca`: the validated host PEM, bound read-only at
     # CORPORATE_CA_PATH (None: unset, nothing rendered).
     corporate_ca_host_path: str | None = None
-    corporate_ca_container_path: str = CORPORATE_CA_PATH
 
     @property
     def project(self) -> str:
@@ -172,14 +171,6 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     return out
 
 
-def resolve_corporate_ca(value: object, session_dir: Path | None) -> str:
-    """`corporate_ca` as a validated absolute host path (glove/cafile.py).
-    Checked at plan time, so `glove check` fails early."""
-    from .cafile import resolve_ca_file
-
-    return str(resolve_ca_file("corporate_ca", value, session_dir))
-
-
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
     if uses_srt(cfg.enforcer):
@@ -238,10 +229,11 @@ def build_session_plan(
 
     # Compose the selected extensions first: their endpoints, env, host services
     # and image layers feed the network plan, env and image below.
+    sd_path = Path(session_dir) if session_dir else None
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
-        session_dir=Path(session_dir) if session_dir else None, subnet=cfg.subnet,
+        session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
     )
@@ -265,7 +257,10 @@ def build_session_plan(
         environment.setdefault(k, v)  # an explicit `env:` entry wins
     corporate_ca = None
     if cfg.corporate_ca:
-        corporate_ca = resolve_corporate_ca(cfg.corporate_ca, Path(session_dir) if session_dir else None)
+        from .cafile import resolve_ca_file
+
+        # checked at plan time, so `glove check` fails early
+        corporate_ca = str(resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path))
         # Node *adds* these to its built-in roots: trust is widened, never
         # replaced, and verification is never turned off. Non-Node tools
         # (curl, python) keep the image's store (README: corporate_ca).

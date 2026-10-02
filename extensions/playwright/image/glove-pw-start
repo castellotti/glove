@@ -61,20 +61,20 @@ require_sandbox() {
 # so import each certificate of the bound bundle into the user's NSS db ($HOME
 # is a tmpfs) as a trusted CA. Trust is only added; verification stays on.
 trust_corporate_ca() {
-  [ -n "${PW_CORPORATE_CA:-}" ] && [ -f "$PW_CORPORATE_CA" ] || return 0
-  local db="$HOME/.pki/nssdb" dir n=0 f
+  local ca="${NODE_EXTRA_CA_CERTS:-}" db="$HOME/.pki/nssdb" dir f
+  [ -n "$ca" ] && [ -f "$ca" ] || return 0
   mkdir -p "$db"
   [ -f "$db/cert9.db" ] || certutil -d "sql:$db" -N --empty-password
   dir=$(mktemp -d)
   awk -v dir="$dir" '/-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("%s/%03d.pem", dir, n) }
-                     out { print > out } /-----END CERTIFICATE-----/ { close(out); out = "" }' "$PW_CORPORATE_CA"
-  for f in "$dir"/*.pem; do
-    [ -f "$f" ] || continue
-    n=$((n + 1))
-    certutil -d "sql:$db" -A -n "glove-corporate-ca-$n" -t "C,," -i "$f"
+                     out { print > out } /-----END CERTIFICATE-----/ { close(out); out = "" }' "$ca"
+  set -- "$dir"/*.pem
+  [ -f "$1" ] || set --
+  for f; do
+    certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"
   done
   rm -rf "$dir"
-  echo "glove: trusting $n corporate CA certificate(s) from $PW_CORPORATE_CA" >&2
+  echo "glove: trusting $# corporate CA certificate(s) from $ca" >&2
 }
 
 case "${1:-headless}" in
