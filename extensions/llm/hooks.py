@@ -23,16 +23,20 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import yaml
 
 PROVIDERS = Path(__file__).parent / "providers"
 CATALOG_KEYS = frozenset({
-    "name", "api", "host", "base_path", "default_port", "locations", "auth", "models_endpoint", "probes", "defaults",
+    "name", "api", "host", "base_path", "default_port", "locations", "auth", "headers", "models_endpoint",
+    "models_cursor", "dated_aliases", "probes", "defaults",
 })
+HEADER_NAME = re.compile(r"[A-Za-z0-9-]+")
+HEADER_VALUE = re.compile(r"[\x20-\x7e]*")
 CAPABILITY_KEYS = ("vision", "context_window", "max_tokens", "reasoning")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -50,7 +54,29 @@ def load_provider(name: str) -> dict[str, Any]:
     unknown = set(cat) - CATALOG_KEYS
     if unknown:
         raise LlmError(f"llm: provider {name!r} has unknown catalog keys {sorted(unknown)}")
+    for h in (cat.get("headers") or {}, ((cat.get("auth") or {}).get("oauth") or {}).get("headers") or {}):
+        for k, v in h.items():
+            if not HEADER_NAME.fullmatch(str(k)) or not HEADER_VALUE.fullmatch(str(v)):
+                raise LlmError(f"llm: provider {name!r} has a bad header {k!r}")
     return cat
+
+
+def _auth(s: dict[str, Any], cat: dict[str, Any], harness: str) -> tuple[dict[str, Any], dict[str, str]]:
+    """The auth block for `s["auth"]` and the public headers a probe sends."""
+    auth = cat.get("auth") or {}
+    headers = {str(k): str(v) for k, v in (cat.get("headers") or {}).items()}
+    if s.get("auth", "api-key") != "oauth":
+        return auth, headers
+    oauth = auth.get("oauth")
+    if not oauth:
+        raise LlmError(f"llm: provider {cat['name']!r} takes no `auth: oauth` (an API key only)")
+    if harness not in (oauth.get("harnesses") or []):
+        raise LlmError(f"llm: an {cat['name']} subscription token (`auth: oauth`) is for "
+                       f"{', '.join(oauth.get('harnesses') or [])} only, not harness {harness!r}; use an API key")
+    if not s.get("api_key"):
+        raise LlmError("llm: `auth: oauth` needs `api_key: keychain:<service>` holding the token")
+    headers.update({str(k): str(v) for k, v in (oauth.get("headers") or {}).items()})
+    return {**auth, **oauth}, headers
 
 
 def _split_endpoint(endpoint: str, default_port: int | None) -> tuple[str, int, str | None, str | None]:
@@ -121,7 +147,7 @@ def _capabilities(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, An
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     s = ctx["settings"]
     cat = load_provider(s["provider"])
-    auth = cat.get("auth") or {}
+    auth, headers = _auth(s, cat, ctx.get("harness", ""))
     if auth.get("required") and not s.get("api_key"):
         raise LlmError(f"llm: provider {cat['name']!r} needs `api_key: keychain:<service>`")
     r = route(s, cat)
@@ -147,6 +173,8 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         "api_key_secret": "api_key" if s.get("api_key") else None,
         "auth_header": auth.get("header", "Authorization"),
         "auth_scheme": auth.get("scheme", "Bearer"),
+        "api_key_kind": s.get("auth") or "api-key",
+        "probe_headers": headers,
         "capabilities": _capabilities(s, cat),
         "capabilities_auto": s.get("capabilities") == "auto",
         "capabilities_explicit": sorted(s["capabilities"]) if isinstance(s.get("capabilities"), dict) else [],
@@ -186,6 +214,39 @@ def _extract(doc: Any, spec: Any) -> Any:
     return value
 
 
+MAX_MODEL_PAGES = 20
+CONNECT_RETRIES = (1, 2, 3, 4)  # seconds between attempts while nothing answers
+
+
+def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
+    """Every id the models endpoint lists, following a paginated list
+    (`has_more` + `last_id`, the catalog's `models_cursor` names the parameter)."""
+    endpoint = cat.get("models_endpoint", "/v1/models")
+    url, ids = root + endpoint, []
+    for _ in range(MAX_MODEL_PAGES):
+        status, text = probe(url, auth=auth)
+        for wait in CONNECT_RETRIES if status == 0 else ():
+            # no HTTP answer at all: a forwarder that implements more than socat
+            # (observe's gate) can still be starting
+            time.sleep(wait)
+            status, text = probe(url, auth=auth)
+            if status != 0:
+                break
+        if status != 200:
+            raise LlmError(f"llm: {cat['name']} did not answer {endpoint} (HTTP {status}): "
+                           f"{text[:200]} — is the server running and reachable at the configured endpoint?")
+        try:
+            doc = json.loads(text)
+            ids += [m.get("id") for m in (doc.get("data") or []) if isinstance(m, dict)]
+        except (ValueError, AttributeError) as e:
+            raise LlmError(f"llm: {endpoint} returned non-JSON: {text[:200]}") from e
+        cursor = cat.get("models_cursor")
+        if not (cursor and doc.get("has_more") and doc.get("last_id")):
+            return ids
+        url = f"{root}{endpoint}{'&' if '?' in endpoint else '?'}{cursor}={quote(str(doc['last_id']))}"
+    raise LlmError(f"llm: {endpoint} listed more than {MAX_MODEL_PAGES} pages")
+
+
 def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
     """Resolve `model: auto` / `capabilities: auto`. Returns (exports, notes).
     `probe(url, method=, body=, auth=)` → (status, text) via a throwaway container."""
@@ -194,21 +255,16 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
     auth = bool(exports.get("api_key_secret"))
     notes: list[str] = []
     out = dict(exports)
-    status, text = probe(root + cat.get("models_endpoint", "/v1/models"), auth=auth)
-    if status != 200:
-        raise LlmError(f"llm: {cat['name']} did not answer {cat.get('models_endpoint')} (HTTP {status}): "
-                       f"{text[:200]} — is the server running and reachable at the configured endpoint?")
-    try:
-        ids = [m.get("id") for m in (json.loads(text).get("data") or []) if isinstance(m, dict)]
-    except (ValueError, AttributeError) as e:
-        raise LlmError(f"llm: {cat.get('models_endpoint')} returned non-JSON: {text[:200]}") from e
+    ids = _model_ids(cat, root, probe, auth)
     if exports["model"] == "auto":
         if len(ids) != 1:
             raise LlmError(f"llm: model: auto needs exactly one model at {cat.get('models_endpoint')}, found "
                            f"{ids or 'none'} — set `model:` to one of them")
         out["model"] = ids[0]
         notes.append(f"model: auto → {ids[0]}")
-    elif ids and exports["model"] not in ids:
+    elif ids and exports["model"] not in ids and not (
+            cat.get("dated_aliases") and any(re.fullmatch(re.escape(exports["model"]) + r"-\d{8}", i or "")
+                                             for i in ids)):
         raise LlmError(f"llm: model {exports['model']!r} is not served (available: {ids})")
     caps = dict(exports["capabilities"])
     spec = (cat.get("probes") or {}).get("capabilities")

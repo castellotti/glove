@@ -3,6 +3,17 @@ api: anthropic-messages
 host: api.anthropic.com
 base_path: ""
 locations: [internet]
-auth: { header: x-api-key, scheme: "", required: true }
-models_endpoint: /v1/models
+# `auth: oauth` takes a Claude subscription token (`claude setup-token`), which is
+# for Claude Code only; it authenticates as a bearer token with the OAuth beta.
+auth:
+  header: x-api-key
+  scheme: ""
+  required: true
+  oauth: { header: Authorization, scheme: Bearer, headers: { anthropic-beta: oauth-2025-04-20 }, harnesses: [claude-code] }
+headers: { anthropic-version: "2023-06-01" }
+# paginated: ask for a large page and follow `has_more` with `after_id=<last_id>`
+models_endpoint: /v1/models?limit=1000
+models_cursor: after_id
+# the list names dated snapshots (claude-haiku-4-5-20251001); the API also takes the alias
+dated_aliases: true
 defaults: { vision: true, context_window: 200000, max_tokens: 8192, reasoning: false }

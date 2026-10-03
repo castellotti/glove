@@ -1,0 +1,28 @@
+{
+  "command": [
+    "nono",
+    "run",
+    "-s",
+    "--allow-cwd",
+    "--profile",
+    "/etc/glove/enforcer/harness.json",
+    "--",
+    "/usr/local/bin/claude"
+  ],
+  "enforcer_env": {
+    "NONO_NO_PROXY": "localhost,127.0.0.1"
+  },
+  "environment": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    "DISABLE_AUTOUPDATER": "1"
+  },
+  "image": "glove/claude-code:0.2.0",
+  "passthrough_env": [
+    "CLAUDE_CODE_OAUTH_TOKEN"
+  ],
+  "transcripts": [
+    null,
+    null
+  ]
+}

@@ -123,6 +123,7 @@ def validate_export_isolation(plan: SessionPlan) -> None:
     binds = [("home", plan.home_dir), *((m.container_path, m.host_path) for m in plan.mounts)]
     if plan.policies_host_dir:
         binds.append(("enforcer", plan.policies_host_dir))
+    binds += [(target, host) for host, target in getattr(plan, "system_mounts", ())]
     observe_root = comp.export_dirs["observe"]
     guarded = [
         ("observe export", str(observe_root), "read or forge its own flow record"),

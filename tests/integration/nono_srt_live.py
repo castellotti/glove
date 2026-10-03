@@ -38,6 +38,10 @@ from glove.plan import secret_env
 from glove.session import _compose_base, ensure_images, start_sidecars
 
 RESULTS: list[bool] = []
+# What differs per harness: the model id the host stub lists (llm_stub for
+# OpenAI-API harnesses, anthropic_stub for Claude Code) and the shell tool's name.
+LLM_MATCH = {"claude-code": "claude-stub"}
+BASH_TOOL = {"claude-code": "Bash"}
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -54,7 +58,7 @@ HARNESS_PROBE = r"""
 unshare -Ur true 2>/dev/null; echo "UNSHARE_USER=$?"
 unshare -m true 2>/dev/null; echo "UNSHARE_MOUNT=$?"
 echo "KEY_IN_HARNESS=$(env | grep -c '^FAKE_API_KEY=')"
-echo "LLM=$(curl -sS -m 10 "http://$LLM_HOST:$LLM_PORT/v1/models" 2>&1 | grep -c stub-qwen)"
+echo "LLM=$(curl -sS -m 10 "http://$LLM_HOST:$LLM_PORT/v1/models" 2>&1 | grep -c "$LLM_MATCH")"
 curl -sS -m 10 -o /dev/null https://example.com 2>/dev/null; echo "EXAMPLE=$?"
 getent hosts example.com >/dev/null 2>&1; echo "DNS_EXTERNAL=$?"
 ( echo pwn > /work/.git/hooks/pre-commit ) 2>/dev/null; echo "HOOK_WRITE=$?"
@@ -111,12 +115,14 @@ def drive_tui(argv: list[str], env: dict) -> dict:
     mark = len(buf)
     # markers built at run time: Pi echoes the command text itself
     os.write(fd, b"!perl -e 'open(T, \"+<\", \"/dev/tty\") or die \"TTY\".\"-REFUSED: $!\\n\"; "
-                 b"print \"TTY\".\"-OPENED\\n\"'\r")
+                 b"print \"TTY\".\"-OPENED\\n\"'")
+    pump(1)
+    os.write(fd, b"\r")  # on its own: Claude Code takes one burst as a paste, Enter included
     pump(10)
     ansi = r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)"
     shell = re.sub(ansi, "", bytes(buf[mark:]).decode(errors="replace"))
     if os.environ.get("TUI_DUMP"):
-        Path(os.environ["TUI_DUMP"]).write_text(shell)
+        Path(os.environ["TUI_DUMP"]).write_text(re.sub(ansi, "", bytes(buf).decode(errors="replace")))
     os.write(fd, b"\x03\x03")
     pump(2)
     try:
@@ -147,10 +153,19 @@ def main(directory: str) -> int:
         print(f"  (images ready in {time.time() - t:.0f}s: {plan.image})", flush=True)
         start_sidecars(plan, sd.compose, provider=rt, env=env)
         check("sidecars up + verify passed", True)
-        _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
+        _resolve_extensions(plan, rt, secret_env(plan))
         render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+        if cfg.harness == "claude-code":
+            # Claude Code asks once whether to use an ANTHROPIC_API_KEY and keeps
+            # the answer (its last 20 chars); glove never writes key material, so
+            # the test pre-approves its fake key the way the operator's "Yes" would.
+            state = sd.home / ".claude" / ".claude.json"
+            doc = json.loads(state.read_text())
+            doc["customApiKeyResponses"] = {"approved": [env["GLOVE_TEST_ANTHROPIC_KEY"][-20:]], "rejected": []}
+            state.write_text(json.dumps(doc))
         port = plan.model.base_url.split(":")[2].split("/")[0]
-        probe_env = {"LLM_HOST": f"glove-{sid}-llm", "LLM_PORT": port}
+        probe_env = {"LLM_HOST": f"glove-{sid}-llm", "LLM_PORT": port,
+                     "LLM_MATCH": LLM_MATCH.get(cfg.harness, "stub-qwen")}
         env_args = [a for k, v in probe_env.items() for a in ("-e", f"{k}={v}")]
         prefix = plan.harness_command[:plan.harness_command.index("ctty") + 2]  # relay … ctty --
         wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
@@ -209,7 +224,7 @@ def main(directory: str) -> int:
         cmd = 'echo tool-ran-$((6*7)); unshare -Ur true 2>/dev/null; echo userns=$?'
         t0 = time.time()
         r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *plan.harness_command, "-p",
-                            f"CALL bash {json.dumps({'command': cmd})}"], env=env, stdin=subprocess.DEVNULL,
+                            f"CALL {BASH_TOOL.get(cfg.harness, 'bash')} {json.dumps({'command': cmd})}"], env=env, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=300)
         ans = (r.stdout + r.stderr)[-800:]
         check("the tool call ran (TOOL RESULT: tool-ran-42)", "tool-ran-42" in ans, ans.replace("\n", " "))

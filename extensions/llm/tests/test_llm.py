@@ -118,8 +118,13 @@ def test_lan_never_gives_the_harness_a_lan_route(tmp_path):
 def test_internet_location_aliases_the_provider_host_onto_the_forwarder(tmp_path):
     plan, doc, _ = _plan(tmp_path, **SCENARIOS["internet"])
     llm = doc["services"]["glove-s-llm"]
-    assert llm["command"].endswith("TCP4:api.openai.com:443")
     assert llm["networks"]["glove-s-net"]["aliases"] == ["api.openai.com"]
+    # the aliased forwarder would resolve its own alias: it dials a hop off the
+    # harness network, which dials the real name
+    assert llm["command"].endswith("TCP4:glove-s-llm-out:443")
+    out = doc["services"]["glove-s-llm-out"]
+    assert out["command"].endswith("TCP4:api.openai.com:443")
+    assert set(out["networks"]) == {"glove-s-llm"}
     assert plan.model.base_url == "https://api.openai.com/v1"  # TLS end to end, real SNI
     assert plan.passthrough_env == ["GLOVE_LLM_API_KEY"]
 
@@ -291,3 +296,85 @@ def test_generic_provider_without_max_model_len_keeps_the_default(tmp_path):
     ex, notes = _resolve(tmp_path, server, **GENERIC, capabilities="auto")
     assert ex["capabilities"]["context_window"] == 32768
     assert any("did not report context_window; using the default 32768" in n for n in notes)
+
+
+# --- auth: oauth and paginated model lists ----------------------------------------------------
+
+ANTHROPIC = {"provider": "anthropic", "location": "internet", "endpoint": None, "api_key": "keychain:test-cc"}
+
+
+def test_oauth_is_for_the_harnesses_the_catalog_names(tmp_path):
+    with pytest.raises(ExtensionError, match="for claude-code only, not harness 'pi'"):
+        _plan(tmp_path, **ANTHROPIC, auth="oauth")
+
+
+def test_oauth_needs_a_catalog_oauth_block(tmp_path):
+    with pytest.raises(ExtensionError, match="takes no `auth: oauth`"):
+        _plan(tmp_path, harness="claude-code", provider="openai", location="internet", endpoint=None,
+              api_key="keychain:k", auth="oauth")
+
+
+def test_oauth_exports_bearer_auth_and_the_beta_header(tmp_path):
+    plan, _, _ = _plan(tmp_path, harness="claude-code", **ANTHROPIC, auth="oauth")
+    ex = plan.composition.slots["inference"].exports
+    assert (ex["auth_header"], ex["auth_scheme"], ex["api_key_kind"]) == ("Authorization", "Bearer", "oauth")
+    assert ex["probe_headers"] == {"anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20"}
+    assert plan.model.api_key_kind == "oauth"
+
+
+def test_api_key_auth_keeps_x_api_key(tmp_path):
+    plan, _, _ = _plan(tmp_path, **ANTHROPIC)
+    ex = plan.composition.slots["inference"].exports
+    assert (ex["auth_header"], ex["auth_scheme"], ex["api_key_kind"]) == ("x-api-key", "", "api-key")
+    assert ex["probe_headers"] == {"anthropic-version": "2023-06-01"}
+
+
+class PagedServer:
+    """Anthropic's `/v1/models`: pages of two, `has_more` + `last_id`, `after_id` cursor."""
+
+    def __init__(self, models):
+        self.models, self.calls = models, []
+
+    def __call__(self, url, method="GET", body=None, auth=False):
+        self.calls.append(url)
+        after = url.partition("after_id=")[2]
+        start = self.models.index(after) + 1 if after else 0
+        page = self.models[start:start + 2]
+        more = start + 2 < len(self.models)
+        return 200, json.dumps({"data": [{"id": m} for m in page], "has_more": more, "last_id": page[-1]})
+
+
+def test_a_paginated_model_list_is_followed_to_the_end(tmp_path):
+    server = PagedServer(["a", "b", "c", "d", "claude-x"])
+    ex, _ = _resolve(tmp_path, server, **ANTHROPIC, model="claude-x")
+    assert ex["model"] == "claude-x"
+    assert server.calls == ["https://api.anthropic.com/v1/models?limit=1000",
+                            "https://api.anthropic.com/v1/models?limit=1000&after_id=b",
+                            "https://api.anthropic.com/v1/models?limit=1000&after_id=d"]
+
+
+def test_a_model_on_no_page_is_not_served(tmp_path):
+    with pytest.raises(hooks.LlmError, match="is not served"):
+        _resolve(tmp_path, PagedServer(["a", "b", "c"]), **ANTHROPIC, model="claude-x")
+
+
+def test_an_alias_matches_its_dated_snapshot(tmp_path):
+    ex, _ = _resolve(tmp_path, PagedServer(["claude-x-20251001"]), **ANTHROPIC, model="claude-x")
+    assert ex["model"] == "claude-x"
+    (tmp_path / "b").mkdir()
+    with pytest.raises(hooks.LlmError, match="is not served"):
+        _resolve(tmp_path / "b", PagedServer(["claude-x-2-20251001"]), **ANTHROPIC, model="claude-x")
+
+
+def test_a_forwarder_still_starting_is_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr(hooks.time, "sleep", lambda s: None)
+    answers = iter([(0, ""), (0, ""), (200, json.dumps({"data": [{"id": "test-model"}]}))])
+    ex, _ = _resolve(tmp_path, lambda url, method="GET", body=None, auth=False: next(answers, (404, "")),
+                     model="test-model", capabilities={"context_window": 8192})
+    assert ex["model"] == "test-model"
+
+
+def test_a_forwarder_that_never_answers_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(hooks.time, "sleep", lambda s: None)
+    with pytest.raises(hooks.LlmError, match="HTTP 0"):
+        _resolve(tmp_path, lambda url, method="GET", body=None, auth=False: (0, ""), model="test-model")

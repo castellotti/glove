@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "http",
+      "url": "http://glove-s-browser:8931/mcp"
+    },
+    "searxng": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "/opt/glove/ext/search/searxng_mcp.py"
+      ],
+      "env": {
+        "SEARXNG_URL": "http://glove-s-search:8080"
+      }
+    }
+  }
+}

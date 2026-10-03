@@ -111,7 +111,7 @@ def test_wrap_and_wrapper_argv(tmp_path):
     assert f"{ENFORCER_DIR}/tool.json" in wrapper
 
 
-@pytest.mark.parametrize("harness", ["pi", "vibe"])
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
 def test_nono_pin_matches_dockerfile(harness):
     # Each harness image's `COPY --from` must be the pinned tag@digest, so a
     # bump in one place cannot silently diverge (and a re-tag is caught).

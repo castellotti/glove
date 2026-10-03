@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -220,6 +220,49 @@ has no server-side switch for it). The controls:
 - **Background traffic.** Chromium still contacts Google services
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
+
+## Claude Code: managed settings and the shell prefix
+
+Claude Code is the one harness whose ring-2 glue can live outside its writable
+config home. glove renders `/etc/claude-code/managed-settings.json` (and
+`managed-mcp.json`) to `.glove/harness/` and binds it read-only; managed
+settings override every other scope, and an unparseable managed file stops
+Claude Code from starting (fail closed).
+
+- **`CLAUDE_CODE_SHELL_PREFIX`** = `/opt/glove/bin/glove-cc-prefix` (baked,
+  read-only rootfs). Claude Code runs `<prefix> "<shell string>"` for the Bash
+  tool (main agent and subagents), operator `!` commands, hooks and MCP stdio
+  servers. The prefix reads the tool wrapper from
+  `/etc/glove/enforcer/tool-wrapper.argv` (read-only), drops `NONO_*`/`SRT_*`
+  from its environment, and execs `<wrapper> bash --norc -c "<string>"`. A
+  missing or empty wrapper, or anything but one argument, exits 126 without
+  running the command. The prefix is set **only** in managed settings: Phase-0
+  testing showed the agent's user `settings.json` `env` overrides one in the
+  process environment, but not a managed one (`test_cc_nono.sh` re-checks it
+  with the user setting blanked). With `enforcer: none` no prefix is set (there
+  is no wrapper to run under).
+- **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
+  `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
+  servers). A project's hooks and `.mcp.json` servers do not run.
+- **Config home:** `Read(//home/agent/.claude/**)` and
+  `Edit(//home/agent/.claude/**)` are denied to the agent's file tools (`//`
+  is an absolute path; Edit rules cover every writing tool). Tool commands
+  cannot reach the home at all (ring 1).
+- **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
+  every command still runs under ring 1. `WebFetch` is denied. Anything else
+  (an MCP tool outside an extension's allowlist) prompts the operator.
+- **Network:** with a subscription token Claude Code dials only
+  `api.anthropic.com`, through the `llm` forwarder; non-essential traffic,
+  telemetry, error reporting, auto-update, claude.ai connectors and artifacts
+  are off.
+- **Key:** `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) in the harness
+  env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
+  from every tool command. glove never writes key material: with an API key,
+  Claude Code itself asks once whether to use it and records the answer.
+- **Gaps:** MCP stdio servers run under the tool wrapper too, so they have no
+  network (an extension that needs one must use the `http` transport); a
+  `statusLine` command is not overridden (the agent cannot write the settings
+  that would add one).
 
 ## Tool commands and the terminal (TIOCSTI)
 

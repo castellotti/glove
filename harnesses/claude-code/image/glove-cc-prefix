@@ -1,0 +1,28 @@
+#!/bin/bash --norc
+# glove-cc-prefix: Claude Code's CLAUDE_CODE_SHELL_PREFIX. Claude Code runs
+# `<prefix> "<one shell string>"` for the Bash tool, `!` commands, hooks and MCP
+# stdio servers; this runs that string under the session's ring-1 tool wrapper
+# (/etc/glove/enforcer/tool-wrapper.argv, one argument per line, read-only).
+# Anything unexpected fails closed with 126: no wrapper, no shell.
+set -uo pipefail
+WRAPPER=/etc/glove/enforcer/tool-wrapper.argv
+if [ "$#" -ne 1 ]; then
+  echo "glove: shell prefix expects one argument, got $# — shell blocked (fail closed)" >&2
+  exit 126
+fi
+argv=()
+if [ -r "$WRAPPER" ]; then
+  mapfile -t argv < "$WRAPPER"
+fi
+if [ "${#argv[@]}" -eq 0 ] || [ -z "${argv[0]}" ]; then
+  echo "glove: tool wrapper missing — shell blocked (fail closed)" >&2
+  exit 126
+fi
+# The agent's settings `env` reaches this process: drop anything aimed at the
+# enforcers themselves.
+for name in $(compgen -e); do
+  case "$name" in NONO_*|SRT_*) unset "$name" ;; esac
+done
+# --norc: bash's rshd heuristic would otherwise source /etc/bash.bashrc, which
+# the tool policy denies, and print an error on every command.
+exec "${argv[@]}" /bin/bash --norc -c "$1"

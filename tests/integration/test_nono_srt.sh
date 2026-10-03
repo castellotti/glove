@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live: `enforcer: nono+srt` in a real session against the host llm stub.
 #
-#   bash tests/integration/test_nono_srt.sh [pi|vibe]      (default: pi)
+#   bash tests/integration/test_nono_srt.sh [pi|vibe|claude-code]      (default: pi)
 #
 # See nono_srt_live.py for the checks. Podman refuses nono+srt (its compose
 # provider can't apply the relaxed seccomp profile), so RT=podman checks that.
@@ -25,6 +25,12 @@ env: {FAKE_API_KEY: sk-probe-not-a-secret}
 extensions:
   llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:$PORT", model: auto}
 YAML
+if [ "$HARNESS" = claude-code ]; then
+  # Claude Code speaks the Anthropic Messages API: the anthropic stub, a fake key
+  sed -i.bak "s|  llm: .*|  llm: {provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$PORT\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}|" "$S/glove-session.yml"
+  export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
+  STUB_PY=anthropic_stub.py
+fi
 mkdir -p "$S/work/.git/hooks" "$S/work/.vscode" "$S/work/sub"; : > "$S/work/.git/config"; : > "$S/work/.envrc"
 echo 'PROBE-DOTENV=1' > "$S/work/.env"; echo 'PROBE-DOTENV=1' > "$S/work/sub/.env.local"
 
@@ -37,7 +43,7 @@ if [ "$RT" = podman ]; then
   echo "  FAIL: podman did not refuse nono+srt"; echo "$out" | tail -20; exit 1
 fi
 
-uv run --quiet --no-project python "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
+uv run --quiet --no-project python "$ROOT/tests/integration/stubs/${STUB_PY:-llm_stub.py}" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!
 sleep 1
 uv run --project "$ROOT" python "$ROOT/tests/integration/nono_srt_live.py" "$S"

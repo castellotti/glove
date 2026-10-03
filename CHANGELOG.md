@@ -4,6 +4,28 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code harness** (`harness: claude-code`, image
+  `glove/claude-code:0.2.0`: the native binary, pinned, no Node). glove's
+  guard rails are read-only managed settings at `/etc/claude-code`: a shell
+  prefix (`glove-cc-prefix`) that runs every Bash tool, `!`, hook and MCP stdio
+  command under the ring-1 tool wrapper and fails closed; managed-only hooks,
+  permission rules and MCP servers; the config home denied to Read/Edit;
+  non-essential traffic off. The home gets `settings.json`, a merged
+  `.claude.json` (onboarding, `/work` trust), `CLAUDE.md` and skill links;
+  transcripts (`projects/`) are exported by `observe`. MCP and skills
+  contributions render as managed MCP servers and permission rules.
+- `llm`: `auth: oauth` for a subscription token where the catalog allows it
+  (`anthropic`, for `claude-code` only); catalog `headers` on every probe; a
+  paginated model list is followed (`models_cursor`) and an alias matches its
+  dated snapshot (`dated_aliases`). New provider `anthropic-compatible` (any
+  Anthropic Messages API server, host/LAN/internet).
+- Harness adapters may render read-only system config (`system_files`, a dir
+  of its own under `/etc`, from `.glove/harness/`) and name the env var the LLM
+  key travels in (`secret_env`). Every enforcer with a tool wrapper also renders
+  `tool-wrapper.argv` (one argument per line).
+
 ### Changed
 
 - **Harness plugins.** Pi, Vibe and Claude Code moved from `glove/harnesses/`
@@ -35,6 +57,14 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- `llm` `location: internet` never connected: the forwarder carries the
+  provider's hostname as an alias on the harness network, and Docker's DNS
+  answers a container's own alias first, so it dialled itself. An aliased
+  endpoint now dials through a second hop off the harness network
+  (`glove-<id>-llm-out`). The cloud route is verified live with Anthropic.
+- The `llm` launch probe retries a few times while nothing answers, so a gate
+  forwarder (observe) still starting no longer fails the launch with "HTTP 0".
 
 - Vibe's `sessions_subdir` is `logs/session`, where Vibe 2.x writes its
   transcripts (it never creates `sessions/`), so `glove up --resume` finds them.

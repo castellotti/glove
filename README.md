@@ -1,7 +1,7 @@
 # glove
 
-`glove` is a Python CLI that launches an agentic coding harness (Pi or Mistral
-Vibe; Claude Code later) inside a **sandbox**, presents the harness's normal TUI
+`glove` is a Python CLI that launches an agentic coding harness (Pi, Mistral
+Vibe or Claude Code) inside a **sandbox**, presents the harness's normal TUI
 in your terminal, and guarantees that the harness - and every shell command,
 extension, skill, or MCP server it spawns - can only touch the host directories
 you explicitly exposed, can only reach the network endpoints you explicitly
@@ -100,14 +100,14 @@ paths you fill in, and hooks go in the session's `local/`.
 ```yaml
 glove: 3
 template: minimal           # provenance only
-harness: pi                 # pi | vibe | claude-code (experimental)
+harness: pi                 # pi | vibe | claude-code
 runtime: docker             # docker | podman | apple-container|gondolin|utm (stub)
 enforcer: nono+srt          # default: nono+srt on docker, nono on podman | nono | srt | none
 mounts:                     # explicit extra host dirs; work/ is always /work
   - { path: ~/src/shared-lib, mode: ro }
 extensions:                 # name → settings; unlisted = nothing in the session
   llm:                      # required: fills the `inference` slot
-    provider: llama.cpp     # openai-compatible (any OpenAI-API server) | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+    provider: llama.cpp     # openai-compatible (any OpenAI-API server) | anthropic-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
     location: host          # host (this Mac) | lan | internet
     endpoint: 127.0.0.1:8080
     model: auto             # or an id; auto = the single model /v1/models lists
@@ -195,8 +195,8 @@ toolchains:                       # a list; order is install and PATH order; one
   deps from any directory under every enforcer. The harness always runs on the
   image's own interpreter, toolchain or not: Pi starts as
   `/usr/local/bin/node /usr/local/bin/pi`, and Vibe's hook runs as
-  `/usr/local/bin/python3 /opt/glove/vibe-hook`. Claude Code (experimental) has
-  no such pin.
+  `/usr/local/bin/python3 /opt/glove/vibe-hook`. Claude Code is a native
+  binary started as `/usr/local/bin/claude`.
 - **Lockfile-strict by default.** `npm ci`, `pnpm install --frozen-lockfile`,
   `yarn install --frozen-lockfile` and `uv sync --locked --no-install-project`
   are the defaults.
@@ -366,9 +366,59 @@ Core reads every `harness.yml` and imports `adapter.py` by path only for the
 harness a session selects. Every image bakes the one shared entrypoint
 (`glove/enforcers/entrypoint`, the `gloveentry` build context) that validates the
 ring-1 policies before the harness starts. Bundled: `pi`, `vibe`, and
-`claude-code` (experimental). The names are stable: `~/.glove/registry.json`
+`claude-code`. The names are stable: `~/.glove/registry.json`
 and observe's `session.json` record them, and external monitors (Layman) pick a
 transcript parser by them.
+
+An adapter may also render read-only **system config** (`system_files`): files
+in a directory of its own under `/etc`, written to `.glove/harness/` and bound
+read-only like the ring-1 policies. Every enforcer with a tool wrapper also
+renders it one argument per line (`tool-wrapper.argv`) beside
+`tool-wrapper.json`, for glue that has no JSON parser.
+
+### Claude Code
+
+```yaml
+harness: claude-code
+extensions:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-5-5
+    auth: oauth                       # a subscription token from `claude setup-token`
+    api_key: keychain:claude-code-me  # `glove keychain set claude-code-me`, then paste the token
+    # auth: api-key + an API key works too (Claude Code asks once whether to use it)
+```
+
+- **Image** `glove/claude-code:0.2.0`: the native Claude Code binary (pinned,
+  auto-update off), nono, glove-pty and `glove-cc-prefix`; no Node.
+- **Guard rails live outside the agent's reach**, in
+  `/etc/claude-code/managed-settings.json` (read-only bind; managed settings win
+  over every other scope, and an unparseable file stops Claude Code):
+  - `CLAUDE_CODE_SHELL_PREFIX` → `glove-cc-prefix`: the Bash tool, `!`
+    commands, hooks and MCP stdio servers all run under the session's tool
+    wrapper, and fail closed (exit 126) if it is missing. It is set only there,
+    because the agent's own `settings.json` `env` would override a prefix in the
+    process environment.
+  - only managed hooks, permission rules and MCP servers: a project's
+    `.claude/settings.json` hooks and `.mcp.json` servers never run;
+  - Read/Edit denied on the config home (`//home/agent/.claude/**`);
+  - the built-in tools are pre-approved (as Pi and Vibe auto-approve), `WebFetch`
+    is denied (the container has no route to fetch from), `defaultMode` is
+    pinned to `default` (`harness_config.permissions.defaultMode` may pick
+    `acceptEdits`, `plan` or `dontAsk`);
+  - non-essential traffic, telemetry, error reporting and auto-update off.
+- **Key:** the subscription token travels only as `CLAUDE_CODE_OAUTH_TOKEN`
+  (an API key as `ANTHROPIC_API_KEY`). The `anthropic` provider allows `auth:
+  oauth` for `claude-code` only. With a token Claude Code dials only
+  `api.anthropic.com`, through the session's `llm` forwarder.
+- **Home:** `settings.json` (model, no co-author trailer, `harness_config.settings`),
+  `.claude.json` onboarding and `/work` trust merged into whatever Claude Code
+  keeps there, `CLAUDE.md` (environment + brief), skills linked under `skills/`.
+  Transcripts: `projects/<cwd>/<uuid>.jsonl`, exported by `observe`.
+- `harness_config` takes `settings` (user-scope settings) and `permissions`
+  (`defaultMode`, extra `allow`/`deny` rules).
+- `anthropic-compatible` runs Claude Code against any server that speaks the
+  Anthropic Messages API (llama.cpp, vLLM, LiteLLM, a gateway).
 
 ## Extensions
 
@@ -737,7 +787,8 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi and Vibe (29 checks each: `test_nono_srt.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi wired + verified (12-check integration, incl. env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
-| Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); cloud providers **untested** |
+| Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested** |
+| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 17 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). Extensions (playwright, search, webfetch) with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |

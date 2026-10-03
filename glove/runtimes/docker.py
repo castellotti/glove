@@ -201,6 +201,7 @@ class DockerRuntime:
             "passthrough_env": plan.passthrough_env,
             "policies_host_dir": plan.policies_host_dir,
             "policies_container_dir": plan.policies_container_dir,
+            "system_mounts": plan.system_mounts,
             "sidecars": plan.network.socat,
             "transcripts_host_dir": plan.transcripts_host_dir,
             "transcripts_container_dir": plan.transcripts_container_dir,

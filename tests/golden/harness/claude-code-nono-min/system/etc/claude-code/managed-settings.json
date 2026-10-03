@@ -1,0 +1,42 @@
+{
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": [],
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Glob",
+      "Grep",
+      "LS",
+      "Agent",
+      "Task",
+      "TodoWrite",
+      "WebSearch"
+    ],
+    "deny": [
+      "Read(//home/agent/.claude/**)",
+      "Edit(//home/agent/.claude/**)",
+      "WebFetch"
+    ]
+  },
+  "enableArtifact": false,
+  "disableClaudeAiConnectors": true,
+  "sandbox": {
+    "enabled": false
+  },
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+    "CLAUDE_CODE_SHELL_PREFIX": "/opt/glove/bin/glove-cc-prefix"
+  }
+}
