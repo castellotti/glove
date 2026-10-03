@@ -1,0 +1,27 @@
+api: 1
+name: pi
+summary: Pi coding agent (earendil-works/pi-coding-agent).
+# 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,
+# enforcer extension) only. Optional capabilities are opt-in extensions.
+image: glove/pi:0.5.0
+# Load only the always-on ring-1 `enforcer` extension (deps are node builtins)
+# from a system path; the user's own extensions still load from the config home.
+# Capability extensions (search, browser) are added to this entry by the adapter
+# when an extension contributes `harness: {pi: {extensions: …}}`.
+# Pi runs on the image's node by path, not via its `#!/usr/bin/env node`
+# shebang: a `toolchains` node block puts a pinned node first on PATH.
+entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enforcer]
+config_home: { env: PI_CODING_AGENT_DIR, path: /home/agent/.pi/agent }
+context_file: /home/agent/.pi/agent/AGENTS.md
+# PI_OFFLINE stops Pi's startup egress attempts (fd download, version check,
+# telemetry) that fail in the no-egress sandbox.
+env: { PI_CODING_AGENT_DIR: /home/agent/.pi/agent, PI_OFFLINE: "1" }
+sessions_subdir: sessions
+transcript_subdir: sessions
+runtime_paths: [/usr/local]
+# Debian bookworm's python3 (3.11): pip needs --break-system-packages (PEP 668)
+pip: { install: [pip3, install, --no-cache-dir, --break-system-packages], bootstrap: [python3, python3-pip] }
+# `pi --continue` reopens the last session; `--session <id>` accepts a path or partial UUID.
+resume: { continue: [--continue], session: [--session, "{id}"] }
+# Neutral extension contributions this harness renders (see extensions/README).
+contributions: [skills]

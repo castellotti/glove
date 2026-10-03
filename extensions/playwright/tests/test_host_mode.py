@@ -80,8 +80,8 @@ def test_vibe_refused_without_ack(tmp_path):
     with pytest.raises(ExtensionError, match="browser_run_code_unsafe"):
         _plan(tmp_path, harness="vibe")
     _, plan = _plan(tmp_path / "ok", harness="vibe", i_accept_host_rce=True)
-    pw = next(s for s in plan.composition.vibe_mcp if s["name"] == "playwright")
-    assert pw["url"] == "http://glove-s-browser:8931/mcp" and "browser_run_code_unsafe" not in pw["enabled_tools"]
+    pw = next(s for _, s in plan.composition.mcp if s["name"] == "playwright")
+    assert pw["url"] == "http://glove-s-browser:8931/mcp" and "browser_run_code_unsafe" not in pw["tools"]
 
 
 @pytest.mark.parametrize("egress", ["vpn", "tor"])

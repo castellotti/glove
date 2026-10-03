@@ -46,7 +46,7 @@ def test_vibe_config_toml(tmp_path):
     names = {s["name"] for s in doc["mcp_servers"]}
     assert names == {"playwright", "searxng"}
     pw = next(s for s in doc["mcp_servers"] if s["name"] == "playwright")
-    assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp" and "enabled_tools" not in pw
+    assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp" and "tools" not in pw
     # the playwright allowlist, as a Vibe denylist scoped to that server's tools
     (deny,) = doc["disabled_tools"]
     assert deny.startswith("re:playwright_(?!(?:browser_navigate|")

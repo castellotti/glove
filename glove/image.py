@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .harness import HarnessProfile
+from .harness import HarnessProfile, adapter_call
 
 if TYPE_CHECKING:
     from .extensions import Composition
@@ -43,7 +43,7 @@ def _apt_bootstrap(probe: str, pkgs) -> str:
             "&& rm -rf /var/lib/apt/lists/*)")
 
 
-def _staged(ext: str, src: Path) -> str:
+def staged_name(ext: str, src: Path) -> str:
     """Build-context path a source is staged at, namespaced by extension."""
     return f"{ext}/{src.name}"
 
@@ -76,7 +76,7 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile, ext_dir: Path) 
         if not path.exists() or not path.is_relative_to(ext_dir):
             raise ValueError(f"extension {ext!r}: image copy source {src!r} must exist inside the extension")
         sources.append(path)
-        lines.append(f"COPY {_staged(ext, path)} {dst}")
+        lines.append(f"COPY {staged_name(ext, path)} {dst}")
     for cmd in layer.get("run") or []:
         lines.append(f"RUN {cmd}")
     return lines, sources
@@ -97,18 +97,15 @@ def render_dockerfile(
         body, sources = _layer_lines(ext, layer, profile, a.manifest.path)
         lines += body
         staged += [(ext, s) for s in sources]
-    for ext, src in comp.pi_extensions:
-        dest = comp.pi_extension_dest(ext, src)
-        staged.append((ext, src))
-        lines.append(f"# extension: {ext} (Pi extension)")
-        lines.append(f"COPY {_staged(ext, src)} {dest}")
-        if (src / "package.json").is_file():
-            lines.append(f"RUN cd {dest} && npm install --no-audit --no-fund")
-    for ext, src, dest in comp.pi_skills:
+    # the harness's own image contributions (e.g. Pi's `-e` extensions)
+    body, sources = adapter_call(profile, "image_lines", comp, default=([], []))
+    lines += body
+    staged += sources
+    for ext, src, dest in comp.skills:
         if src is not None:
             staged.append((ext, src))
-            lines.append(f"# extension: {ext} (Pi skill)")
-            lines.append(f"COPY {_staged(ext, src)} {dest}")
+            lines.append(f"# extension: {ext} (skill)")
+            lines.append(f"COPY {staged_name(ext, src)} {dest}")
     if toolchains:
         from .toolchains import dockerfile_lines
 
@@ -119,9 +116,9 @@ def render_dockerfile(
         return None, []
     seen: dict[str, Path] = {}
     for ext, src in staged:  # staged by name: two sources must not share one
-        other = seen.setdefault(_staged(ext, src), src)
+        other = seen.setdefault(staged_name(ext, src), src)
         if other != src:
-            raise ValueError(f"extension {ext!r}: {src} and {other} would both stage as {_staged(ext, src)!r}; "
+            raise ValueError(f"extension {ext!r}: {src} and {other} would both stage as {staged_name(ext, src)!r}; "
                              "rename one")
     return "\n".join(lines) + "\n", staged
 
@@ -150,7 +147,7 @@ def content_hash(dockerfile: str, staged: list[tuple[str, Path]]) -> str:
 def stage_context(dest: Path, staged: list[tuple[str, Path]]) -> None:
     """Copy every staged source into the build context ``dest``."""
     for ext, src in staged:
-        target = dest / _staged(ext, src)
+        target = dest / staged_name(ext, src)
         target.parent.mkdir(parents=True, exist_ok=True)
         if src.is_dir():
             shutil.copytree(src, target, dirs_exist_ok=True, symlinks=True,

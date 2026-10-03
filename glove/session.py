@@ -19,7 +19,7 @@ import yaml
 from rich.console import Console
 
 from .config import Config
-from .enforcers.base import PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
+from .enforcers.base import ENTRYPOINT_DIR, PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, effective_image
 from .naming import project_name, scoped
 from .plan import FORWARDER_IMAGE
@@ -72,7 +72,8 @@ def _build_base(
         raise FileNotFoundError(f"no Dockerfile for harness {profile.name}: {profile.dockerfile}")
     context = profile.dockerfile.parent
     console.print(f"[bold]building base image[/bold] {tag}  (context: {context})")
-    cmd = [provider, "build", "-t", tag, "--build-context", f"glovepty={PTY_DIR}"]
+    cmd = [provider, "build", "-t", tag, "--build-context", f"glovepty={PTY_DIR}",
+           "--build-context", f"gloveentry={ENTRYPOINT_DIR}"]
     if apt_packages:
         cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:

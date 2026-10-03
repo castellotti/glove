@@ -18,7 +18,7 @@ from .enforcers.base import srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
-from .harness import HarnessProfile, effective_image, get_profile
+from .harness import HarnessProfile, adapter_call, effective_image, get_profile
 from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
@@ -336,11 +336,9 @@ def build_session_plan(
         plan.transcripts_container_dir = f"{profile.config_home_path}/{profile.transcript_subdir}"
 
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
-    # collect enforcer env/caps. Pi loads capability code as `-e <path>`.
-    entry = list(profile.entry)
-    if cfg.harness == "pi":
-        for ext, src in comp.pi_extensions:
-            entry += ["-e", comp.pi_extension_dest(ext, src)]
+    # collect enforcer env/caps. The adapter may extend the entry (Pi loads
+    # capability code as `-e <path>`).
+    entry = [*profile.entry, *adapter_call(profile, "entry_args", comp, default=[])]
     # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
     # wrapper prefix. session_id=None ⇒ continue-last.
     if resume or session_id is not None:

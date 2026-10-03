@@ -1,19 +1,37 @@
-"""Harness profile registry.
+"""Harness plugins: `harnesses/<name>/` beside `extensions/`.
 
-Each profile keeps the glove core generic: it declares the base image build
-context, the config-home env var + in-container path, the TUI entry command,
-the context file that carries the host-sudo relay rule, and default env.
+Each harness is a directory with a declarative `harness.yml` (the profile:
+image tag, TUI entry, config home, context file, resume flags, …), an
+`image/` build context and an optional `adapter.py` that renders the harness's
+native config. Core knows no harness by name: it reads the manifests and imports
+an adapter by path only for the harness a session selected, so no other
+harness's code runs.
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import sys
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
+from types import ModuleType
+
+import yaml
 
 from .config import ConfigError
 
-HARNESSES_DIR = Path(__file__).parent / "harnesses"
+HARNESSES_DIR = Path(__file__).resolve().parent.parent / "harnesses"
+MANIFEST = "harness.yml"
+MANIFEST_KEYS = frozenset({
+    "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
+    "transcript_subdir", "runtime_paths", "pip", "resume", "contributions",
+})
+REQUIRED_KEYS = ("name", "image", "entry", "config_home", "context_file")
+# Harness-neutral extension contributions a harness may render (`harness.<key>`
+# in an extension manifest); see glove/extensions.py `_harness_contrib`.
+CONTRIBUTIONS = frozenset({"mcp", "skills"})
 
 
 @dataclass(frozen=True)
@@ -25,8 +43,7 @@ class HarnessProfile:
     config_home_path: str  # in-container config dir (on a writable volume)
     context_file: str  # in-container path for the sudo-relay instruction
     # Where this harness writes its `*.jsonl` transcripts, relative to
-    # `config_home_path`. Pi/Vibe nest them under `sessions/<project>/`; Claude
-    # Code uses `projects/<slug>/`. sessions_dir joins this onto the host home.
+    # `config_home_path`. sessions_dir joins this onto the host home.
     sessions_subdir: str = "sessions"
     # The directory observe's `transcripts: true` exports (relative to
     # `config_home_path`); None ⇒ this harness's transcripts are not exported.
@@ -39,8 +56,7 @@ class HarnessProfile:
     # them makes the harness exec fail with exit 127 under Landlock.
     runtime_paths: tuple[str, ...] = ("/usr/local",)
     # Command that installs Python packages into the image, for extension/user `pip`
-    # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an
-    # error). Vibe installs via uv; Pi via Debian's pip3 (see pip_bootstrap).
+    # layers. None ⇒ this harness ships no Python installer (a `pip` layer is an error).
     pip_install: tuple[str, ...] | None = None
     # apt packages a `pip` layer needs first (installed once, before the first
     # pip layer), for a base image without Python.
@@ -51,10 +67,17 @@ class HarnessProfile:
     # can't resume that way, and resume_args raises.
     resume_continue: tuple[str, ...] | None = None
     resume_session: tuple[str, ...] | None = None
+    # Neutral extension contributions it renders (subset of CONTRIBUTIONS).
+    contributions: frozenset[str] = frozenset()
+    # The plugin directory; None for a profile built in code (tests).
+    path: Path | None = None
 
     @property
     def dockerfile(self) -> Path:
-        return HARNESSES_DIR / self.name / "Dockerfile"
+        return (self.path or HARNESSES_DIR / self.name) / "image" / "Dockerfile"
+
+    def renders(self, contribution: str) -> bool:
+        return contribution in self.contributions
 
     def resume_args(self, session_id: str | None) -> list[str]:
         """Harness flags to resume a session; raises if unsupported.
@@ -74,78 +97,44 @@ class HarnessProfile:
         return [session_id if p == "{id}" else p for p in self.resume_session]
 
 
-_REGISTRY: dict[str, HarnessProfile] = {
-    "vibe": HarnessProfile(
-        name="vibe",
-        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
-        # glove-pty, pre_tool hook) only. Optional capabilities are opt-in extensions.
-        image="glove/vibe:0.5.0",
-        entry=["vibe", "--trust", "--yolo", "--workdir", "/work"],
-        config_home_env="VIBE_HOME",
-        config_home_path="/home/agent/.vibe",
-        context_file="/home/agent/.vibe/AGENTS.md",
-        default_env={"VIBE_HOME": "/home/agent/.vibe"},
-        # vibe is installed with `uv tool install` under /opt/uv; its shebang
-        # points at that venv's python (→ /usr/local's cpython).
-        runtime_paths=("/opt/uv", "/usr/local"),
-        # Python packages install system-wide via the baked uv.
-        pip_install=("uv", "pip", "install", "--system"),
-        # Vibe: `-c`/`--continue` continues the most recent session
-        # (non-interactive); bare `--resume` opens an interactive picker (and
-        # errors in programmatic mode), so continue-last must map to --continue,
-        # not --resume. A specific id is `--resume <id>`.
-        resume_continue=("--continue",),
-        resume_session=("--resume", "{id}"),
-        transcript_subdir="logs/session",
-    ),
-    "pi": HarnessProfile(
-        name="pi",
-        # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary,
-        # glove-pty, enforcer extension) only. Optional capabilities are opt-in extensions.
-        image="glove/pi:0.5.0",
-        # Load only the always-on ring-1 `enforcer` extension (deps are node
-        # builtins) from a system path; the user's own extensions still load from
-        # the config home. Capability extensions (search, browser) are opt-in
-        # extensions added to this entry when enabled — absent by default.
-        # Pi runs on the image's node by path, not via its `#!/usr/bin/env node`
-        # shebang: a `toolchains` node block puts a pinned node first on PATH.
-        entry=[
-            "/usr/local/bin/node", "/usr/local/bin/pi",
-            "-e", "/opt/glove/pi-extensions/enforcer",
-        ],
-        config_home_env="PI_CODING_AGENT_DIR",
-        config_home_path="/home/agent/.pi/agent",
-        context_file="/home/agent/.pi/agent/AGENTS.md",
-        # PI_OFFLINE stops Pi's startup egress attempts (fd download, version
-        # check, telemetry) that fail in the no-egress sandbox.
-        default_env={
-            "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
-            "PI_OFFLINE": "1",
-        },
-        # Debian bookworm's python3 (3.11): pip needs --break-system-packages (PEP 668)
-        pip_install=("pip3", "install", "--no-cache-dir", "--break-system-packages"),
-        pip_bootstrap=("python3", "python3-pip"),
-        # `pi --continue` reopens the last session; `--session <id>` accepts a
-        # path or partial UUID.
-        resume_continue=("--continue",),
-        resume_session=("--session", "{id}"),
-    ),
-    "claude-code": HarnessProfile(
-        name="claude-code",
-        image="glove/claude-code:0.1.0",
-        entry=["claude"],
-        config_home_env="CLAUDE_CONFIG_DIR",
-        config_home_path="/home/agent/.claude",
-        context_file="/home/agent/.claude/CLAUDE.md",
-        default_env={"CLAUDE_CONFIG_DIR": "/home/agent/.claude"},
-        # CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
-        sessions_subdir="projects",
-        transcript_subdir=None,
-        # Documented CC flags; image is a stub — wired but untested.
-        resume_continue=("--continue",),
-        resume_session=("--resume", "{id}"),
-    ),
-}
+def _strs(v: object, where: str) -> tuple[str, ...]:
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise ConfigError(f"{where}: want a list of strings")
+    return tuple(v)
+
+
+def load_profile(path: Path) -> HarnessProfile:
+    """A `HarnessProfile` from `<path>/harness.yml`."""
+    where = f"{path / MANIFEST}"
+    raw = yaml.safe_load((path / MANIFEST).read_text()) or {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: want a mapping")
+    unknown = set(raw) - MANIFEST_KEYS
+    missing = [k for k in REQUIRED_KEYS if k not in raw]
+    if unknown or missing or raw.get("api") != 1:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}, missing {missing}, or api is not 1")
+    if raw["name"] != path.name:
+        raise ConfigError(f"{where}: name {raw['name']!r} must match its directory {path.name!r}")
+    home = raw["config_home"]
+    pip = raw.get("pip") or {}
+    resume = raw.get("resume") or {}
+    contrib = frozenset(_strs(raw.get("contributions") or [], f"{where} contributions"))
+    if contrib - CONTRIBUTIONS:
+        raise ConfigError(f"{where}: contributions must be among {sorted(CONTRIBUTIONS)}")
+    return HarnessProfile(
+        name=raw["name"], image=str(raw["image"]), entry=list(_strs(raw["entry"], f"{where} entry")),
+        config_home_env=str(home["env"]), config_home_path=str(home["path"]),
+        context_file=str(raw["context_file"]),
+        sessions_subdir=str(raw.get("sessions_subdir", "sessions")),
+        transcript_subdir=raw.get("transcript_subdir", "sessions"),
+        default_env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
+        runtime_paths=_strs(raw.get("runtime_paths", ["/usr/local"]), f"{where} runtime_paths"),
+        pip_install=_strs(pip["install"], f"{where} pip.install") if "install" in pip else None,
+        pip_bootstrap=_strs(pip.get("bootstrap") or [], f"{where} pip.bootstrap"),
+        resume_continue=_strs(resume["continue"], f"{where} resume") if "continue" in resume else None,
+        resume_session=_strs(resume["session"], f"{where} resume") if "session" in resume else None,
+        contributions=contrib, path=path,
+    )
 
 
 def effective_image(
@@ -172,14 +161,38 @@ def effective_image(
     return f"{base}:{tag}-{digest}" if sep else f"{profile.image}-{digest}"
 
 
-def get_profile(name: str) -> HarnessProfile:
-    try:
-        return _REGISTRY[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown harness {name!r}; known: {', '.join(sorted(_REGISTRY))}"
-        ) from None
-
-
 def known_harnesses() -> list[str]:
-    return sorted(_REGISTRY)
+    return sorted(p.parent.name for p in HARNESSES_DIR.glob(f"*/{MANIFEST}"))
+
+
+@cache
+def get_profile(name: str) -> HarnessProfile:
+    path = HARNESSES_DIR / name
+    if "/" in name or name.startswith(".") or not (path / MANIFEST).is_file():
+        raise ValueError(f"unknown harness {name!r}; known: {', '.join(known_harnesses())}")
+    return load_profile(path)
+
+
+@cache
+def _adapter_module(path: Path) -> ModuleType | None:
+    file = path / "adapter.py"
+    if not file.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(f"glove_harness_{path.name.replace('-', '_')}", file)
+    if spec is None or spec.loader is None:
+        raise ConfigError(f"harness {path.name!r}: cannot load {file}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # the standard recipe: visible to tracebacks, pickling, tests
+    spec.loader.exec_module(module)
+    return module
+
+
+def harness_adapter(profile: HarnessProfile) -> ModuleType | None:
+    """The harness's `adapter.py` (imported on first use), or None."""
+    return _adapter_module(profile.path) if profile.path is not None else None
+
+
+def adapter_call(profile: HarnessProfile, name: str, *args, default=None, **kw):
+    """Call `adapter.<name>(…)` when the harness defines it; else `default`."""
+    fn = getattr(harness_adapter(profile), name, None)
+    return fn(*args, **kw) if fn is not None else default

@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from .config import ConfigError
-from .image import _apt_bootstrap, _q, _staged
+from .image import _apt_bootstrap, _q, staged_name
 
 ROOT = "/opt/glove/toolchains"
 BLOCK_KEYS = frozenset({"lang", "version", "manager", "project", "install", "packages", "browsers",
@@ -219,7 +219,7 @@ def _fetch(tc: Toolchain, arch: dict[str, str], name: str, url: str, verify: str
 
 
 def _copy_project(tc: Toolchain) -> str:
-    return f"COPY {json.dumps([*(_staged(tc.label, f) for f in tc.project_files), tc.project_dir + '/'])}"
+    return f"COPY {json.dumps([*(staged_name(tc.label, f) for f in tc.project_files), tc.project_dir + '/'])}"
 
 
 class NodeHandler(Handler):

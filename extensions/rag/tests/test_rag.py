@@ -80,7 +80,7 @@ def test_skills_reach_pis_settings(tmp_path, models, obsidian):
 
 def test_without_obsidian_dir_no_obsidian_skills_or_brief(tmp_path, models):
     _, plan = _plan(tmp_path, models_dir=str(models))
-    assert [d for _, _, d in plan.composition.pi_skills] == ["/opt/glove/skills/rag/rag-parse",
+    assert [d for _, _, d in plan.composition.skills] == ["/opt/glove/skills/rag/rag-parse",
                                                               "/opt/glove/skills/rag/rag-query"]
     assert "wiki-ingest" not in dict(plan.composition.rendered_briefs())["rag"]
 
@@ -93,7 +93,7 @@ def test_a_missing_mounted_skill_fails_at_plan_time(tmp_path, models, obsidian):
 
 def test_vibe_gets_kstore_but_no_skills(tmp_path, models):
     _, plan = _plan(tmp_path, harness="vibe", models_dir=str(models))
-    assert "uv pip install --system" in plan.derived_dockerfile and not plan.composition.pi_skills
+    assert "uv pip install --system" in plan.derived_dockerfile and not plan.composition.skills
 
 
 @pytest.mark.parametrize(("rag", "match"), [

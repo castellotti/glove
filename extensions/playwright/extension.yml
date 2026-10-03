@@ -85,8 +85,8 @@ harness:
     BROWSER_MCP_URL: "{{ endpoint.browser.url }}/mcp"
     BROWSER_MCP_TOOLS: "{{ settings.tools | join(',') }}"
     BROWSER_MODE: "{{ settings.mode }}"
-  pi_extensions: [pi-extension]
-  vibe_mcp:
+  pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
+  mcp:                                  # rendered by harnesses that speak MCP (vibe)
     - { name: playwright, transport: http, url: "{{ endpoint.browser.url }}/mcp",
-        enabled_tools: "{{ settings.tools | join(',') }}" }
+        tools: "{{ settings.tools | join(',') }}" }
   brief: "brief/{{ settings.mode }}.md"

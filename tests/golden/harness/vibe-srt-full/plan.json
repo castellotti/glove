@@ -1,0 +1,33 @@
+{
+  "command": [
+    "/opt/glove/bin/glove-pty",
+    "relay",
+    "--",
+    "/opt/glove/srt/node",
+    "/opt/glove/srt/glove-srt.mjs",
+    "/etc/glove/enforcer/srt-harness.json",
+    "--",
+    "/opt/glove/bin/glove-pty",
+    "ctty",
+    "--",
+    "vibe",
+    "--trust",
+    "--yolo",
+    "--workdir",
+    "/work"
+  ],
+  "enforcer_env": {},
+  "environment": {
+    "BROWSER_MCP_TOOLS": "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog",
+    "BROWSER_MCP_URL": "http://glove-s-browser:8931/mcp",
+    "BROWSER_MODE": "headless",
+    "SEARXNG_URL": "http://glove-s-search:8080",
+    "VIBE_HOME": "/home/agent/.vibe"
+  },
+  "image": "glove/vibe:0.5.0-242c6d84dd-srt-f5b44676c0",
+  "passthrough_env": [],
+  "transcripts": [
+    "<GLOVE_HOME>/observe/s/transcripts",
+    "/home/agent/.vibe/logs/session"
+  ]
+}

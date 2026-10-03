@@ -25,6 +25,9 @@ ENFORCER_DIR = "/etc/glove/enforcer"
 # glove-pty (enforcers/pty/glove-pty.c), baked into every harness base image:
 # `notty` before each tool command, `relay`/`ctty` around a harness under srt.
 PTY_DIR = Path(__file__).parent / "pty"
+# The entrypoint every harness image bakes (the `gloveentry` build context): it
+# validates the ring-1 policies, then execs the compose command.
+ENTRYPOINT_DIR = Path(__file__).parent / "entrypoint"
 GLOVE_PTY = "/opt/glove/bin/glove-pty"
 
 # Enforcers that run srt (bubblewrap) in the harness container: the `-srt`

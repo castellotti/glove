@@ -15,8 +15,10 @@ def with_llm(extensions: dict | None = None) -> dict:
 
 
 def make_cfg(**kw) -> Config:
-    """A Config with the stub inference provider (plus any `extensions=`)."""
+    """A Config with the stub inference provider (plus any `extensions=`), on Pi
+    unless `harness=` says otherwise (core has no default harness)."""
     kw["extensions"] = with_llm(kw.get("extensions"))
+    kw.setdefault("harness", "pi")
     return Config(**kw)
 
 

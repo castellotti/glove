@@ -1,0 +1,47 @@
+{
+  "command": [
+    "/opt/glove/bin/glove-pty",
+    "relay",
+    "--",
+    "/opt/glove/srt/node",
+    "/opt/glove/srt/glove-srt.mjs",
+    "/etc/glove/enforcer/srt-harness.json",
+    "--",
+    "/opt/glove/bin/glove-pty",
+    "ctty",
+    "--",
+    "/usr/local/bin/node",
+    "/usr/local/bin/pi",
+    "-e",
+    "/opt/glove/pi-extensions/enforcer",
+    "-e",
+    "/opt/glove/ext/playwright/pi-extension",
+    "-e",
+    "/opt/glove/ext/search/pi-extension",
+    "-e",
+    "/opt/glove/ext/webfetch/pi-extension"
+  ],
+  "enforcer_env": {},
+  "environment": {
+    "BROWSER_MCP_TOOLS": "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog",
+    "BROWSER_MCP_URL": "http://glove-s-browser:8931/mcp",
+    "BROWSER_MODE": "headless",
+    "CLAUDE_OBSIDIAN_CORE": "",
+    "CLAUDE_OBSIDIAN_VAULT": "/work/data/store/vault",
+    "GLOVE_FETCH_ALLOW": "",
+    "GLOVE_FETCH_PROXY": "http://glove-s-proxy:8888",
+    "HF_HUB_OFFLINE": "1",
+    "KSTORE_EMBED_CACHE": "/mnt/rag-models",
+    "KSTORE_EMBED_MODEL": "BAAI/bge-small-en-v1.5",
+    "KSTORE_QUERY_STORES": "both",
+    "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
+    "PI_OFFLINE": "1",
+    "SEARXNG_URL": "http://glove-s-search:8080"
+  },
+  "image": "glove/pi:0.5.0-d20a6d6958-srt-f5b44676c0",
+  "passthrough_env": [],
+  "transcripts": [
+    "<GLOVE_HOME>/observe/s/transcripts",
+    "/home/agent/.pi/agent/sessions"
+  ]
+}

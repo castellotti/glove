@@ -1,0 +1,28 @@
+{
+  "command": [
+    "nono",
+    "run",
+    "-s",
+    "--allow-cwd",
+    "--profile",
+    "/etc/glove/enforcer/harness.json",
+    "--",
+    "vibe",
+    "--trust",
+    "--yolo",
+    "--workdir",
+    "/work"
+  ],
+  "enforcer_env": {
+    "NONO_NO_PROXY": "localhost,127.0.0.1"
+  },
+  "environment": {
+    "VIBE_HOME": "/home/agent/.vibe"
+  },
+  "image": "glove/vibe:0.5.0",
+  "passthrough_env": [],
+  "transcripts": [
+    null,
+    null
+  ]
+}

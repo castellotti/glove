@@ -118,7 +118,9 @@ def test_nono_pin_matches_dockerfile(harness):
     from glove.enforcers.nono.version import nono_image_ref
 
     assert "@sha256:" in nono_image_ref()
-    dockerfile = (Path(__file__).parent.parent / f"glove/harnesses/{harness}/Dockerfile").read_text()
+    from glove.harness import get_profile
+
+    dockerfile = get_profile(harness).dockerfile.read_text()
     assert f"COPY --from={nono_image_ref()} " in dockerfile
 
 

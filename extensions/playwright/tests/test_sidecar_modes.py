@@ -175,8 +175,8 @@ def test_a_sidecar_never_binds_all_of_work(tmp_path, monkeypatch):
 
 def test_vibe_gets_the_allowlist_in_sidecar_modes(tmp_path):
     plan = _plan(tmp_path, harness="vibe", tools=["browser_navigate", "browser_snapshot"])
-    pw = next(s for s in plan.composition.vibe_mcp if s["name"] == "playwright")
-    assert pw["enabled_tools"] == "browser_navigate,browser_snapshot"
+    pw = next(s for _, s in plan.composition.mcp if s["name"] == "playwright")
+    assert pw["tools"] == "browser_navigate,browser_snapshot"
 
 
 def test_bad_settings(tmp_path):

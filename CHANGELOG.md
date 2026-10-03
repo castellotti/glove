@@ -6,6 +6,23 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Harness plugins.** Pi, Vibe and Claude Code moved from `glove/harnesses/`
+  and core's registry/render code to `harnesses/<name>/` (`harness.yml`,
+  `adapter.py`, `image/`, `tests/`). Core loads a harness's adapter only when a
+  session selects it and knows no harness by name (a test enforces it).
+  `Config` has no default harness any more (session files always named one).
+  Rendered Pi and Vibe homes, compose projects, policies and derived Dockerfiles
+  are byte-identical (new golden tests, `tests/golden/harness/`), except that a
+  baked skill's Dockerfile comment reads `(skill)`, which re-tags a session's
+  derived image once when it uses `rag`.
+- **Extension `harness:` keys are harness-neutral:** `vibe_mcp` → `mcp`
+  (Playwright's allowlist key `enabled_tools` → `tools`), `pi_skills` →
+  `skills`, `pi_extensions` → `pi: {extensions: [...]}`. Unknown keys are now
+  refused. All bundled extensions are migrated; an out-of-tree extension using
+  the old keys fails with "unknown key".
+- Pi and Vibe images share one entrypoint (`glove/enforcers/entrypoint/`, the
+  `gloveentry` build context) instead of two identical copies.
+
 - Pi always starts as `/usr/local/bin/node /usr/local/bin/pi`, and Vibe's
   `pre_tool` hook always runs as `/usr/local/bin/python3 /opt/glove/vibe-hook`.
   The harness never depends on whichever `node`/`python3` is first on `PATH`
@@ -16,6 +33,11 @@ All notable changes to glove are documented here.
   walking a staged directory instead of walking and then discarding them.
   `glove build` reuses the plan's rendered Dockerfile instead of rendering it
   again.
+
+### Fixed
+
+- Vibe's `sessions_subdir` is `logs/session`, where Vibe 2.x writes its
+  transcripts (it never creates `sessions/`), so `glove up --resume` finds them.
 
 ### Added
 

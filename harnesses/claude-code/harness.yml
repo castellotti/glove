@@ -1,0 +1,14 @@
+api: 1
+name: claude-code
+summary: Anthropic's Claude Code (experimental; see docs/planning).
+image: glove/claude-code:0.1.0
+entry: [claude]
+config_home: { env: CLAUDE_CONFIG_DIR, path: /home/agent/.claude }
+context_file: /home/agent/.claude/CLAUDE.md
+env: { CLAUDE_CONFIG_DIR: /home/agent/.claude }
+# CC stores transcripts under `~/.claude/projects/<slug>/`, not `sessions/`.
+sessions_subdir: projects
+transcript_subdir: null
+runtime_paths: [/usr/local]
+resume: { continue: [--continue], session: [--resume, "{id}"] }
+contributions: []

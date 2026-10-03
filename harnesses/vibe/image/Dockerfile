@@ -46,7 +46,8 @@ RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
 # executable so hooks.toml can invoke it directly.
 COPY vibe_hook.py /opt/glove/vibe-hook
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
-COPY entrypoint.sh /opt/glove/entrypoint.sh
+# The shared entrypoint (glove/enforcers/entrypoint, the `gloveentry` build context).
+COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
 RUN chmod 0755 /opt/glove/vibe-hook /opt/glove/entrypoint.sh
 
 # Baked home is overlaid by the per-session bind mount; keep it world-writable

@@ -1,0 +1,13 @@
+{
+  "defaultProvider": "glove",
+  "defaultModel": "test-model",
+  "defaultThinkingLevel": "medium",
+  "theme": "dark",
+  "skills": [
+    "/opt/glove/skills/rag/rag-parse",
+    "/opt/glove/skills/rag/rag-query"
+  ],
+  "env": {
+    "X": "1"
+  }
+}

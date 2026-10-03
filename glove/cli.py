@@ -26,7 +26,7 @@ from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
 from .hardening import HardeningError
-from .harness import known_harnesses
+from .harness import adapter_call, known_harnesses
 from .harnessconfig import render_home
 from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .naming import scoped
@@ -499,8 +499,12 @@ def _print_extensions(plan) -> None:
         shown = ", ".join(f"{k}={v}" for k, v in layer.items() if k in ("apt", "pip", "npm") and v)
         if shown:
             console.print(f"    image layer ({ext}): {shown}")
-    for ext, src in comp.pi_extensions:
-        console.print(f"    pi extension ({ext}): {comp.pi_extension_dest(ext, src)}")
+    for ext, item in comp.mcp:
+        console.print(f"    mcp server ({ext}): {item.get('name')}")
+    for ext, _src, dest in comp.skills:
+        console.print(f"    skill ({ext}): {dest}")
+    for line in adapter_call(plan.profile, "describe", comp, default=[]):
+        console.print(f"    {line}")
     for key, privs in comp.privileges.items():
         console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")
     for a in comp.active:
