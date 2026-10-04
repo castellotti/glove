@@ -35,7 +35,7 @@ def test_render_is_valid_yaml(tmp_path):
     services = doc["services"]
     assert "glove-vibe-local-harness" in services
     assert "glove-vibe-local-llm" in services
-    assert "glove-vibe-local-search" in services
+    assert "glove-vibe-local-search-mcp" in services
 
 
 def test_harness_hardening_present(tmp_path):
@@ -57,7 +57,7 @@ def test_every_forwarder_is_hardened(tmp_path):
     _, text = render(cfg, tmp_path, cwd=str(work))
     doc = yaml.safe_load(text)
     forwarders = {k: v for k, v in doc["services"].items() if v["image"].startswith("glove/forwarder:")}
-    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "search")}
+    assert set(forwarders) == {f"glove-vibe-local-{r}" for r in ("llm", "search-mcp")}
     for name, svc in forwarders.items():
         assert svc["user"] == "501:20", name
         assert svc["cap_drop"] == ["ALL"], name
@@ -98,7 +98,7 @@ def test_internal_networks_and_forwarder_joins(tmp_path):
     assert nets["glove-vibe-local-net"]["internal"] is True
     assert not any(n.get("external") for n in nets.values())  # every network is the session's own
     # the search forwarder joins its target's private net; host-gateway ones the hostgw bridge
-    search = doc["services"]["glove-vibe-local-search"]
+    search = doc["services"]["glove-vibe-local-search-mcp"]
     assert set(search["networks"]) == {"glove-vibe-local-net", "glove-vibe-local-searchnet"}
     llm = doc["services"]["glove-vibe-local-llm"]
     assert llm["extra_hosts"] == ["host.docker.internal:host-gateway"]

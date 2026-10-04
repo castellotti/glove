@@ -65,3 +65,14 @@ def test_every_scenario_says_what_it_is():
             assert "rules" not in json.loads((obs / "net" / "status.json").read_text())
         if name == "orphaned":
             assert not Path(row["dir"]).exists()
+        if name == "claude-code":
+            assert row["harness"] == facts["harness"] == "claude-code"
+            tx = obs / "transcripts"
+            assert sorted(p.relative_to(tx).as_posix() for p in tx.rglob("*.jsonl")) == [
+                "-work/7c1d2e3f-0000-4000-8000-0f1a2b3c4d5e.jsonl",
+                "-work/7c1d2e3f-0000-4000-8000-0f1a2b3c4d5e/subagents/agent-a1b2c3.jsonl"]
+            flows = [json.loads(ln) for ln in (obs / "net" / "flows.ndjson").read_text().splitlines()]
+            assert {(f["service"], f["client"]) for f in flows} == {("webfetch-mcp", "harness"),
+                                                                    ("webfetch-egress", "webfetch")}
+            served = {f["service"] for f in facts["services"]}
+            assert {"webfetch-mcp", "webfetch-egress", "llm"} <= served and "proxy" not in served

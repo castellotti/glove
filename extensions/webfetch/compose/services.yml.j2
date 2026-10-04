@@ -1,0 +1,27 @@
+services:
+{% if harness in ["vibe", "claude-code"] %}
+  # fetch_url for harnesses that speak MCP: streamable HTTP on :8000, reached
+  # only through the harness's `webfetch-mcp` forwarder (and only under that
+  # name: MCP_ALLOWED_HOST). Every fetch goes through
+  # {{ endpoint['webfetch-egress'].url }} — the egress provider's proxy, or (with
+  # observe) a gate in front of it, and then the fetcher is not on the egress
+  # network at all. Either network is internal, so it has no other way out.
+  fetcher:
+    image: "{{ images.mcp }}"
+{% if endpoint['webfetch-egress'].interposed %}
+    networks: [fetchnet]
+{% else %}
+    networks: [egress, fetchnet]
+{% endif %}
+    environment:
+      GLOVE_FETCH_PROXY: "{{ endpoint['webfetch-egress'].url }}"
+      GLOVE_FETCH_ALLOW: "{{ (slot.egress.get('guard_hosts', []) + slot.egress.get('guard_cidrs', [])) | join(',') }}"
+      MCP_ALLOWED_HOST: "{{ endpoint['webfetch-mcp'].host }}:8000"
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+{% endif %}

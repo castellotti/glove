@@ -781,7 +781,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
     for k, v in render_value(h.get("env") or {}, ctx, where).items():
-        set_harness_env(comp, where, k, v)
+        if v not in (None, ""):  # renders empty (e.g. its endpoint is off for this harness): not set
+            set_harness_env(comp, where, k, v)
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)
@@ -901,7 +902,7 @@ def compose(
             comp.slots[s] = a
         ctx = base_context(comp, a)
         for net, spec in (a.manifest.raw.get("networks") or {}).items():
-            if net in CORE_NETWORKS:
+            if net in CORE_NETWORKS or not when_matches((spec or {}).get("when"), ctx):
                 continue
             if not (spec or {}).get("internal", True):
                 raise ExtensionError(f"extension {a.name!r}: private network {net!r} must be internal")

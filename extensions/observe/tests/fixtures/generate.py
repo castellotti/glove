@@ -14,6 +14,9 @@ One directory per scenario, each holding `home/`: a tree shaped like
                           in the session dir, which is not part of ~/.glove)
   orphaned                the session dir was deleted: registry row + export
   not-observable          a registry row only (grants null), no export
+  claude-code             observe on a Claude Code session: its transcript
+                          layout (-work/<uuid>.jsonl + subagents/) and the
+                          fetcher's flow (`webfetch-egress`, client webfetch)
 
 Sessions are planned with `glove plan` (session.json, grants, registry rows),
 flows come from the gate's own record builders and status.json from the
@@ -42,21 +45,48 @@ SCENARIOS = {
     "filter-revoked": "  observe: {}\n  filter: {}\n",  # then filter is removed
     "orphaned": "  observe: {}\n",  # then the session dir is deleted
     "not-observable": "",
+    "claude-code": "  observe: {}\n",
 }
 LLM = '{provider: llama.cpp, location: host, endpoint: "127.0.0.1:8080", model: test-model}'
+CC_LLM = '{provider: anthropic-compatible, location: host, endpoint: "127.0.0.1:8080", model: claude-test}'
+CC_SESSION = "7c1d2e3f-0000-4000-8000-0f1a2b3c4d5e"
 
 
-def _session_file(extra: str) -> str:
-    return (f"glove: 3\ntemplate: pi-search\nharness: pi\nextensions:\n  llm: {LLM}\n  direct: {{}}\n"
+def _session_file(extra: str, harness: str = "pi") -> str:
+    llm, template = (CC_LLM, "claude-code") if harness == "claude-code" else (LLM, "pi-search")
+    return (f"glove: 3\ntemplate: {template}\nharness: {harness}\nextensions:\n  llm: {llm}\n  direct: {{}}\n"
             f"  webfetch: {{}}\n{extra}")
 
 
-def _flows(net: Path, sid: str, *, filtered: bool) -> None:
+def _flows(net: Path, sid: str, *, filtered: bool, harness: str = "pi") -> None:
     """Two closed flows from the gate's own builder: one allowed, and one
-    blocked by a rule (filter) or by the SSRF guard (observe only)."""
+    blocked by a rule (filter) or by the SSRF guard (observe only). A Claude
+    Code session fetches through the `fetcher` sidecar: its harness hop is
+    `webfetch-mcp`, and the fetch itself is `webfetch-egress`, client webfetch."""
     from extensions.gate.netgate.records import flow_record
 
     blocked_rule = "r_fixture_1" if filtered else "builtin:ssrf-guard"
+    if harness == "claude-code":
+        up = f"http://glove-{sid}-direct-proxy:8888"
+        recs = [
+            flow_record(phase="close", flow_id="f_1", env=sid, session=sid, t=1.0, t_open=0.4, t_close=1.0,
+                        service="webfetch-mcp", tool="web_fetch", client="harness", proto="tcp",
+                        dest_host=f"glove-{sid}-fetcher", dest_port=8000, dest_ip=None, resolution="unavailable",
+                        scope="local", route_kind="tcp", route_upstream=None, up=300, down=2048, verdict="allow",
+                        rule=None, close_reason="eof", request=None, run="g_1"),
+            flow_record(phase="close", flow_id="f_2", env=sid, session=sid, t=1.0, t_open=0.5, t_close=1.0,
+                        service="webfetch-egress", tool="web_fetch", client="webfetch", proto="http-connect",
+                        dest_host="en.wikipedia.org", dest_port=443, dest_ip=None, resolution="unavailable",
+                        scope="direct", route_kind="direct", route_upstream=up, up=512, down=40960,
+                        verdict="allow", rule=None, close_reason="eof", request=None, run="g_1"),
+            flow_record(phase="close", flow_id="f_3", env=sid, session=sid, t=2.0, t_open=2.0, t_close=2.0,
+                        service="webfetch-egress", tool="web_fetch", client="webfetch", proto="http-connect",
+                        dest_host="169.254.169.254", dest_port=443, dest_ip=None, resolution="literal",
+                        scope="local", route_kind="direct", route_upstream=up, up=48, down=120, verdict="block",
+                        rule="builtin:ssrf-guard", close_reason="blocked", request=None, run="g_1"),
+        ]
+        (net / "flows.ndjson").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
+        return
     recs = [
         flow_record(phase="close", flow_id="f_1", env=sid, session=sid, t=1.0, t_open=0.5, t_close=1.0,
                     service="proxy", tool="web_fetch", client="harness", proto="http-connect",
@@ -71,6 +101,26 @@ def _flows(net: Path, sid: str, *, filtered: bool) -> None:
                     verdict="block", rule=blocked_rule, close_reason="blocked", request=None, run="g_1"),
     ]
     (net / "flows.ndjson").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
+
+
+def _cc_transcript(root: Path) -> None:
+    """Claude Code's layout under projects/: -work/<session uuid>.jsonl and its
+    subagents' transcripts in -work/<session uuid>/subagents/."""
+    t = root / "-work"
+    (t / CC_SESSION / "subagents").mkdir(parents=True)
+    base = {"sessionId": CC_SESSION, "cwd": "/work", "timestamp": T0, "version": "2.1.288"}
+    lines = [
+        {**base, "type": "user", "uuid": "u-1", "parentUuid": None,
+         "message": {"role": "user", "content": "hello"}},
+        {**base, "type": "assistant", "uuid": "a-1", "parentUuid": "u-1",
+         "message": {"role": "assistant", "model": "claude-test", "content": [
+             {"type": "tool_use", "id": "toolu_1", "name": "mcp__webfetch__fetch_url",
+              "input": {"url": "https://en.wikipedia.org/"}}]}},
+    ]
+    (t / f"{CC_SESSION}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    sub = {**base, "type": "user", "uuid": "s-1", "parentUuid": None, "isSidechain": True, "agentId": "a1b2c3",
+           "message": {"role": "user", "content": "look it up"}}
+    (t / CC_SESSION / "subagents" / "agent-a1b2c3.jsonl").write_text(json.dumps(sub) + "\n")
 
 
 def _status(net: Path, control: Path | None) -> None:
@@ -116,7 +166,8 @@ def generate(out: Path) -> None:
             os.environ["GLOVE_HOME"] = str(home)
             d = Path(tmp) / "sessions" / name
             (d / "work").mkdir(parents=True)
-            (d / "glove-session.yml").write_text(_session_file(extra))
+            harness = "claude-code" if name == "claude-code" else "pi"
+            (d / "glove-session.yml").write_text(_session_file(extra, harness))
             # a fixed id, so the fixture is stable (`glove plan` keeps an existing one)
             (d / ".glove").mkdir(mode=0o700)
             sid = f"{name}-0f1a2b"
@@ -135,9 +186,11 @@ def generate(out: Path) -> None:
                 assert not ctl.exists()
             _normalise(home, tmp)  # rules.json first: status.json records its real sha256
             if (obs / "net").is_dir():
-                _flows(obs / "net", sid, filtered=name == "observe-filter")
+                _flows(obs / "net", sid, filtered=name == "observe-filter", harness=harness)
                 _status(obs / "net", ctl if ctl.is_dir() else None)
-            if (obs / "transcripts").is_dir():
+            if (obs / "transcripts").is_dir() and harness == "claude-code":
+                _cc_transcript(obs / "transcripts")
+            elif (obs / "transcripts").is_dir():
                 t = obs / "transcripts" / "--work--"
                 t.mkdir()
                 (t / "20261001_0f1a2b3c.jsonl").write_text(

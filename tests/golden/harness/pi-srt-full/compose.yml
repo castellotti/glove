@@ -35,11 +35,9 @@ services:
       KSTORE_EMBED_CACHE: "/mnt/rag-models"
       KSTORE_QUERY_STORES: "both"
       HF_HUB_OFFLINE: "1"
-      CLAUDE_OBSIDIAN_CORE: ""
       CLAUDE_OBSIDIAN_VAULT: "/work/data/store/vault"
       SEARXNG_URL: "http://glove-s-search:8080"
       GLOVE_FETCH_PROXY: "http://glove-s-proxy:8888"
-      GLOVE_FETCH_ALLOW: ""
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -101,7 +99,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - collect
     - --net-dir
@@ -244,7 +242,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service
@@ -308,7 +306,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service
@@ -370,7 +368,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service
@@ -426,7 +424,7 @@ services:
     mem_limit: 512m
   glove-s-search:
     container_name: glove-s-search
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service
@@ -488,7 +486,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service
@@ -542,7 +540,7 @@ services:
     mem_limit: 512m
   glove-s-proxy:
     container_name: glove-s-proxy
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d6ab816472e1
     command:
     - forward
     - --service

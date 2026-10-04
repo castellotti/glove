@@ -1,21 +1,49 @@
 api: 1
 name: webfetch
-summary: Pi's web_fetch tool — read a URL as text through the egress provider's proxy (endpoint `proxy`).
+summary: Read a URL as text through the egress provider's proxy — Pi's web_fetch tool / a fetch_url MCP server (Vibe, Claude Code).
 requires: [egress]
-validate:
-  - when: { harness: vibe }
-    error: "webfetch is a Pi extension; Vibe has no web_fetch tool from glove"
+networks:
+  fetchnet: { internal: true, when: { harness: [vibe, claude-code] } }   # the fetcher sidecar and its harness forwarder (and, with observe, its gate)
+images:
+  # harnesses that speak MCP get fetch_url from a sidecar over HTTP: one server for
+  # each of them, nothing baked into the harness image
+  mcp: { build: image, when: { harness: [vibe, claude-code] } }
+services: compose/services.yml.j2
 endpoints:
-  # The harness reaches the egress proxy only through this forwarder; Pi
+  # Pi: the harness reaches the egress proxy only through this forwarder; Pi
   # attaches it per request (never as a global dispatcher, so LLM traffic is
   # unaffected). Shell commands have no network either way.
   proxy:
+    when: { harness: pi }
     port: 8888
     target: { slot: egress }
+  # MCP harnesses: the harness reaches the fetcher only, never the proxy
+  webfetch-mcp:
+    when: { harness: [vibe, claude-code] }
+    port: 8000
+    target: { service: fetcher, network: fetchnet, port: 8000 }
+    observe: { tool: web_fetch }
+  # The fetcher's hop to the egress proxy. Only rendered when a forwarder
+  # provider (observe) interposes a gate: then the fetcher leaves the egress
+  # network and reaches the proxy only through it. Otherwise it dials the proxy.
+  webfetch-egress:
+    when: { harness: [vibe, claude-code] }
+    harness: false
+    interpose: true
+    target: { slot: egress }
+    listen_networks: [fetchnet]
+    observe: { client: webfetch, tool: web_fetch }
+verify:
+  - { name: fetcher-up, kind: container-healthy, service: fetcher, when: { harness: [vibe, claude-code] } }
 harness:
   env:
-    GLOVE_FETCH_PROXY: "{{ endpoint.proxy.url }}"
+    GLOVE_FETCH_PROXY: "{{ endpoint.proxy.url if endpoint.proxy is defined else '' }}"
     # corporate egress only: its allowlist (private hosts the guard lets through)
-    GLOVE_FETCH_ALLOW: "{{ (slot.egress.get('guard_hosts', []) + slot.egress.get('guard_cidrs', [])) | join(',') }}"
+    GLOVE_FETCH_ALLOW: >-
+      {{ (slot.egress.get('guard_hosts', []) + slot.egress.get('guard_cidrs', [])) | join(',')
+         if endpoint.proxy is defined else '' }}
   pi: { extensions: [pi-extension] }   # Pi's web_fetch tool
+  mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
+    - { name: webfetch, transport: http, url: "{{ endpoint['webfetch-mcp'].url }}/mcp",
+        when: { harness: [vibe, claude-code] } }
   brief: brief.md

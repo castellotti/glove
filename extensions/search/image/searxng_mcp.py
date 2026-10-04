@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Stdio MCP server exposing `web_search` backed by a private SearXNG JSON API.
+"""MCP server exposing `web_search` backed by the session's private SearXNG.
 
-Mirrors the pi-local web-search extension: it only ever talks to the SearXNG
-endpoint bridged in by the `search` forwarder sidecar (never the open internet
-directly). By design it rate-limits and NEVER auto-retries on
+Runs in the `search-mcp` sidecar and serves streamable HTTP on :8000 (stateless,
+plain JSON responses), which the harness reaches through the `search-mcp`
+forwarder. It only ever talks to SearXNG on the extension's internal network,
+never the open internet. Requests must name the forwarder as their Host
+(`MCP_ALLOWED_HOST`): anything else is refused, as with the Playwright MCP.
+Mirrors Pi's web_search extension: it rate-limits and NEVER auto-retries on
 429 — the shared exit IP is easily throttled.
 """
 
@@ -17,11 +20,18 @@ import urllib.parse
 import urllib.request
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8080").rstrip("/")
 MIN_INTERVAL = float(os.environ.get("SEARXNG_MIN_INTERVAL", "2.0"))
+ALLOWED_HOST = os.environ.get("MCP_ALLOWED_HOST", "")
 
-mcp = FastMCP("searxng")
+mcp = FastMCP(
+    "searxng", host="0.0.0.0", port=8000, stateless_http=True, json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=[ALLOWED_HOST] if ALLOWED_HOST else [],
+        allowed_origins=[]),
+)
 _last_call = 0.0
 
 
@@ -79,4 +89,4 @@ def web_search(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="streamable-http")

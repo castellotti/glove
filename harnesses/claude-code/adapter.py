@@ -82,12 +82,16 @@ def _config(cfg) -> dict[str, Any]:
     return hc
 
 
-def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], dict[str, str]]:
-    """managed-mcp.json servers from the neutral `mcp` contribution, the
-    permission rules their `tools` allowlists imply (other tools prompt), and,
-    when `wrapped` (a shell prefix is set), each stdio server's argv file."""
+def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[str], dict[str, str]]:
+    """managed-mcp.json servers from the neutral `mcp` contribution; the
+    permission rules their `tools` allowlists imply: allow rules for the listed
+    tools, deny rules for every other tool the server is known to have
+    (`all_tools`; Claude Code's rules can't say "only these", and an unknown
+    tool prompts); and, when `wrapped` (a shell prefix is set), each stdio
+    server's argv file."""
     servers: dict[str, Any] = {}
     allow: list[str] = []
+    deny: list[str] = []
     argv_files: dict[str, str] = {}
     for _ext, item in comp.mcp if comp is not None else []:
         item = dict(item)
@@ -108,11 +112,14 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], dict[s
         if tools is None:
             allow.append(f"mcp__{name}")
         else:
-            allow += [f"mcp__{name}__{t}" for t in mcp_tool_names(tools)]
-    return servers, allow, argv_files
+            names = mcp_tool_names(tools)
+            allow += [f"mcp__{name}__{t}" for t in names]
+            deny += [f"mcp__{name}__{t}" for t in mcp_tool_names(item.get("all_tools") or []) if t not in names]
+    return servers, allow, deny, argv_files
 
 
-def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], wrapped: bool) -> dict[str, Any]:
+def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], mcp_deny: list[str],
+                     wrapped: bool) -> dict[str, Any]:
     perms = _config(cfg).get("permissions") or {}
     home = plan.profile.config_home_path
     env = dict(MANAGED_ENV)
@@ -130,7 +137,7 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], w
         "permissions": {
             "defaultMode": perms.get("defaultMode", "default"),
             "allow": [*ALLOW_TOOLS, *mcp_allow, *(perms.get("allow") or [])],
-            "deny": [f"Read(/{home}/**)", f"Edit(/{home}/**)", *DENY_TOOLS, *(perms.get("deny") or [])],
+            "deny": [f"Read(/{home}/**)", f"Edit(/{home}/**)", *DENY_TOOLS, *mcp_deny, *(perms.get("deny") or [])],
         },
         "enableArtifact": False,
         "disableClaudeAiConnectors": True,
@@ -146,9 +153,9 @@ def system_files(cfg, plan) -> dict[str, dict[str, str]]:
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}; "
                           "pick provider anthropic (or an Anthropic-compatible endpoint)")
     wrapped = "tool-wrapper.argv" in plan.policies
-    servers, mcp_allow, argv_files = _mcp(plan.composition, wrapped)
-    files = {"managed-settings.json": json.dumps(managed_settings(cfg, plan, servers, mcp_allow, wrapped), indent=2)
-             + "\n"}
+    servers, mcp_allow, mcp_deny, argv_files = _mcp(plan.composition, wrapped)
+    settings = managed_settings(cfg, plan, servers, mcp_allow, mcp_deny, wrapped)
+    files = {"managed-settings.json": json.dumps(settings, indent=2) + "\n"}
     if servers:
         files["managed-mcp.json"] = json.dumps({"mcpServers": servers}, indent=2) + "\n"
     return {MANAGED_DIR: {**files, **argv_files}}
@@ -224,6 +231,6 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
 
 
 def describe(comp) -> list[str]:
-    servers, _, _ = _mcp(comp)
+    servers, _, _, _ = _mcp(comp)
     return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {n}" for n in servers),
             *(f"skill: {name} → {dest}" for name, dest in _skill_links(comp))]

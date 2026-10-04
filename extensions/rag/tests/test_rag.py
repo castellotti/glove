@@ -59,7 +59,7 @@ def test_models_dir_is_a_read_only_mount_the_env_points_at(tmp_path, models):
     env = plan.environment
     assert env["KSTORE_EMBED_CACHE"] == "/mnt/rag-models" and env["HF_HUB_OFFLINE"] == "1"
     assert (env["KSTORE_EMBED_MODEL"], env["KSTORE_QUERY_STORES"]) == ("BAAI/bge-small-en-v1.5", "both")
-    assert env["CLAUDE_OBSIDIAN_CORE"] == ""
+    assert "CLAUDE_OBSIDIAN_CORE" not in env  # renders empty: not set
     from glove.enforcers.nono.policies import _ro_mounts  # the tool policy may read it
     assert "/mnt/rag-models" in _ro_mounts(plan)
 

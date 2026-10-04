@@ -55,7 +55,7 @@ def test_vibe_config_toml(tmp_path):
     assert not hidden.fullmatch("playwright_browser_navigate") and not hidden.fullmatch("bash")
     assert not hidden.fullmatch("searxng_search")
     sx = next(s for s in doc["mcp_servers"] if s["name"] == "searxng")
-    assert sx["env"]["SEARXNG_URL"] == "http://glove-vibe-sess-search:8080"
+    assert sx == {"name": "searxng", "transport": "http", "url": "http://glove-vibe-sess-search-mcp:8000/mcp"}
 
 
 def test_vibe_context_file_has_sudo_relay_brief_and_extension_briefs(tmp_path):

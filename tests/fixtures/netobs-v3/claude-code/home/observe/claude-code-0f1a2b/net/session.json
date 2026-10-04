@@ -1,0 +1,77 @@
+{
+  "v": 1,
+  "type": "session",
+  "env": "claude-code-0f1a2b",
+  "session": "claude-code-0f1a2b",
+  "harness": "claude-code",
+  "gate": "0.2.0",
+  "image": "glove/ext-gate-netgate:fixtureixture",
+  "record": "metadata",
+  "resolve": "in-tunnel",
+  "resolver": null,
+  "exit_identity": "none",
+  "upstream_kind": "direct",
+  "rotate": {
+    "max_bytes": 67108864,
+    "keep": 8,
+    "retain_s": null
+  },
+  "record_headers": false,
+  "rendered_at": "2026-10-01T12:00:00.000Z",
+  "services": [
+    {
+      "service": "llm",
+      "listen": "glove-claude-code-0f1a2b-llm:8080",
+      "observed": true,
+      "harness": true,
+      "mode": "tcp",
+      "tool": "llm",
+      "scope": "local",
+      "upstream": "tcp:host.docker.internal:8080",
+      "route": {
+        "kind": "tcp",
+        "upstream": "tcp:host.docker.internal:8080"
+      },
+      "client": "harness"
+    },
+    {
+      "service": "webfetch-mcp",
+      "listen": "glove-claude-code-0f1a2b-webfetch-mcp:8000",
+      "observed": true,
+      "harness": true,
+      "mode": "tcp",
+      "tool": "web_fetch",
+      "scope": "local",
+      "upstream": "tcp:glove-claude-code-0f1a2b-fetcher:8000",
+      "route": {
+        "kind": "tcp",
+        "upstream": "tcp:glove-claude-code-0f1a2b-fetcher:8000"
+      },
+      "client": "harness"
+    },
+    {
+      "service": "webfetch-egress",
+      "listen": "glove-claude-code-0f1a2b-webfetch-egress:8888",
+      "observed": true,
+      "harness": false,
+      "mode": "http-proxy",
+      "tool": "web_fetch",
+      "scope": null,
+      "upstream": "chain:http://glove-claude-code-0f1a2b-direct-proxy:8888",
+      "route": {
+        "kind": "direct",
+        "upstream": "http://glove-claude-code-0f1a2b-direct-proxy:8888"
+      },
+      "client": "webfetch"
+    }
+  ],
+  "grants": {
+    "observe": {
+      "net": true,
+      "transcripts": true
+    },
+    "filter": {
+      "granted": false
+    }
+  }
+}

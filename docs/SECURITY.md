@@ -267,8 +267,12 @@ Claude Code from starting (fail closed).
   linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
   home, so a skill's files are readable by the path Claude Code shows.
 - **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
-  every command still runs under ring 1. `WebFetch` is denied. Anything else
-  (an MCP tool outside an extension's allowlist) prompts the operator.
+  every command still runs under ring 1. `WebFetch` is denied (`webfetch`'s
+  `fetch_url` reads pages through the egress from a sidecar). An extension's
+  MCP allowlist (`tools`) becomes allow rules, and every other tool the server
+  is known to have (`all_tools`) a deny rule, so Claude Code never offers it
+  and no prompt can approve it (Playwright's `browser_run_code_unsafe`,
+  `browser_evaluate`). A tool unknown to `all_tools` would prompt.
 - **Network:** with a subscription token Claude Code dials only
   `api.anthropic.com`, through the `llm` forwarder; non-essential traffic,
   telemetry, error reporting, auto-update, claude.ai connectors and artifacts
@@ -283,7 +287,13 @@ Claude Code from starting (fail closed).
   whether it also loads a `.claude/settings*.json` from a subdirectory is
   **untested**. The project's
   `.claude/skills`, `agents` and `commands` stay writable (prompts; whatever
-  they run goes through ring 1).
+  they run goes through ring 1). A `statusLine` command is not overridden (the
+  agent cannot write the settings that would add one).
+- **No HTTP hooks to the session's forwarders.** Claude Code refuses an `http`
+  hook whose host resolves to a private address (only loopback is allowed), and
+  every glove forwarder is on a private network; `command` hooks run under the
+  tool wrapper, without network. A live Layman gate for a gloved Claude Code
+  would need a loopback relay inside the harness container: not built.
 
 ## Tool commands and the terminal (TIOCSTI)
 
@@ -423,7 +433,14 @@ reporting `rules`).
   on the search extension's private network. The gate is never on the harness
   network and is never offered to the harness (tests and a live check assert
   SearXNG cannot reach the proxy directly). The SSRF guard and, with filter, the
-  rules cover SearXNG's requests too.
+  rules cover SearXNG's requests too. The `fetcher` (`webfetch` for Vibe and
+  Claude Code) is held the same way behind `webfetch-egress` (`client:
+  webfetch`); without observe it dials the proxy on the internal egress network.
+- **MCP sidecars.** `searxng-mcp` and `fetcher` serve MCP over HTTP to their
+  harness forwarder only: they are not on the harness network, get the full
+  sidecar hardening, and refuse a request whose Host is not their forwarder's
+  name (DNS-rebinding protection). Their Python dependencies install from a
+  hash-pinned `requirements.txt` onto a digest-pinned base image.
 - **`record: full` is a deliberate privacy trade.** It writes the method and
   URL of cleartext HTTP requests (and, opted in, headers with credentials
   redacted) to disk. HTTPS paths are never visible, because there is no TLS
