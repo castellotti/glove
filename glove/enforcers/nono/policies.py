@@ -73,6 +73,12 @@ def _ro_mounts(plan: SessionPlan) -> list[str]:
     return [m.container_path for m in plan.mounts if m.mode == "ro"]
 
 
+def channel_paths(plan: SessionPlan) -> list[str]:
+    """Extension channels (/run/glove/<name>): directories shared with a sidecar
+    (a relay's requests). Writable in every profile; they carry no network."""
+    return [c.path for c in plan.composition.channels]
+
+
 def _workdir(plan: SessionPlan) -> str:
     for m in plan.mounts:
         if m.is_workdir:
@@ -102,7 +108,7 @@ def render_harness_profile(plan: SessionPlan) -> dict:
         "extends": "default",
         "workdir": {"access": "readwrite"},
         "filesystem": {
-            "allow": [work, *_rw_mounts(plan), config_home, TMP],
+            "allow": [work, *_rw_mounts(plan), config_home, TMP, *channel_paths(plan)],
             # The harness's interpreter/runtime (its venv or node prefix) must be
             # readable or `nono run` cannot exec the TUI (exit 127 under Landlock).
             "read": _read_paths(plan),
@@ -129,7 +135,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
             # Interpreter/runtime paths ARE readable (see _read_paths) so a tool
             # command can exec node/python; read-only, and the widened read
             # surface is bounded by network.block + deny_vars (module docstring).
-            "allow": [work, *_rw_mounts(plan), TMP],
+            "allow": [work, *_rw_mounts(plan), TMP, *channel_paths(plan)],
             "read": _read_paths(plan),
         },
         "network": {"block": True},

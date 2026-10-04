@@ -125,6 +125,13 @@ services:
         source: {{ transcripts_host_dir | tojson }}
         target: {{ transcripts_container_dir | tojson }}
 {% endif %}
+{% for c in channels %}
+      # channel {{ c.name }} ({{ c.extension }}): a directory shared with its
+      # sidecar(s) {{ c.services | join(", ") }} (session tmpfs; no network)
+      - type: volume
+        source: {{ c.volume(session) }}
+        target: {{ c.path }}
+{% endfor %}
 {% for t in hardening.tmpfs %}
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under /home/agent overlays the bind. mode is forced

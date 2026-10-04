@@ -1,0 +1,47 @@
+#!/bin/bash
+# git — the network verbs (push, fetch, clone, ls-remote) go to the session's
+# github sidecar, which holds the token; `pull` is a relayed fetch plus a local
+# merge (or rebase). Everything else is the real git, here, with no network.
+real=/usr/bin/git
+args=("$@")
+i=0
+cwd=
+globals=0
+while [ "$i" -lt "${#args[@]}" ]; do
+    case "${args[$i]}" in
+        -C) cwd=${args[$((i + 1))]:-}; i=$((i + 2)) ;;
+        -c | --git-dir | --work-tree | --namespace) globals=1; i=$((i + 2)) ;;
+        -*) globals=1; i=$((i + 1)) ;;
+        *) break ;;
+    esac
+done
+sub=${args[$i]:-}
+case "$sub" in
+    push | fetch | clone | ls-remote | pull) ;;
+    *) exec "$real" "$@" ;;
+esac
+if [ "$globals" = 1 ]; then
+    echo "glove: \`git $sub\` is relayed to the github sidecar; drop the global options before it (only -C is kept)" >&2
+    exit 2
+fi
+if [ -n "$cwd" ]; then cd "$cwd" || exit 2; fi
+rest=("${args[@]:$((i + 1))}")
+if [ "$sub" != pull ]; then
+    exec /opt/glove/bin/glove-relay github git "$sub" "${rest[@]}"
+fi
+how=merge
+opts=()
+fetch=()
+for a in "${rest[@]}"; do
+    case "$a" in
+        -r | --rebase) how=rebase ;;
+        --no-rebase) how=merge ;;
+        --ff-only | --no-ff | --ff) opts+=("$a") ;;
+        -q | --quiet | -v | --verbose) fetch+=("$a") ;;
+        -*) echo "glove: \`git pull $a\` is not supported here; run \`git fetch\` then \`git merge\`/\`git rebase\`" >&2; exit 2 ;;
+        *) fetch+=("$a") ;;
+    esac
+done
+/opt/glove/bin/glove-relay github git fetch "${fetch[@]}" || exit
+if [ "$how" = rebase ]; then exec "$real" rebase FETCH_HEAD; fi
+exec "$real" merge "${opts[@]}" FETCH_HEAD

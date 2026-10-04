@@ -69,7 +69,7 @@ HARNESS_HOME_MOUNT = "/home/agent"
 def _rw_paths(plan: SessionPlan) -> list[str]:
     work = next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
     rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
-    return [work, *rw, TMP]
+    return [work, *rw, TMP, *(c.path for c in plan.composition.channels)]
 
 
 def denied_env_vars(plan: SessionPlan) -> list[str]:

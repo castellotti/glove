@@ -51,9 +51,30 @@ All notable changes to glove are documented here.
   key) a managed deny rule, so Claude Code never offers it; host mode needs
   `i_accept_host_rce: true` as with Vibe.
 - Extension networks take `when:` (like endpoints and images).
+- **`github`** (with the new library **`relay`**): `gh`, and `git push`/`fetch`/
+  `pull`/`clone`/`ls-remote`, from the agent's shell. Shims in the harness image
+  relay each call to a hardened sidecar that holds the token (resolved in memory
+  at `glove up`, never in the harness). The sidecar runs the real command under
+  a policy:
+  - gh: a subcommand allowlist; `auth`/`secret`/`extension`/… never; `gh api`
+    GET only; github.com only.
+  - git: network verbs to `https://github.com/<owner>/<repo>` remotes, with the
+    repo's config defanged.
+  - File arguments are opened inside `/work` only.
+  - Traffic reaches GitHub's hosts only, through an in-process fence and then
+    the egress. With `observe`, a gate labels the flows `client: github` (a new
+    netgate client label).
+- Core: **channels** (`channels:`), a session tmpfs volume at
+  `/run/glove/<name>` shared by the harness and named sidecars, which every
+  enforcer lets the harness and its commands write (no network). A relay uses
+  files and FIFOs there because glove's seccomp below srt forbids Unix sockets.
+  Also core: the **`work` privilege**, which binds the harness's whole `/work`
+  read-write into one sidecar. Both are for in-tree or trusted extensions only.
 
 ### Changed
 
+- `privileges` no longer records empty `cap_add`/`devices` lists for a service
+  that asks for neither.
 - `search` for Vibe (and now Claude Code) is the `searxng` MCP server over HTTP
   from a hardened `searxng-mcp` sidecar (python slim + `mcp`, hash-pinned)
   instead of a stdio server baked into the harness image: one server for both

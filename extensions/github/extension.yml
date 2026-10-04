@@ -1,0 +1,44 @@
+api: 1
+name: github
+summary: gh, and git push/fetch/pull/clone, from shell commands — relayed to a sidecar that holds the token; the sandbox never sees it or gets a route.
+requires: [relay, egress]
+settings:
+  token: { type: secret, required: true }   # keychain:<service> | env:<VAR>: a GitHub token (fine-grained, the repos you name)
+  # gh subcommands relayed ("pr", "pr create", …); unset: the README's default
+  # set. `auth`, `extension`, `alias`, `config`, `codespace`, `secret`,
+  # `variable`, `ssh-key` and `gpg-key` are refused whatever this says.
+  allow: { type: list, pattern: "^[a-z][a-z-]*( [a-z][a-z-]*)?$" }
+  timeout: { type: int, default: 600 }      # seconds one relayed command may run
+networks:
+  ghnet: { internal: true }                 # the relay sidecar (and, with observe, its gate)
+hooks: hooks.py                             # launch_env: the token, in memory, for the sidecar
+services: compose/services.yml.j2
+endpoints:
+  # The relay's hop to the egress proxy. Only rendered when a forwarder provider
+  # (observe) interposes a gate: then the sidecar leaves the egress network and
+  # reaches the proxy only through it, and every GitHub host it contacts is in
+  # the flow record (client github). Otherwise it dials the proxy.
+  github-egress:
+    harness: false
+    interpose: true
+    target: { slot: egress }
+    listen_networks: [ghnet]
+    observe: { client: github, tool: gh }
+# /run/glove/github in the harness and the sidecar: where the gh/git shims leave
+# requests (files and FIFOs; no socket, no network)
+channels:
+  github: { services: [gh] }
+privileges:
+  # `gh pr create`, `git push` and `git clone` work on the harness's checkout:
+  # the sidecar binds the whole /work read-write (the policy defangs the
+  # repo's config and keeps every file argument inside /work)
+  gh: { work: true }
+limits:
+  gh: { pids: 256, memory: 1g }
+verify:
+  - { name: github-relay-up, kind: container-healthy, service: gh }
+harness:
+  image:
+    "*":
+      copy: [[shim/gh, /usr/local/bin/gh], [shim/git, /usr/local/bin/git]]
+  brief: brief.md

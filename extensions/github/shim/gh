@@ -1,0 +1,4 @@
+#!/bin/bash
+# gh — relayed to the session's github sidecar, which holds the token and runs
+# the real gh (see the github extension's relay_policy.py for what it allows).
+exec /opt/glove/bin/glove-relay github gh "$@"
