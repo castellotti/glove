@@ -6,9 +6,10 @@
     },
     "searxng": {
       "type": "stdio",
-      "command": "python3",
+      "command": "/opt/glove/bin/glove-cc-prefix",
       "args": [
-        "/opt/glove/ext/search/searxng_mcp.py"
+        "--mcp",
+        "searxng"
       ],
       "env": {
         "SEARXNG_URL": "http://glove-s-search:8080"

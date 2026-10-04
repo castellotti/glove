@@ -9,13 +9,21 @@ All notable changes to glove are documented here.
 - **Claude Code harness** (`harness: claude-code`, image
   `glove/claude-code:0.2.0`: the native binary, pinned, no Node). glove's
   guard rails are read-only managed settings at `/etc/claude-code`: a shell
-  prefix (`glove-cc-prefix`) that runs every Bash tool, `!`, hook and MCP stdio
-  command under the ring-1 tool wrapper and fails closed; managed-only hooks,
-  permission rules and MCP servers; the config home denied to Read/Edit;
-  non-essential traffic off. The home gets `settings.json`, a merged
-  `.claude.json` (onboarding, `/work` trust), `CLAUDE.md` and skill links;
-  transcripts (`projects/`) are exported by `observe`. MCP and skills
-  contributions render as managed MCP servers and permission rules.
+  prefix (`glove-cc-prefix`) that runs every Bash tool, `!` and hook command
+  under the ring-1 tool wrapper and fails closed, and each glove stdio MCP
+  server (`--mcp <name>`, from a read-only argv) under the harness sandbox,
+  with network; managed-only hooks, permission rules and MCP servers; the
+  config home denied to Read/Edit; non-essential traffic off. The project's
+  `.claude/settings.json` and `settings.local.json` are read-only to the agent
+  (their `env` reaches processes Claude Code starts outside ring 1). The home
+  gets `settings.json`, a merged `.claude.json` (onboarding, `/work` trust) and
+  `CLAUDE.md`; transcripts (`projects/`) are exported by `observe`. MCP
+  contributions render as managed MCP servers and permission rules; skills
+  are linked from `/opt/glove/cc` (`--add-dir`), outside the denied home.
+  `search` bakes its SearXNG MCP server into the Claude Code image.
+- Harness profiles may name `trusted_files` (relative to the working dir):
+  files the harness loads its own config from, always bound read-only at
+  ring 0 (a placeholder when missing; their directories pinned).
 - `llm`: `auth: oauth` for a subscription token where the catalog allows it
   (`anthropic`, for `claude-code` only); catalog `headers` on every probe; a
   paginated model list is followed (`models_cursor`) and an alias matches its
@@ -24,7 +32,8 @@ All notable changes to glove are documented here.
 - Harness adapters may render read-only system config (`system_files`, a dir
   of its own under `/etc`, from `.glove/harness/`) and name the env var the LLM
   key travels in (`secret_env`). Every enforcer with a tool wrapper also renders
-  `tool-wrapper.argv` (one argument per line).
+  `tool-wrapper.argv` (one argument per line). System files are rewritten in
+  place (atomic per file), so a re-plan never swaps the dir a live session binds.
 
 ### Changed
 

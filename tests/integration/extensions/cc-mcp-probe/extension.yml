@@ -1,0 +1,18 @@
+api: 1
+name: cc-mcp-probe
+summary: test_cc_nono.sh only — a stdio "MCP server" that records whether it reached the session's llm forwarder.
+harness:
+  mcp:
+    # Not an MCP server: on start it notes which sandbox it is in (the config
+    # home is readable only outside the tool profile) and whether the network
+    # works (the llm forwarder, from Claude Code's managed env), then idles
+    # until Claude Code gives up on it.
+    - name: probe
+      transport: stdio
+      command: bash
+      args:
+        - -c
+        - >-
+          { test -r /home/agent/.claude/settings.json && echo ctx=harness || echo ctx=tool;
+          curl -sS -m 5 -o /dev/null -w "net=%{http_code}\n" "$ANTHROPIC_BASE_URL/v1/models"; } > /work/MCP-PROBE 2>&1;
+          sleep 60

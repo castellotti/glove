@@ -241,13 +241,31 @@ Claude Code from starting (fail closed).
   process environment, but not a managed one (`test_cc_nono.sh` re-checks it
   with the user setting blanked). With `enforcer: none` no prefix is set (there
   is no wrapper to run under).
+- **MCP stdio servers** are rendered as `glove-cc-prefix --mcp <name>`; on
+  exactly that string the prefix execs `/etc/claude-code/mcp-<name>.argv`
+  (read-only) without the tool wrapper, so the server runs under the harness's
+  sandbox, with network, as under Pi and Vibe. The agent cannot produce that
+  string: a Bash or `!` string always starts with Claude Code's snapshot
+  `source`, and hooks are managed-only. An unknown name exits 126.
+- **Project settings** (`/work/.claude/settings.json`, `settings.local.json`)
+  are bound read-only at ring 0, on every enforcer (`trusted_files` in
+  `harness.yml`; an empty placeholder when missing, created on the host, and
+  `.claude` pinned as a mount point so it can't be renamed aside). Claude Code
+  applies their `env` to processes it starts itself, outside ring 1: tested,
+  a planted `LD_PRELOAD` loaded into its `git`/`cat`/`id`, `BASH_ENV` and
+  exported functions ran in its shells and in the bash prefix before it could
+  scrub anything. Their command settings (`apiKeyHelper`, `statusLine`, …)
+  are closed the same way. Only what the operator brought in is loaded
+  (`test_cc_nono.sh` plants both files with the Write tool and a command).
 - **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
   `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
   servers). A project's hooks and `.mcp.json` servers do not run.
 - **Config home:** `Read(//home/agent/.claude/**)` and
   `Edit(//home/agent/.claude/**)` are denied to the agent's file tools (`//`
   is an absolute path; Edit rules cover every writing tool). Tool commands
-  cannot reach the home at all (ring 1).
+  cannot reach the home at all (ring 1). Contributed skills are therefore
+  linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
+  home, so a skill's files are readable by the path Claude Code shows.
 - **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
   every command still runs under ring 1. `WebFetch` is denied. Anything else
   (an MCP tool outside an extension's allowlist) prompts the operator.
@@ -259,10 +277,13 @@ Claude Code from starting (fail closed).
   env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
   from every tool command. glove never writes key material: with an API key,
   Claude Code itself asks once whether to use it and records the answer.
-- **Gaps:** MCP stdio servers run under the tool wrapper too, so they have no
-  network (an extension that needs one must use the `http` transport); a
-  `statusLine` command is not overridden (the agent cannot write the settings
-  that would add one).
+- **Gaps:** a glove MCP stdio server has the harness's rights (config home,
+  network to the session's forwarders), as under Pi and Vibe. Project settings
+  are protected in the working dir Claude Code starts in (its project root);
+  whether it also loads a `.claude/settings*.json` from a subdirectory is
+  **untested**. The project's
+  `.claude/skills`, `agents` and `commands` stay writable (prompts; whatever
+  they run goes through ring 1).
 
 ## Tool commands and the terminal (TIOCSTI)
 

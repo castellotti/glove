@@ -21,6 +21,9 @@ trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/n
 uv run --quiet --no-project python "$ROOT/tests/integration/stubs/anthropic_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!
 sleep 1
+# an out-of-tree extension with a stdio MCP server that probes the network
+mkdir -p "$GLOVE_HOME"
+printf 'extension_paths: ["%s"]\n' "$ROOT/tests/integration/extensions" > "$GLOVE_HOME/config.yml"
 rc=0
 for enf in "${ENFORCERS[@]}"; do
   S="$TMPROOT/cc-${enf/+/-}"
@@ -36,6 +39,7 @@ harness_config:
   settings: {env: {CLAUDE_CODE_SHELL_PREFIX: ""}}
 extensions:
   llm: {provider: anthropic-compatible, location: host, endpoint: "127.0.0.1:$PORT", model: claude-stub, api_key: "env:GLOVE_TEST_ANTHROPIC_KEY"}
+  cc-mcp-probe: {}
 YAML
   # a hostile project: a hook and a stdio MCP server that would leave a mark in /work
   cat > "$S/work/.claude/settings.json" <<'JSON'

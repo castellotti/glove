@@ -395,13 +395,20 @@ extensions:
   `/etc/claude-code/managed-settings.json` (read-only bind; managed settings win
   over every other scope, and an unparseable file stops Claude Code):
   - `CLAUDE_CODE_SHELL_PREFIX` → `glove-cc-prefix`: the Bash tool, `!`
-    commands, hooks and MCP stdio servers all run under the session's tool
-    wrapper, and fail closed (exit 126) if it is missing. It is set only there,
-    because the agent's own `settings.json` `env` would override a prefix in the
-    process environment.
+    commands and hooks all run under the session's tool wrapper, and fail
+    closed (exit 126) if it is missing. It is set only there, because the
+    agent's own `settings.json` `env` would override a prefix in the process
+    environment. A stdio MCP server runs as `glove-cc-prefix --mcp <name>`,
+    from a read-only argv beside the settings, under the harness's sandbox
+    (with network, as Pi and Vibe run theirs), not the tool wrapper;
   - only managed hooks, permission rules and MCP servers: a project's
     `.claude/settings.json` hooks and `.mcp.json` servers never run;
   - Read/Edit denied on the config home (`//home/agent/.claude/**`);
+  - the project's `.claude/settings.json` and `settings.local.json` are bound
+    read-only (ring 0, `trusted_files` in `harness.yml`; an empty placeholder
+    when missing, and `.claude` pinned so it can't be moved aside): Claude Code
+    applies their `env` and commands to processes it starts itself, outside
+    the tool wrapper, so the agent must not write them;
   - the built-in tools are pre-approved (as Pi and Vibe auto-approve), `WebFetch`
     is denied (the container has no route to fetch from), `defaultMode` is
     pinned to `default` (`harness_config.permissions.defaultMode` may pick
@@ -413,7 +420,9 @@ extensions:
   `api.anthropic.com`, through the session's `llm` forwarder.
 - **Home:** `settings.json` (model, no co-author trailer, `harness_config.settings`),
   `.claude.json` onboarding and `/work` trust merged into whatever Claude Code
-  keeps there, `CLAUDE.md` (environment + brief), skills linked under `skills/`.
+  keeps there, `CLAUDE.md` (environment + brief). Contributed skills are linked
+  from `/opt/glove/cc/.claude/skills` (baked) and loaded with `--add-dir`, so
+  the agent can read a skill's files by the path Claude Code shows it.
   Transcripts: `projects/<cwd>/<uuid>.jsonl`, exported by `observe`.
 - `harness_config` takes `settings` (user-scope settings) and `permissions`
   (`defaultMode`, extra `allow`/`deny` rules).
@@ -456,8 +465,8 @@ Core validates all of it:
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
   - `mcp: [{name, transport: stdio|http, …, tools: [...]}]`: an MCP server,
-    rendered by harnesses that speak MCP (Vibe: `config.toml`, with `tools`
-    as an allowlist);
+    rendered by harnesses that speak MCP (Vibe: `config.toml`; Claude Code:
+    `managed-mcp.json`; `tools` is an allowlist);
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);
@@ -788,7 +797,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi wired + verified (12-check integration, incl. env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested** |
-| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 17 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). Extensions (playwright, search, webfetch) with Claude Code: **untested**; Podman: **untested** |
+| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 22 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). Extensions (playwright, search, webfetch) with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |

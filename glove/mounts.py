@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -215,7 +216,9 @@ def _hooks_path(git_config: str, repo: str) -> str | None:
     return os.path.realpath(os.path.join(repo, value))
 
 
-def protected_paths(mounts: list[Mount], *, protect_ide_files: bool = False) -> tuple[Protect, ...]:
+def protected_paths(
+    mounts: list[Mount], *, protect_ide_files: bool = False, trusted: Sequence[str] = (),
+) -> tuple[Protect, ...]:
     """Ring-0 read-only binds for every rw mount (§6.3 of the v3 plan).
 
     Covers `.git/hooks` and `.git/config` at the mount root and, when
@@ -225,7 +228,12 @@ def protected_paths(mounts: list[Mount], *, protect_ide_files: bool = False) -> 
     protected hooks wholesale. Sources are realpath'd and must stay inside the
     mount: a symlink can never turn this into a bind of some other host path.
     Residual gap (documented): a path created later (e.g. `git init` in a
-    directory with no repo yet) or a nested repo/submodule is not covered."""
+    directory with no repo yet) or a nested repo/submodule is not covered.
+
+    `trusted` (container paths; the harness profile's `trusted_files`) are
+    always protected: a missing file gets a placeholder, and each directory
+    between it and the mount root is pinned read-write (a missing one is
+    created at launch), so `mv .claude x` cannot swap in a fresh copy."""
     out: list[Protect] = []
     seen: set[str] = set()
 
@@ -256,7 +264,28 @@ def protected_paths(mounts: list[Mount], *, protect_ide_files: bool = False) -> 
                     add(m, None, rel, kind)  # placeholder
                 elif os.path.exists(real) and _inside(m.host_path, real):
                     add(m, real, os.path.relpath(real, m.host_path), kind)
+    for path in trusted:
+        _protect_trusted(mounts, path, add)
     return tuple(out)
+
+
+def _protect_trusted(mounts: list[Mount], path: str, add) -> None:
+    m = max((m for m in mounts if _is_ancestor(Path(m.container_path), Path(path))),
+            key=lambda m: len(m.container_path), default=None)
+    if m is None or m.mode != "rw":
+        return  # not agent-writable: the read-only mount or rootfs covers it
+    parts = os.path.relpath(path, m.container_path).split("/")
+    for i in range(1, len(parts) + 1):
+        sub = "/".join(parts[:i])
+        host = os.path.join(m.host_path, sub)
+        is_file = i == len(parts)
+        if os.path.islink(host) or (os.path.exists(host) and os.path.isdir(host) == is_file):
+            raise MountError(f"{host}: the harness loads its config from here, so glove protects it; "
+                             f"it must be a {'regular file' if is_file else 'directory'}, not a symlink")
+        if not is_file:
+            add(m, host, sub, "dir", read_only=False)  # pin: no rename
+        else:
+            add(m, host if os.path.exists(host) else None, sub, "file")
 
 
 def _resolve_working_dir(

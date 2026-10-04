@@ -9,6 +9,7 @@ Built from a resolved ``Config`` plus the mount and network plans.
 from __future__ import annotations
 
 import os
+import posixpath
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -138,24 +139,39 @@ def secret_env_names(plan: SessionPlan) -> list[str]:
 def write_system_files(plan: SessionPlan, root: Path) -> None:
     """Write `plan.system_files` under `root` (one dir per container dir) and
     record the read-only binds. Only a dir of its own under /etc qualifies: never
-    /etc itself, glove's enforcer dir, or a path the agent writes."""
+    /etc itself, glove's enforcer dir, or a path the agent writes.
+
+    A running session binds these dirs, so they are updated in place (each file
+    replaced atomically, stale ones removed), never deleted and recreated: a
+    re-plan must not leave the live container an empty or orphaned dir."""
     import re
     import shutil
+    import tempfile
 
-    if root.exists():
-        shutil.rmtree(root)
     plan.system_mounts = []
+    dirs: set[Path] = set()
     for target, files in sorted(plan.system_files.items()):
         if not re.fullmatch(r"/etc/[a-z0-9][a-z0-9._-]*", target) or target == plan.policies_container_dir:
             raise ConfigError(f"harness {plan.profile.name!r}: system files must go in a dir of their own "
                               f"under /etc, not {target!r}")
+        bad = [f for f in files if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", f)]
+        if bad:
+            raise ConfigError(f"harness {plan.profile.name!r}: bad system file name {bad[0]!r}")
         d = root / target.removeprefix("/etc/")
-        d.mkdir(parents=True)
+        d.mkdir(parents=True, exist_ok=True)
+        dirs.add(d)
+        for stale in set(d.iterdir()) - {d / f for f in files}:
+            shutil.rmtree(stale) if stale.is_dir() and not stale.is_symlink() else stale.unlink()
         for fname, content in files.items():
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", fname):
-                raise ConfigError(f"harness {plan.profile.name!r}: bad system file name {fname!r}")
-            (d / fname).write_text(content)
+            fd, tmp = tempfile.mkstemp(dir=root, prefix=".tmp-")
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, d / fname)
         plan.system_mounts.append((str(d), target))
+    if root.is_dir():
+        for stale in set(root.iterdir()) - dirs:  # a dir the harness no longer renders
+            shutil.rmtree(stale) if stale.is_dir() and not stale.is_symlink() else stale.unlink()
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
@@ -276,9 +292,9 @@ def build_session_plan(
         allow_sensitive=cfg.allow_sensitive,
     )
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    mount_plan = replace(
-        mount_plan, protect=protected_paths(mount_plan.mounts, protect_ide_files=cfg.protect_ide_files)
-    )
+    trusted = [posixpath.normpath(posixpath.join(mount_plan.working_dir, f)) for f in profile.trusted_files]
+    mount_plan = replace(mount_plan, protect=protected_paths(
+        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files, trusted=trusted))
     network = build_network_plan(cfg, session, comp)
 
     environment = _resolve_env(cfg, profile)

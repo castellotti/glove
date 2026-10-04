@@ -10,7 +10,9 @@
     "/opt/glove/bin/glove-pty",
     "ctty",
     "--",
-    "/usr/local/bin/claude"
+    "/usr/local/bin/claude",
+    "--add-dir",
+    "/opt/glove/cc"
   ],
   "enforcer_env": {},
   "environment": {
@@ -28,7 +30,7 @@
     "KSTORE_QUERY_STORES": "both",
     "SEARXNG_URL": "http://glove-s-search:8080"
   },
-  "image": "glove/claude-code:0.2.0-f675fb1295-srt-f5b44676c0",
+  "image": "glove/claude-code:0.2.0-283eeec91d-srt-f5b44676c0",
   "passthrough_env": [
     "ANTHROPIC_API_KEY"
   ],

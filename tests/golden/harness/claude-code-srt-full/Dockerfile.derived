@@ -12,6 +12,12 @@ RUN pip3 install --no-cache-dir --break-system-packages llama-index-core==0.14.2
 COPY rag/kstore /opt/glove/rag/kstore
 COPY rag/kstore.sh /usr/local/bin/kstore
 RUN chmod 0755 /usr/local/bin/kstore
+# extension: search
+RUN command -v pip3 >/dev/null || (apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && rm -rf /var/lib/apt/lists/*)
+RUN pip3 install --no-cache-dir --break-system-packages 'mcp<2'
+COPY search/searxng_mcp.py /opt/glove/ext/search/searxng_mcp.py
+# Claude Code: contributed skills (loaded with --add-dir)
+RUN mkdir -p /opt/glove/cc/.claude/skills && ln -s /opt/glove/skills/rag/rag-parse /opt/glove/cc/.claude/skills/rag-parse && ln -s /opt/glove/skills/rag/rag-query /opt/glove/cc/.claude/skills/rag-query
 # extension: rag (skill)
 COPY rag/rag-parse /opt/glove/skills/rag/rag-parse
 # extension: rag (skill)

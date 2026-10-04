@@ -10,6 +10,9 @@ then in the harness service:
      tool wrapper even though the agent's own settings blank the prefix; Read
      and Write into the config home are denied; a project's hooks and
      `.mcp.json` stdio servers never run;
+     the agent cannot plant project settings (ring 0 binds them read-only),
+     whose `env` would reach processes Claude Code starts outside ring 1;
+     a stdio MCP server runs under the harness sandbox, with network;
   4. the transcript lands in projects/ (what observe exports for Layman), and the
      stub saw only the paths Claude Code needs.
 """
@@ -74,6 +77,8 @@ def main(directory: str, stub_log: str) -> int:
                 extra=("-e", "NONO_EVIL=1", "-e", "SRT_EVIL=1"))
         check("wrapped: runs, an injected NONO_*/SRT_* is dropped", r.returncode == 0 and "evil=0" in r.stdout,
               f"{r.returncode} {r.stdout[-200:]} {r.stderr[-300:]}")
+        r = run("/opt/glove/bin/glove-cc-prefix --mcp nope", entry="/opt/glove/bin/glove-cc-prefix")
+        check("--mcp with no rendered server → 126", r.returncode == 126, f"{r.returncode} {r.stderr[-200:]}")
 
         print("== the managed settings are read-only")
         r = run("bash", "-c", "echo '{}' > /etc/claude-code/managed-settings.json; echo rc=$?",
@@ -106,6 +111,26 @@ def main(directory: str, stub_log: str) -> int:
         check("a project's hooks never ran", not (sd.root / "work" / "HOOK-RAN").exists()
               and "after-hooks" in out, out.replace("\n", " ")[-300:])
         check("a project's .mcp.json stdio server never started", not (sd.root / "work" / "MCP-RAN").exists())
+        probe = sd.root / "work" / "MCP-PROBE"
+        text = probe.read_text() if probe.exists() else ""
+        check("a glove stdio MCP server runs under the harness sandbox, with network",
+              "ctx=harness" in text and "net=200" in text, text or "no MCP-PROBE")
+
+        print("== project settings are read-only (their env reaches processes outside ring 1)")
+        local = sd.root / "work" / ".claude" / "settings.local.json"
+        planted = json.dumps({"env": {"BASH_ENV": "/work/evil.sh", "LD_PRELOAD": "/work/x.so"}})
+        (sd.root / "work" / "evil.sh").write_text("touch /work/ENV-RAN\n")
+        agent(f"CALL Write {json.dumps({'file_path': '/work/.claude/settings.local.json', 'content': planted})}")
+        check("the Write tool cannot plant settings.local.json", local.read_text() == "", local.read_text()[:200])
+        cmd = (f"echo '{planted}' > /work/.claude/settings.local.json; echo w=$?; "
+               "mv /work/.claude /work/claude-moved; echo mv=$?")
+        out = agent(f"CALL Bash {json.dumps({'command': cmd})}")
+        check("… nor a tool command, nor can it move .claude aside",
+              re.search(r"w=[1-9]", out) is not None and re.search(r"mv=[1-9]", out) is not None
+              and local.read_text() == "" and not (sd.root / "work" / "claude-moved").exists(),
+              out.replace("\n", " ")[-300:])
+        agent(f"CALL Bash {json.dumps({'command': 'echo after-plant'})}")
+        check("… so no planted env ran", not (sd.root / "work" / "ENV-RAN").exists())
 
         print("== transcripts and traffic")
         jsonl = list((sd.home / ".claude" / "projects").glob("*/*.jsonl"))

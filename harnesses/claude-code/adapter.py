@@ -7,19 +7,26 @@ read-only; managed settings win over every other scope, and an unparseable one
 stops Claude Code from starting. They carry:
 
 - `CLAUDE_CODE_SHELL_PREFIX` → /opt/glove/bin/glove-cc-prefix, so the Bash
-  tool, `!` commands, hooks and MCP stdio servers all run under the ring-1 tool
-  wrapper (a prefix in the process env would yield to the agent's own settings);
+  tool, `!` commands and hooks all run under the ring-1 tool wrapper (a prefix
+  in the process env would yield to the agent's own settings). A stdio MCP
+  server is rendered as `glove-cc-prefix --mcp <name>`, which the prefix runs
+  from `mcp-<name>.argv` beside the settings under the harness's own sandbox,
+  as Pi and Vibe run theirs: the tool profile has no network to reach a sidecar;
 - managed-only hooks, permission rules and MCP servers, and deny rules on the
   config home (`//` is an absolute path; Edit rules cover every write tool);
 - the switches that keep Claude Code to its inference host.
 
 `render_home` writes the user-scope `settings.json` (cosmetic, model) and merges
 the onboarding/trust state into `.claude.json`, which Claude Code also writes.
+Contributed skills are linked from /opt/glove/cc/.claude/skills (baked, loaded
+with `--add-dir`), not the config home, whose deny rules would hide their files.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import shlex
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -29,6 +36,7 @@ from glove.harnessconfig import _mount_plan_for, rel_config_home
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
+SKILLS_ROOT = "/opt/glove/cc"  # `--add-dir`: Claude Code loads <dir>/.claude/skills
 DEFAULT_HOST = "api.anthropic.com"
 # The built-in tools glove approves: every command runs under the tool wrapper
 # and every file write stays inside the mounts, as with Pi and Vibe.
@@ -62,36 +70,52 @@ def _config(cfg) -> dict[str, Any]:
     if unknown or not isinstance(perms, dict) or set(perms) - PERMISSION_KEYS:
         raise ConfigError(f"claude-code harness_config takes {sorted(CONFIG_KEYS)} "
                           f"(permissions: {sorted(PERMISSION_KEYS)})")
+    if not isinstance(hc.get("settings") or {}, dict):
+        raise ConfigError("claude-code harness_config.settings must be a mapping")
+    for key in ("allow", "deny"):
+        rules = perms.get(key) or []
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            raise ConfigError(f"claude-code permissions.{key} must be a list of rule strings")
     if perms.get("defaultMode", "default") not in MODES:
         raise ConfigError(f"claude-code permissions.defaultMode must be one of {list(MODES)}")
     return hc
 
 
-def _mcp(comp) -> tuple[dict[str, Any], list[str]]:
-    """managed-mcp.json servers from the neutral `mcp` contribution, and the
-    permission rules their `tools` allowlists imply (other tools prompt)."""
+def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], dict[str, str]]:
+    """managed-mcp.json servers from the neutral `mcp` contribution, the
+    permission rules their `tools` allowlists imply (other tools prompt), and,
+    when `wrapped` (a shell prefix is set), each stdio server's argv file."""
     servers: dict[str, Any] = {}
     allow: list[str] = []
+    argv_files: dict[str, str] = {}
     for _ext, item in comp.mcp if comp is not None else []:
         item = dict(item)
         name, transport, tools = item.pop("name"), item.pop("transport", "stdio"), item.pop("tools", None)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise ConfigError(f"MCP server name {name!r}: letters, digits, '_' and '-' only")
         if transport == "http":
             servers[name] = {"type": "http", "url": item["url"]}
         else:
-            servers[name] = {"type": "stdio", "command": item["command"], "args": list(item.get("args") or []),
+            argv = [str(item["command"]), *(str(a) for a in item.get("args") or [])]
+            if wrapped:
+                if any("\n" in a for a in argv):
+                    raise ConfigError(f"MCP server {name!r}: an argument with a newline")
+                argv_files[f"mcp-{name}.argv"] = "".join(f"{a}\n" for a in argv)
+                argv = [SHELL_PREFIX, "--mcp", name]
+            servers[name] = {"type": "stdio", "command": argv[0], "args": argv[1:],
                              **({"env": dict(item["env"])} if item.get("env") else {})}
         if tools is None:
             allow.append(f"mcp__{name}")
         else:
             names = [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
             allow += [f"mcp__{name}__{t}" for t in names]
-    return servers, allow
+    return servers, allow, argv_files
 
 
 def managed_settings(cfg, plan) -> dict[str, Any]:
     perms = _config(cfg).get("permissions") or {}
     home = plan.profile.config_home_path
-    servers, mcp_allow = _mcp(plan.composition)
+    servers, mcp_allow, _ = _mcp(plan.composition)
     env = dict(MANAGED_ENV)
     if "tool-wrapper.argv" in plan.policies:
         env["CLAUDE_CODE_SHELL_PREFIX"] = SHELL_PREFIX
@@ -122,11 +146,11 @@ def system_files(cfg, plan) -> dict[str, dict[str, str]]:
     if model is not None and model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}; "
                           "pick provider anthropic (or an Anthropic-compatible endpoint)")
-    servers, _ = _mcp(plan.composition)
+    servers, _, argv_files = _mcp(plan.composition, wrapped="tool-wrapper.argv" in plan.policies)
     files = {"managed-settings.json": json.dumps(managed_settings(cfg, plan), indent=2) + "\n"}
     if servers:
         files["managed-mcp.json"] = json.dumps({"mcpServers": servers}, indent=2) + "\n"
-    return {MANAGED_DIR: files}
+    return {MANAGED_DIR: {**files, **argv_files}}
 
 
 def _merge_json(path: Path, update: dict[str, Any]) -> None:
@@ -147,24 +171,31 @@ def _merge_json(path: Path, update: dict[str, Any]) -> None:
     path.write_text(json.dumps(merge(doc, update), indent=2) + "\n")
 
 
-def _link_skills(cfg_dir: Path, comp) -> list[Path]:
-    """$CLAUDE_CONFIG_DIR/skills/<name> → each contributed skill's container
-    path (dangling on the host, resolved in the container). Links from an
-    earlier launch are replaced; a skill dir of the operator's own is kept."""
-    skills = cfg_dir / "skills"
-    if skills.is_dir():
-        for old in skills.iterdir():
-            if old.is_symlink() and str(old.readlink()).startswith("/"):
-                old.unlink()
-    out: list[Path] = []
+def _skill_links(comp) -> list[tuple[str, str]]:
+    """(link name, container path) per contributed skill; a name taken by an
+    earlier skill gets its extension's prefix."""
+    out: dict[str, str] = {}
     for ext, _src, dest in comp.skills if comp is not None else []:
-        skills.mkdir(exist_ok=True)
-        link = skills / Path(dest).name
-        if link.exists() or link.is_symlink():
-            link = skills / f"{ext}-{Path(dest).name}"
-        link.symlink_to(dest)
-        out.append(link)
-    return out
+        name = Path(dest).name
+        out[f"{ext}-{name}" if name in out else name] = dest
+    return list(out.items())
+
+
+def entry_args(comp) -> list[str]:
+    return ["--add-dir", SKILLS_ROOT] if _skill_links(comp) else []
+
+
+def image_lines(comp) -> tuple[list[str], list]:
+    """Bake the skill links: outside the config home, so the agent can read a
+    skill's files (and a tool command run its scripts) by the path Claude Code
+    shows it."""
+    links = _skill_links(comp)
+    if not links:
+        return [], []
+    d = f"{SKILLS_ROOT}/.claude/skills"
+    return ["# Claude Code: contributed skills (loaded with --add-dir)",
+            f"RUN mkdir -p {d} && " + " && ".join(f"ln -s {shlex.quote(dest)} {shlex.quote(f'{d}/{name}')}"
+                                                for name, dest in links)], []
 
 
 def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
@@ -188,9 +219,10 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
     p_state = cfg_dir / ".claude.json"
     _merge_json(p_state, {"hasCompletedOnboarding": True,
                           "projects": {work: {"hasTrustDialogAccepted": True}}})
-    return [p_settings, p_state, *_link_skills(cfg_dir, comp)]
+    return [p_settings, p_state]
 
 
 def describe(comp) -> list[str]:
-    servers, _ = _mcp(comp)
-    return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {n}" for n in servers)]
+    servers, _, _ = _mcp(comp)
+    return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {n}" for n in servers),
+            *(f"skill: {name} → {dest}" for name, dest in _skill_links(comp))]

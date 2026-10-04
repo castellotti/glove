@@ -12,6 +12,7 @@ and otherwise uses the nearest session at or above the cwd:
 
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from datetime import UTC, datetime
@@ -242,6 +243,9 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     from .plan import write_system_files
 
     write_system_files(plan, sd.state / "harness")
+    for p in plan.protect:  # a pinned dir over a trusted file may not exist yet
+        if p.kind == "dir" and p.host_path and not os.path.lexists(p.host_path):
+            os.makedirs(p.host_path)
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 

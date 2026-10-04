@@ -90,7 +90,9 @@ def test_harness_config_permissions(tmp_path):
 
 
 @pytest.mark.parametrize("hc", [{"mcp_servers": []}, {"permissions": {"mode": "x"}},
-                                {"permissions": {"defaultMode": "bypassPermissions"}}])
+                                {"permissions": {"defaultMode": "bypassPermissions"}},
+                                {"permissions": {"allow": "Bash(git:*)"}}, {"permissions": {"deny": [1]}},
+                                {"settings": ["theme"]}])
 def test_bad_harness_config_is_refused(tmp_path, hc):
     with pytest.raises(ConfigError, match="claude-code"):
         _plan(tmp_path, harness_config=hc)
@@ -144,12 +146,64 @@ def test_home_seeds_onboarding_and_trust_and_keeps_claude_codes_state(tmp_path):
     assert "How your environment works" in (home / ".claude" / "CLAUDE.md").read_text()
 
 
-def test_skills_are_linked_and_stale_links_replaced(tmp_path):
+def test_skills_are_baked_outside_the_config_home(tmp_path):
+    # the config home is denied to Read and to tool commands, so a skill's files
+    # must be reachable by the path Claude Code shows: <add-dir>/.claude/skills/<name>
+    from glove.harness import adapter_call
+
     cfg, plan = _plan(tmp_path, extensions={"media": {}, "ocr": {}, "rag": {"models_dir": str(tmp_path)}})
-    skills = tmp_path / "h" / ".claude" / "skills"
-    skills.mkdir(parents=True)
-    (skills / "stale").symlink_to("/opt/glove/skills/old/stale")
-    (skills / "mine").mkdir()  # the operator's own skill dir stays
+    assert plan.command[-2:] == ["--add-dir", "/opt/glove/cc"]
+    lines, _ = adapter_call(plan.profile, "image_lines", plan.composition)
+    assert lines[-1] == ("RUN mkdir -p /opt/glove/cc/.claude/skills"
+                         " && ln -s /opt/glove/skills/rag/rag-parse /opt/glove/cc/.claude/skills/rag-parse"
+                         " && ln -s /opt/glove/skills/rag/rag-query /opt/glove/cc/.claude/skills/rag-query")
     render_home(cfg, plan.profile, tmp_path / "h", plan.model, comp=plan.composition)
-    assert sorted(p.name for p in skills.iterdir()) == ["mine", "rag-parse", "rag-query"]
-    assert str((skills / "rag-query").readlink()) == "/opt/glove/skills/rag/rag-query"
+    assert not (tmp_path / "h" / ".claude" / "skills").exists()
+
+
+def test_no_skills_no_add_dir(tmp_path):
+    _, plan = _plan(tmp_path)
+    assert "--add-dir" not in plan.command
+
+
+def _searxng(tmp_path, enforcer):
+    _, plan = _plan(tmp_path, enforcer=enforcer, extensions={"direct": {}, "search": {}})
+    files = plan.system_files["/etc/claude-code"]
+    return files, json.loads(files["managed-mcp.json"])["mcpServers"]["searxng"]
+
+
+def test_stdio_mcp_runs_through_the_prefix_from_a_read_only_argv(tmp_path):
+    # not the tool wrapper: its profile has no network, and the server talks to a sidecar
+    files, server = _searxng(tmp_path, "nono")
+    assert server["command"] == "/opt/glove/bin/glove-cc-prefix" and server["args"] == ["--mcp", "searxng"]
+    assert server["env"] == {"SEARXNG_URL": "http://glove-s-search:8080"}
+    assert files["mcp-searxng.argv"] == "python3\n/opt/glove/ext/search/searxng_mcp.py\n"
+
+
+def test_stdio_mcp_without_an_enforcer_runs_directly(tmp_path):
+    files, server = _searxng(tmp_path, "none")
+    assert server["command"] == "python3" and not any(f.endswith(".argv") for f in files)
+
+
+def test_the_trusted_project_settings_are_protected(tmp_path):
+    _, plan = _plan(tmp_path)
+    got = {p.container_path: (p.kind, p.read_only) for p in plan.protect}
+    assert got == {"/work/.claude": ("dir", False), "/work/.claude/settings.json": ("file", True),
+                   "/work/.claude/settings.local.json": ("file", True)}
+
+
+def test_system_files_are_rewritten_in_place(tmp_path):
+    # a live session binds the dir: a re-plan must keep it (same inode), not swap it
+    _, plan = _plan(tmp_path)
+    root = tmp_path / "state" / "harness"
+    write_system_files(plan, root)
+    d = root / "claude-code"
+    inode = d.stat().st_ino
+    (d / "managed-settings.json").write_text("stale")
+    (d / "gone.json").write_text("{}")
+    (root / "old-dir").mkdir()
+    write_system_files(plan, root)
+    assert d.stat().st_ino == inode
+    assert json.loads((d / "managed-settings.json").read_text())["allowManagedHooksOnly"] is True
+    assert sorted(p.name for p in root.iterdir()) == ["claude-code"]
+    assert sorted(p.name for p in d.iterdir()) == ["managed-settings.json"]

@@ -20,3 +20,7 @@ runtime_paths: [/usr/local, /etc/claude-code]
 pip: { install: [pip3, install, --no-cache-dir, --break-system-packages], bootstrap: [python3, python3-pip] }
 resume: { continue: [--continue], session: [--resume, "{id}"] }
 contributions: [mcp, skills]
+# Project settings apply their `env` (LD_PRELOAD, BASH_ENV, exported functions)
+# and commands to processes Claude Code starts itself, outside ring 1: ring 0
+# binds them read-only, so only what the operator brought in is loaded.
+trusted_files: [.claude/settings.json, .claude/settings.local.json]
