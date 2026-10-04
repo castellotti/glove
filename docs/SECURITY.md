@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -220,6 +220,70 @@ has no server-side switch for it). The controls:
 - **Background traffic.** Chromium still contacts Google services
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
+
+## Claude Code: managed settings and the shell prefix
+
+Claude Code is the one harness whose ring-2 glue can live outside its writable
+config home. glove renders `/etc/claude-code/managed-settings.json` (and
+`managed-mcp.json`) to `.glove/harness/` and binds it read-only; managed
+settings override every other scope, and an unparseable managed file stops
+Claude Code from starting (fail closed).
+
+- **`CLAUDE_CODE_SHELL_PREFIX`** = `/opt/glove/bin/glove-cc-prefix` (baked,
+  read-only rootfs). Claude Code runs `<prefix> "<shell string>"` for the Bash
+  tool (main agent and subagents), operator `!` commands, hooks and MCP stdio
+  servers. The prefix reads the tool wrapper from
+  `/etc/glove/enforcer/tool-wrapper.argv` (read-only), drops `NONO_*`/`SRT_*`
+  from its environment, and execs `<wrapper> bash --norc -c "<string>"`. A
+  missing or empty wrapper, or anything but one argument, exits 126 without
+  running the command. The prefix is set **only** in managed settings: Phase-0
+  testing showed the agent's user `settings.json` `env` overrides one in the
+  process environment, but not a managed one (`test_cc_nono.sh` re-checks it
+  with the user setting blanked). With `enforcer: none` no prefix is set (there
+  is no wrapper to run under).
+- **MCP stdio servers** are rendered as `glove-cc-prefix --mcp <name>`; on
+  exactly that string the prefix execs `/etc/claude-code/mcp-<name>.argv`
+  (read-only) without the tool wrapper, so the server runs under the harness's
+  sandbox, with network, as under Pi and Vibe. The agent cannot produce that
+  string: a Bash or `!` string always starts with Claude Code's snapshot
+  `source`, and hooks are managed-only. An unknown name exits 126.
+- **Project settings** (`/work/.claude/settings.json`, `settings.local.json`)
+  are bound read-only at ring 0, on every enforcer (`trusted_files` in
+  `harness.yml`; an empty placeholder when missing, created on the host, and
+  `.claude` pinned as a mount point so it can't be renamed aside). Claude Code
+  applies their `env` to processes it starts itself, outside ring 1: tested,
+  a planted `LD_PRELOAD` loaded into its `git`/`cat`/`id`, `BASH_ENV` and
+  exported functions ran in its shells and in the bash prefix before it could
+  scrub anything. Their command settings (`apiKeyHelper`, `statusLine`, …)
+  are closed the same way. Only what the operator brought in is loaded
+  (`test_cc_nono.sh` plants both files with the Write tool and a command).
+- **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
+  `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
+  servers). A project's hooks and `.mcp.json` servers do not run.
+- **Config home:** `Read(//home/agent/.claude/**)` and
+  `Edit(//home/agent/.claude/**)` are denied to the agent's file tools (`//`
+  is an absolute path; Edit rules cover every writing tool). Tool commands
+  cannot reach the home at all (ring 1). Contributed skills are therefore
+  linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
+  home, so a skill's files are readable by the path Claude Code shows.
+- **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
+  every command still runs under ring 1. `WebFetch` is denied. Anything else
+  (an MCP tool outside an extension's allowlist) prompts the operator.
+- **Network:** with a subscription token Claude Code dials only
+  `api.anthropic.com`, through the `llm` forwarder; non-essential traffic,
+  telemetry, error reporting, auto-update, claude.ai connectors and artifacts
+  are off.
+- **Key:** `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) in the harness
+  env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
+  from every tool command. glove never writes key material: with an API key,
+  Claude Code itself asks once whether to use it and records the answer.
+- **Gaps:** a glove MCP stdio server has the harness's rights (config home,
+  network to the session's forwarders), as under Pi and Vibe. Project settings
+  are protected in the working dir Claude Code starts in (its project root);
+  whether it also loads a `.claude/settings*.json` from a subdirectory is
+  **untested**. The project's
+  `.claude/skills`, `agents` and `commands` stay writable (prompts; whatever
+  they run goes through ring 1).
 
 ## Tool commands and the terminal (TIOCSTI)
 

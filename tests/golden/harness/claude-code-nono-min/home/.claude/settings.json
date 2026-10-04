@@ -1,0 +1,8 @@
+{
+  "model": "claude-x",
+  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  }
+}

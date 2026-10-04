@@ -46,7 +46,7 @@ def test_nono_wraps_harness_command(tmp_path):
     plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), home_dir=str(tmp_path / "h"))
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
     assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
-    assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json"}
+    assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json", "tool-wrapper.argv"}
 
 
 def test_none_enforcer_leaves_command_bare(tmp_path):

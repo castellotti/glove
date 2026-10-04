@@ -15,7 +15,7 @@ routing and probes live in the `llm` extension.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +42,9 @@ class ModelDescriptor:
     api: str
     model: str
     api_key_env: str | None = None
+    # How the key authenticates: "api-key", or "oauth" (a subscription token the
+    # provider catalog allows only for some harnesses); the adapter picks its env.
+    api_key_kind: str = "api-key"
     vision: bool = False
     context_window: int = 32768
     max_tokens: int = 8192
@@ -59,10 +62,25 @@ class ModelDescriptor:
         return cls(
             base_url=str(ex["base_url"]), api=str(ex["api"]), model=str(ex["model"]),
             api_key_env=LLM_API_KEY_ENV if ex.get("api_key_secret") else None,
+            api_key_kind=str(ex.get("api_key_kind") or "api-key"),
             vision=bool(caps.get("vision")), context_window=int(caps.get("context_window") or 32768),
             max_tokens=int(caps.get("max_tokens") or 8192), reasoning=bool(caps.get("reasoning")),
             extra_models=tuple(ex.get("extra_models") or ()),
         )
+
+
+def harness_model(profile: HarnessProfile, exports: dict[str, Any]) -> ModelDescriptor:
+    """The descriptor for this harness: the key travels in the env var its
+    adapter names (`secret_env(model)`), else `GLOVE_LLM_API_KEY`."""
+    model = ModelDescriptor.from_exports(exports)
+    name = adapter_call(profile, "secret_env", model) if model.api_key_env else None
+    return replace(model, api_key_env=name) if name else model
+
+
+def mcp_tool_names(tools: str | Sequence[Any]) -> list[str]:
+    """An `mcp` contribution's `tools` allowlist (a comma-separated string or a
+    list) as tool names."""
+    return [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
 
 
 def _mount_plan_for(cfg: Config) -> MountPlan:

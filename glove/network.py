@@ -117,13 +117,26 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
         for logical in (ep.target.network, *ep.listen_networks):
             if logical and logical not in ("net", "hostgw") and scoped(session, logical) not in nets:
                 nets.append(scoped(session, logical))
-        impl = forwarder_service(comp, endpoint_info(ep, session, tuple(nets)))
+        target = f"{ep.target.host}:{ep.target.port}"
+        hop = None
+        if ep.target.host in ep.aliases:
+            # Docker's DNS answers a container's own alias first, so the aliased
+            # forwarder dialling that name would reach itself. A second hop, off
+            # the harness network (no alias there), dials the real name; a gate
+            # in front still records it from the TLS SNI.
+            hop = Sidecar(role=f"{ep.name}-out", listen_port=ep.target.port, target=target, harness=False,
+                          networks=tuple(nets))
+            target = f"{scoped(session, hop.role)}:{ep.target.port}"
+        info = {**endpoint_info(ep, session, tuple(nets)), "target": target}
+        impl = forwarder_service(comp, info)
         sidecars.append(Sidecar(
-            role=ep.name, listen_port=ep.port, target=f"{ep.target.host}:{ep.target.port}",
+            role=ep.name, listen_port=ep.port, target=target,
             host_gateway=ep.target.kind == "host", harness=ep.harness, networks=tuple(nets),
             aliases=ep.aliases, impl=impl[0] if impl else None, facts=impl[1] if impl else {},
             impl_aliases=tuple(impl[2]) if impl else (),
         ))
+        if hop is not None:
+            sidecars.append(hop)
     for logical, spec in (comp.networks if comp else {}).items():
         if logical not in ("net", "hostgw"):
             session_networks[scoped(session, logical)] = bool(spec.get("internal", True))

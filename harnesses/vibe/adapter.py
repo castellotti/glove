@@ -15,7 +15,7 @@ from typing import Any
 
 import tomli_w
 
-from glove.harnessconfig import rel_config_home
+from glove.harnessconfig import mcp_tool_names, rel_config_home
 
 # Descriptor api → Vibe (backend, api_style).
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
@@ -30,7 +30,7 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
         item = dict(item)
         allow = item.pop("tools", None)
         if allow is not None:
-            names = [t.strip() for t in (allow.split(",") if isinstance(allow, str) else allow) if str(t).strip()]
+            names = mcp_tool_names(allow)
             ok = re.fullmatch(r"[a-z0-9_]+", item["name"]) and all(re.fullmatch(r"[A-Za-z0-9_-]+", n) for n in names)
             if not ok:
                 raise ValueError(f"vibe mcp {item['name']!r}: bad tools {names}")

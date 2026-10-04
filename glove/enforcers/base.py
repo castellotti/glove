@@ -35,6 +35,12 @@ GLOVE_PTY = "/opt/glove/bin/glove-pty"
 SRT_ENFORCERS = frozenset({"srt", "nono+srt"})
 
 
+def argv_lines(argv: list[str]) -> str:
+    """An argv one argument per line (`*.argv`), for glue with no JSON parser
+    (Claude Code's shell prefix is a bash script)."""
+    return "".join(f"{a}\n" for a in argv)
+
+
 def uses_srt(enforcer: str) -> bool:
     return enforcer in SRT_ENFORCERS
 

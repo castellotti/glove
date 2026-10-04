@@ -27,7 +27,7 @@ HARNESSES_DIR = Path(__file__).resolve().parent.parent / "harnesses"
 MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
-    "transcript_subdir", "runtime_paths", "pip", "resume", "contributions",
+    "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
 })
 REQUIRED_KEYS = ("name", "image", "entry", "config_home", "context_file")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
@@ -70,6 +70,10 @@ class HarnessProfile:
     resume_session: tuple[str, ...] | None = None
     # Neutral extension contributions it renders (subset of CONTRIBUTIONS).
     contributions: frozenset[str] = frozenset()
+    # Files under its working dir the harness loads its own config from (e.g.
+    # Claude Code's project settings, whose `env` and commands it applies
+    # outside ring 1): ring 0 binds them read-only, so the agent cannot plant one.
+    trusted_files: tuple[str, ...] = ()
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
 
@@ -130,6 +134,10 @@ def load_profile(path: Path) -> HarnessProfile:
         opt["transcript_subdir"] = raw["transcript_subdir"]
     if "runtime_paths" in raw:
         opt["runtime_paths"] = _strs(raw["runtime_paths"], f"{where} runtime_paths")
+    if "trusted_files" in raw:
+        opt["trusted_files"] = _strs(raw["trusted_files"], f"{where} trusted_files")
+        if any(f.startswith("/") or ".." in f.split("/") for f in opt["trusted_files"]):
+            raise ConfigError(f"{where}: trusted_files are relative to the working dir, without '..'")
     return HarnessProfile(
         name=raw["name"], image=str(raw["image"]), entry=list(_strs(raw["entry"], f"{where} entry")),
         config_home_env=str(home["env"]), config_home_path=str(home["path"]),

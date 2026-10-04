@@ -262,13 +262,18 @@ def launch(
 def probe_http(
     provider: str, plan: SessionPlan, url: str, *, method: str = "GET", body: dict | None = None,
     auth_env: dict[str, str] | None = None, auth_header: str = "Authorization", auth_scheme: str = "Bearer",
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     """HTTP request from a throwaway, hardened container on the harness network,
     so the host never resolves or contacts the endpoint itself. A key travels
-    only as an env var of that container (never in any argv)."""
+    only as an env var of that container (never in any argv); `headers` are
+    public request headers (e.g. an API version)."""
     import json as _json
+    import shlex
 
     script = 'curl -sS -m 20 -o /tmp/b -w "%{http_code}" -X "$M" "$U"'
+    for k, v in (headers or {}).items():
+        script += " -H " + shlex.quote(f"{k}: {v}")
     if body is not None:
         script += ' -H "content-type: application/json" --data "$B"'
     if auth_env:

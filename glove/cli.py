@@ -237,6 +237,13 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         for fname, content in plan.policies.items():
             (enforcer_dir / fname).write_text(content)
         plan.policies_host_dir = str(enforcer_dir)
+    # The adapter's read-only system config (e.g. Claude Code's managed
+    # settings), likewise in .glove/ and bound read-only.
+    from .mounts import make_pinned_dirs
+    from .plan import write_system_files
+
+    write_system_files(plan, sd.state / "harness")
+    make_pinned_dirs(plan.protect)  # a pinned dir over a trusted file may not exist yet
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 
@@ -370,20 +377,22 @@ def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
     """Run each active extension's `resolve` hook (after sidecars are up) and
     refresh the model descriptor from the inference slot's resolved exports."""
     from .extensions import base_context
-    from .harnessconfig import LLM_API_KEY_ENV, ModelDescriptor
+    from .harnessconfig import LLM_API_KEY_ENV, harness_model
     from .session import probe_http
 
     comp = plan.composition
+    name = plan.model.api_key_env if plan.model is not None else None
+    key = {LLM_API_KEY_ENV: secrets[name]} if name in secrets else None
     for a in comp.active:
         if a.hooks is None or not hasattr(a.hooks, "resolve"):
             continue
         ex = a.exports
-        key = {LLM_API_KEY_ENV: secrets[LLM_API_KEY_ENV]} if LLM_API_KEY_ENV in secrets else None
 
-        def probe(url, method="GET", body=None, auth=False, _ex=ex, _key=key):
-            return probe_http(provider, plan, url, method=method, body=body, auth_env=_key if auth else None,
+        def probe(url, method="GET", body=None, auth=False, _ex=ex):
+            return probe_http(provider, plan, url, method=method, body=body, auth_env=key if auth else None,
                               auth_header=_ex.get("auth_header", "Authorization"),
-                              auth_scheme=_ex.get("auth_scheme", "Bearer"))
+                              auth_scheme=_ex.get("auth_scheme", "Bearer"),
+                              headers=_ex.get("probe_headers") or {})
 
         try:
             a.exports, notes = a.hooks.resolve(base_context(comp, a), ex, probe)
@@ -392,7 +401,7 @@ def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
         for n in notes:
             console.print(f"  [cyan]{a.name}:[/cyan] {n}")
     if "inference" in comp.slots:
-        plan.model = ModelDescriptor.from_exports(comp.slot_exports("inference"))
+        plan.model = harness_model(plan.profile, comp.slot_exports("inference"))
 
 
 def _validate_resume(profile, home_dir: Path, session_id: str | None, sid: str):
@@ -455,6 +464,8 @@ def _print_summary(plan, home_files) -> None:
             f"[bold]enforcer[/bold] ({plan.enforcer}): "
             f"{', '.join(sorted(plan.policies))} → {plan.policies_container_dir} [dim](ro)[/dim]"
         )
+    for target, files in sorted(plan.system_files.items()):
+        console.print(f"[bold]harness system config[/bold]: {', '.join(sorted(files))} → {target} [dim](ro)[/dim]")
     console.print("[bold]forwarders (network allow-list)[/bold]")
     if not plan.network.sidecars:
         console.print("  [dim](none — harness is fully offline)[/dim]")
