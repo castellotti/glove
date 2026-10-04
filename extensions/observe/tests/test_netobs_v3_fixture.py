@@ -12,12 +12,18 @@ from extensions.gate.netgate.policy import parse_bytes
 from extensions.observe.tests.fixtures.generate import OUT, SCENARIOS, generate
 
 
+def _files(root: Path) -> set[Path]:
+    """Files under `root`, relative to it. Folders count only through their
+    files: git can't carry an empty one (generate.py's empty control/ roots),
+    so a checkout may or may not have them."""
+    return {p.relative_to(root) for p in root.rglob("*") if p.is_file()}
+
+
 def _dirs_equal(a: Path, b: Path) -> list[str]:
-    cmp = filecmp.dircmp(a, b)
-    diffs = [*cmp.left_only, *cmp.right_only, *cmp.diff_files]
-    for sub in cmp.common_dirs:
-        diffs += _dirs_equal(a / sub, b / sub)
-    return diffs
+    fa, fb = _files(a), _files(b)
+    diffs = fa ^ fb
+    diffs |= {f for f in fa & fb if not filecmp.cmp(a / f, b / f, shallow=False)}
+    return sorted(map(str, diffs))
 
 
 def test_the_checked_in_fixture_is_current(tmp_path):
@@ -32,7 +38,7 @@ def _home(name: str) -> tuple[Path, dict]:
 
 
 def test_every_scenario_says_what_it_is():
-    assert sorted(p.name for p in OUT.iterdir()) == sorted(SCENARIOS)
+    assert sorted(p.name for p in OUT.iterdir() if _files(p)) == sorted(SCENARIOS)
     for name in SCENARIOS:
         home, row = _home(name)
         sid = row["id"]

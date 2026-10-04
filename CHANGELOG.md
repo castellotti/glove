@@ -41,6 +41,9 @@ All notable changes to glove are documented here.
 - Vibe transcripts (`session_<ts>_<id>/messages.jsonl`) take their id from the
   folder, not the file name, so `glove up --session <id>` and the post-exit
   resume hint use Vibe's real id instead of `messages`.
+- The `netobs-v3` fixture tests compare files only. `generate.py` writes empty
+  `control/` folders that git can't carry, so the tests passed or failed
+  depending on which folders a checkout happened to leave behind.
 
 ### Added
 
