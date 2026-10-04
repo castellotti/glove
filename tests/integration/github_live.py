@@ -120,6 +120,11 @@ def main(directory: str, repo: str | None) -> int:
         out = sh(f"cd /work && git clone -q {PUBLIC_REPO} hello && git -C hello log --oneline -1; echo rc=$?")
         check("git clone into /work, then local git on it",
               "rc=0" in out and (sd.root / "work" / "hello" / ".git").is_dir(), out)
+        out = sh("cd /work && git init -q fresh && cd fresh && date > f && git add f && "
+                 "git -c user.name=t -c user.email=t@example.invalid commit -qm t && git status --short; "
+                 "cd /work/hello && git checkout -q -b local-t; echo rc=$?")
+        check("local git on fresh checkouts (init, commit, branch) — not 'dubious ownership'",
+              "rc=0" in out and "dubious" not in out, out)
         out = sh("cd /work/hello && git pull; echo rc=$?")
         check("git pull (relayed fetch + local merge)", "rc=0" in out and "Already up to date" in out, out)
         out = sh("curl -sS -m 4 https://github.com >/dev/null 2>&1; echo net=$?")
@@ -141,6 +146,16 @@ def main(directory: str, repo: str | None) -> int:
             out = sh(f"gh api repos/{repo} --jq .full_name; echo rc=$?")
             check("gh api GET", repo in out and "rc=0" in out, out)
             branch = f"glove-relay-test-{sid}"
+            # empty, or an unreadable answer: never push (the first branch pushed to an empty
+            # repository becomes its default, which cannot be deleted again)
+            size = re.search(r"SIZE=(\d+)/BRANCHES=(\d+) rc=0", sh(
+                f"echo SIZE=$(gh api repos/{repo} --jq .size)/BRANCHES=$(gh api repos/{repo}/branches --jq length); "
+                "echo rc=$?"))
+            if not size or size.group(2) == "0":
+                print("    SKIP: the scratch repository has no branch (or its size could not be read): its first"
+                      " pushed branch would become the default, which cannot be deleted again; give it one commit")
+                repo = None
+        if repo:
             out = sh(f"cd /work && git clone -q https://github.com/{repo}.git scratch && cd scratch && "
                      f"git checkout -q -b {branch} && date > glove-relay-test.txt && git add . && "
                      f"git -c user.name=glove -c user.email=glove@example.invalid commit -qm 'glove relay test' && "

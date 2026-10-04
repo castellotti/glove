@@ -70,6 +70,9 @@ All notable changes to glove are documented here.
   files and FIFOs there because glove's seccomp below srt forbids Unix sockets.
   Also core: the **`work` privilege**, which binds the harness's whole `/work`
   read-write into one sidecar. Both are for in-tree or trusted extensions only.
+- `github` sets `safe.directory=*` for git in the harness (`GIT_CONFIG_PARAMETERS`)
+  and in the sidecar. On Docker Desktop, a checkout that was just made reads as
+  root-owned inside the harness, so git refused it as "dubious ownership".
 
 ### Changed
 

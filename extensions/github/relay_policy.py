@@ -79,6 +79,7 @@ def git_hardening(proxy: str) -> list[tuple[str, str]]:
         ("maintenance.auto", "false"),
         ("fetch.writeCommitGraph", "false"),
         ("safe.bareRepository", "explicit"),
+        ("safe.directory", "*"),  # the harness made these checkouts; ownership reads oddly across mounts
     ]
 
 
