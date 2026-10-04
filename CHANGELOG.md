@@ -36,7 +36,9 @@ All notable changes to glove are documented here.
   place (atomic per file), so a re-plan never swaps the dir a live session binds.
 - `webfetch` for Vibe: a `fetch_url` MCP tool served over HTTP by a hardened
   `fetcher` sidecar (a port of Pi's web_fetch and its destination guard: public
-  pages only, every redirect re-checked, policy refusals named). The harness
+  pages only, every redirect re-checked, policy refusals named; IPv4 in hex,
+  octal or shortened form is refused, since Python does not normalise it as
+  Node does; an unknown page charset falls back to utf-8). The harness
   reaches only the fetcher, never the egress proxy; with `observe` the fetcher's
   traffic goes through its own gate (`client: webfetch`, a new netgate client
   label).

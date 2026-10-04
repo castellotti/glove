@@ -40,7 +40,11 @@ flows `client: webfetch`).
 **Destinations.** Both tools read public web pages only. It refuses
 non-global IP literals (loopback, RFC 1918, link-local/metadata, CGNAT, ULA …),
 single-label and local names (`localhost`, `*.local`, `*.internal`,
-`host.docker.internal` …) and URLs with credentials, before anything is sent. It
+`host.docker.internal` …) and URLs with credentials, before anything is sent.
+Vibe's guard also refuses IPv4 addresses spelled any way but as a dotted quad
+(`0xa.0.0.1`, `012.0.0.1`, `127.1`), which the resolver behind the proxy would
+read as addresses (Node's URL rewrites them before Pi's guard sees them), and
+judges IPv6 in its compressed form. It
 follows redirects itself (at most 5) and checks every hop. Names are judged by
 shape and never resolved, so a public name that resolves to a private address is
 not caught here. Under `direct`, tinyproxy's filter is the second layer with the

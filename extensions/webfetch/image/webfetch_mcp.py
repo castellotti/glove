@@ -51,6 +51,24 @@ def _v4(ip: str) -> list[int]:
     return [int(x) for x in ip.split(".")]
 
 
+def _canonical(host: str) -> str | None:
+    """`host` in the one spelling the guard judges, or None for an IPv4 address
+    written any other way (`0xa.0.0.1`, `012.0.0.1`, `127.1`, `10.1`). Node's URL
+    rewrites those to dotted quads before guard.ts sees them; urlsplit does not,
+    and the resolver behind the proxy (inet_aton) reads them as addresses."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            socket.inet_aton(host)
+        except (OSError, ValueError):
+            return host
+        return None
+    if ip.version == 6:
+        return f"::ffff:{ip.ipv4_mapped}" if ip.ipv4_mapped else ip.compressed
+    return host
+
+
 def _ip_kind(host: str) -> int:
     try:
         return ipaddress.ip_address(host).version
@@ -111,7 +129,9 @@ def refusal(url: str, allow: list[str] | None = None) -> str | None:
         return "not an http(s) URL"
     if u.username or u.password:
         return "URLs with credentials are not fetched"
-    host = (u.hostname or "").lower().rstrip(".")
+    host = _canonical((u.hostname or "").lower().rstrip("."))
+    if host is None:
+        return f"{u.hostname} is an IP address in a non-standard form"
     kind = _ip_kind(host)
     if allow:
         if host in HARD_NAMES or host.endswith(".localhost"):
@@ -253,7 +273,11 @@ def fetch(url: str, max_chars: int = 20000, raw: bool = False) -> str:
                     "source. If web_search is also failing, the egress itself may be down.")
     assert res is not None
     with res:
-        body = res.read(MAX_BODY).decode(res.headers.get_content_charset() or "utf-8", "replace")
+        data = res.read(MAX_BODY)
+        try:
+            body = data.decode(res.headers.get_content_charset() or "utf-8", "replace")
+        except LookupError:  # a charset Python does not know
+            body = data.decode("utf-8", "replace")
         ctype = res.headers.get("Content-Type") or ""
     if raw:
         out = body

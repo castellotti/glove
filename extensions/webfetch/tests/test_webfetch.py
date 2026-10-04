@@ -108,6 +108,13 @@ def _server():
     ("http://[::ffff:10.0.0.1]/", False), ("http://localhost:8080/", False), ("http://intranet/", False),
     ("http://host.docker.internal:8080/", False), ("http://printer.local/", False),
     ("http://nas.home.arpa/", False), ("http://example.com./", True),
+    # IPv4 spelled other than as a dotted quad: Node's URL normalises it, urlsplit
+    # does not, and the resolver behind the proxy (inet_aton) reads it as an address
+    ("http://0xa.0.0.1/", False), ("http://012.0.0.1/", False), ("http://010.0.0.1/", False),
+    ("http://127.1/", False), ("http://10.1/", False), ("http://2130706433/", False), ("http://0x8.8.8.8/", False),
+    # IPv6 is judged compressed, IPv4-mapped as IPv4
+    ("http://[0:0:0:0:0:0:0:1]/", False), ("http://[::ffff:a00:1]/", False), ("http://[FD00::1]/", False),
+    ("http://[::ffff:8.8.8.8]/", True), ("http://[::ffff:808:808]/", True),
 ])
 def test_guard(url, ok):
     assert (_server().refusal(url, []) is None) is ok
@@ -119,6 +126,7 @@ def test_guard_corporate_allowlist():
     assert m.refusal("https://git.corp.example/", allow) is None
     assert m.refusal("http://10.20.3.4/", allow) is None
     assert m.refusal("http://10.21.3.4/", allow) == "10.21.3.4 is not a public address"
+    assert m.refusal("http://0xa.20.3.4/", allow) == "0xa.20.3.4 is an IP address in a non-standard form"
     # this machine and metadata stay refused whatever the list says
     assert "this machine" in m.refusal("http://localhost/", ["localhost"])
     assert "not a reachable address" in m.refusal("http://169.254.169.254/", ["169.254.0.0/16"])
@@ -144,6 +152,7 @@ class _Proxy(BaseHTTPRequestHandler):
             "http://example.com/loop": (302, "text/plain", "", {"Location": "/loop"}),
             "http://example.com/blocked": (403, "text/plain", "glove netgate refused: rule example", {}),
             "http://example.com/slow": (429, "text/plain", "", {}),
+            "http://example.com/bogus-charset": (200, "text/html; charset=no-such-codec", "<p>café</p>", {}),
         }
         status, ctype, body, headers = routes.get(self.path, (404, "text/plain", "", {}))
         data = body.encode()
@@ -180,6 +189,10 @@ def test_fetch_reports_policy_refusals_and_rate_limits(server):
     assert server.fetch("http://example.com/slow").startswith("Rate-limited (HTTP 429)")
     assert server.fetch("http://example.com/missing") == "HTTP 404 for http://example.com/missing"
     assert server.fetch("http://example.com/page", max_chars=5).startswith("Examp\n\n[truncated to 5 chars]")
+
+
+def test_fetch_falls_back_to_utf8_for_an_unknown_charset(server):
+    assert server.fetch("http://example.com/bogus-charset").startswith("café")
 
 
 def test_fetch_refuses_without_a_proxy_or_to_a_private_host(server, monkeypatch):
