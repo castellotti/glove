@@ -35,7 +35,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from .config import ConfigError, HostService, is_secret_ref
 from .exports import ensure_dir
-from .harness import get_profile, known_harnesses
+from .harness import CONTRIBUTIONS, get_profile, known_harnesses
 from .mounts import host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
@@ -759,14 +759,15 @@ def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
 
 # `harness:` keys every extension may use; a harness's own name keys a section
 # only its adapter reads (e.g. `pi: {extensions: [...]}`).
-HARNESS_KEYS = frozenset({"image", "env", "brief", "mcp", "skills"})
+HARNESS_KEYS = frozenset({"image", "env", "brief"}) | CONTRIBUTIONS
 
 
 def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
     h = a.manifest.raw.get("harness") or {}
     where = f"extension {a.name!r} harness"
+    allowed = HARNESS_KEYS | set(known_harnesses())
     for k in h:
-        if k not in HARNESS_KEYS and k not in known_harnesses():
+        if k not in allowed:
             raise ExtensionError(f"{where}: unknown key {k!r} (known: {sorted(HARNESS_KEYS)} or a harness name)")
     profile = get_profile(comp.harness)
     image = h.get("image") or {}

@@ -45,7 +45,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
     cfg_dir.mkdir(parents=True, exist_ok=True)
     # Pre-create the session-log dir so an external monitor (e.g. Layman) can
     # bind-mount it read-only before Vibe's first turn writes messages.jsonl.
-    (cfg_dir / "logs" / "session").mkdir(parents=True, exist_ok=True)
+    (cfg_dir / profile.sessions_subdir).mkdir(parents=True, exist_ok=True)
 
     if model.api not in VIBE_BACKENDS:
         raise ValueError(f"Vibe cannot speak the {model.api!r} API; pick an OpenAI-compatible or Mistral provider")
@@ -116,7 +116,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
     # Ring-1 tool hook: route every bash tool call through the enforcer's
     # per-command sandbox. Only when an in-container enforcer is
     # active — `none` has no wrapper to invoke.
-    if cfg.enforcer in ("nono", "nono+srt", "srt"):
+    if cfg.enforcer != "none":
         written.append(_write_vibe_hooks(cfg_dir))
     return written
 

@@ -46,10 +46,9 @@ def entry_args(comp) -> list[str]:
 
 def image_lines(comp) -> tuple[list[str], list[tuple[str, Path]]]:
     lines: list[str] = []
-    staged: list[tuple[str, Path]] = []
-    for ext, src in extensions(comp):
+    staged = extensions(comp)
+    for ext, src in staged:
         dest = extension_dest(ext, src)
-        staged.append((ext, src))
         lines.append(f"# extension: {ext} (Pi extension)")
         lines.append(f"COPY {staged_name(ext, src)} {dest}")
         if (src / "package.json").is_file():

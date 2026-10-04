@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import yaml
 
@@ -121,19 +122,24 @@ def load_profile(path: Path) -> HarnessProfile:
     contrib = frozenset(_strs(raw.get("contributions") or [], f"{where} contributions"))
     if contrib - CONTRIBUTIONS:
         raise ConfigError(f"{where}: contributions must be among {sorted(CONTRIBUTIONS)}")
+    # optional keys: set only when given, so the dataclass holds the defaults
+    opt: dict[str, Any] = {}
+    if "sessions_subdir" in raw:
+        opt["sessions_subdir"] = str(raw["sessions_subdir"])
+    if "transcript_subdir" in raw:
+        opt["transcript_subdir"] = raw["transcript_subdir"]
+    if "runtime_paths" in raw:
+        opt["runtime_paths"] = _strs(raw["runtime_paths"], f"{where} runtime_paths")
     return HarnessProfile(
         name=raw["name"], image=str(raw["image"]), entry=list(_strs(raw["entry"], f"{where} entry")),
         config_home_env=str(home["env"]), config_home_path=str(home["path"]),
         context_file=str(raw["context_file"]),
-        sessions_subdir=str(raw.get("sessions_subdir", "sessions")),
-        transcript_subdir=raw.get("transcript_subdir", "sessions"),
         default_env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
-        runtime_paths=_strs(raw.get("runtime_paths", ["/usr/local"]), f"{where} runtime_paths"),
         pip_install=_strs(pip["install"], f"{where} pip.install") if "install" in pip else None,
         pip_bootstrap=_strs(pip.get("bootstrap") or [], f"{where} pip.bootstrap"),
         resume_continue=_strs(resume["continue"], f"{where} resume") if "continue" in resume else None,
         resume_session=_strs(resume["session"], f"{where} resume") if "session" in resume else None,
-        contributions=contrib, path=path,
+        contributions=contrib, path=path, **opt,
     )
 
 
@@ -187,12 +193,8 @@ def _adapter_module(path: Path) -> ModuleType | None:
     return module
 
 
-def harness_adapter(profile: HarnessProfile) -> ModuleType | None:
-    """The harness's `adapter.py` (imported on first use), or None."""
-    return _adapter_module(profile.path) if profile.path is not None else None
-
-
 def adapter_call(profile: HarnessProfile, name: str, *args, default=None, **kw):
-    """Call `adapter.<name>(…)` when the harness defines it; else `default`."""
-    fn = getattr(harness_adapter(profile), name, None)
+    """Call `adapter.<name>(…)` (its `adapter.py`, imported on first use) when
+    the harness defines it; else `default`."""
+    fn = getattr(_adapter_module(profile.path) if profile.path is not None else None, name, None)
     return fn(*args, **kw) if fn is not None else default
