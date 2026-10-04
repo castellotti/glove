@@ -38,12 +38,10 @@ def test_requires_egress(tmp_path):
 LOCAL_LLM = {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080", "model": "m"}
 
 
-@pytest.mark.parametrize("harness", ["vibe", "claude-code"])
 @pytest.mark.parametrize("observe", [False, True])
-def test_mcp_harnesses_get_fetch_url_from_a_sidecar(tmp_path, harness, observe):
-    exts = {"direct": {}, "webfetch": {}, **({"observe": {}} if observe else {}),
-            **({"llm": LOCAL_LLM} if harness == "claude-code" else {})}
-    cfg = make_cfg(harness=harness, name="s", workdir=str(tmp_path), extensions=exts)
+def test_vibe_gets_fetch_url_from_a_sidecar(tmp_path, observe):
+    exts = {"direct": {}, "webfetch": {}, **({"observe": {}} if observe else {})}
+    cfg = make_cfg(harness="vibe", name="s", workdir=str(tmp_path), extensions=exts)
     plan, text = render(cfg, tmp_path)
     assert [s for _, s in plan.composition.mcp] == [
         {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp"}]
@@ -63,6 +61,16 @@ def test_mcp_harnesses_get_fetch_url_from_a_sidecar(tmp_path, harness, observe):
         assert set(svc["networks"]) == {"glove-s-egress", "glove-s-fetchnet"}
         assert svc["environment"]["GLOVE_FETCH_PROXY"] == "http://glove-s-direct-proxy:8888"
     assert "webfetch" not in (plan.derived_dockerfile or "")
+
+
+def test_claude_code_uses_its_own_webfetch_through_the_proxy_endpoint(tmp_path):
+    cfg = make_cfg(harness="claude-code", name="s", workdir=str(tmp_path),
+                   extensions={"direct": {}, "webfetch": {}, "llm": LOCAL_LLM})
+    plan, text = render(cfg, tmp_path)
+    assert plan.composition.mcp == [] and "glove-s-fetcher" not in yaml.safe_load(text)["services"]
+    fwd = next(s for s in plan.network.sidecars if s.role == "proxy")
+    assert fwd.harness and fwd.target == "glove-s-direct-proxy:8888"
+    assert "WebFetch" in dict(plan.composition.rendered_briefs())["webfetch"]
 
 
 def test_the_sidecar_image_is_hash_pinned():

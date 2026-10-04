@@ -35,25 +35,10 @@
       "client": "harness"
     },
     {
-      "service": "webfetch-mcp",
-      "listen": "glove-claude-code-0f1a2b-webfetch-mcp:8000",
+      "service": "proxy",
+      "listen": "glove-claude-code-0f1a2b-proxy:8888",
       "observed": true,
       "harness": true,
-      "mode": "tcp",
-      "tool": "web_fetch",
-      "scope": "local",
-      "upstream": "tcp:glove-claude-code-0f1a2b-fetcher:8000",
-      "route": {
-        "kind": "tcp",
-        "upstream": "tcp:glove-claude-code-0f1a2b-fetcher:8000"
-      },
-      "client": "harness"
-    },
-    {
-      "service": "webfetch-egress",
-      "listen": "glove-claude-code-0f1a2b-webfetch-egress:8888",
-      "observed": true,
-      "harness": false,
       "mode": "http-proxy",
       "tool": "web_fetch",
       "scope": null,
@@ -62,7 +47,7 @@
         "kind": "direct",
         "upstream": "http://glove-claude-code-0f1a2b-direct-proxy:8888"
       },
-      "client": "webfetch"
+      "client": "harness"
     }
   ],
   "grants": {

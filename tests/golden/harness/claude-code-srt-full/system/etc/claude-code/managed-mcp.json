@@ -7,10 +7,6 @@
     "searxng": {
       "type": "http",
       "url": "http://glove-s-search-mcp:8000/mcp"
-    },
-    "webfetch": {
-      "type": "http",
-      "url": "http://glove-s-webfetch-mcp:8000/mcp"
     }
   }
 }

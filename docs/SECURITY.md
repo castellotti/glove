@@ -267,16 +267,42 @@ Claude Code from starting (fail closed).
   linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
   home, so a skill's files are readable by the path Claude Code shows.
 - **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
-  every command still runs under ring 1. `WebFetch` is denied (`webfetch`'s
-  `fetch_url` reads pages through the egress from a sidecar). An extension's
+  every command still runs under ring 1. `WebFetch` is denied unless the
+  session has `webfetch` (see "Claude Code's own WebFetch" below). An extension's
   MCP allowlist (`tools`) becomes allow rules, and every other tool the server
   is known to have (`all_tools`) a deny rule, so Claude Code never offers it
   and no prompt can approve it (Playwright's `browser_run_code_unsafe`,
   `browser_evaluate`). A tool unknown to `all_tools` would prompt.
 - **Network:** with a subscription token Claude Code dials only
-  `api.anthropic.com`, through the `llm` forwarder; non-essential traffic,
-  telemetry, error reporting, auto-update, claude.ai connectors and artifacts
-  are off.
+  `api.anthropic.com`, through the `llm` forwarder (plus WebFetch through the
+  egress proxy, with `webfetch`); non-essential traffic, telemetry, error
+  reporting, auto-update, claude.ai connectors and artifacts are off.
+- **Claude Code's own WebFetch (with `webfetch`).** glove keeps the tool Claude
+  Code expects rather than substituting one, and points it at the egress:
+  managed `HTTPS_PROXY`/`HTTP_PROXY` = the `proxy` endpoint, `NO_PROXY` = every
+  session forwarder name and alias plus loopback (managed, so the agent cannot
+  change either). Compared with Pi's `web_fetch` and Vibe's `fetch_url`, this
+  is broader in these ways:
+  - **no client-side destination guard.** Private, loopback and metadata
+    destinations are refused only at the egress: tinyproxy's filter under
+    `direct`, the tunnel under `tor`/`vpn`, the corporate gate's allowlist, and
+    with `observe` the gate's SSRF guard (both verified live with `direct`:
+    "proxy refused the connection"). Redirects are not followed across hosts by
+    Claude Code itself, so a redirect into the LAN needs a second WebFetch call,
+    which the egress refuses the same way;
+  - **the harness process holds the raw egress proxy**, as Pi does. Anything in
+    Claude Code that honours `HTTPS_PROXY` and is not a session forwarder goes
+    out through the egress, not just WebFetch. Tool commands still have no
+    network;
+  - **domain preflight**: Claude Code asks `api.anthropic.com` whether it may
+    fetch each domain, so Anthropic learns the domains fetched (over the
+    inference link with `provider: anthropic`, otherwise through the egress).
+    `skipWebFetchPreflight` is left unset: the blocklist is Claude Code's
+    default safety check;
+  - **page content goes to the inference provider**, summarised by a second
+    model call (as any tool result does), and Claude Code's request headers
+    identify it, so behind `tor`/`vpn` its fetches are distinguishable from a
+    browser's.
 - **Key:** `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) in the harness
   env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
   from every tool command. glove never writes key material: with an API key,
@@ -433,8 +459,7 @@ reporting `rules`).
   on the search extension's private network. The gate is never on the harness
   network and is never offered to the harness (tests and a live check assert
   SearXNG cannot reach the proxy directly). The SSRF guard and, with filter, the
-  rules cover SearXNG's requests too. The `fetcher` (`webfetch` for Vibe and
-  Claude Code) is held the same way behind `webfetch-egress` (`client:
+  rules cover SearXNG's requests too. The `fetcher` (`webfetch` for Vibe) is held the same way behind `webfetch-egress` (`client:
   webfetch`); without observe it dials the proxy on the internal egress network.
 - **MCP sidecars.** `searxng-mcp` and `fetcher` serve MCP over HTTP to their
   harness forwarder only: they are not on the harness network, get the full

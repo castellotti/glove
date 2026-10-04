@@ -15,8 +15,8 @@ One directory per scenario, each holding `home/`: a tree shaped like
   orphaned                the session dir was deleted: registry row + export
   not-observable          a registry row only (grants null), no export
   claude-code             observe on a Claude Code session: its transcript
-                          layout (-work/<uuid>.jsonl + subagents/) and the
-                          fetcher's flow (`webfetch-egress`, client webfetch)
+                          layout (-work/<uuid>.jsonl + subagents/); WebFetch
+                          flows through `proxy` as Pi's do
 
 Sessions are planned with `glove plan` (session.json, grants, registry rows),
 flows come from the gate's own record builders and status.json from the
@@ -60,33 +60,11 @@ def _session_file(extra: str, harness: str = "pi") -> str:
 
 def _flows(net: Path, sid: str, *, filtered: bool, harness: str = "pi") -> None:
     """Two closed flows from the gate's own builder: one allowed, and one
-    blocked by a rule (filter) or by the SSRF guard (observe only). A Claude
-    Code session fetches through the `fetcher` sidecar: its harness hop is
-    `webfetch-mcp`, and the fetch itself is `webfetch-egress`, client webfetch."""
+    blocked by a rule (filter) or by the SSRF guard (observe only). Claude
+    Code's own WebFetch goes through the same `proxy` endpoint as Pi's web_fetch."""
     from extensions.gate.netgate.records import flow_record
 
     blocked_rule = "r_fixture_1" if filtered else "builtin:ssrf-guard"
-    if harness == "claude-code":
-        up = f"http://glove-{sid}-direct-proxy:8888"
-        recs = [
-            flow_record(phase="close", flow_id="f_1", env=sid, session=sid, t=1.0, t_open=0.4, t_close=1.0,
-                        service="webfetch-mcp", tool="web_fetch", client="harness", proto="tcp",
-                        dest_host=f"glove-{sid}-fetcher", dest_port=8000, dest_ip=None, resolution="unavailable",
-                        scope="local", route_kind="tcp", route_upstream=None, up=300, down=2048, verdict="allow",
-                        rule=None, close_reason="eof", request=None, run="g_1"),
-            flow_record(phase="close", flow_id="f_2", env=sid, session=sid, t=1.0, t_open=0.5, t_close=1.0,
-                        service="webfetch-egress", tool="web_fetch", client="webfetch", proto="http-connect",
-                        dest_host="en.wikipedia.org", dest_port=443, dest_ip=None, resolution="unavailable",
-                        scope="direct", route_kind="direct", route_upstream=up, up=512, down=40960,
-                        verdict="allow", rule=None, close_reason="eof", request=None, run="g_1"),
-            flow_record(phase="close", flow_id="f_3", env=sid, session=sid, t=2.0, t_open=2.0, t_close=2.0,
-                        service="webfetch-egress", tool="web_fetch", client="webfetch", proto="http-connect",
-                        dest_host="169.254.169.254", dest_port=443, dest_ip=None, resolution="literal",
-                        scope="local", route_kind="direct", route_upstream=up, up=48, down=120, verdict="block",
-                        rule="builtin:ssrf-guard", close_reason="blocked", request=None, run="g_1"),
-        ]
-        (net / "flows.ndjson").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
-        return
     recs = [
         flow_record(phase="close", flow_id="f_1", env=sid, session=sid, t=1.0, t_open=0.5, t_close=1.0,
                     service="proxy", tool="web_fetch", client="harness", proto="http-connect",
@@ -114,8 +92,8 @@ def _cc_transcript(root: Path) -> None:
          "message": {"role": "user", "content": "hello"}},
         {**base, "type": "assistant", "uuid": "a-1", "parentUuid": "u-1",
          "message": {"role": "assistant", "model": "claude-test", "content": [
-             {"type": "tool_use", "id": "toolu_1", "name": "mcp__webfetch__fetch_url",
-              "input": {"url": "https://en.wikipedia.org/"}}]}},
+             {"type": "tool_use", "id": "toolu_1", "name": "WebFetch",
+              "input": {"url": "https://en.wikipedia.org/", "prompt": "summarise"}}]}},
     ]
     (t / f"{CC_SESSION}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
     sub = {**base, "type": "user", "uuid": "s-1", "parentUuid": None, "isSidechain": True, "agentId": "a1b2c3",

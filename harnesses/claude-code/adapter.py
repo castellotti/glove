@@ -14,7 +14,9 @@ stops Claude Code from starting. They carry:
   as Pi and Vibe run theirs: the tool profile has no network to reach a sidecar;
 - managed-only hooks, permission rules and MCP servers, and deny rules on the
   config home (`//` is an absolute path; Edit rules cover every write tool);
-- the switches that keep Claude Code to its inference host.
+- the switches that keep Claude Code to its inference host;
+- with `webfetch`, Claude Code's own WebFetch through the egress proxy
+  (`HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`).
 
 `render_home` writes the user-scope `settings.json` (cosmetic, model) and merges
 the onboarding/trust state into `.claude.json`, which Claude Code also writes.
@@ -33,7 +35,9 @@ from urllib.parse import urlsplit
 
 from glove.config import ConfigError
 from glove.enforcers.base import argv_lines
+from glove.extensions import ExtensionError, render_value
 from glove.harnessconfig import _mount_plan_for, mcp_tool_names, rel_config_home
+from glove.naming import scoped
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
@@ -44,11 +48,13 @@ DEFAULT_HOST = "api.anthropic.com"
 ALLOW_TOOLS = ["Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS", "Agent",
                "Task", "TodoWrite", "WebSearch"]
 # WebFetch fetches from inside the container, which reaches only the session's
-# forwarders: refused rather than left to fail.
-DENY_TOOLS = ["WebFetch"]
+# forwarders: refused rather than left to fail, unless `webfetch` gives it the
+# egress proxy.
+WEB_FETCH = "WebFetch"
 MODES = ("default", "acceptEdits", "plan", "dontAsk")
 CONFIG_KEYS = frozenset({"settings", "permissions"})
 PERMISSION_KEYS = frozenset({"defaultMode", "allow", "deny"})
+SECTION_KEYS = frozenset({"web_fetch"})
 MANAGED_ENV = {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "DISABLE_TELEMETRY": "1",
@@ -118,6 +124,31 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[s
     return servers, allow, deny, argv_files
 
 
+def _web_fetch_proxy(comp) -> str | None:
+    """The egress proxy an extension hands WebFetch (`claude-code: {web_fetch:
+    {proxy: <url>}}`), if any."""
+    proxy = None
+    for a, section, ctx in comp.harness_items if comp is not None else []:
+        where = f"extension {a.name!r} harness"
+        section = render_value(section, ctx, where)
+        wf = section.get("web_fetch") if isinstance(section, dict) else None
+        if not isinstance(section, dict) or set(section) - SECTION_KEYS or not isinstance(wf, dict) \
+                or set(wf) != {"proxy"} or not str(wf["proxy"]).startswith(f"http://{scoped(comp.session, '')}"):
+            raise ExtensionError(f"{where}: `claude-code:` takes {{web_fetch: {{proxy: <a session endpoint's url>}}}}")
+        proxy = str(wf["proxy"])
+    return proxy
+
+
+def _no_proxy(plan) -> str:
+    """Every name the harness reaches a session forwarder by (and loopback):
+    inference, MCP servers and the rest never go through the egress proxy."""
+    hosts = ["localhost", "127.0.0.1", "::1"]
+    for sc in plan.network.sidecars:
+        if sc.harness:
+            hosts += [scoped(plan.session, sc.role), *sc.aliases, *sc.impl_aliases]
+    return ",".join(dict.fromkeys(hosts))
+
+
 def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], mcp_deny: list[str],
                      wrapped: bool) -> dict[str, Any]:
     perms = _config(cfg).get("permissions") or {}
@@ -125,6 +156,9 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
     env = dict(MANAGED_ENV)
     if wrapped:
         env["CLAUDE_CODE_SHELL_PREFIX"] = SHELL_PREFIX
+    proxy = _web_fetch_proxy(plan.composition)
+    if proxy:
+        env.update({"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "NO_PROXY": _no_proxy(plan)})
     model = plan.model
     if model is not None and urlsplit(model.base_url).hostname != DEFAULT_HOST:
         # only off the default host: CC treats a base URL as a gateway
@@ -136,8 +170,9 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
         "allowedMcpServers": [{"serverName": n} for n in servers],
         "permissions": {
             "defaultMode": perms.get("defaultMode", "default"),
-            "allow": [*ALLOW_TOOLS, *mcp_allow, *(perms.get("allow") or [])],
-            "deny": [f"Read(/{home}/**)", f"Edit(/{home}/**)", *DENY_TOOLS, *mcp_deny, *(perms.get("deny") or [])],
+            "allow": [*ALLOW_TOOLS, *([WEB_FETCH] if proxy else []), *mcp_allow, *(perms.get("allow") or [])],
+            "deny": [f"Read(/{home}/**)", f"Edit(/{home}/**)", *([] if proxy else [WEB_FETCH]), *mcp_deny,
+                     *(perms.get("deny") or [])],
         },
         "enableArtifact": False,
         "disableClaudeAiConnectors": True,

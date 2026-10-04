@@ -130,15 +130,32 @@ def test_host_mode_playwright_needs_the_rce_acknowledgement(tmp_path):
         _plan(tmp_path, extensions={"playwright": {"mode": "host"}})
 
 
-def test_search_and_webfetch_are_http_mcp_servers_the_agent_may_use(tmp_path):
+def test_search_is_an_http_mcp_server_and_webfetch_is_claude_codes_own_through_the_proxy(tmp_path):
     _, plan = _plan(tmp_path, extensions={"direct": {}, "search": {}, "webfetch": {}})
     files = plan.system_files["/etc/claude-code"]
     servers = json.loads(files["managed-mcp.json"])["mcpServers"]
-    assert servers == {"searxng": {"type": "http", "url": "http://glove-s-search-mcp:8000/mcp"},
-                       "webfetch": {"type": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp"}}
+    assert servers == {"searxng": {"type": "http", "url": "http://glove-s-search-mcp:8000/mcp"}}
     m = json.loads(files["managed-settings.json"])
-    assert {"mcp__searxng", "mcp__webfetch"} <= set(m["permissions"]["allow"])
-    assert "WebFetch" in m["permissions"]["deny"]  # fetch_url is the way out, through the egress
+    assert {"mcp__searxng", "WebFetch"} <= set(m["permissions"]["allow"])
+    assert "WebFetch" not in m["permissions"]["deny"]
+    env = m["env"]
+    assert env["HTTPS_PROXY"] == env["HTTP_PROXY"] == "http://glove-s-proxy:8888"
+    no_proxy = env["NO_PROXY"].split(",")
+    # inference and the MCP servers never go through the egress proxy
+    assert {"localhost", "127.0.0.1", "glove-s-llm", "glove-s-search-mcp"} <= set(no_proxy)
+    assert not any(k.startswith("HTTP") for k in plan.environment)  # managed env only
+    assert not any(k.startswith("GLOVE_FETCH") for k in plan.environment)
+    assert not any(s.role in ("webfetch-mcp", "fetcher") for s in plan.network.sidecars)
+
+
+def test_the_cloud_alias_stays_off_the_proxy(tmp_path):
+    _, plan = _plan(tmp_path, extensions={"direct": {}, "webfetch": {}})
+    assert "api.anthropic.com" in _managed(plan)["env"]["NO_PROXY"].split(",")
+
+
+def test_without_webfetch_webfetch_is_denied_and_no_proxy_is_set(tmp_path):
+    m = _managed(_plan(tmp_path)[1])
+    assert "WebFetch" in m["permissions"]["deny"] and "HTTPS_PROXY" not in m["env"]
 
 
 def test_system_files_are_written_under_state_and_bound_read_only(tmp_path):

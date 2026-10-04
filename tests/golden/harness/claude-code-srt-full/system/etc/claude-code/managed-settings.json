@@ -8,9 +8,6 @@
     },
     {
       "serverName": "searxng"
-    },
-    {
-      "serverName": "webfetch"
     }
   ],
   "permissions": {
@@ -29,6 +26,7 @@
       "Task",
       "TodoWrite",
       "WebSearch",
+      "WebFetch",
       "mcp__playwright__browser_navigate",
       "mcp__playwright__browser_navigate_back",
       "mcp__playwright__browser_snapshot",
@@ -41,13 +39,11 @@
       "mcp__playwright__browser_wait_for",
       "mcp__playwright__browser_tabs",
       "mcp__playwright__browser_handle_dialog",
-      "mcp__searxng",
-      "mcp__webfetch"
+      "mcp__searxng"
     ],
     "deny": [
       "Read(//home/agent/.claude/**)",
       "Edit(//home/agent/.claude/**)",
-      "WebFetch",
       "mcp__playwright__browser_annotate",
       "mcp__playwright__browser_check",
       "mcp__playwright__browser_close",
@@ -131,6 +127,9 @@
     "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
     "CLAUDE_CODE_SHELL_PREFIX": "/opt/glove/bin/glove-cc-prefix",
+    "HTTPS_PROXY": "http://glove-s-proxy:8888",
+    "HTTP_PROXY": "http://glove-s-proxy:8888",
+    "NO_PROXY": "localhost,127.0.0.1,::1,glove-s-llm,glove-s-llm-ingress,glove-s-browser,glove-s-browser-ingress,glove-s-search-mcp,glove-s-search-mcp-ingress,glove-s-proxy,glove-s-proxy-ingress",
     "ANTHROPIC_BASE_URL": "http://glove-s-llm:8080"
   }
 }

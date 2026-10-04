@@ -1,7 +1,9 @@
 """Anthropic Messages look-alike for the Claude Code integration checks (stdlib only).
 
 `CALL <tool> <json>` in the last user text → a tool_use; a tool_result → text
-"TOOL RESULT: <first 400 chars>". Everything else → a fixed sentence. Logs each
+"TOOL RESULT: <first 400 chars>". A request without tools (Claude Code's
+WebFetch summariser, title generation) → "ECHO: <the user text, from the
+first `---`>". Everything else → a fixed sentence. Logs each
 request path, the auth header names present (never values) and tool names.
 """
 
@@ -65,6 +67,8 @@ class H(BaseHTTPRequestHandler):
         elif (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
             out = [{"type": "tool_use", "id": "toolu_" + uuid.uuid4().hex[:20], "name": m.group(1),
                     "input": json.loads(m.group(2))}]
+        elif not tools:
+            out = [{"type": "text", "text": "ECHO: " + text[text.find("---"):][:1200]}]
         else:
             out = [{"type": "text", "text": REPLY}]
         stop = "tool_use" if out[0]["type"] == "tool_use" else "end_turn"

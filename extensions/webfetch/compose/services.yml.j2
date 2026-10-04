@@ -1,6 +1,6 @@
 services:
-{% if harness in ["vibe", "claude-code"] %}
-  # fetch_url for harnesses that speak MCP: streamable HTTP on :8000, reached
+{% if harness == "vibe" %}
+  # fetch_url for Vibe: streamable HTTP on :8000, reached
   # only through the harness's `webfetch-mcp` forwarder (and only under that
   # name: MCP_ALLOWED_HOST). Every fetch goes through
   # {{ endpoint['webfetch-egress'].url }} — the egress provider's proxy, or (with

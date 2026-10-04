@@ -34,12 +34,16 @@ All notable changes to glove are documented here.
   key travels in (`secret_env`). Every enforcer with a tool wrapper also renders
   `tool-wrapper.argv` (one argument per line). System files are rewritten in
   place (atomic per file), so a re-plan never swaps the dir a live session binds.
-- `webfetch` for Vibe and Claude Code: a `fetch_url` MCP tool served over HTTP
-  by a hardened `fetcher` sidecar (a port of Pi's web_fetch and its destination
-  guard: public pages only, every redirect re-checked, policy refusals named).
-  The harness reaches only the fetcher, never the egress proxy; with `observe`
-  the fetcher's traffic goes through its own gate (`client: webfetch`, a new
-  netgate client label).
+- `webfetch` for Vibe: a `fetch_url` MCP tool served over HTTP by a hardened
+  `fetcher` sidecar (a port of Pi's web_fetch and its destination guard: public
+  pages only, every redirect re-checked, policy refusals named). The harness
+  reaches only the fetcher, never the egress proxy; with `observe` the fetcher's
+  traffic goes through its own gate (`client: webfetch`, a new netgate client
+  label).
+- `webfetch` for Claude Code: its own `WebFetch`, allowed and pointed at the
+  `proxy` endpoint (`HTTPS_PROXY` in the managed env, session forwarders in
+  `NO_PROXY`); private destinations are refused by the egress layer. Without
+  `webfetch`, `WebFetch` stays denied.
 - Claude Code with `playwright`: the `tools` allowlist becomes allow rules and
   every other tool the pinned MCP defines (`all_tools`, a new neutral `mcp:`
   key) a managed deny rule, so Claude Code never offers it; host mode needs

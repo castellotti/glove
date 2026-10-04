@@ -1,1 +1,3 @@
-- `{{ "web_fetch" if harness == "pi" else "fetch_url" }}` fetches one URL and returns its text (HTML converted, no JavaScript). It is your default way to read a page found with `web_search`. Back off on HTTP 429.
+{% if harness == "claude-code" %}- `WebFetch` reads one URL through the session's egress proxy (public pages only; this machine and the LAN are refused). Back off on HTTP 429.
+{% else %}- `{{ "web_fetch" if harness == "pi" else "fetch_url" }}` fetches one URL and returns its text (HTML converted, no JavaScript). It is your default way to read a page found with `web_search`. Back off on HTTP 429.
+{% endif %}

@@ -17,7 +17,17 @@ as `GLOVE_FETCH_PROXY`. The Pi extension attaches it per request with undici's
 goes through it. The extension and its npm dependencies (pinned) are baked into
 the session image at build time; nothing is installed into the harness home.
 
-**Vibe and Claude Code** get a `fetch_url` tool from the `webfetch` MCP server,
+**Claude Code** keeps its own `WebFetch`: glove allows it and sets
+`HTTPS_PROXY`/`HTTP_PROXY` to the `proxy` endpoint in the read-only managed
+settings, with every session forwarder (the inference link, MCP servers) and
+loopback in `NO_PROXY`. Its destinations are policed at the egress, not in the
+client: tinyproxy's filter (`direct`), the tunnel (`tor`, `vpn`), the corporate
+gate, or with `observe` the gate's SSRF guard. It also keeps Claude Code's own
+behaviour: a domain preflight to `api.anthropic.com` (through the inference
+link with `provider: anthropic`, otherwise through the egress) and a small-model
+summary of each page. See `docs/SECURITY.md` for what this widens.
+
+**Vibe** gets a `fetch_url` tool from the `webfetch` MCP server,
 served over streamable HTTP by the `fetcher` sidecar (`image/webfetch_mcp.py`,
 a port of the Pi extension and its guard; python slim + `mcp` from a
 hash-pinned `requirements.txt`). The harness reaches it through the
@@ -25,8 +35,7 @@ hash-pinned `requirements.txt`). The harness reaches it through the
 egress proxy. The fetcher sits on a private `fetchnet` and answers only
 requests naming its forwarder as Host. It reaches the proxy directly on the
 egress network, or with `observe` only through its own gate (`webfetch-egress`,
-flows `client: webfetch`). Claude Code's own `WebFetch` stays denied: it would
-fetch from inside the container, which has no route out.
+flows `client: webfetch`).
 
 **Destinations.** Both tools read public web pages only. It refuses
 non-global IP literals (loopback, RFC 1918, link-local/metadata, CGNAT, ULA …),

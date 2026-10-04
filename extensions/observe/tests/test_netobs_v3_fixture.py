@@ -72,7 +72,6 @@ def test_every_scenario_says_what_it_is():
                 "-work/7c1d2e3f-0000-4000-8000-0f1a2b3c4d5e.jsonl",
                 "-work/7c1d2e3f-0000-4000-8000-0f1a2b3c4d5e/subagents/agent-a1b2c3.jsonl"]
             flows = [json.loads(ln) for ln in (obs / "net" / "flows.ndjson").read_text().splitlines()]
-            assert {(f["service"], f["client"]) for f in flows} == {("webfetch-mcp", "harness"),
-                                                                    ("webfetch-egress", "webfetch")}
+            assert {(f["service"], f["client"], f["tool"]) for f in flows} == {("proxy", "harness", "web_fetch")}
             served = {f["service"] for f in facts["services"]}
-            assert {"webfetch-mcp", "webfetch-egress", "llm"} <= served and "proxy" not in served
+            assert {"proxy", "llm"} <= served and "webfetch-mcp" not in served

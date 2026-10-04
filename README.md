@@ -117,7 +117,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     provider: mullvad       # any gluetun provider, or `custom`
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
-  webfetch: {}              # read a page through the egress (Pi web_fetch, MCP fetch_url)
+  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url)
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   observe: {}               # network observability (read) — see below
@@ -409,11 +409,13 @@ extensions:
     when missing, and `.claude` pinned so it can't be moved aside): Claude Code
     applies their `env` and commands to processes it starts itself, outside
     the tool wrapper, so the agent must not write them;
-  - the built-in tools are pre-approved (as Pi and Vibe auto-approve), `WebFetch`
-    is denied (the container has no route to fetch from; `webfetch`'s
-    `fetch_url` reads pages through the egress), `defaultMode` is pinned to
-    `default` (`harness_config.permissions.defaultMode` may pick `acceptEdits`,
-    `plan` or `dontAsk`);
+  - the built-in tools are pre-approved (as Pi and Vibe auto-approve);
+    `WebFetch` is allowed with `webfetch` (through the egress proxy:
+    `HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`; see
+    [SECURITY.md](docs/SECURITY.md) for what that widens) and denied without it;
+    `defaultMode` is pinned to `default`
+    (`harness_config.permissions.defaultMode` may pick `acceptEdits`, `plan` or
+    `dontAsk`);
   - extensions' MCP servers are the only ones (`managed-mcp.json`): a server's
     `tools` allowlist becomes allow rules, and every other tool it is known to
     have (`all_tools`) a deny rule, so Claude Code never offers it (Playwright's
@@ -528,10 +530,12 @@ every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
 going through the egress proxy. `webfetch` reads one page as text through the
 egress, refusing this machine, the LAN and metadata addresses (also on every
 redirect). Pi gets its own `web_search`/`web_fetch` extensions (`webfetch`
-through a `proxy` forwarder). Harnesses that speak MCP (Vibe, Claude Code) get
-`web_search` and `fetch_url` from two small hardened sidecars served over HTTP
-(`search-mcp`, `webfetch-mcp`), so the harness never reaches SearXNG itself
-or gets the raw egress proxy. The fetcher reaches the proxy only through its own hop
+through a `proxy` forwarder). Claude Code keeps its own `WebFetch`, pointed at
+the same `proxy` forwarder; there the egress layer (the proxy's filter, the
+tunnel's policy, or with `observe` the gate's SSRF guard) refuses this machine
+and the LAN. Harnesses that speak MCP get `web_search` from a small hardened
+sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
+itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which reaches the proxy only through its own hop
 (`webfetch-egress`; with `observe`, a gate labelling its flows `client:
 webfetch`). Both need an egress provider. The `pi-search` template puts it
 together: `glove new pi-search <dir>`.
@@ -812,7 +816,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi wired + verified (12-check integration, incl. env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested** |
-| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 22 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` + `webfetch` over their MCP sidecars (`HARNESS=claude-code test_egress.sh direct` 16 checks, 18 with `OBSERVE=1`), `playwright` headless with observe (`test_playwright.sh claude-code` 19: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
+| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 22 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct` 13 checks, 14 with `OBSERVE=1`), `playwright` headless with observe (`test_playwright.sh claude-code` 19: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
@@ -877,8 +881,8 @@ bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub 
 bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (17 checks per enforcer)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
                                               # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
-HARNESS=claude-code bash tests/integration/test_egress.sh direct  # the MCP sidecars (also: vibe;
-                                              # OBSERVE=1 adds the fetcher's flows) (16/18 checks)
+HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP + WebFetch via the proxy
+                                              # (13/14 checks; also: vibe 16/18; OBSERVE=1 adds flows)
 bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (19 checks;
                                               # also: headless, novnc, control, vibe)
 bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)

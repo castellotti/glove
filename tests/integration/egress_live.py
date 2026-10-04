@@ -45,7 +45,7 @@ results: list[tuple[str, bool]] = []
 HERE = Path(__file__).parent
 # the search and fetch tools as each harness names them
 TOOLS = {"pi": ("web_search", "web_fetch"), "vibe": ("searxng_web_search", "webfetch_fetch_url"),
-         "claude-code": ("mcp__searxng__web_search", "mcp__webfetch__fetch_url")}
+         "claude-code": ("mcp__searxng__web_search", "WebFetch")}
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -101,7 +101,7 @@ def main(directory: str, keep: bool) -> int:
                             {"U": f"http://{s}-search:8080/search?q=wikipedia&format=json"}, timeout=90)
             hits = int(out) if rc == 0 and out.strip().isdigit() else -1
             check("search endpoint returns SearXNG results", hits > 0, f"{hits} results")
-        if comp.by_name("webfetch") and not mcp_harness:
+        if comp.by_name("webfetch") and cfg.harness in ("pi", "claude-code"):
             real = host_public_ip(ECHO_URL)
             rc, out = probe(rt, plan, "net", 'curl -fsS -m 30 -x "$X" "$U"',
                             {"X": f"http://{s}-proxy:8888", "U": ECHO_URL}, timeout=60)
@@ -121,7 +121,7 @@ def main(directory: str, keep: bool) -> int:
         if mcp_harness:
             for ext, host, tool in (("search", f"{s}-search-mcp", "web_search"),
                                     ("webfetch", f"{s}-webfetch-mcp", "fetch_url")):
-                if not comp.by_name(ext):
+                if not comp.by_name(ext) or (ext == "webfetch" and cfg.harness != "vibe"):
                     continue
                 out = mcp(ext, host, [["tools/list", {}]])
                 check(f"{ext}: the forwarder serves the MCP ({tool})", f"tools: {tool}" in out, out[-160:])
@@ -132,7 +132,7 @@ def main(directory: str, keep: bool) -> int:
                         out = mcp(ext, f"{s}-{name}", [["tools/list", {}]])
                         check(f"{ext}: the sidecar itself is unreachable from the harness network",
                               "tools:" not in out, out[-100:])
-            if comp.by_name("webfetch"):
+            if comp.by_name("webfetch") and cfg.harness == "vibe":
                 r = subprocess.run([rt, "exec", f"{s}-fetcher", "python3", "-c",
                                     "import urllib.request as u; u.urlopen('https://example.com', timeout=8)"],
                                    capture_output=True, text=True)
@@ -144,24 +144,47 @@ def main(directory: str, keep: bool) -> int:
         calls = []
         if comp.by_name("search"):
             calls.append((search_tool, {"query": "wikipedia"}, "TOOL RESULT"))
+        cc = cfg.harness == "claude-code"
         if comp.by_name("webfetch"):
-            calls.append((fetch_tool, {"url": "https://example.com"}, "documentation examples"))
-            # never a way into this machine or its LAN (the guard runs before the proxy)
-            calls.append((fetch_tool, {"url": "http://host.docker.internal:8080/"}, "Refused"))
-            calls.append((fetch_tool, {"url": "http://192.168.1.1/"}, "Refused"))
+            # Claude Code's own WebFetch takes a prompt and summarises with the model (the stub echoes)
+            extra = {"prompt": "quote the page"} if cc else {}
+            calls.append((fetch_tool, {"url": "https://example.com", **extra}, "documentation examples"))
+            # never a way into this machine or its LAN (Pi/Vibe: the guard before the proxy; Claude
+            # Code: the egress proxy refuses, so nothing is fetched to summarise)
+            calls.append((fetch_tool, {"url": "http://host.docker.internal:8080/", **extra}, "Refused"))
+            calls.append((fetch_tool, {"url": "http://192.168.1.1/", **extra}, "Refused"))
             # …not even through a public redirect (needs httpbin.org reachable via the egress)
-            calls.append((fetch_tool, {"url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F"},
-                          "Refused a redirect"))
+            calls.append((fetch_tool, {"url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F",
+                                       **extra}, "Refused a redirect"))
         for tool, args, want in calls:
             cmd = [*plan.harness_command, "-p", f"CALL {tool} {json.dumps(args)}"]
             r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
             answer = r.stdout.strip() or r.stderr.strip()
             print(f"    {tool}: {answer[-400:]}")
-            label = f"{tool} refuses {args['url']}" if want.startswith("Refused") else f"{tool} through the egress"
-            check(label, "TOOL RESULT" in answer and want in answer)
+            refusal = want.startswith("Refused")
+            label = f"{tool} refuses {args['url']}" if refusal else f"{tool} through the egress"
+            if cc and refusal:  # Claude Code words its own errors: nothing may have been fetched
+                check(label, "TOOL RESULT" in answer and "ECHO:" not in answer)
+            else:
+                check(label, "TOOL RESULT" in answer and want in answer)
 
-        if comp.by_name("observe") and comp.by_name("webfetch") and mcp_harness:
+        if comp.by_name("observe") and comp.by_name("webfetch") and cc:
+            print("== observe")
+            net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
+            recs = []
+            for f in sorted(net.glob("flows*.ndjson")):
+                recs += [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
+            fetched = [r for r in recs if r.get("type") == "flow" and r.get("service") == "proxy"
+                       and (r.get("dest") or {}).get("host") == "example.com"]
+            f = fetched[-1] if fetched else {}
+            check("flow: proxy → example.com, client harness, tool web_fetch",
+                  (f.get("client"), f.get("tool")) == ("harness", "web_fetch"),
+                  json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
+            dests = sorted({(r.get("dest") or {}).get("host") for r in recs
+                            if r.get("type") == "flow" and r.get("service") == "proxy"} - {None})
+            print(f"    (WebFetch destinations through the proxy: {', '.join(dests)})")
+        if comp.by_name("observe") and comp.by_name("webfetch") and cfg.harness == "vibe":
             print("== observe")
             net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
             recs = []
