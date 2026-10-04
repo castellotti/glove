@@ -5,7 +5,10 @@
 # (internal network only, hardened) with `compose run` — every check below runs
 # with NO network: the pinned runtimes, the projects' deps, an installed CLI and
 # Playwright's baked Chromium must all work offline. A second session checks
-# Vibe (no node in its base; its hook keeps the image's python), session 4 a
+# Vibe (no node in its base; its hook keeps the image's python), session 3 the
+# browser in a shell command under srt, 3b under nono+srt with
+# `enforcer_options: {nono: {browsers: true}}` (and that /proc still hides the
+# harness's environ), session 4 a
 # lockfile that installs only with legacy-peer-deps (baked `.npmrc`, then
 # `install_flags`), and the plan-time refusals (incl. the flag allow-list).
 #
@@ -154,6 +157,47 @@ IMAGE="$(build "$S3" | tail -1)"
 out="$(tool "mkdir -p \"\$TMPDIR\" && cd /work/node-app && node check.js")"
 echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (srt): baked Chromium launches offline" \
   || bad "tool (srt): check.js: $out"
+cleanup
+trap - EXIT
+
+echo "== session 3b: pi + the default enforcer with enforcer_options {nono: {browsers: true}} =="
+S3B="$SESSIONS/s3b"
+mkdir -p "$S3B/projects" "$S3B/work"
+cp -R "$FIX/node-app" "$S3B/projects/"
+cp -R "$FIX/node-app" "$S3B/work/"
+new_session "$S3B" pi "enforcer_options: {nono: {browsers: true}}
+toolchains:
+  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+" || { bad "glove plan (nono browsers) failed"; exit 1; }
+trap cleanup EXIT
+IMAGE="$(build "$S3B" | tail -1)"
+[ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "nono browsers build failed"
+out="$(tool "cd /work/node-app && node check.js")"
+echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (nono, browsers): baked Chromium launches offline" \
+  || bad "tool (nono, browsers): check.js: $out"
+# /proc is readable now, but not another domain's environ: under the session's own
+# harness wrapper (srt), a harness-side process holding the LLM key is readable
+# from the harness and denied to a wrapped command.
+wrap="$(uv run --quiet --project "$ROOT" python -c '
+import sys, yaml
+svc = next(v for k, v in yaml.safe_load(open(sys.argv[1]))["services"].items() if k.endswith("-harness"))
+cmd = svc["command"]
+print(" ".join(cmd[:cmd.index("ctty") - 1]))' "$S_COMPOSE")"
+w="$(uv run --quiet --project "$ROOT" python -c \
+  'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json")"
+cat > "$S3B/work/scan.sh" <<'EOF2'
+for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue
+  tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -q '^GLOVE_LLM_API_KEY=glove-test-key' && echo "KEY-SEEN $p"
+done; echo scanned
+EOF2
+# shellcheck disable=SC2086
+out="$("$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T -e GLOVE_LLM_API_KEY=glove-test-key \
+  "glove-$S_ID-harness" $wrap bash -c "sleep 30 & bash /work/scan.sh; echo TOOL; $w bash /work/scan.sh" 2>&1)"
+echo "$out" | sed -n '/^TOOL$/q;p' | grep -q KEY-SEEN && ok "control: the harness side reads its own processes' environ" \
+  || bad "control: no key seen from the harness side: $out"
+echo "$out" | sed -n '/^TOOL$/,$p' | grep -q scanned && ! echo "$out" | sed -n '/^TOOL$/,$p' | grep -q KEY-SEEN \
+  && ok "tool (nono, browsers): /proc readable, no other process's environ (the key stays hidden)" \
+  || bad "tool (nono, browsers): environ scan: $out"
 cleanup
 trap - EXIT
 

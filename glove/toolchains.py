@@ -268,7 +268,10 @@ class NodeHandler(Handler):
                           rt)]
         globals_ = ([f"{tc.manager}@{tc.manager_version or 'latest'}"] if tc.manager != "npm" else []) \
             + list(tc.packages)
-        tools = [_run(tc, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache")] \
+        # with no project, the global packages take `<prefix>/lib/node` (in the pinned node's
+        # global require path), so `require` finds them from any directory
+        link = [] if tc.project_files or not tc.packages else [f"ln -s {rt}/lib/node_modules {rt}/lib/node"]
+        tools = [_run(tc, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache", *link)] \
             if globals_ else []
         project = []
         if tc.project_files:
@@ -301,7 +304,9 @@ class NodeHandler(Handler):
     def describe(self, tc: Toolchain) -> list[str]:
         out = [f"- **Node {tc.version}** (`node`, `npm`"
                + (f", `{tc.manager}`" if tc.manager != "npm" else "") + ") is first on `PATH`"
-               + (f"; global tools: {', '.join(f'`{p}`' for p in tc.packages)}" if tc.packages else "") + "."]
+               + (f"; global tools: {', '.join(f'`{p}`' for p in tc.packages)}" if tc.packages else "")
+               + ("" if tc.project_spec or not tc.packages else " (`require` finds them from any directory)")
+               + "."]
         if tc.project_spec:
             nm = f"{tc.project_dir}/node_modules"
             out.append(
@@ -314,7 +319,8 @@ class NodeHandler(Handler):
         if tc.browsers:
             out.append(f"  - Playwright browsers ({', '.join(tc.browsers)}) are installed at "
                        f"`{self.browsers_dir(tc)}` (`PLAYWRIGHT_BROWSERS_PATH`); launch them with "
-                       "`chromiumSandbox: false` (the container is the sandbox), after `mkdir -p \"$TMPDIR\"`.")
+                       "`chromiumSandbox: false` (the container is the sandbox); if `$TMPDIR` is set, "
+                       "`mkdir -p \"$TMPDIR\"` first.")
         return out
 
 
@@ -595,11 +601,11 @@ def dockerfile_lines(blocks: Sequence[Toolchain]) -> tuple[list[str], list[tuple
     return lines, [(tc.label, f) for tc in blocks for f in tc.project_files]
 
 
-def brief(blocks: Sequence[Toolchain], enforcer: str) -> str:
+def brief(blocks: Sequence[Toolchain], enforcer: str, options: dict | None = None) -> str:
     """The context-file section telling the agent what is baked in."""
     from .enforcers import get_enforcer
 
-    browsers_ok = get_enforcer(enforcer).tools_run_browsers
+    browsers_ok = get_enforcer(enforcer).tools_run_browsers(options or {})
     lines = ["## Toolchains", "",
              "Baked into this image at build time (shell commands have no network, so nothing can be "
              f"installed now). Everything lives under `{ROOT}` (read-only):", ""]

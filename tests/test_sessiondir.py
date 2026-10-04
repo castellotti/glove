@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -167,3 +168,47 @@ def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
     assert {a.name for a in comp.active} == {"llm", "gate", "corporate", "webfetch", "observe"}
     assert comp.slot_exports("egress")["route"] == "corporate"
     assert comp.slots["forwarder"].name == "observe"
+
+
+def test_vibe_search_template_plans_once_filled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert "vibe-search" in sdm.list_templates()
+    sd, sid = sdm.materialize("vibe-search", tmp_path / "vs")
+    text = sd.file.read_text()
+    filled = (text.replace("provider: <set-me>         # openai", "provider: llama.cpp  # openai")
+              .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
+              .replace("provider: <set-me>", "provider: mullvad").replace("keychain:<set-me>", "keychain:wg"))
+    sd.file.write_text(filled)
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    comp = plan.composition
+    assert cfg.harness == "vibe"
+    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert {"search-mcp", "webfetch-mcp"} <= {e.name for e in comp.endpoints}
+
+
+def test_claude_code_template_plans_once_filled(tmp_path, monkeypatch):
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert "claude-code" in sdm.list_templates()
+    sd, sid = sdm.materialize("claude-code", tmp_path / "cc")
+    text = sd.file.read_text()
+    assert text.count("keychain:<set-me>") >= 2  # the token and the GitHub token are references
+    sd.file.write_text(text.replace("keychain:<set-me>", "keychain:svc"))
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    comp = plan.composition
+    assert cfg.harness == "claude-code" and plan.enforcer == "nono+srt"
+    assert {"direct", "webfetch", "playwright", "github", "relay", "observe", "filter"} <= {a.name for a in comp.active}
+    assert comp.by_name("ssh") is None
+    assert "/proc" in json.loads(plan.policies["tool.json"])["filesystem"]["read"]  # browsers in shell commands
+    assert [tc["lang"] for tc in cfg.toolchains] == ["python", "node"]

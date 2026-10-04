@@ -82,6 +82,16 @@ All notable changes to glove are documented here.
     ProxyCommand, identities or TTY.
   - **relay** gains `openssh-client` and `libnss-wrapper`, runs a relay with no
     `/work` (file arguments refused) and no fence when its policy names no hosts.
+- `enforcer_options: {nono: {browsers: true}}` (`nono` and `nono+srt`): shell
+  commands may start Playwright's baked Chromium, by granting the tool profile
+  read-only `/proc`. Other processes' `environ`, `mem` and fd links stay closed
+  (Landlock denies access to processes outside the command's own domain), so the
+  harness's LLM key stays hidden; their command lines and `/proc/net` become
+  readable. Off by default; the toolchains brief tells the agent which applies.
+- Templates **`claude-code`** (Claude Code on an Anthropic subscription: `github`,
+  WebFetch and a sidecar Chromium through `direct`, Python/uv and Node/pnpm with
+  Playwright's Chromium usable from shell commands, `observe` + `filter`; `ssh`
+  commented out) and **`vibe-search`** (`pi-search` with Vibe as the harness).
 - Core: **`via: lan`** endpoints, a host:port the user named, dialled for a
   trusted extension's sidecar only, over a routable `lan` network that only
   those forwarders may join. The address must be a private IPv4 address
@@ -143,6 +153,11 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- `toolchains` (node): with no project, the global `packages` are linked into
+  the pinned node's global require path, so `require('playwright')` works from
+  a shell command in any directory (it needed `NODE_PATH` before). The brief
+  says `mkdir -p "$TMPDIR"` only when `$TMPDIR` is set (srt sets it; nono
+  doesn't).
 - `llm` `location: internet` never connected: the forwarder carries the
   provider's hostname as an alias on the harness network, and Docker's DNS
   answers a container's own alias first, so it dialled itself. An aliased

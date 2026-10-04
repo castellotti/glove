@@ -209,7 +209,9 @@ def test_node_managers_and_browsers(tmp_path):
     # browsers via a global playwright, no project
     plan = _plan(tmp_path, toolchains=[{**NODE, "packages": ["playwright@1.50.0"], "browsers": ["firefox"]}])
     assert " playwright install --with-deps firefox" in plan.derived_dockerfile
-    assert "lib/node" not in plan.derived_dockerfile
+    # with no project, the global packages are what `require` finds from any directory
+    assert "ln -s /opt/glove/toolchains/node/22.11.0/lib/node_modules /opt/glove/toolchains/node/22.11.0/lib/node" \
+        in plan.derived_dockerfile
     # a project without playwright: the global one from `packages` installs the browsers
     _node_project(tmp_path / "plain")
     plan = _plan(tmp_path, toolchains=[{**NODE, "project": "plain", "packages": ["playwright@1.50.0"],
@@ -502,9 +504,12 @@ def test_context_file_section_only_when_set(tmp_path):
     assert "cannot start inside a shell command" not in text
 
 
-@pytest.mark.parametrize(("enforcer", "warned"), [("nono+srt", True), ("nono", True), ("srt", False)])
-def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, warned):
-    cfg = _cfg(tmp_path, enforcer=enforcer,
+@pytest.mark.parametrize(("enforcer", "options", "warned"), [
+    ("nono+srt", {}, True), ("nono", {}, True), ("srt", {}, False),
+    ("nono+srt", {"nono": {"browsers": True}}, False), ("nono", {"nono": {"browsers": True}}, False),
+])
+def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, options, warned):
+    cfg = _cfg(tmp_path, enforcer=enforcer, enforcer_options=options,
                toolchains=[{**NODE, "packages": ["playwright@1.63.0"], "browsers": ["chromium"]}])
     text = build_environment_context(cfg)
     assert "PLAYWRIGHT_BROWSERS_PATH" in text

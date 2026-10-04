@@ -146,7 +146,7 @@ def build_environment_context(
     if toolchains:
         from .toolchains import brief
 
-        lines += ["", brief(toolchains, cfg.enforcer)]
+        lines += ["", brief(toolchains, cfg.enforcer, cfg.enforcer_options)]
     briefs = comp.rendered_briefs() if comp is not None else []
     if briefs:
         lines += ["", "## Capabilities", ""]

@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 from helpers import make_cfg, render
 
+from glove.config import ConfigError
 from glove.enforcers import get_enforcer
 from glove.enforcers.base import ENFORCER_DIR, GLOVE_PTY, srt_suffix
 from glove.enforcers.nono_srt import render_harness_settings
@@ -113,3 +115,23 @@ def test_podman_refuses_it():
 def test_gaps_documented(tmp_path):
     gaps = get_enforcer("nono+srt").gaps(_plan(tmp_path))
     assert any("nested-userns" in g for g in gaps) and any(".env" in g for g in gaps)
+
+
+@pytest.mark.parametrize("enforcer", ["nono", "nono+srt"])
+def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
+    """`enforcer_options: {nono: {browsers: true}}`: Chromium needs /proc in the tool
+    profile (read-only); off by default, and the harness side is unchanged."""
+    def policies(**kw):
+        work = tmp_path / "work"
+        work.mkdir(exist_ok=True)
+        cfg = make_cfg(harness="pi", workdir=str(work), name="s", enforcer=enforcer, **kw)
+        return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
+                                  state_dir=str(tmp_path / "ext")).policies
+
+    off, on = policies(), policies(enforcer_options={"nono": {"browsers": True}})
+    assert "/proc" not in json.loads(off["tool.json"])["filesystem"]["read"]
+    tool = json.loads(on["tool.json"])["filesystem"]
+    assert "/proc" in tool["read"] and "/proc" not in tool["allow"]
+    assert {k: v for k, v in on.items() if k != "tool.json"} == {k: v for k, v in off.items() if k != "tool.json"}
+    with pytest.raises(ConfigError, match="browsers"):
+        policies(enforcer_options={"nono": {"browsers": "yes"}})
