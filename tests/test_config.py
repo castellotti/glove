@@ -12,7 +12,7 @@ from glove.config import Config
 
 def test_defaults():
     cfg = Config()
-    assert cfg.harness == "vibe"
+    assert cfg.harness == ""  # no default: a session file names its harness
     assert cfg.allow_root is False
     assert not hasattr(cfg, "services") and not hasattr(cfg, "net")  # forwarders come from extensions
 

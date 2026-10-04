@@ -30,14 +30,17 @@ def sessions_dir(profile: HarnessProfile, home_dir: Path) -> Path:
 
 @dataclass(frozen=True)
 class SessionRef:
-    id: str  # UUID parsed from the filename (…_<uuid>.jsonl), else the stem
+    id: str  # UUID from the filename (…_<uuid>.jsonl) or, for Vibe's messages.jsonl, its folder
     path: Path
     mtime: float
 
 
 def _parse_id(path: Path) -> str:
-    """The trailing `<uuid>` of a `<ts>_<uuid>.jsonl` name (else the whole stem)."""
-    stem = path.stem
+    """The trailing `<uuid>` of a `<ts>_<uuid>.jsonl` name (else the whole stem).
+
+    Vibe names every transcript `messages.jsonl` inside a per-session folder
+    `session_<ts>_<id>/`, so there the id is the folder name's trailing part."""
+    stem = path.parent.name.removeprefix("session_") if path.name == "messages.jsonl" else path.stem
     return stem.rpartition("_")[2] or stem
 
 

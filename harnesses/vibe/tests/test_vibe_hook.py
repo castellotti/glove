@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK_PATH = Path(__file__).parent.parent / "glove/harnesses/vibe/vibe_hook.py"
+HOOK_PATH = Path(__file__).parent.parent / "image" / "vibe_hook.py"
 
 
 def _load():

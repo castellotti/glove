@@ -35,6 +35,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from .config import ConfigError, HostService, is_secret_ref
 from .exports import ensure_dir
+from .harness import CONTRIBUTIONS, get_profile, known_harnesses
 from .mounts import host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
@@ -404,12 +405,15 @@ class Composition:
     endpoints: list[Endpoint] = field(default_factory=list)
     harness_env: dict[str, str] = field(default_factory=dict)
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
-    pi_extensions: list[tuple[str, Path]] = field(default_factory=list)  # (ext, src dir)
-    # (ext, src dir baked into the image or None for a path under a mount, container path)
-    pi_skills: list[tuple[str, Path | None, str]] = field(default_factory=list)
+    # Neutral contributions, collected only when the harness renders them
+    # (harness.yml `contributions`): skills as (ext, src dir baked into the image
+    # or None for a path under a mount, container path); MCP servers as (ext, spec).
+    skills: list[tuple[str, Path | None, str]] = field(default_factory=list)
+    mcp: list[tuple[str, dict]] = field(default_factory=list)
+    # `harness.<this harness>:` sections, for its adapter: (extension, section, template context)
+    harness_items: list[tuple[Active, Any, dict]] = field(default_factory=list)
     # (ext, host dir, container path): read-only harness binds from `mounts:`
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
-    vibe_mcp: list[dict] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
@@ -459,10 +463,7 @@ class Composition:
             out["control"] = a is not filt  # the gates only ever read rules.json
         return out
 
-    def pi_extension_dest(self, ext: str, src: Path) -> str:
-        return f"/opt/glove/ext/{ext}/{src.name}"
-
-    def pi_skill_dest(self, ext: str, src: Path) -> str:
+    def skill_dest(self, ext: str, src: Path) -> str:
         return f"/opt/glove/skills/{ext}/{src.name}"
 
     def rendered_briefs(self) -> list[tuple[str, str]]:
@@ -756,9 +757,19 @@ def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
     comp.harness_env[k] = str(v)
 
 
+# `harness:` keys every extension may use; a harness's own name keys a section
+# only its adapter reads (e.g. `pi: {extensions: [...]}`).
+HARNESS_KEYS = frozenset({"image", "env", "brief"}) | CONTRIBUTIONS
+
+
 def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
     h = a.manifest.raw.get("harness") or {}
     where = f"extension {a.name!r} harness"
+    allowed = HARNESS_KEYS | set(known_harnesses())
+    for k in h:
+        if k not in allowed:
+            raise ExtensionError(f"{where}: unknown key {k!r} (known: {sorted(HARNESS_KEYS)} or a harness name)")
+    profile = get_profile(comp.harness)
     image = h.get("image") or {}
     for key in ("*", comp.harness):
         for layer in active_items([image[key]] if isinstance(image.get(key), dict) else image.get(key), ctx):
@@ -771,13 +782,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             comp.image_layers.append((a.name, layer))
     for k, v in render_value(h.get("env") or {}, ctx, where).items():
         set_harness_env(comp, where, k, v)
-    if comp.harness == "pi":
-        for item in active_items(h.get("pi_extensions"), ctx):
-            src = a.manifest.path / (item["src"] if isinstance(item, dict) else item)
-            if not src.is_dir():
-                raise ExtensionError(f"{where}: pi extension {src} not found")
-            comp.pi_extensions.append((a.name, src))
-        for item in active_items(h.get("pi_skills"), ctx):
+    if profile.renders("skills"):
+        for item in active_items(h.get("skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)
             if "mount" in spec:  # {mount: <name>, path: <rel>}: a skill in one of its mounts, if mounted
                 if spec["mount"] not in a.mounts:
@@ -787,14 +793,16 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                 bad = not rel or rel.startswith("/") or ".." in rel.split("/")
                 if bad or not Path(host, rel, "SKILL.md").is_file():
                     raise ExtensionError(f"{where}: skill {rel!r} has no SKILL.md in mount {spec['mount']!r} ({host})")
-                comp.pi_skills.append((a.name, None, f"{a.mounts[spec['mount']]}/{rel}"))
+                comp.skills.append((a.name, None, f"{a.mounts[spec['mount']]}/{rel}"))
                 continue
             src = (a.manifest.path / str(spec["src"])).resolve()
             if not (src / "SKILL.md").is_file() or not src.is_relative_to(a.manifest.path.resolve()):
                 raise ExtensionError(f"{where}: skill {spec['src']!r} needs a SKILL.md inside the extension")
-            comp.pi_skills.append((a.name, src, comp.pi_skill_dest(a.name, src)))
-    if comp.harness == "vibe":
-        comp.vibe_mcp.extend(render_value(active_items(h.get("vibe_mcp"), ctx), ctx, where))
+            comp.skills.append((a.name, src, comp.skill_dest(a.name, src)))
+    if profile.renders("mcp"):
+        comp.mcp.extend((a.name, item) for item in render_value(active_items(h.get("mcp"), ctx), ctx, where))
+    if h.get(comp.harness) is not None:
+        comp.harness_items.append((a, h[comp.harness], ctx))
     brief = h.get("brief")
     if isinstance(brief, str | dict):
         for item in active_items([brief], ctx):

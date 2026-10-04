@@ -38,7 +38,7 @@ def test_pi_wiring(tmp_path):
 
 def test_vibe_wiring(tmp_path):
     plan = _plan(tmp_path, "vibe")
-    assert plan.composition.vibe_mcp == [{
+    assert [s for _, s in plan.composition.mcp] == [{
         "name": "searxng", "transport": "stdio", "command": "python3",
         "args": ["/opt/glove/ext/search/searxng_mcp.py"], "env": {"SEARXNG_URL": "http://glove-s-search:8080"},
     }]

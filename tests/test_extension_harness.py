@@ -94,17 +94,17 @@ def test_a_mount_never_exposes_the_session_state(tree, tmp_path, monkeypatch, pr
 def test_skills_baked_or_from_a_mount(tree, tmp_path, monkeypatch):
     _ext(tree, "m", MOUNTER + """\
         harness:
-          pi_skills:
+          skills:
             - skills/mine
             - { mount: data, path: skills/theirs }
         """.replace("        ", ""), {"skills/mine/SKILL.md": "x"})
     (tmp_path / "d" / "skills" / "theirs").mkdir(parents=True)
     (tmp_path / "d" / "skills" / "theirs" / "SKILL.md").write_text("x")
     plan = _plan(tree, tmp_path, monkeypatch, {"m": {"data": str(tmp_path / "d")}})
-    assert [d for _, _, d in plan.composition.pi_skills] == ["/opt/glove/skills/m/mine", "/mnt/m-data/skills/theirs"]
+    assert [d for _, _, d in plan.composition.skills] == ["/opt/glove/skills/m/mine", "/mnt/m-data/skills/theirs"]
     assert "COPY m/mine /opt/glove/skills/m/mine" in plan.derived_dockerfile
     plan = _plan(tree, tmp_path, monkeypatch, {"m": {}})  # the mount is off: its skill is skipped
-    assert [d for _, _, d in plan.composition.pi_skills] == ["/opt/glove/skills/m/mine"]
+    assert [d for _, _, d in plan.composition.skills] == ["/opt/glove/skills/m/mine"]
 
 
 @pytest.mark.parametrize(("item", "match"), [
@@ -113,7 +113,7 @@ def test_skills_baked_or_from_a_mount(tree, tmp_path, monkeypatch):
     ("{ mount: data, path: ../../etc }", "has no SKILL.md in mount"),
 ])
 def test_bad_skills(tree, tmp_path, monkeypatch, item, match):
-    _ext(tree, "m", MOUNTER + f"harness:\n  pi_skills: [{item}]\n")
+    _ext(tree, "m", MOUNTER + f"harness:\n  skills: [{item}]\n")
     (tmp_path / "d").mkdir()
     with pytest.raises(ExtensionError, match=match):
         _plan(tree, tmp_path, monkeypatch, {"m": {"data": str(tmp_path / "d")}})

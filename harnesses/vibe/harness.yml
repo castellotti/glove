@@ -1,0 +1,24 @@
+api: 1
+name: vibe
+summary: Mistral Vibe.
+# 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,
+# pre_tool hook) only. Optional capabilities are opt-in extensions.
+image: glove/vibe:0.5.0
+entry: [vibe, --trust, --yolo, --workdir, /work]
+config_home: { env: VIBE_HOME, path: /home/agent/.vibe }
+context_file: /home/agent/.vibe/AGENTS.md
+env: { VIBE_HOME: /home/agent/.vibe }
+# Vibe 2.x writes each session to logs/session/session_<ts>_<id>/messages.jsonl
+# (and never creates sessions/).
+sessions_subdir: logs/session
+transcript_subdir: logs/session
+# vibe is installed with `uv tool install` under /opt/uv; its shebang points at
+# that venv's python (→ /usr/local's cpython).
+runtime_paths: [/opt/uv, /usr/local]
+# Python packages install system-wide via the baked uv.
+pip: { install: [uv, pip, install, --system] }
+# `-c`/`--continue` continues the most recent session (non-interactive); bare
+# `--resume` opens an interactive picker (and errors in programmatic mode), so
+# continue-last must map to --continue, not --resume. A specific id is `--resume <id>`.
+resume: { continue: [--continue], session: [--resume, "{id}"] }
+contributions: [mcp]

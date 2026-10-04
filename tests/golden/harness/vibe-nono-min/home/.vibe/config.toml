@@ -1,0 +1,27 @@
+active_model = "glove"
+auto_approve = true
+api_timeout = 1800.0
+enable_update_checks = false
+enable_auto_update = false
+enable_telemetry = false
+experimental_bash_tool = false
+mcp_servers = []
+
+[[providers]]
+name = "glove"
+api_base = "http://glove-s-llm:8080/v1"
+api_key_env_var = ""
+api_style = "openai"
+backend = "generic"
+reasoning_field_name = "reasoning_content"
+
+[[models]]
+name = "test-model"
+provider = "glove"
+alias = "glove"
+temperature = 1.0
+input_price = 0.0
+output_price = 0.0
+thinking = "off"
+auto_compact_threshold = 26214
+supports_images = false

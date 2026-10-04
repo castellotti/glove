@@ -1,0 +1,19 @@
+{
+  "filesystem": {
+    "denyRead": [
+      "/work/**/.env",
+      "/work/**/.env.*"
+    ],
+    "allowRead": [],
+    "allowWrite": [
+      "/work",
+      "/home/agent",
+      "/tmp"
+    ],
+    "denyWrite": []
+  },
+  "enableWeakerNestedSandbox": true,
+  "seccomp": {
+    "applyPath": "/opt/glove/srt/apply-seccomp"
+  }
+}

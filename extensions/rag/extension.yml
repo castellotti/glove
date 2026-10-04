@@ -32,7 +32,7 @@ harness:
     HF_HUB_OFFLINE: "1"
     CLAUDE_OBSIDIAN_CORE: "{{ mount.obsidian ~ '/scripts/claude-obsidian.py' if mount.obsidian is defined else '' }}"
     CLAUDE_OBSIDIAN_VAULT: /work/data/store/vault
-  pi_skills:
+  skills:                               # SKILL.md dirs, for harnesses that load skills (pi)
     - skills/rag-parse
     - skills/rag-query
     # claude-obsidian's offline skills, when obsidian_dir is set (autoresearch/defuddle need the web)

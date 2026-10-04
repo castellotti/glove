@@ -53,9 +53,11 @@ RUN if [ -n "$GLOVE_PIP" ]; then \
 # extensions are added by plugins into a per-session image variant, not here.
 COPY extensions/enforcer /opt/glove/pi-extensions/enforcer
 
-# Baked entrypoint validates the enforcer policies then execs the compose command.
+# Baked entrypoint (glove/enforcers/entrypoint, shared by every harness, passed as
+# the `gloveentry` build context) validates the enforcer policies then execs the
+# compose command.
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
-COPY entrypoint.sh /opt/glove/entrypoint.sh
+COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
 RUN chmod 0755 /opt/glove/entrypoint.sh
 
 RUN mkdir -p /home/agent && chmod 0777 /home/agent

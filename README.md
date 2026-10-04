@@ -18,8 +18,10 @@ sandbox (srt/bubblewrap around the harness and nono/Landlock around every
 command on Docker; nono alone on Podman) runs *inside* the container and wraps
 every command the agent executes. See [How it works](#how-it-works---three-rings-defense-in-depth).
 
-**Minimal core + extensions.** The core (`glove/`) knows harnesses, runtimes,
-enforcers and session directories. Every capability is an **extension** in
+**Minimal core + plugins.** The core (`glove/`) knows runtimes, enforcers and
+session directories, and no harness by name: each harness is a **harness
+plugin** in `harnesses/<name>/` (see [Harnesses](#harnesses)), and only the
+selected one's code runs. Every capability is an **extension** in
 `extensions/<name>/` (a declarative `extension.yml`), selected per session in
 `extensions:`. An extension you don't select contributes nothing: no
 containers, no mounts, no image layers. Bundled: **`llm`** (the inference
@@ -33,7 +35,7 @@ Chrome). See [Extensions](#extensions).
 
 ## Quick start
 
-glove runs from a checkout (the bundled `extensions/` and `templates/` live
+glove runs from a checkout (the bundled `harnesses/`, `extensions/` and `templates/` live
 next to the package), with [uv](https://docs.astral.sh/uv/), and Docker Desktop
 or Podman:
 
@@ -347,12 +349,34 @@ prompt-injected instructions) will run with the wider reach.
 > process sees it; ring 1 strips it from every shell command. Store a key with
 > `glove keychain set <service>` (it prompts; the key is never in argv).
 
+## Harnesses
+
+A harness is a directory under `harnesses/`, beside `extensions/`:
+
+```
+harnesses/<name>/
+  harness.yml    # the profile (data): image tag, TUI entry, config home, context file,
+                 # transcript dirs, resume flags, which neutral contributions it renders
+  adapter.py     # renders its native config; may add entry args / image lines (optional)
+  image/         # the base image's build context (Dockerfile, ring-1 glue)
+  tests/
+```
+
+Core reads every `harness.yml` and imports `adapter.py` by path only for the
+harness a session selects. Every image bakes the one shared entrypoint
+(`glove/enforcers/entrypoint`, the `gloveentry` build context) that validates the
+ring-1 policies before the harness starts. Bundled: `pi`, `vibe`, and
+`claude-code` (experimental). The names are stable: `~/.glove/registry.json`
+and observe's `session.json` record them, and external monitors (Layman) pick a
+transcript parser by them.
+
 ## Extensions
 
 An extension is a directory under `extensions/` with an `extension.yml`
 manifest (`api: 1`): its settings schema, the endpoints (forwarders) the
-harness may reach, image layers, Pi extensions / Vibe MCP servers, a brief for
-the agent, and optionally hardened sidecars. Core validates all of it:
+harness may reach, image layers, harness contributions (MCP servers, skills, a
+harness's own code), a brief for the agent, and optionally hardened sidecars.
+Core validates all of it:
 
 - **Settings** are typed; unknown keys, `<set-me>` placeholders and literal
   secrets are errors. Secrets are `keychain:`/`env:` references, resolved in
@@ -378,9 +402,20 @@ the agent, and optionally hardened sidecars. Core validates all of it:
   are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
   `path` setting (such a setting may not have a default), checked like the
   session's own `mounts:` (never `.glove/`, `local/`, the session file, glove's
-  home or another session's state). **Pi skills** come baked into the image
-  (`pi_skills: [skills/x]`) or from a mount (`{mount: m, path: skills/y}`,
-  skipped when that mount is off) and are listed in Pi's `settings.json`.
+  home or another session's state).
+- **Harness contributions** are harness-neutral where they can be, under
+  `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
+  - `mcp: [{name, transport: stdio|http, …, tools: [...]}]`: an MCP server,
+    rendered by harnesses that speak MCP (Vibe: `config.toml`, with `tools`
+    as an allowlist);
+  - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
+    from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
+    for harnesses that load skills (Pi: `settings.json`);
+  - `<harness>: {...}`: a section only that harness's adapter reads, e.g.
+    `pi: {extensions: [pi-extension]}` (Pi has no MCP, so it loads its own
+    code with `pi -e`).
+
+  Any other key is an error.
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
@@ -392,8 +427,8 @@ configured `host:port`; `internet` → a forwarder to the provider's HTTPS host,
 aliased so TLS runs end to end. The harness never gets LAN or internet reach
 itself. `model: auto` and `capabilities: auto` are resolved at launch from a
 throwaway container on the harness network (the host never contacts the
-server), and core renders the result into Pi `models.json` / Vibe `config.toml`
-(vision → `input: ["text","image"]`).
+server), and the harness's adapter renders the result into its own config
+(Pi `models.json`, Vibe `config.toml`; vision → `input: ["text","image"]`).
 
 ### Egress: `vpn`, `tor`, `direct`, `corporate`
 

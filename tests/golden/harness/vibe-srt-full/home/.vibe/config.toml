@@ -1,0 +1,52 @@
+active_model = "glove"
+auto_approve = true
+api_timeout = 1800.0
+enable_update_checks = false
+enable_auto_update = false
+enable_telemetry = false
+experimental_bash_tool = false
+include_commit_signature = false
+disabled_tools = [
+    "re:playwright_(?!(?:browser_navigate|browser_navigate_back|browser_snapshot|browser_take_screenshot|browser_click|browser_type|browser_hover|browser_select_option|browser_press_key|browser_wait_for|browser_tabs|browser_handle_dialog)$).*",
+    "task",
+]
+
+[[mcp_servers]]
+name = "playwright"
+transport = "http"
+url = "http://glove-s-browser:8931/mcp"
+
+[[mcp_servers]]
+name = "searxng"
+transport = "stdio"
+command = "python3"
+args = [
+    "/opt/glove/ext/search/searxng_mcp.py",
+]
+
+[mcp_servers.env]
+SEARXNG_URL = "http://glove-s-search:8080"
+
+[[mcp_servers]]
+name = "extra"
+transport = "http"
+url = "http://x:1/mcp"
+
+[[providers]]
+name = "glove"
+api_base = "http://glove-s-llm:8080/v1"
+api_key_env_var = ""
+api_style = "openai"
+backend = "generic"
+reasoning_field_name = "reasoning_content"
+
+[[models]]
+name = "test-model"
+provider = "glove"
+alias = "glove"
+temperature = 1.0
+input_price = 0.0
+output_price = 0.0
+thinking = "off"
+auto_compact_threshold = 26214
+supports_images = false

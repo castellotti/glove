@@ -54,7 +54,7 @@ class HostService:
 
 @dataclass
 class Config:
-    harness: str = "vibe"
+    harness: str = ""  # a harnesses/<name> plugin; session files must name one
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
     # NEW in v2. `runtime` is the ring-0 layer (docker | podman |
     # apple-container | gondolin | utm); for docker/podman it also drives which

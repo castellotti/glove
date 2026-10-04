@@ -32,8 +32,8 @@ harness:
     SEARXNG_URL: "{{ endpoint.search.url }}"
   image:
     vibe: { copy: [[searxng_mcp.py, /opt/glove/ext/search/searxng_mcp.py]], pip: ["mcp<2"] }
-  pi_extensions: [pi-extension]
-  vibe_mcp:
+  pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
+  mcp:                                  # rendered by harnesses that speak MCP (vibe)
     - name: searxng
       transport: stdio
       command: python3

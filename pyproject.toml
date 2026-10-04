@@ -31,15 +31,15 @@ glove = "glove.cli:main"
 packages = ["glove"]
 artifacts = [
     "glove/templates/*",
-    "glove/harnesses/**/*",
+    "glove/enforcers/entrypoint/*",
     "glove/enforcers/srt_image/*",
     "glove/enforcers/pty/*",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "extensions"]
+testpaths = ["tests", "extensions", "harnesses"]
 pythonpath = [".", "tests"]
-# importlib: extension test files share basenames (extensions/*/tests/test_*.py)
+# importlib: plugin test files share basenames (extensions|harnesses/*/tests/test_*.py)
 addopts = "--import-mode=importlib"
 
 [tool.ruff]
@@ -47,8 +47,8 @@ target-version = "py311"
 # The codebase wraps prose at ~88 but runs functional lines longer; 120 is a
 # real ceiling that matches practice without a wholesale reflow.
 line-length = 120
-# Integration scripts are bash; the harness images vendor third-party code.
-extend-exclude = ["tests/integration", "glove/harnesses"]
+# Integration scripts are bash; the harness image contexts are baked as-is.
+extend-exclude = ["tests/integration", "harnesses/*/image"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]

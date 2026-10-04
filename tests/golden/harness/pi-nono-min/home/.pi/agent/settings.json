@@ -1,0 +1,6 @@
+{
+  "defaultProvider": "glove",
+  "defaultModel": "test-model",
+  "defaultThinkingLevel": "low",
+  "theme": "dark"
+}
