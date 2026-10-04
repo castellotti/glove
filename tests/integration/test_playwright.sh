@@ -24,14 +24,8 @@ RT="${RT:-docker}"
 CASE="${1:-headless}"
 PORT="${STUB_PORT:-18085}"
 TMPROOT="$(mktemp -d)"; S="$TMPROOT/pw"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
-STUB_PY=llm_stub.py
-LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$PORT\", model: auto}"
-if [ "$CASE" = claude-code ]; then
-  # Claude Code speaks the Anthropic Messages API: the anthropic stub, a fake key
-  STUB_PY=anthropic_stub.py
-  LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$PORT\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}"
-  export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
-fi
+. "$ROOT/tests/integration/lib_session.sh"
+stub_llm "$CASE" "$PORT"
 python3 "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!; disown "$STUB"
 trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT

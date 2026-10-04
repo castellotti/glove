@@ -205,8 +205,6 @@ def _opener() -> urllib.request.OpenerDirector:
 
 def tunnel_refusal(url: str) -> str | None:
     """The egress gate's refusal text if it answers a CONNECT for `url` with 403, else None."""
-    if not PROXY:
-        return None
     p, u = urllib.parse.urlsplit(PROXY), urllib.parse.urlsplit(url)
     port = u.port or (443 if u.scheme == "https" else 80)
     conn = http.client.HTTPConnection(p.hostname, p.port or 80, timeout=15)

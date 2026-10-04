@@ -43,6 +43,5 @@ harness:
     SEARXNG_URL: "{{ endpoint.search.url if endpoint.search is defined else '' }}"
   pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
   mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
-    - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp",
-        when: { harness: [vibe, claude-code] } }
+    - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp" }
   brief: brief.md

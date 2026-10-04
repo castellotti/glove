@@ -44,7 +44,7 @@ harness:
          if harness == 'pi' else '' }}
   pi: { extensions: [pi-extension] }   # Pi's web_fetch tool
   claude-code:                          # Claude Code's own WebFetch, through the proxy
-    web_fetch: { proxy: "{{ endpoint.proxy.url if endpoint.proxy is defined else '' }}" }
+    web_fetch: { proxy: "{{ endpoint.proxy.url }}" }
   mcp:                                  # Vibe (its native web_fetch is blocked by its hook)
     - { name: webfetch, transport: http, url: "{{ endpoint['webfetch-mcp'].url }}/mcp",
         when: { harness: vibe } }

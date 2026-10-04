@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 import threading
@@ -13,7 +12,7 @@ import pytest
 import yaml
 from helpers import make_cfg, render
 
-from glove.extensions import ExtensionError
+from glove.extensions import ExtensionError, load_module
 from glove.plan import build_session_plan
 
 
@@ -90,11 +89,7 @@ def test_npm_dependencies_are_pinned_exactly():
 
 
 def _server():
-    path = Path(__file__).parents[1] / "image" / "webfetch_mcp.py"
-    spec = importlib.util.spec_from_file_location("webfetch_mcp", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return load_module(Path(__file__).parents[1] / "image" / "webfetch_mcp.py", "webfetch")
 
 
 # the same table as guard.ts's behaviour (README "Destinations")

@@ -33,6 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, _resolve_extensions
 from glove.extensions import image_tag
@@ -119,19 +120,17 @@ def main(directory: str, keep: bool) -> int:
             return (r.stdout + r.stderr).strip()
 
         if mcp_harness:
-            for ext, host, tool in (("search", f"{s}-search-mcp", "web_search"),
-                                    ("webfetch", f"{s}-webfetch-mcp", "fetch_url")):
+            for ext, host, tool, sidecar in (("search", f"{s}-search-mcp", "web_search", "searxng-mcp"),
+                                             ("webfetch", f"{s}-webfetch-mcp", "fetch_url", "fetcher")):
                 if not comp.by_name(ext) or (ext == "webfetch" and cfg.harness != "vibe"):
                     continue
                 out = mcp(ext, host, [["tools/list", {}]])
                 check(f"{ext}: the forwarder serves the MCP ({tool})", f"tools: {tool}" in out, out[-160:])
                 out = mcp(ext, host, [["tools/list", {}]], header="evil.example:8000")
                 check(f"{ext}: a foreign Host header is refused", "tools:" not in out, out[-120:])
-                for name in ("searxng-mcp", "fetcher"):
-                    if ext == ("search" if name == "searxng-mcp" else "webfetch"):
-                        out = mcp(ext, f"{s}-{name}", [["tools/list", {}]])
-                        check(f"{ext}: the sidecar itself is unreachable from the harness network",
-                              "tools:" not in out, out[-100:])
+                out = mcp(ext, f"{s}-{sidecar}", [["tools/list", {}]])
+                check(f"{ext}: the sidecar itself is unreachable from the harness network",
+                      "tools:" not in out, out[-100:])
             if comp.by_name("webfetch") and cfg.harness == "vibe":
                 r = subprocess.run([rt, "exec", f"{s}-fetcher", "python3", "-c",
                                     "import urllib.request as u; u.urlopen('https://example.com', timeout=8)"],
@@ -169,36 +168,25 @@ def main(directory: str, keep: bool) -> int:
             else:
                 check(label, "TOOL RESULT" in answer and want in answer)
 
-        if comp.by_name("observe") and comp.by_name("webfetch") and cc:
+        if comp.by_name("observe") and comp.by_name("webfetch") and cfg.harness != "pi":
             print("== observe")
-            net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
-            recs = []
-            for f in sorted(net.glob("flows*.ndjson")):
-                recs += [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
-            fetched = [r for r in recs if r.get("type") == "flow" and r.get("service") == "proxy"
+            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
+            # Claude Code's WebFetch goes through the proxy itself; Vibe's fetcher through its own gate
+            svc, client = ("proxy", "harness") if cc else ("webfetch-egress", "webfetch")
+            fetched = [r for r in recs if r.get("service") == svc
                        and (r.get("dest") or {}).get("host") == "example.com"]
             f = fetched[-1] if fetched else {}
-            check("flow: proxy → example.com, client harness, tool web_fetch",
-                  (f.get("client"), f.get("tool")) == ("harness", "web_fetch"),
+            check(f"flow: {svc} → example.com, client {client}, tool web_fetch",
+                  (f.get("client"), f.get("tool")) == (client, "web_fetch"),
                   json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
-            dests = sorted({(r.get("dest") or {}).get("host") for r in recs
-                            if r.get("type") == "flow" and r.get("service") == "proxy"} - {None})
-            print(f"    (WebFetch destinations through the proxy: {', '.join(dests)})")
-        if comp.by_name("observe") and comp.by_name("webfetch") and cfg.harness == "vibe":
-            print("== observe")
-            net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
-            recs = []
-            for f in sorted(net.glob("flows*.ndjson")):
-                recs += [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
-            fetched = [r for r in recs if r.get("type") == "flow" and r.get("service") == "webfetch-egress"
-                       and (r.get("dest") or {}).get("host") == "example.com"]
-            f = fetched[-1] if fetched else {}
-            check("flow: webfetch-egress → example.com, client webfetch, tool web_fetch",
-                  (f.get("client"), f.get("tool")) == ("webfetch", "web_fetch"),
-                  json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
-            hop = [r for r in recs if r.get("type") == "flow" and r.get("service") == "webfetch-mcp"]
-            check("flow: the harness → fetcher hop, client harness",
-                  bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")
+            if cc:
+                dests = sorted({(r.get("dest") or {}).get("host") for r in recs if r.get("service") == "proxy"}
+                               - {None})
+                print(f"    (WebFetch destinations through the proxy: {', '.join(dests)})")
+            else:
+                hop = [r for r in recs if r.get("service") == "webfetch-mcp"]
+                check("flow: the harness → fetcher hop, client harness",
+                      bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")
     except Exception as e:  # report, then tear down
         check(f"launch ({type(e).__name__})", False, str(e)[-600:])
     finally:

@@ -535,10 +535,10 @@ the same `proxy` forwarder; there the egress layer (the proxy's filter, the
 tunnel's policy, or with `observe` the gate's SSRF guard) refuses this machine
 and the LAN. Harnesses that speak MCP get `web_search` from a small hardened
 sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
-itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which reaches the proxy only through its own hop
-(`webfetch-egress`; with `observe`, a gate labelling its flows `client:
-webfetch`). Both need an egress provider. The `pi-search` template puts it
-together: `glove new pi-search <dir>`.
+itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which
+reaches the proxy only through its own hop (`webfetch-egress`; with `observe`,
+a gate labelling its flows `client: webfetch`). Both need an egress provider.
+The `pi-search` template puts it together: `glove new pi-search <dir>`.
 
 **`corporate`** is a netgate proxy that resolves and dials destinations itself
 (`dns: host` follows the VPN's split DNS through Docker Desktop / Podman

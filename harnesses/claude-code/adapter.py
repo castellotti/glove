@@ -54,7 +54,6 @@ WEB_FETCH = "WebFetch"
 MODES = ("default", "acceptEdits", "plan", "dontAsk")
 CONFIG_KEYS = frozenset({"settings", "permissions"})
 PERMISSION_KEYS = frozenset({"defaultMode", "allow", "deny"})
-SECTION_KEYS = frozenset({"web_fetch"})
 MANAGED_ENV = {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "DISABLE_TELEMETRY": "1",
@@ -130,12 +129,13 @@ def _web_fetch_proxy(comp) -> str | None:
     proxy = None
     for a, section, ctx in comp.harness_items if comp is not None else []:
         where = f"extension {a.name!r} harness"
-        section = render_value(section, ctx, where)
-        wf = section.get("web_fetch") if isinstance(section, dict) else None
-        if not isinstance(section, dict) or set(section) - SECTION_KEYS or not isinstance(wf, dict) \
-                or set(wf) != {"proxy"} or not str(wf["proxy"]).startswith(f"http://{scoped(comp.session, '')}"):
-            raise ExtensionError(f"{where}: `claude-code:` takes {{web_fetch: {{proxy: <a session endpoint's url>}}}}")
-        proxy = str(wf["proxy"])
+        match render_value(section, ctx, where):
+            case {"web_fetch": {"proxy": str() as url} as wf} as section if len(section) == len(wf) == 1 \
+                    and url.startswith(f"http://{scoped(comp.session, '')}"):
+                proxy = url
+            case _:
+                raise ExtensionError(
+                    f"{where}: `claude-code:` takes {{web_fetch: {{proxy: <a session endpoint's url>}}}}")
     return proxy
 
 

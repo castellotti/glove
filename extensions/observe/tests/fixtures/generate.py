@@ -58,7 +58,7 @@ def _session_file(extra: str, harness: str = "pi") -> str:
             f"  webfetch: {{}}\n{extra}")
 
 
-def _flows(net: Path, sid: str, *, filtered: bool, harness: str = "pi") -> None:
+def _flows(net: Path, sid: str, *, filtered: bool) -> None:
     """Two closed flows from the gate's own builder: one allowed, and one
     blocked by a rule (filter) or by the SSRF guard (observe only). Claude
     Code's own WebFetch goes through the same `proxy` endpoint as Pi's web_fetch."""
@@ -164,7 +164,7 @@ def generate(out: Path) -> None:
                 assert not ctl.exists()
             _normalise(home, tmp)  # rules.json first: status.json records its real sha256
             if (obs / "net").is_dir():
-                _flows(obs / "net", sid, filtered=name == "observe-filter", harness=harness)
+                _flows(obs / "net", sid, filtered=name == "observe-filter")
                 _status(obs / "net", ctl if ctl.is_dir() else None)
             if (obs / "transcripts").is_dir() and harness == "claude-code":
                 _cc_transcript(obs / "transcripts")
