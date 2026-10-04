@@ -54,17 +54,21 @@ def load_provider(name: str) -> dict[str, Any]:
     unknown = set(cat) - CATALOG_KEYS
     if unknown:
         raise LlmError(f"llm: provider {name!r} has unknown catalog keys {sorted(unknown)}")
-    for h in (cat.get("headers") or {}, ((cat.get("auth") or {}).get("oauth") or {}).get("headers") or {}):
-        for k, v in h.items():
-            if not HEADER_NAME.fullmatch(str(k)) or not HEADER_VALUE.fullmatch(str(v)):
-                raise LlmError(f"llm: provider {name!r} has a bad header {k!r}")
+    for k, v in [*_headers(cat).items(), *_headers((cat.get("auth") or {}).get("oauth")).items()]:
+        if not HEADER_NAME.fullmatch(k) or not HEADER_VALUE.fullmatch(v):
+            raise LlmError(f"llm: provider {name!r} has a bad header {k!r}")
     return cat
+
+
+def _headers(block: dict[str, Any] | None) -> dict[str, str]:
+    """A catalog block's `headers`, as strings."""
+    return {str(k): str(v) for k, v in ((block or {}).get("headers") or {}).items()}
 
 
 def _auth(s: dict[str, Any], cat: dict[str, Any], harness: str) -> tuple[dict[str, Any], dict[str, str]]:
     """The auth block for `s["auth"]` and the public headers a probe sends."""
     auth = cat.get("auth") or {}
-    headers = {str(k): str(v) for k, v in (cat.get("headers") or {}).items()}
+    headers = _headers(cat)
     if s.get("auth", "api-key") != "oauth":
         return auth, headers
     oauth = auth.get("oauth")
@@ -75,7 +79,7 @@ def _auth(s: dict[str, Any], cat: dict[str, Any], harness: str) -> tuple[dict[st
                        f"{', '.join(oauth.get('harnesses') or [])} only, not harness {harness!r}; use an API key")
     if not s.get("api_key"):
         raise LlmError("llm: `auth: oauth` needs `api_key: keychain:<service>` holding the token")
-    headers.update({str(k): str(v) for k, v in (oauth.get("headers") or {}).items()})
+    headers.update(_headers(oauth))
     return {**auth, **oauth}, headers
 
 
@@ -221,17 +225,17 @@ CONNECT_RETRIES = (1, 2, 3, 4)  # seconds between attempts while nothing answers
 def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
     """Every id the models endpoint lists, following a paginated list
     (`has_more` + `last_id`, the catalog's `models_cursor` names the parameter)."""
-    endpoint = cat.get("models_endpoint", "/v1/models")
+    endpoint, cursor = cat.get("models_endpoint", "/v1/models"), cat.get("models_cursor")
     url, ids = root + endpoint, []
     for _ in range(MAX_MODEL_PAGES):
         status, text = probe(url, auth=auth)
-        for wait in CONNECT_RETRIES if status == 0 else ():
+        for wait in CONNECT_RETRIES:
+            if status != 0:
+                break
             # no HTTP answer at all: a forwarder that implements more than socat
             # (observe's gate) can still be starting
             time.sleep(wait)
             status, text = probe(url, auth=auth)
-            if status != 0:
-                break
         if status != 200:
             raise LlmError(f"llm: {cat['name']} did not answer {endpoint} (HTTP {status}): "
                            f"{text[:200]} — is the server running and reachable at the configured endpoint?")
@@ -240,11 +244,16 @@ def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
             ids += [m.get("id") for m in (doc.get("data") or []) if isinstance(m, dict)]
         except (ValueError, AttributeError) as e:
             raise LlmError(f"llm: {endpoint} returned non-JSON: {text[:200]}") from e
-        cursor = cat.get("models_cursor")
         if not (cursor and doc.get("has_more") and doc.get("last_id")):
             return ids
         url = f"{root}{endpoint}{'&' if '?' in endpoint else '?'}{cursor}={quote(str(doc['last_id']))}"
     raise LlmError(f"llm: {endpoint} listed more than {MAX_MODEL_PAGES} pages")
+
+
+def _served(model: str, ids: list[str], cat: dict[str, Any]) -> bool:
+    """`model` is listed, or (`dated_aliases`) a dated snapshot `<model>-YYYYMMDD` is."""
+    return model in ids or (bool(cat.get("dated_aliases")) and any(
+        re.fullmatch(re.escape(model) + r"-\d{8}", i or "") for i in ids))
 
 
 def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
@@ -262,9 +271,7 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
                            f"{ids or 'none'} — set `model:` to one of them")
         out["model"] = ids[0]
         notes.append(f"model: auto → {ids[0]}")
-    elif ids and exports["model"] not in ids and not (
-            cat.get("dated_aliases") and any(re.fullmatch(re.escape(exports["model"]) + r"-\d{8}", i or "")
-                                             for i in ids)):
+    elif ids and not _served(exports["model"], ids, cat):
         raise LlmError(f"llm: model {exports['model']!r} is not served (available: {ids})")
     caps = dict(exports["capabilities"])
     spec = (cat.get("probes") or {}).get("capabilities")

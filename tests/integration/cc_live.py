@@ -48,12 +48,13 @@ def main(directory: str, stub_log: str) -> int:
     env = dict(os.environ)
     try:
         plan, _, _ = _materialize_plan(sd, sid, cfg)
-        env = {**os.environ, **secret_env(plan)}
+        secrets = secret_env(plan)
+        env = {**os.environ, **secrets}
         base = _compose_base(rt, plan.project, sd.compose)
         print(f"== session {sid} ({cfg.harness}, enforcer {plan.enforcer}, runtime {rt})")
         ensure_images(cfg, plan, rt)
         start_sidecars(plan, sd.compose, provider=rt, env=env)
-        _resolve_extensions(plan, rt, secret_env(plan))
+        _resolve_extensions(plan, rt, secrets)
         render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
         managed = json.loads((sd.state / "harness" / "claude-code" / "managed-settings.json").read_text())
         check("managed settings set the shell prefix", managed["env"].get("CLAUDE_CODE_SHELL_PREFIX")

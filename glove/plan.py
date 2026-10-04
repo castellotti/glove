@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
+import shutil
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import Config, ConfigError
-from .enforcers.base import srt_suffix, uses_srt
+from .enforcers.base import argv_lines, srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
@@ -144,10 +147,6 @@ def write_system_files(plan: SessionPlan, root: Path) -> None:
     A running session binds these dirs, so they are updated in place (each file
     replaced atomically, stale ones removed), never deleted and recreated: a
     re-plan must not leave the live container an empty or orphaned dir."""
-    import re
-    import shutil
-    import tempfile
-
     plan.system_mounts = []
     dirs: set[Path] = set()
     for target, files in sorted(plan.system_files.items()):
@@ -161,7 +160,7 @@ def write_system_files(plan: SessionPlan, root: Path) -> None:
         d.mkdir(parents=True, exist_ok=True)
         dirs.add(d)
         for stale in set(d.iterdir()) - {d / f for f in files}:
-            shutil.rmtree(stale) if stale.is_dir() and not stale.is_symlink() else stale.unlink()
+            _remove(stale)
         for fname, content in files.items():
             fd, tmp = tempfile.mkstemp(dir=root, prefix=".tmp-")
             with os.fdopen(fd, "w") as f:
@@ -171,7 +170,14 @@ def write_system_files(plan: SessionPlan, root: Path) -> None:
         plan.system_mounts.append((str(d), target))
     if root.is_dir():
         for stale in set(root.iterdir()) - dirs:  # a dir the harness no longer renders
-            shutil.rmtree(stale) if stale.is_dir() and not stale.is_symlink() else stale.unlink()
+            _remove(stale)
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
@@ -387,9 +393,7 @@ def build_session_plan(
     plan.policies = enforcer.render_policies(plan)
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
-        # The same argv one per line, for a harness glue that has no JSON parser
-        # (Claude Code's shell prefix is a bash script).
-        plan.policies["tool-wrapper.argv"] = "".join(f"{a}\n" for a in wrapper)
+        plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
     plan.system_files = adapter_call(profile, "system_files", cfg, plan, default={})
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)

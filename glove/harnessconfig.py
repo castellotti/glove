@@ -77,6 +77,12 @@ def harness_model(profile: HarnessProfile, exports: dict[str, Any]) -> ModelDesc
     return replace(model, api_key_env=name) if name else model
 
 
+def mcp_tool_names(tools: str | Sequence[Any]) -> list[str]:
+    """An `mcp` contribution's `tools` allowlist (a comma-separated string or a
+    list) as tool names."""
+    return [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
+
+
 def _mount_plan_for(cfg: Config) -> MountPlan:
     """Resolve the same mount plan the runtime renders, for the context file."""
     return compute_mounts(

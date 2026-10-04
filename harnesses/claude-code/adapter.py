@@ -32,7 +32,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from glove.config import ConfigError
-from glove.harnessconfig import _mount_plan_for, rel_config_home
+from glove.enforcers.base import argv_lines
+from glove.harnessconfig import _mount_plan_for, mcp_tool_names, rel_config_home
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
@@ -100,24 +101,22 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], dict[s
             if wrapped:
                 if any("\n" in a for a in argv):
                     raise ConfigError(f"MCP server {name!r}: an argument with a newline")
-                argv_files[f"mcp-{name}.argv"] = "".join(f"{a}\n" for a in argv)
+                argv_files[f"mcp-{name}.argv"] = argv_lines(argv)
                 argv = [SHELL_PREFIX, "--mcp", name]
             servers[name] = {"type": "stdio", "command": argv[0], "args": argv[1:],
                              **({"env": dict(item["env"])} if item.get("env") else {})}
         if tools is None:
             allow.append(f"mcp__{name}")
         else:
-            names = [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
-            allow += [f"mcp__{name}__{t}" for t in names]
+            allow += [f"mcp__{name}__{t}" for t in mcp_tool_names(tools)]
     return servers, allow, argv_files
 
 
-def managed_settings(cfg, plan) -> dict[str, Any]:
+def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], wrapped: bool) -> dict[str, Any]:
     perms = _config(cfg).get("permissions") or {}
     home = plan.profile.config_home_path
-    servers, mcp_allow, _ = _mcp(plan.composition)
     env = dict(MANAGED_ENV)
-    if "tool-wrapper.argv" in plan.policies:
+    if wrapped:
         env["CLAUDE_CODE_SHELL_PREFIX"] = SHELL_PREFIX
     model = plan.model
     if model is not None and urlsplit(model.base_url).hostname != DEFAULT_HOST:
@@ -146,8 +145,10 @@ def system_files(cfg, plan) -> dict[str, dict[str, str]]:
     if model is not None and model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}; "
                           "pick provider anthropic (or an Anthropic-compatible endpoint)")
-    servers, _, argv_files = _mcp(plan.composition, wrapped="tool-wrapper.argv" in plan.policies)
-    files = {"managed-settings.json": json.dumps(managed_settings(cfg, plan), indent=2) + "\n"}
+    wrapped = "tool-wrapper.argv" in plan.policies
+    servers, mcp_allow, argv_files = _mcp(plan.composition, wrapped)
+    files = {"managed-settings.json": json.dumps(managed_settings(cfg, plan, servers, mcp_allow, wrapped), indent=2)
+             + "\n"}
     if servers:
         files["managed-mcp.json"] = json.dumps({"mcpServers": servers}, indent=2) + "\n"
     return {MANAGED_DIR: {**files, **argv_files}}

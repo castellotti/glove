@@ -310,6 +310,14 @@ def _resolve_working_dir(
     return os.path.normpath(os.path.join(best.container_path, rel))
 
 
+def make_pinned_dirs(protect: tuple[Protect, ...]) -> None:
+    """Create the pinned dirs over a trusted file (`_protect_trusted`) that do
+    not exist yet, so their binds have a source."""
+    for p in protect:
+        if p.kind == "dir" and p.host_path and not os.path.lexists(p.host_path):
+            os.makedirs(p.host_path)
+
+
 def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:
     """Create the empty file/dir sources for placeholder binds (outside /work)."""
     directory.mkdir(parents=True, exist_ok=True)

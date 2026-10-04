@@ -133,7 +133,7 @@ def test_transcripts_bind_must_be_the_observe_exports_own(tmp_path):
     root = tmp_path / "g" / "observe" / "s"
     comp = SimpleNamespace(export_dirs={"observe": root, "control": tmp_path / "g" / "control" / "s"})
     plan = SimpleNamespace(composition=comp, home_dir=str(tmp_path / "h"), mounts=[], policies_host_dir=None,
-                           transcripts_host_dir=str(root / "net"))
+                           system_mounts=[], transcripts_host_dir=str(root / "net"))
     with pytest.raises(HardeningError):
         exports.validate_export_isolation(plan)
     plan.transcripts_host_dir = str(root / "transcripts")

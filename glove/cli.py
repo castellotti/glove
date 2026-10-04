@@ -12,7 +12,6 @@ and otherwise uses the nearest session at or above the cwd:
 
 from __future__ import annotations
 
-import os
 import shutil
 import time
 from datetime import UTC, datetime
@@ -240,12 +239,11 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         plan.policies_host_dir = str(enforcer_dir)
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
+    from .mounts import make_pinned_dirs
     from .plan import write_system_files
 
     write_system_files(plan, sd.state / "harness")
-    for p in plan.protect:  # a pinned dir over a trusted file may not exist yet
-        if p.kind == "dir" and p.host_path and not os.path.lexists(p.host_path):
-            os.makedirs(p.host_path)
+    make_pinned_dirs(plan.protect)  # a pinned dir over a trusted file may not exist yet
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 
@@ -384,14 +382,14 @@ def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
 
     comp = plan.composition
     name = plan.model.api_key_env if plan.model is not None else None
+    key = {LLM_API_KEY_ENV: secrets[name]} if name in secrets else None
     for a in comp.active:
         if a.hooks is None or not hasattr(a.hooks, "resolve"):
             continue
         ex = a.exports
-        key = {LLM_API_KEY_ENV: secrets[name]} if name in secrets else None
 
-        def probe(url, method="GET", body=None, auth=False, _ex=ex, _key=key):
-            return probe_http(provider, plan, url, method=method, body=body, auth_env=_key if auth else None,
+        def probe(url, method="GET", body=None, auth=False, _ex=ex):
+            return probe_http(provider, plan, url, method=method, body=body, auth_env=key if auth else None,
                               auth_header=_ex.get("auth_header", "Authorization"),
                               auth_scheme=_ex.get("auth_scheme", "Bearer"),
                               headers=_ex.get("probe_headers") or {})
