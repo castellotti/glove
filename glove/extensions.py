@@ -698,13 +698,16 @@ def generate_secret() -> str:
 
 # Logical network names an extension may use. The harness network (`net`) is
 # core's alone; `llm` carries only inference forwarders; `hostgw` only
-# host-gateway forwarders; `wan` only the active egress provider's containers.
+# host-gateway forwarders; `wan` only the active egress provider's containers;
+# `lan` only the forwarders of `via: lan` endpoints (a named LAN host, never
+# reached by the harness itself).
 CORE_NETWORKS = {
     "net": {"internal": True},
     "egress": {"internal": True},
     "wan": {"internal": False},
     "llm": {"internal": False},
     "hostgw": {"internal": False},
+    "lan": {"internal": False},
 }
 HOST_GATEWAY = "host.docker.internal"
 
@@ -735,13 +738,19 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         require_trust(a, f"{where}: reaching a host port")
         target = Target(HOST_GATEWAY, int(t["host_port"]), "host", "hostgw")
     elif "address" in t:
-        # a remote host:port: the inference provider over `llm`, or the egress
-        # provider over `wan` (e.g. corporate's raw TCP endpoints)
+        # a remote host:port: the inference provider over `llm`, the egress
+        # provider over `wan` (e.g. corporate's raw TCP endpoints), or — over
+        # `lan` — a host the user named, for a sidecar only (e.g. ssh)
         via = str(t.get("via", "llm"))
-        slot = {"llm": "inference", "wan": "egress"}.get(via)
-        if slot is None or slot not in a.manifest.provides:
-            raise ExtensionError(f"{where}: only the inference provider (via: llm) or the egress provider "
-                                 "(via: wan) may dial a remote address")
+        if via == "lan":
+            if harness:
+                raise ExtensionError(f"{where}: a `via: lan` endpoint is for a sidecar (harness: false); "
+                                     "the harness never reaches a LAN host itself")
+        else:
+            slot = {"llm": "inference", "wan": "egress"}.get(via)
+            if slot is None or slot not in a.manifest.provides:
+                raise ExtensionError(f"{where}: only the inference provider (via: llm), the egress provider "
+                                     "(via: wan) or a sidecar's LAN host (via: lan) may dial a remote address")
         require_trust(a, f"{where}: dialling a remote address")
         host, _, port = str(t["address"]).rpartition(":")
         if not host or not port.isdigit():

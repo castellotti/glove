@@ -92,6 +92,10 @@ Every capability (the model, search, the browser, …) is an extension in
   with named sidecars of the same extension, writable by the harness and its
   commands (every enforcer grants exactly those paths, and no network). The
   harness mounts no other volume (re-checked on the merged project).
+- **LAN hosts** (`via: lan`, in-tree or trusted only): an endpoint may dial a
+  host:port the user named, for a sidecar only (never `harness: true`), over
+  core's routable `lan` network, which only those forwarders may join
+  (re-checked on the merged project). It exists for `ssh` (below).
 - **The `work` privilege** (in-tree or trusted only) binds the harness's whole
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
   it. It exists for `github` (below).
@@ -287,6 +291,29 @@ runs the real command. What that adds, and what bounds it:
   A prompt-injected agent can push the contents of `/work` to a repository the
   token can write. The fence keeps that on GitHub; it cannot tell your
   repositories apart.
+
+### `ssh`: the same relay, to named LAN hosts
+
+- **The key never enters the harness.** It reaches the sidecar's environment at
+  `compose up` and is loaded into an `ssh-agent` there; no key file exists. The
+  live test finds no key material in the harness.
+- **Routes:** each named host gets one forwarder (`via: lan`), the sidecar's
+  only route; the harness has none. The live test checks that a shell command
+  cannot reach the host, and that the sidecar cannot reach it (or the internet)
+  except through its forwarder. With `observe`, every connection is a flow
+  (`client: ssh`, `scope: lan`) and `glove filter` can block it.
+- **The policy:**
+  - destinations are the named hosts as their configured users;
+  - options are an allowlist; refused: `-L`/`-R`/`-D`/`-W`, `-J`, `-i`, `-F`,
+    `-A`, `-t`, and every `-o` but a few timeouts;
+  - `ProxyCommand=none`, `ClearAllForwardings`, batch mode and the agent socket
+    are pinned first in argv, where ssh keeps them;
+  - host keys are checked strictly against the session's `known_hosts`, never
+    learned.
+- **Residual risk:** whatever the key may do on those hosts, a prompt-injected
+  agent may do (the remote command is the agent's). Use a key made for the
+  session, restricted in `authorized_keys` (`restrict`, `from=`, or a forced
+  command), as an unprivileged user.
 
 ## Claude Code: managed settings and the shell prefix
 

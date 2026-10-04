@@ -448,6 +448,10 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             ep_owner = next((comp.by_name(e.extension) for e in comp.endpoints if e.name == short), None)
             if egress_provider is None or egress_provider not in (owner, ep_owner):
                 raise ExtensionError(f"service {name!r} joins the wan network, which only the egress provider may")
+        if scoped(session, "lan") in nets:
+            short = name.removeprefix(scoped(session, ""))
+            if not any(e.target.network == "lan" and short in (e.name, f"{e.name}-out") for e in comp.endpoints):
+                raise ExtensionError(f"service {name!r} joins the lan network, which only `via: lan` forwarders may")
         if harness_net in nets and name != plan.harness_service:
             role = name.removeprefix(scoped(session, ""))
             if not any(e.name == role and e.harness for e in comp.endpoints) and role not in {

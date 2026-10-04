@@ -70,6 +70,21 @@ All notable changes to glove are documented here.
     start are capped (4× the concurrent limit, the rest dropped), a request
     left half-open holds no descriptors past 10s, and the fence drops a
     connection that sends no `CONNECT` within 10s.
+- **`ssh`**: `ssh <host> <command>` to LAN hosts the session names, relayed to a
+  hardened sidecar.
+  - **Key:** held in an `ssh-agent` there, delivered by `launch_env` and never
+    in the harness.
+  - **Routes:** each host gets one forwarder on core's new `lan` network, the
+    sidecar's only route. With `observe` it is a gate: `client: ssh` (a new
+    netgate client label), `scope: lan`.
+  - **Policy:** host keys checked strictly against the session's
+    `known_hosts`; an option allowlist with no forwarding, jump hosts,
+    ProxyCommand, identities or TTY.
+  - **relay** gains `openssh-client` and `libnss-wrapper`, runs a relay with no
+    `/work` (file arguments refused) and no fence when its policy names no hosts.
+- Core: **`via: lan`** endpoints, a host:port the user named, dialled for a
+  trusted extension's sidecar only, over a routable `lan` network that only
+  those forwarders may join.
 - Core: **channels** (`channels:`), a session tmpfs volume at
   `/run/glove/<name>` shared by the harness and named sidecars, which every
   enforcer lets the harness and its commands write (no network). A relay uses
