@@ -19,13 +19,14 @@ from helpers import make_cfg
 GOLDEN = Path(__file__).parent / "golden" / "harness"
 UPDATE = os.environ.get("GLOVE_UPDATE_GOLDEN") == "1"
 
-WEB = {"direct": {}, "search": {}, "playwright": {}, "media": {}, "ocr": {}, "observe": {}, "filter": {}}
+WEB = {"direct": {}, "search": {}, "webfetch": {}, "playwright": {}, "media": {}, "ocr": {}, "observe": {},
+       "filter": {}}
 
 CASES = {
     "pi-nono-min": {"harness": "pi", "enforcer": "nono", "extensions": {}},
     "pi-srt-full": {
         "harness": "pi", "enforcer": "nono+srt",
-        "extensions": {**WEB, "webfetch": {}, "rag": {"models_dir": "{tmp}/models"}},
+        "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"}},
         "harness_config": {"settings": {"defaultThinkingLevel": "medium", "env": {"X": "1"}},
                            "model": {"maxTokens": 4096}},
         "brief": "# brief\n\nDo the thing.",

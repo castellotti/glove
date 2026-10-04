@@ -36,13 +36,39 @@ def test_pi_wiring(tmp_path):
     assert fwd.networks == ("glove-s-searchnet",)
 
 
-def test_vibe_wiring(tmp_path):
-    plan = _plan(tmp_path, "vibe")
-    assert [s for _, s in plan.composition.mcp] == [{
-        "name": "searxng", "transport": "stdio", "command": "python3",
-        "args": ["/opt/glove/ext/search/searxng_mcp.py"], "env": {"SEARXNG_URL": "http://glove-s-search:8080"},
-    }]
-    assert "/opt/glove/ext/search/searxng_mcp.py" in plan.derived_dockerfile
+@pytest.mark.parametrize("harness", ["vibe", "claude-code"])
+def test_mcp_harnesses_get_web_search_from_a_sidecar_over_http(tmp_path, harness):
+    llm = {"llm": {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080",
+                   "model": "m"}} if harness == "claude-code" else {}
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions={"direct": {}, "search": {}, **llm})
+    plan, text = render(cfg, tmp_path)
+    assert [s for _, s in plan.composition.mcp] == [
+        {"name": "searxng", "transport": "http", "url": "http://glove-s-search-mcp:8000/mcp"}]
+    fwd = next(s for s in plan.network.sidecars if s.role == "search-mcp")
+    assert fwd.target == "glove-s-searxng-mcp:8000" and fwd.networks == ("glove-s-searchnet",)
+    svc = yaml.safe_load(text)["services"]["glove-s-searxng-mcp"]
+    assert set(svc["networks"]) == {"glove-s-searchnet"}  # never on egress
+    assert svc["environment"]["MCP_ALLOWED_HOST"] == "glove-s-search-mcp:8000"
+    assert svc["read_only"] is True and svc["cap_drop"] == ["ALL"]
+    # nothing baked into the harness image for search any more
+    assert "searxng_mcp" not in (plan.derived_dockerfile or "")
+
+
+def test_pi_gets_no_mcp_sidecar(tmp_path):
+    plan = _plan(tmp_path)
+    assert not any(s.role == "search-mcp" for s in plan.network.sidecars)
+    assert not any(n.endswith("searxng-mcp") for n in plan.composition.fragments[-1][1]["services"])
+
+
+def test_the_sidecar_image_is_hash_pinned():
+    d = Path(__file__).resolve().parent.parent / "image"
+    df = (d / "Dockerfile").read_text()
+    assert "@sha256:" in df and "--require-hashes" in df
+    reqs = [ln for ln in (d / "requirements.txt").read_text().splitlines() if ln and not ln[0].isspace()
+            and not ln.startswith("#")]
+    assert all("==" in ln for ln in reqs) and any(ln.startswith("mcp==") for ln in reqs)
 
 
 def test_sidecars_networks_and_mounts(tmp_path):

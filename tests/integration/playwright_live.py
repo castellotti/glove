@@ -96,7 +96,7 @@ def main(directory: str) -> int:
         pws = comp.by_name("playwright").settings
         mode, observed = pws["mode"], comp.by_name("observe") is not None
         check(f"sidecars up + verify passed (mode {mode}, egress {comp.slots['egress'].name})", True)
-        _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
+        _resolve_extensions(plan, rt, secret_env(plan))
         render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
         pw_image = image_tag(comp.by_name("playwright"), "pw")
 
@@ -154,7 +154,7 @@ def main(directory: str) -> int:
         print(f"== the agent ({cfg.harness}) browses")
         log = Path(os.environ["STUB_LOG"]) if os.environ.get("STUB_LOG") else None
         mark = len(log.read_text()) if log else 0
-        prefix = "playwright_" if cfg.harness == "vibe" else ""
+        prefix = {"vibe": "playwright_", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
         ans = agent(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
@@ -164,12 +164,22 @@ def main(directory: str) -> int:
                 m = re.match(r"stub: chat .* tools=(.*)$", line)
                 if m:
                     offered |= set(m.group(1).split(","))
+                m = re.match(r"stub: tools=(\[.*\])$", line)  # the anthropic stub
+                if m:
+                    offered |= set(json.loads(m.group(1).replace("'", '"')))
         browser_tools = sorted(t for t in offered if "browser_" in t)
         check("offered the allowlisted browser tools only",
               f"{prefix}browser_navigate" in offered and len(browser_tools) == len(pws["tools"])
               and not any("run_code" in t or "evaluate" in t for t in offered), ", ".join(browser_tools)[:160])
-        if cfg.harness == "pi":
-            ans = agent("bash", {"command": f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-browser/8931' 2>&1; "
+        if cfg.harness == "claude-code":
+            # a tool outside the allowlist is denied by a managed rule: never offered, so no prompt
+            ans = agent(f"{prefix}browser_evaluate", {"function": "() => document.title"})
+            check("a denied tool (browser_evaluate) is not even offered", "Example Domain" not in ans
+                  and "no such tool available" in ans.lower(),
+                  ans[-160:].replace("\n", " "))
+        if cfg.harness in ("pi", "claude-code"):
+            bash = "Bash" if cfg.harness == "claude-code" else "bash"
+            ans = agent(bash, {"command": f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-browser/8931' 2>&1; "
                                             "echo rc=$?"})
             check("a shell command cannot reach the MCP (ring 1)", "rc=0" not in ans, ans[-100:])
 

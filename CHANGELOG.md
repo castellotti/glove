@@ -34,9 +34,34 @@ All notable changes to glove are documented here.
   key travels in (`secret_env`). Every enforcer with a tool wrapper also renders
   `tool-wrapper.argv` (one argument per line). System files are rewritten in
   place (atomic per file), so a re-plan never swaps the dir a live session binds.
+- `webfetch` for Vibe: a `fetch_url` MCP tool served over HTTP by a hardened
+  `fetcher` sidecar (a port of Pi's web_fetch and its destination guard: public
+  pages only, every redirect re-checked, policy refusals named; IPv4 in hex,
+  octal or shortened form is refused, since Python does not normalise it as
+  Node does; an unknown page charset falls back to utf-8). The harness
+  reaches only the fetcher, never the egress proxy; with `observe` the fetcher's
+  traffic goes through its own gate (`client: webfetch`, a new netgate client
+  label).
+- `webfetch` for Claude Code: its own `WebFetch`, allowed and pointed at the
+  `proxy` endpoint (`HTTPS_PROXY` in the managed env, session forwarders in
+  `NO_PROXY`); private destinations are refused by the egress layer. Without
+  `webfetch`, `WebFetch` stays denied.
+- Claude Code with `playwright`: the `tools` allowlist becomes allow rules and
+  every other tool the pinned MCP defines (`all_tools`, a new neutral `mcp:`
+  key) a managed deny rule, so Claude Code never offers it; host mode needs
+  `i_accept_host_rce: true` as with Vibe.
+- Extension networks take `when:` (like endpoints and images).
 
 ### Changed
 
+- `search` for Vibe (and now Claude Code) is the `searxng` MCP server over HTTP
+  from a hardened `searxng-mcp` sidecar (python slim + `mcp`, hash-pinned)
+  instead of a stdio server baked into the harness image: one server for both
+  harnesses, and the harness never reaches SearXNG itself. The raw SearXNG
+  endpoint (`search`) is Pi's only.
+- An extension's harness `env` value that renders empty is no longer set
+  (`GLOVE_FETCH_ALLOW` outside `corporate`, `rag`'s `CLAUDE_OBSIDIAN_CORE`
+  without a vault).
 - **Harness plugins.** Pi, Vibe and Claude Code moved from `glove/harnesses/`
   and core's registry/render code to `harnesses/<name>/` (`harness.yml`,
   `adapter.py`, `image/`, `tests/`). Core loads a harness's adapter only when a

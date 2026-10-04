@@ -27,7 +27,7 @@ selected one's code runs. Every capability is an **extension** in
 containers, no mounts, no image layers. Bundled: **`llm`** (the inference
 engine; required), the egress providers **`vpn`** (gluetun), **`tor`**,
 **`direct`** and **`corporate`** (corporate resources only), **`search`** (a
-per-session SearXNG), **`webfetch`** (Pi's `web_fetch`), **`observe`** (network
+per-session SearXNG), **`webfetch`** (read a page through the egress), **`observe`** (network
 observability, read) and **`filter`** (network rules, write), **`media`**
 (analysis toolchain), **`ocr`**/**`rag`** (documents) and **`playwright`** (a
 real Chromium: a hardened headless sidecar, a noVNC-watched one, or the host's
@@ -117,7 +117,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     provider: mullvad       # any gluetun provider, or `custom`
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
-  webfetch: {}              # Pi's web_fetch through the egress
+  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url)
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   observe: {}               # network observability (read) — see below
@@ -409,10 +409,17 @@ extensions:
     when missing, and `.claude` pinned so it can't be moved aside): Claude Code
     applies their `env` and commands to processes it starts itself, outside
     the tool wrapper, so the agent must not write them;
-  - the built-in tools are pre-approved (as Pi and Vibe auto-approve), `WebFetch`
-    is denied (the container has no route to fetch from), `defaultMode` is
-    pinned to `default` (`harness_config.permissions.defaultMode` may pick
-    `acceptEdits`, `plan` or `dontAsk`);
+  - the built-in tools are pre-approved (as Pi and Vibe auto-approve);
+    `WebFetch` is allowed with `webfetch` (through the egress proxy:
+    `HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`; see
+    [SECURITY.md](docs/SECURITY.md) for what that widens) and denied without it;
+    `defaultMode` is pinned to `default`
+    (`harness_config.permissions.defaultMode` may pick `acceptEdits`, `plan` or
+    `dontAsk`);
+  - extensions' MCP servers are the only ones (`managed-mcp.json`): a server's
+    `tools` allowlist becomes allow rules, and every other tool it is known to
+    have (`all_tools`) a deny rule, so Claude Code never offers it (Playwright's
+    `browser_run_code_unsafe` and `browser_evaluate` included);
   - non-essential traffic, telemetry, error reporting and auto-update off.
 - **Key:** the subscription token travels only as `CLAUDE_CODE_OAUTH_TOKEN`
   (an API key as `ANTHROPIC_API_KEY`). The `anthropic` provider allows `auth:
@@ -464,9 +471,10 @@ Core validates all of it:
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
-  - `mcp: [{name, transport: stdio|http, …, tools: [...]}]`: an MCP server,
-    rendered by harnesses that speak MCP (Vibe: `config.toml`; Claude Code:
-    `managed-mcp.json`; `tools` is an allowlist);
+  - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
+    an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
+    with `tools` as an allowlist; Claude Code: `managed-mcp.json`, `tools` as
+    allow rules and the rest of `all_tools` as deny rules);
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);
@@ -519,9 +527,18 @@ Keychain references handed to gluetun as compose secrets. An optional
 every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
 
 `search` runs SearXNG and valkey in the session, with every engine request
-going through the egress proxy. `webfetch` gives Pi `web_fetch` through a
-`proxy` forwarder. Both need an egress provider. The `pi-search` template puts
-it together: `glove new pi-search <dir>`.
+going through the egress proxy. `webfetch` reads one page as text through the
+egress, refusing this machine, the LAN and metadata addresses (also on every
+redirect). Pi gets its own `web_search`/`web_fetch` extensions (`webfetch`
+through a `proxy` forwarder). Claude Code keeps its own `WebFetch`, pointed at
+the same `proxy` forwarder; there the egress layer (the proxy's filter, the
+tunnel's policy, or with `observe` the gate's SSRF guard) refuses this machine
+and the LAN. Harnesses that speak MCP get `web_search` from a small hardened
+sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
+itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which
+reaches the proxy only through its own hop (`webfetch-egress`; with `observe`,
+a gate labelling its flows `client: webfetch`). Both need an egress provider.
+The `pi-search` template puts it together: `glove new pi-search <dir>`.
 
 **`corporate`** is a netgate proxy that resolves and dials destinations itself
 (`dns: host` follows the VPN's split DNS through Docker Desktop / Podman
@@ -711,7 +728,9 @@ it in your browser through a loopback tunnel that lives only while the command
 runs, view-only unless `allow_control: true` (enforced by the VNC server).
 **`host`** drives a Chrome on your desktop (refused behind vpn/tor). The agent
 gets only the `tools` allowlist: Pi registers just those, Vibe hides every
-other `playwright_*` tool (`browser_run_code_unsafe` included). A private CA
+other `playwright_*` tool (`browser_run_code_unsafe` included), and Claude Code
+gets allow rules for them and a managed deny rule for every other tool the
+pinned MCP has. A private CA
 for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
 `corporate_ca`, so set both when the browser is used. The sidecar's Node trusts it
 through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
@@ -797,14 +816,14 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi wired + verified (12-check integration, incl. env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested** |
-| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 22 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). Extensions (playwright, search, webfetch) with Claude Code: **untested**; Podman: **untested** |
+| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh` 22 checks each: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code` 29) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct` 13 checks, 14 with `OBSERVE=1`), `playwright` headless with observe (`test_playwright.sh claude-code` 19: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
-| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently |
+| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
-| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi and Vibe on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
-| Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe unless `i_accept_host_rce: true`; host-side start **untested** |
+| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
+| Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
 
 The sidecar modes need nothing on the host. Host mode needs Node/npx and a
 Chromium-family browser on the host; the friction-free option is Playwright's
@@ -859,8 +878,13 @@ bash tests/integration/test_pi_srt.sh     # srt  / Pi  (12 checks)
 bash tests/integration/test_nono_srt.sh pi    # nono+srt in a real session (29 checks; also: vibe)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
+bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (17 checks per enforcer)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
                                               # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
+HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP + WebFetch via the proxy
+                                              # (13/14 checks; also: vibe 16/18; OBSERVE=1 adds flows)
+bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (19 checks;
+                                              # also: headless, novnc, control, vibe)
 bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)

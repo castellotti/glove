@@ -62,6 +62,8 @@ Directories:
 
 - `web_search` queries a private SearXNG instance. It returns titles, URLs and snippets. Use short keyword queries, and never retry quickly after a rate limit (HTTP 429): the exit IP is shared.
 
+- `WebFetch` reads one URL through the session's egress proxy (public pages only; this machine and the LAN are refused). Back off on HTTP 429.
+
 ---
 
 # Session brief

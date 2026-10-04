@@ -448,10 +448,10 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     assert "ffmpeg" in df and "python3-pil" in df
     assert "COPY search/pi-extension /opt/glove/ext/search/pi-extension" in df
     assert "-e" in plan.command and "/opt/glove/ext/search/pi-extension" in plan.command
-    # vibe gets the MCP server + pip layer, not the Pi extension
+    # vibe gets search over MCP from a sidecar: no Pi extension, nothing baked for it
     cfg = make_cfg(harness="vibe", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan2, _ = render(cfg, tmp_path / "v")
-    assert "mcp<2" in plan2.derived_dockerfile and "pi-extension" not in plan2.derived_dockerfile
+    assert "searxng" not in plan2.derived_dockerfile and "pi-extension" not in plan2.derived_dockerfile
     assert "Pillow" in plan2.derived_dockerfile
 
 

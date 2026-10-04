@@ -28,6 +28,7 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
     disabled: list[str] = []
     for _ext, item in comp.mcp if comp is not None else []:
         item = dict(item)
+        item.pop("all_tools", None)  # the regex below hides every other tool, known or not
         allow = item.pop("tools", None)
         if allow is not None:
             names = mcp_tool_names(allow)

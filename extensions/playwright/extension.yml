@@ -28,13 +28,13 @@ settings:
   port:              { type: int }                      # host MCP port (default: a free one per session)
   cdp_port:          { type: int }                      # host Chrome remote-debugging port (likewise)
   keep_browser:      { type: bool, default: false }     # leave the host Chrome running after `glove down`
-  i_accept_host_rce: { type: bool, default: false }     # Vibe + host: see README
+  i_accept_host_rce: { type: bool, default: false }     # Vibe/Claude Code + host: see README
 validate:
-  - when: { mode: host, harness: vibe, i_accept_host_rce: false }
+  - when: { mode: host, harness: [vibe, claude-code], i_accept_host_rce: false }
     error: >-
-      mode: host with harness vibe exposes Playwright's `browser_run_code_unsafe` on YOUR HOST: glove hides
-      it from Vibe, but that is a client-side filter, not a boundary. Use Pi, a sidecar mode, or set
-      `i_accept_host_rce: true` to accept that risk.
+      mode: host with harness vibe or claude-code exposes Playwright's `browser_run_code_unsafe` on YOUR HOST: glove
+      hides or denies it in the client, but that is a client-side filter, not a boundary. Use Pi, a sidecar
+      mode, or set `i_accept_host_rce: true` to accept that risk.
   - when: { mode: host, slot.egress.anonymising: true }
     error: >-
       mode: host runs the browser on your desktop, so its traffic bypasses the session's vpn/tor egress;
@@ -86,7 +86,31 @@ harness:
     BROWSER_MCP_TOOLS: "{{ settings.tools | join(',') }}"
     BROWSER_MODE: "{{ settings.mode }}"
   pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
-  mcp:                                  # rendered by harnesses that speak MCP (vibe)
-    - { name: playwright, transport: http, url: "{{ endpoint.browser.url }}/mcp",
-        tools: "{{ settings.tools | join(',') }}" }
+  mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
+    - name: playwright
+      transport: http
+      url: "{{ endpoint.browser.url }}/mcp"
+      tools: "{{ settings.tools | join(',') }}"
+      # every tool the pinned MCP (image/package-lock.json) defines: a harness
+      # whose rules can't express "only these" (Claude Code) denies the rest by
+      # name, so approving one at a prompt is not possible either
+      all_tools: >-
+        browser_annotate,browser_check,browser_click,browser_close,browser_console_clear,browser_console_messages,
+        browser_cookie_clear,browser_cookie_delete,browser_cookie_get,browser_cookie_list,browser_cookie_set,
+        browser_drag,browser_drop,browser_evaluate,browser_file_upload,browser_fill_form,browser_find,
+        browser_generate_locator,browser_get_config,browser_handle_dialog,browser_hide_highlight,browser_highlight,
+        browser_hover,browser_keydown,browser_keyup,browser_localstorage_clear,browser_localstorage_delete,
+        browser_localstorage_get,browser_localstorage_list,browser_localstorage_set,browser_mouse_click_xy,
+        browser_mouse_down,browser_mouse_drag_xy,browser_mouse_move_xy,browser_mouse_up,browser_mouse_wheel,
+        browser_navigate,browser_navigate_back,browser_navigate_forward,browser_network_clear,
+        browser_network_request,browser_network_requests,browser_network_state_set,browser_pdf_save,
+        browser_press_key,browser_press_sequentially,browser_reload,browser_resize,browser_resume,browser_route,
+        browser_route_list,browser_run_code_unsafe,browser_select_option,browser_sessionstorage_clear,
+        browser_sessionstorage_delete,browser_sessionstorage_get,browser_sessionstorage_list,
+        browser_sessionstorage_set,browser_set_storage_state,browser_snapshot,browser_start_recording,
+        browser_start_tracing,browser_start_video,browser_stop_recording,browser_stop_tracing,browser_stop_video,
+        browser_storage_state,browser_tabs,browser_take_screenshot,browser_type,browser_uncheck,browser_unroute,
+        browser_verify_element_visible,browser_verify_list_visible,browser_verify_text_visible,
+        browser_verify_value,browser_video_chapter,browser_video_hide_actions,browser_video_show_actions,
+        browser_wait_for
   brief: "brief/{{ settings.mode }}.md"

@@ -4,6 +4,7 @@ home it seeds, and which env var the key travels in."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,54 @@ def test_mcp_contributions_become_managed_servers_and_rules(tmp_path):
     assert m["allowedMcpServers"] == [{"serverName": "playwright"}]
     assert "mcp__playwright__browser_navigate" in m["permissions"]["allow"]
     assert not any(r == "mcp__playwright" for r in m["permissions"]["allow"])  # an allowlist, not the server
+    # every other tool the pinned MCP has is denied by name: no prompt can approve it
+    deny = m["permissions"]["deny"]
+    assert {"mcp__playwright__browser_run_code_unsafe", "mcp__playwright__browser_evaluate"} <= set(deny)
+    assert "mcp__playwright__browser_navigate" not in deny
+
+
+def test_an_allowlisted_tool_is_not_denied(tmp_path):
+    _, plan = _plan(tmp_path, extensions={"direct": {}, "playwright": {"tools": ["browser_navigate",
+                                                                                 "browser_evaluate"]}})
+    m = _managed(plan)
+    assert "mcp__playwright__browser_evaluate" in m["permissions"]["allow"]
+    assert "mcp__playwright__browser_evaluate" not in m["permissions"]["deny"]
+    assert "mcp__playwright__browser_click" in m["permissions"]["deny"]
+
+
+def test_host_mode_playwright_needs_the_rce_acknowledgement(tmp_path):
+    from glove.extensions import ExtensionError
+
+    with pytest.raises(ExtensionError, match="browser_run_code_unsafe"):
+        _plan(tmp_path, extensions={"playwright": {"mode": "host"}})
+
+
+def test_search_is_an_http_mcp_server_and_webfetch_is_claude_codes_own_through_the_proxy(tmp_path):
+    _, plan = _plan(tmp_path, extensions={"direct": {}, "search": {}, "webfetch": {}})
+    files = plan.system_files["/etc/claude-code"]
+    servers = json.loads(files["managed-mcp.json"])["mcpServers"]
+    assert servers == {"searxng": {"type": "http", "url": "http://glove-s-search-mcp:8000/mcp"}}
+    m = json.loads(files["managed-settings.json"])
+    assert {"mcp__searxng", "WebFetch"} <= set(m["permissions"]["allow"])
+    assert "WebFetch" not in m["permissions"]["deny"]
+    env = m["env"]
+    assert env["HTTPS_PROXY"] == env["HTTP_PROXY"] == "http://glove-s-proxy:8888"
+    no_proxy = env["NO_PROXY"].split(",")
+    # inference and the MCP servers never go through the egress proxy
+    assert {"localhost", "127.0.0.1", "glove-s-llm", "glove-s-search-mcp"} <= set(no_proxy)
+    assert not any(k.startswith("HTTP") for k in plan.environment)  # managed env only
+    assert not any(k.startswith("GLOVE_FETCH") for k in plan.environment)
+    assert not any(s.role in ("webfetch-mcp", "fetcher") for s in plan.network.sidecars)
+
+
+def test_the_cloud_alias_stays_off_the_proxy(tmp_path):
+    _, plan = _plan(tmp_path, extensions={"direct": {}, "webfetch": {}})
+    assert "api.anthropic.com" in _managed(plan)["env"]["NO_PROXY"].split(",")
+
+
+def test_without_webfetch_webfetch_is_denied_and_no_proxy_is_set(tmp_path):
+    m = _managed(_plan(tmp_path)[1])
+    assert "WebFetch" in m["permissions"]["deny"] and "HTTPS_PROXY" not in m["env"]
 
 
 def test_system_files_are_written_under_state_and_bound_read_only(tmp_path):
@@ -166,23 +215,25 @@ def test_no_skills_no_add_dir(tmp_path):
     assert "--add-dir" not in plan.command
 
 
-def _searxng(tmp_path, enforcer):
-    _, plan = _plan(tmp_path, enforcer=enforcer, extensions={"direct": {}, "search": {}})
+def _stdio_probe(tmp_path, enforcer):
+    # the in-tree extensions serve MCP over HTTP: test_cc_nono.sh's stdio probe
+    probes = Path(__file__).parents[3] / "tests" / "integration" / "extensions"
+    (Path(os.environ["GLOVE_HOME"]) / "config.yml").write_text(f"extension_paths: [{probes}]\n")
+    _, plan = _plan(tmp_path, enforcer=enforcer, extensions={"cc-mcp-probe": {}})
     files = plan.system_files["/etc/claude-code"]
-    return files, json.loads(files["managed-mcp.json"])["mcpServers"]["searxng"]
+    return files, json.loads(files["managed-mcp.json"])["mcpServers"]["probe"]
 
 
 def test_stdio_mcp_runs_through_the_prefix_from_a_read_only_argv(tmp_path):
-    # not the tool wrapper: its profile has no network, and the server talks to a sidecar
-    files, server = _searxng(tmp_path, "nono")
-    assert server["command"] == "/opt/glove/bin/glove-cc-prefix" and server["args"] == ["--mcp", "searxng"]
-    assert server["env"] == {"SEARXNG_URL": "http://glove-s-search:8080"}
-    assert files["mcp-searxng.argv"] == "python3\n/opt/glove/ext/search/searxng_mcp.py\n"
+    # not the tool wrapper: its profile has no network, and a server may talk to a sidecar
+    files, server = _stdio_probe(tmp_path, "nono")
+    assert server["command"] == "/opt/glove/bin/glove-cc-prefix" and server["args"] == ["--mcp", "probe"]
+    assert files["mcp-probe.argv"].startswith("bash\n-c\n{ test -r /home/agent/.claude/settings.json")
 
 
 def test_stdio_mcp_without_an_enforcer_runs_directly(tmp_path):
-    files, server = _searxng(tmp_path, "none")
-    assert server["command"] == "python3" and not any(f.endswith(".argv") for f in files)
+    files, server = _stdio_probe(tmp_path, "none")
+    assert server["command"] == "bash" and not any(f.endswith(".argv") for f in files)
 
 
 def test_the_trusted_project_settings_are_protected(tmp_path):
