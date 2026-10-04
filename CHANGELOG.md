@@ -38,6 +38,9 @@ All notable changes to glove are documented here.
 
 - Vibe's `sessions_subdir` is `logs/session`, where Vibe 2.x writes its
   transcripts (it never creates `sessions/`), so `glove up --resume` finds them.
+- Vibe transcripts (`session_<ts>_<id>/messages.jsonl`) take their id from the
+  folder, not the file name, so `glove up --session <id>` and the post-exit
+  resume hint use Vibe's real id instead of `messages`.
 
 ### Added
 

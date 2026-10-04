@@ -206,3 +206,14 @@ def test_widening_narrowing_silent():
     prev = Config(extensions={"direct": {}}, allow_root=True)
     cur = Config(allow_root=False)
     assert widening_warnings(prev, cur) == []
+
+
+def test_vibe_transcript_id_comes_from_its_folder(tmp_path):
+    from glove.sessions import match_session
+
+    d = tmp_path / "logs" / "session" / "session_20260101_120000_ab12cd34"
+    d.mkdir(parents=True)
+    (d / "messages.jsonl").write_text("{}\n")
+    refs = list_sessions(tmp_path / "logs" / "session")
+    assert [r.id for r in refs] == ["ab12cd34"]
+    assert match_session(refs, "ab12cd34") == refs[0]
