@@ -23,7 +23,8 @@ The policy (`--policy`, a Python file loaded by path, owned by the consuming
 extension) names its commands (`COMMANDS`), validates every argv (`prepare`,
 raising its own `Refused` with the message to show), builds the children's
 environment (`setup`) and names the hosts the egress fence lets through
-(`HOSTS`). relayd itself holds no credential knowledge.
+(`HOSTS`; none: no fence and no proxy, e.g. ssh, whose only routes are its
+per-host forwarders). relayd itself holds no credential knowledge.
 
 Egress fence: children reach the network only through an in-process CONNECT
 proxy on 127.0.0.1 that tunnels to the session's egress proxy (`--upstream`)
@@ -98,6 +99,8 @@ class Request:
         symlink after the check changes nothing."""
         if path == "-":
             raise Refused("relayed commands get no stdin: write it to a file under /work and pass its path")
+        if not self.work:
+            raise Refused("this relay takes no file arguments")
         try:
             fd = os.open(self._abs(path), os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
         except OSError as e:
@@ -116,7 +119,7 @@ class Request:
         """A destination directory (it may not exist yet) under the work root,
         as an absolute real path."""
         real = os.path.realpath(self._abs(path))
-        if not within(real, self.work):
+        if not self.work or not within(real, self.work):
             raise Refused(f"{path}: a destination must be under {self.work}")
         return real
 
@@ -166,7 +169,7 @@ class Relay:
         self.channel = channel
         self.policy = policy
         self.env = env
-        self.work = work
+        self.work = work if os.path.isdir(work) else ""  # "": a relay without /work (ssh)
         self.settings = settings
         self.timeout = timeout
         self.slots = threading.BoundedSemaphore(max_active)
@@ -237,6 +240,8 @@ class Relay:
     def _request(self, argv: list[str], cwd: str) -> Request:
         if not argv or argv[0] not in self.policy.COMMANDS:
             raise Refused(f"this relay runs only {sorted(self.policy.COMMANDS)}")
+        if not self.work:  # commands run in /tmp, and Request refuses file arguments
+            return Request(argv, os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY), "", self.settings)
         try:
             cfd = os.open(cwd if cwd.startswith("/") else self.work, os.O_RDONLY | os.O_DIRECTORY)
         except OSError:
@@ -399,10 +404,12 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     policy = load_policy(args.policy)
     settings = json.loads(os.environ.get("RELAY_SETTINGS") or "{}")
-    if not args.upstream:
-        raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
-    fence = Fence(args.upstream, policy.HOSTS)
-    env = policy.setup({"proxy": fence.url, "settings": settings, "work": args.work})
+    fence = None
+    if policy.HOSTS:  # a policy that names no hosts reaches none through a proxy (ssh: its forwarders only)
+        if not args.upstream:
+            raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
+        fence = Fence(args.upstream, policy.HOSTS)
+    env = policy.setup({"proxy": fence.url if fence else None, "settings": settings, "work": args.work})
     Relay(args.channel, policy, env, work=os.path.realpath(args.work), settings=settings,
           timeout=args.timeout, max_active=args.max).serve()
 

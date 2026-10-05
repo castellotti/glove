@@ -1,0 +1,5 @@
+#!/bin/bash
+# ssh — relayed to the session's ssh sidecar, which holds the key and runs the
+# real ssh to the session's named hosts only (see the ssh extension's
+# relay_policy.py): `ssh <host> <command>`, no TTY, no stdin, no forwarding.
+exec /opt/glove/bin/glove-relay ssh ssh "$@"

@@ -1,0 +1,27 @@
+api: 1
+name: ssh
+summary: ssh to named LAN hosts from shell commands — relayed to a sidecar that holds the key in an agent; the sandbox never sees it or gets a route.
+requires: [relay]
+settings:
+  key: { type: secret, required: true }       # keychain:<service> | env:<VAR>: a private key (PEM, or base64 of it)
+  # [{name: build, to: "<host>:22", user: <user>}] — the only destinations
+  hosts: { type: list, required: true }
+  # a known_hosts file in the session directory (e.g. local/known_hosts):
+  # host keys are checked strictly, never learned
+  known_hosts: { type: path, within: session, required: true }
+  timeout: { type: int, default: 600 }        # seconds one relayed command may run
+hooks: hooks.py                               # per-host endpoints, known_hosts, the key in memory
+networks:
+  sshnet: { internal: true }                  # the relay sidecar and its per-host forwarders
+services: compose/services.yml.j2
+# /run/glove/ssh in the harness and the sidecar: where the ssh shim leaves
+# requests (files and FIFOs; no socket, no network)
+channels:
+  ssh: { services: [ssh] }
+verify:
+  - { name: ssh-relay-up, kind: container-healthy, service: ssh }
+harness:
+  image:
+    "*":
+      copy: [[shim/ssh, /usr/local/bin/ssh]]
+  brief: brief.md

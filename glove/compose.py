@@ -436,21 +436,22 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             continue
         if svc.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in (svc.get("security_opt") or []):
             raise ExtensionError(f"sidecar {name!r} is missing the hardening set")
-    wan = scoped(session, "wan")
+    wan, lan = scoped(session, "wan"), scoped(session, "lan")
     egress_provider = comp.slots.get("egress")
     for name, svc in services.items():
         nets = svc.get("networks") or {}
         nets = set(nets) if not isinstance(nets, dict) else set(nets.keys())
+        short = name.removeprefix(scoped(session, ""))
         if wan in nets:
-            short = name.removeprefix(scoped(session, ""))
             owner = next((a for a, d in comp.fragments if short in (d.get("services") or {})), None)
             # ...or the forwarder of an endpoint the egress provider declared (a raw TCP hop)
             ep_owner = next((comp.by_name(e.extension) for e in comp.endpoints if e.name == short), None)
             if egress_provider is None or egress_provider not in (owner, ep_owner):
                 raise ExtensionError(f"service {name!r} joins the wan network, which only the egress provider may")
-        if harness_net in nets and name != plan.harness_service:
-            role = name.removeprefix(scoped(session, ""))
-            if not any(e.name == role and e.harness for e in comp.endpoints) and role not in {
-                s.role for s in plan.network.sidecars if s.harness
-            }:
-                raise ExtensionError(f"service {name!r} joins the harness network but is not a harness endpoint")
+        if lan in nets and not any(e.target.network == "lan" and short in (e.name, f"{e.name}-out")
+                                   for e in comp.endpoints):
+            raise ExtensionError(f"service {name!r} joins the lan network, which only `via: lan` forwarders may")
+        if harness_net in nets and name != plan.harness_service and short not in {
+            e.name for e in comp.endpoints if e.harness
+        } | {s.role for s in plan.network.sidecars if s.harness}:
+            raise ExtensionError(f"service {name!r} joins the harness network but is not a harness endpoint")

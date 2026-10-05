@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ipaddress
 import re
 import secrets as pysecrets
 from dataclasses import dataclass, field
@@ -134,7 +135,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     if not isinstance(raw, dict):
         raise ExtensionError(f"{f}: manifest must be a mapping")
     name = raw.get("name")
-    if not isinstance(name, str) or not _NAME.match(name):
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise ExtensionError(f"{f}: `name` must match {_NAME.pattern}, got {name!r}")
     if raw.get("api") != API_VERSION:
         raise ExtensionError(f"extension {name!r}: api must be {API_VERSION}, got {raw.get('api')!r}")
@@ -698,20 +699,23 @@ def generate_secret() -> str:
 
 # Logical network names an extension may use. The harness network (`net`) is
 # core's alone; `llm` carries only inference forwarders; `hostgw` only
-# host-gateway forwarders; `wan` only the active egress provider's containers.
+# host-gateway forwarders; `wan` only the active egress provider's containers;
+# `lan` only the forwarders of `via: lan` endpoints (a named LAN host, never
+# reached by the harness itself).
 CORE_NETWORKS = {
     "net": {"internal": True},
     "egress": {"internal": True},
     "wan": {"internal": False},
     "llm": {"internal": False},
     "hostgw": {"internal": False},
+    "lan": {"internal": False},
 }
 HOST_GATEWAY = "host.docker.internal"
 
 
 def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
     where = f"extension {a.name!r} endpoint {name!r}"
-    if not _NAME.match(name):
+    if not _NAME.fullmatch(name):
         raise ExtensionError(f"{where}: name must match {_NAME.pattern}")
     t = spec.get("target") or {}
     harness = bool(spec.get("harness", True))
@@ -735,17 +739,28 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         require_trust(a, f"{where}: reaching a host port")
         target = Target(HOST_GATEWAY, int(t["host_port"]), "host", "hostgw")
     elif "address" in t:
-        # a remote host:port: the inference provider over `llm`, or the egress
-        # provider over `wan` (e.g. corporate's raw TCP endpoints)
+        # a remote host:port: the inference provider over `llm`, the egress
+        # provider over `wan` (e.g. corporate's raw TCP endpoints), or — over
+        # `lan` — a host the user named, for a sidecar only (e.g. ssh)
         via = str(t.get("via", "llm"))
-        slot = {"llm": "inference", "wan": "egress"}.get(via)
-        if slot is None or slot not in a.manifest.provides:
-            raise ExtensionError(f"{where}: only the inference provider (via: llm) or the egress provider "
-                                 "(via: wan) may dial a remote address")
+        if via == "lan":
+            if harness:
+                raise ExtensionError(f"{where}: a `via: lan` endpoint is for a sidecar (harness: false); "
+                                     "the harness never reaches a LAN host itself")
+        else:
+            slot = {"llm": "inference", "wan": "egress"}.get(via)
+            if slot is None or slot not in a.manifest.provides:
+                raise ExtensionError(f"{where}: only the inference provider (via: llm), the egress provider "
+                                     "(via: wan) or a sidecar's LAN host (via: lan) may dial a remote address")
         require_trust(a, f"{where}: dialling a remote address")
         host, _, port = str(t["address"]).rpartition(":")
         if not host or not port.isdigit():
             raise ExtensionError(f"{where}: address must be host:port, got {t['address']!r}")
+        if via == "lan" and not lan_host(host):
+            raise ExtensionError(
+                f"{where}: a `via: lan` address must be a private IPv4 address (10/8, 172.16/12, "
+                f"192.168/16) or a LAN name (one label, or under {', '.join(LAN_SUFFIXES)}), got {host!r}; "
+                "`lan` is a direct route, so a public host would bypass the egress provider")
         target = Target(host, int(port), "remote", via)
     else:
         raise ExtensionError(f"{where}: target needs service|slot|host_port|address")
@@ -761,11 +776,34 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
 
 _HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
 
+# What a `via: lan` endpoint may dial. `lan` is a routable, NAT'd bridge with no
+# tunnel, so it must never carry a public host (that would bypass the egress
+# provider, its DNS and the VPN): private IPv4 literals, or names that only a
+# LAN resolver answers. Docker's own names (host.docker.internal, …) are the
+# host, reached only by `host_port` over `hostgw`.
+LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+LAN_SUFFIXES = (".lan", ".local", ".home.arpa", ".internal")
+
+
+def lan_host(host: str) -> bool:
+    h = host.lower()
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        pass
+    else:
+        return ip.version == 4 and any(ip in n for n in LAN_NETWORKS)
+    if not _HOSTNAME.fullmatch(h) or h == "localhost" or h.endswith(".docker.internal") or h == "docker.internal":
+        return False
+    if re.fullmatch(r"[0-9.]+", h):  # a malformed IPv4 literal, never a name
+        return False
+    return "." not in h or h.endswith(LAN_SUFFIXES)
+
 
 def _aliases(items: Any, where: str) -> tuple[str, ...]:
     """Network aliases (DNS names on the harness network), rendered into compose as-is."""
     out = tuple(str(x) for x in items or ())
-    bad = [x for x in out if not _HOSTNAME.match(x)]
+    bad = [x for x in out if not _HOSTNAME.fullmatch(x)]
     if bad:
         raise ExtensionError(f"{where}: aliases must be hostnames, got {bad!r}")
     return out
@@ -782,7 +820,7 @@ def require_trust(a: Active, what: str) -> None:
 def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
     """One harness env var from an extension (manifest or `contribute` hook):
     the key is rendered into compose as-is, so it must be a plain name."""
-    if not isinstance(k, str) or not _ENV_VAR.match(k):
+    if not isinstance(k, str) or not _ENV_VAR.fullmatch(k):
         raise ExtensionError(f"{where}: env key {k!r} must match {_ENV_VAR.pattern}")
     if k in comp.harness_env:
         raise ExtensionError(f"{where}: env {k!r} is already set by another extension")
@@ -1077,7 +1115,7 @@ def launch_env(comp: Composition) -> dict[str, str]:
                 raise ExtensionError(f"extension {a.name!r}: launch hook returned undeclared secret {name!r}")
             env[secret_env_var(f"{a.name}-{name}")] = str(value)
         for var, value in (out.get("env") or {}).items():
-            if not _ENV_VAR.match(var) or var.startswith("GLOVE_") or var in env:
+            if not _ENV_VAR.fullmatch(var) or var.startswith("GLOVE_") or var in env:
                 raise ExtensionError(f"extension {a.name!r}: launch hook returned a bad env name {var!r}")
             env[var] = str(value)
     return env

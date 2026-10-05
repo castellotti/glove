@@ -31,8 +31,9 @@ per-session SearXNG), **`webfetch`** (read a page through the egress), **`observ
 observability, read) and **`filter`** (network rules, write), **`media`**
 (analysis toolchain), **`ocr`**/**`rag`** (documents), **`playwright`** (a
 real Chromium: a hardened headless sidecar, a noVNC-watched one, or the host's
-Chrome) and **`github`** (`gh` and `git push` from shell commands, relayed to a
-sidecar that holds the token). See [Extensions](#extensions).
+Chrome), **`github`** (`gh` and `git push` from shell commands, relayed to a
+sidecar that holds the token) and **`ssh`** (`ssh <host> <command>` to named LAN
+hosts, relayed to a sidecar that holds the key). See [Extensions](#extensions).
 
 ## Quick start
 
@@ -122,6 +123,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
+  # ssh: { key: keychain:my-ssh, hosts: [{name: build, to: "build.lan:22", user: me}], known_hosts: local/known_hosts }
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
@@ -476,6 +478,13 @@ Core validates all of it:
   leaves requests there as files and FIFOs; glove's seccomp below srt forbids
   Unix sockets, so there is no socket.
 - **The harness** only ever gets forwarders on its internal network.
+- **Remote addresses** (`target: {address: host:port}`) are dialled only by the
+  inference provider (`via: llm`), the egress provider (`via: wan`), or, for a
+  trusted extension's sidecar, a LAN host the user named (`via: lan`, never a
+  harness endpoint; core's routable `lan` network carries only those
+  forwarders). `lan` is a direct route that bypasses the egress provider, so a
+  `via: lan` address must be a private IPv4 address or a LAN name (one label,
+  or under `.lan`/`.local`/`.home.arpa`/`.internal`); a public host is refused.
 - **Harness mounts** from an extension (`mounts: {models: {setting: models_dir}}`)
   are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
   `path` setting (such a setting may not have a default), checked like the
@@ -749,7 +758,7 @@ through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 
-### GitHub: `github` (and the `relay` library)
+### Relays: `github`, `ssh` (and the `relay` library)
 
 `gh`, and `git push`/`fetch`/`pull`/`clone`/`ls-remote`, work from the agent's
 shell, with every other shell command still offline. Shims in the harness image
@@ -770,6 +779,18 @@ fine-grained token. Details:
 [extensions/github/README.md](extensions/github/README.md),
 [extensions/relay/README.md](extensions/relay/README.md),
 [docs/SECURITY.md](docs/SECURITY.md#relays-gh-and-git-from-shell-commands-relay-github).
+
+`ssh <host> <command>` works the same way, to the hosts the session names
+(`ssh: {key: keychain:<service>, hosts: [{name, to, user}], known_hosts:
+local/known_hosts}`):
+- **The key** sits in an `ssh-agent` in the sidecar.
+- **Routes:** each host gets one forwarder on core's `lan` network, which is
+  the sidecar's only route; with `observe`, a gate labels it `client: ssh`,
+  `scope: lan`.
+- **Host keys** are checked strictly against the session's `known_hosts`.
+- **Refused:** port forwarding, jump hosts, `ProxyCommand`, identities and a TTY.
+
+Details: [extensions/ssh/README.md](extensions/ssh/README.md).
 
 ## How it works - three rings (defense in depth)
 
@@ -858,6 +879,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`, 26 checks): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (30/30 with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (35/35, nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
+| Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`; 22 checks, 23 with observe); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
 
 The sidecar modes need nothing on the host. Host mode needs Node/npx and a
@@ -920,9 +942,11 @@ HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP +
                                               # (13/14 checks; also: vibe 16/18; OBSERVE=1 adds flows)
 bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (19 checks;
                                               # also: headless, novnc, control, vibe)
-bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (26 checks each;
+bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only;
                                               # GH_SCRATCH_REPO=owner/repo also a push)
+SSH_TEST_HOST=… SSH_TEST_USER=… SSH_KEYCHAIN=… bash tests/integration/test_ssh.sh  # the ssh relay vs a LAN
+                                              # host you name, nono + nono+srt (22 checks each; OBSERVE=1: 23)
 bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)

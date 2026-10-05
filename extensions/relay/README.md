@@ -1,7 +1,7 @@
 # relay
 
 A library extension, never selected on its own. An extension that relays
-commands (today: `github`) requires it, and it is then added automatically. A
+commands (`github`, `ssh`) requires it, and it is then added automatically. A
 relay runs a few named commands for the harness in a sidecar that holds the
 credential. Neither the credential nor a network route enters the sandbox, and
 every other shell command stays offline.
@@ -12,8 +12,8 @@ It brings two things:
   `/opt/glove/bin/glove-relay`. Usage: `glove-relay <channel> <command> args…`.
   Consumers install one wrapper per command; for example, `github`'s `gh` runs
   `exec /opt/glove/bin/glove-relay github gh "$@"`.
-- **The `relayd` image** (`image/`): `relayd.py` (the sidecar half), plus git
-  and the official `gh` that relayed commands run. The base image is pinned by
+- **The `relayd` image** (`image/`): `relayd.py` (the sidecar half), plus git,
+  ssh and the official `gh` that relayed commands run. The base image is pinned by
   digest and the `gh` release by version and SHA-256. Each consumer runs this
   image with its own policy file, bound read-only.
 

@@ -524,10 +524,10 @@ def _relayish(oot, *, work=True, target="/work", ro="", channel="ch", services="
     _svc_ext(oot, "relayish", service=body, extra=extra)
 
 
-def _oot(tmp_path, ghome, trusted: bool):
+def _oot(tmp_path, ghome, trusted: bool, name: str = "relayish"):
     oot = tmp_path / "oot"
     ghome.mkdir(parents=True, exist_ok=True)
-    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + ("trusted_extensions: [relayish]\n"
+    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + (f"trusted_extensions: [{name}]\n"
                                                                          if trusted else ""))
     return oot
 
@@ -569,4 +569,77 @@ def test_the_harness_mounts_no_volume_but_a_channel(tmp_path):
     plan, doc = _render_with(tmp_path, {"direct": {}})
     doc["services"]["glove-s-harness"]["volumes"].append({"type": "volume", "source": "x", "target": "/x"})
     with pytest.raises(ExtensionError, match="no volume but a channel"):
+        validate_project(doc, plan, plan.composition)
+
+
+# --- via: lan ------------------------------------------------------------------------------
+
+_LANNISH = """\
+    services:
+      worker:
+        image: {digest}
+        networks: [{net}]
+    """
+
+
+def _lannish(oot, *, harness=False, net="side", address="192.168.1.10:22"):
+    extra = ("networks: { side: { internal: true } }\n"
+             f"endpoints: {{ box: {{ harness: {str(harness).lower()}, port: 22, listen_networks: [side], "
+             f"target: {{ address: '{address}', via: lan }} }} }}\n")
+    _svc_ext(oot, "lannish", service=_LANNISH.format(digest=DIGEST, net=net), extra=extra)
+
+
+def test_a_lan_endpoint_serves_a_sidecar_over_the_lan_network_only(tmp_path, ghome):
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"))
+    _, doc = _render_with(tmp_path, {"lannish": {}})
+    fwd = doc["services"]["glove-s-box"]
+    assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-side"}
+    assert "TCP4:192.168.1.10:22" in fwd["command"]
+    assert doc["networks"]["glove-s-lan"].get("internal") is not True
+    assert list(doc["services"]["glove-s-harness"]["networks"]) == ["glove-s-net"]
+
+
+def test_lan_rules(tmp_path, ghome):
+    oot = _oot(tmp_path, ghome, trusted=True, name="lannish")
+    _lannish(oot, harness=True)
+    with pytest.raises(ExtensionError, match="never reaches a LAN host itself"):
+        _render_with(tmp_path, {"lannish": {}})
+
+
+@pytest.mark.parametrize("host,ok", [
+    ("10.1.2.3", True), ("172.16.0.5", True), ("172.31.255.1", True), ("192.168.1.10", True),
+    ("nas", True), ("nas.lan", True), ("NAS.Local", True), ("box.home.arpa", True), ("db.corp.internal", True),
+    ("8.8.8.8", False), ("172.32.0.1", False), ("192.0.2.10", False), ("127.0.0.1", False),
+    ("169.254.169.254", False), ("100.64.0.1", False), ("0.0.0.0", False), ("::1", False), ("fd00::1", False),
+    ("github.com", False), ("nas.example", False), ("localhost", False), ("host.docker.internal", False),
+    ("gateway.docker.internal", False), ("docker.internal", False), ("10.0.0", False), ("nas\n", False),
+])
+def test_lan_host(host, ok):
+    from glove.extensions import lan_host
+
+    assert lan_host(host) is ok
+
+
+def test_a_lan_endpoint_refuses_a_public_host(tmp_path, ghome):
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"), address="github.com:22")
+    with pytest.raises(ExtensionError, match="bypass the egress provider"):
+        _render_with(tmp_path, {"lannish": {}})
+
+
+def test_an_untrusted_extension_dials_no_lan_host(tmp_path, ghome):
+    _lannish(_oot(tmp_path, ghome, trusted=False, name="lannish"))
+    with pytest.raises(ExtensionError, match="dialling a remote address is a privilege"):
+        _render_with(tmp_path, {"lannish": {}})
+
+
+def test_no_sidecar_joins_the_lan_network(tmp_path, ghome):
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"), net="lan")
+    with pytest.raises(ExtensionError, match="may not join network 'lan'"):
+        _render_with(tmp_path, {"lannish": {}})
+    from glove.compose import validate_project
+
+    (tmp_path / "t2").mkdir()
+    plan, doc = _render_with(tmp_path / "t2", {"direct": {}})
+    doc["services"]["glove-s-direct-proxy"]["networks"]["glove-s-lan"] = {}
+    with pytest.raises(ExtensionError, match="only `via: lan` forwarders may"):
         validate_project(doc, plan, plan.composition)
