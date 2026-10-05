@@ -465,6 +465,12 @@ class Composition:
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
 
+    @property
+    def channel_paths(self) -> list[str]:
+        """The channels' directories in the harness: writable under every
+        enforcer and profile (they carry no network)."""
+        return [c.path for c in self.channels]
+
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
         return dict(a.exports) if a else {}

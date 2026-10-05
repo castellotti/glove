@@ -20,14 +20,8 @@ HARNESS="${HARNESS:-claude-code}"
 ENFORCERS=("${@:-nono}")
 [ "$#" -eq 0 ] && ENFORCERS=(nono nono+srt)
 TMPROOT="$(mktemp -d)"; export GLOVE_HOME="$TMPROOT/gh"
-if [ "$HARNESS" = claude-code ]; then
-  LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$PORT\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}"
-  export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
-  STUB_PY=anthropic_stub.py
-else
-  LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$PORT\", model: auto}"
-  STUB_PY=llm_stub.py
-fi
+. "$ROOT/tests/integration/lib_session.sh"
+stub_llm "$HARNESS" "$PORT"
 if [ -n "${GH_KEYCHAIN:-}" ]; then
   TOKEN="keychain:$GH_KEYCHAIN"
   export GH_REAL_TOKEN=1

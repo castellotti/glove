@@ -4,7 +4,6 @@ in tests/integration/test_github.sh)."""
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import re
 import select
@@ -17,13 +16,11 @@ from pathlib import Path
 import pytest
 from helpers import make_cfg
 
-from glove.extensions import ExtensionError
+from glove.extensions import ExtensionError, load_module
 from glove.plan import build_session_plan
 
 HERE = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("relayd", HERE / "image" / "relayd.py")
-relayd = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(relayd)
+relayd = load_module(HERE / "image" / "relayd.py", "relay")
 
 
 @pytest.mark.parametrize("host,ok", [

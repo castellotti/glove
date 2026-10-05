@@ -70,8 +70,8 @@ print(json.dumps(info))
 def tmpfs_volume_opts(uid: int, gid: int, context: str | None = None) -> str:
     """Mount options for an extension's tmpfs volume (e.g. the netgate events
     socket dir): owned by ``uid``/``gid`` as the mount sees ids, mode 0700, with
-    an optional SELinux ``context=`` label."""
-    opts = f"size=1m,mode=0700,uid={uid},gid={gid}"
+    an optional SELinux ``context=`` label. Core prepends the size per volume."""
+    opts = f"mode=0700,uid={uid},gid={gid}"
     return f'{opts},context="{context}"' if context else opts
 
 

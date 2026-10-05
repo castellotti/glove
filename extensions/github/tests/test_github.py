@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -13,12 +12,10 @@ import pytest
 import yaml
 from helpers import make_cfg, render
 
-from glove.extensions import ExtensionError
+from glove.extensions import ExtensionError, load_module
 
 HERE = Path(__file__).resolve().parent.parent
-_spec = importlib.util.spec_from_file_location("github_relay_policy", HERE / "relay_policy.py")
-policy = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(policy)
+policy = load_module(HERE / "relay_policy.py", "github")
 Refused = policy.Refused
 
 
@@ -228,6 +225,11 @@ def test_git_url_rewrites_are_resolved(work):
 def test_clone_destination_is_rewritten_inside_work(work):
     assert git(work, work, "clone", "-b", "main", "https://github.com/o/r.git", "sub/r") == [
         "clone", "-b", "main", "https://github.com/o/r.git", f"{work}/sub/r"]
+    # the destination word itself, not a later option value that spells it too
+    assert git(work, work, "clone", "https://github.com/o/r", "up", "-o", "up") == [
+        "clone", "https://github.com/o/r", f"{work}/up", "-o", "up"]
+    assert git(work, work, "clone", "--", "https://github.com/o/r", "up") == [
+        "clone", "--", "https://github.com/o/r", f"{work}/up"]
 
 
 def test_children_get_a_fresh_environment_and_defanged_git(work):
@@ -361,9 +363,7 @@ def make_cfg_plan(tmp_path, exts):
 
 
 def test_launch_env_resolves_the_token_in_memory():
-    spec = importlib.util.spec_from_file_location("github_hooks", HERE / "hooks.py")
-    hooks = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hooks)
+    hooks = load_module(HERE / "hooks.py", "github")
     assert hooks.launch_env({"settings": {"token": "keychain:svc"}}, lambda ref: "tok\n") == {
         "env": {"RELAY_GITHUB_TOKEN": "tok"}}
     with pytest.raises(ValueError, match="empty"):

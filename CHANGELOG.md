@@ -59,7 +59,9 @@ All notable changes to glove are documented here.
   - gh: a subcommand allowlist; `auth`/`secret`/`extension`/… never; `gh api`
     GET only; github.com only.
   - git: network verbs to `https://github.com/<owner>/<repo>` remotes, with the
-    repo's config defanged.
+    repo's config defanged. `git clone <url> <dir>` hands git the checked,
+    resolved `<dir>` itself, even when an option value (`-o <dir>`) spells the
+    same word.
   - File arguments are opened inside `/work` only.
   - Traffic reaches GitHub's hosts only, through an in-process fence and then
     the egress. With `observe`, a gate labels the flows `client: github` (a new

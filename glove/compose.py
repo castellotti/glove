@@ -224,7 +224,7 @@ def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
         full = scoped(comp.session, f"{a.name}-{vname}")
         if opts:
             # owned by the session uid as the mount sees ids, mode 0700
-            opts = {"type": "tmpfs", "device": "tmpfs", "o": extra.get("tmpfs_volume_opts", "size=1m,mode=0700")}
+            opts = {"type": "tmpfs", "device": "tmpfs", "o": f"size=1m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"}
         volumes[full] = {"name": full, **({"driver": "local", "driver_opts": opts} if opts else {})}
     return declared
 
@@ -386,7 +386,7 @@ def _channel_volumes(comp: Composition, extra: dict, volumes: dict[str, Any]) ->
         missing = [x for x in c.services if x not in (doc.get("services") or {})]
         if missing:
             raise ExtensionError(f"extension {c.extension!r} channel {c.name!r}: no service(s) {missing}")
-        opts = extra.get("tmpfs_volume_opts", "size=1m,mode=0700").replace("size=1m", "size=4m")
+        opts = f"size=4m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"
         name = c.volume(comp.session)
         volumes[name] = {"name": name, "driver": "local",
                          "driver_opts": {"type": "tmpfs", "device": "tmpfs", "o": opts}}

@@ -155,6 +155,7 @@ GH_FILE_FLAGS = frozenset({"-F", "--body-file"})
 GH_DIR_FLAGS = frozenset({"-D", "--dir"})
 GH_HOST_FLAGS = frozenset({"--hostname"})
 GH_REPO_FLAGS = frozenset({"-R", "--repo"})
+GH_CHECKED_FLAGS = GH_FILE_FLAGS | GH_DIR_FLAGS | GH_HOST_FLAGS | GH_REPO_FLAGS
 
 
 def _gh(req, args: list[str]) -> list[str]:
@@ -193,8 +194,7 @@ def _gh(req, args: list[str]) -> list[str]:
             raise Refused(f"{name}: spell short options out one by one, value as the next word")
         if name == "--recover" or (words[-1] == "create" and name in ("-T", "--template")):
             raise Refused(f"{name} reads a file in the sidecar: pass the body with --body-file <file under /work>")
-        checked = GH_FILE_FLAGS | GH_DIR_FLAGS | GH_HOST_FLAGS | GH_REPO_FLAGS
-        if name not in checked:
+        if name not in GH_CHECKED_FLAGS:
             out.append(rest[i])
             i += 1
             continue
@@ -302,12 +302,12 @@ def _remote_urls(req, env, remote: str, push: bool) -> list[str]:
 
 def _default_remote(req, env, push: bool) -> str:
     branch = _git_out(req, env, "symbolic-ref", "--short", "-q", "HEAD")
-    keys = ([f"branch.{branch}.pushRemote", "remote.pushDefault"] if push else []) + [f"branch.{branch}.remote"]
+    keys = ([f"branch.{branch}.pushRemote"] if push and branch else []) + (["remote.pushDefault"] if push else []) \
+        + ([f"branch.{branch}.remote"] if branch else [])
     for k in keys:
-        if branch or not k.startswith("branch."):
-            v = _git_out(req, env, "config", "--get", k)
-            if v:
-                return v
+        v = _git_out(req, env, "config", "--get", k)
+        if v:
+            return v
     return "origin"
 
 
@@ -316,7 +316,9 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
         raise Refused(f"only git {', '.join(GIT_NET)} (and pull) are relayed; everything else is local")
     sub, rest = args[0], args[1:]
     value_flags = GIT_VALUE[sub]
+    known = GIT_REFUSED | value_flags
     out, positionals = [sub], []
+    pos_at: list[int] = []  # where each positional sits in `out`
     remotes_all = False
     repo_opt = None
     i = 0
@@ -324,9 +326,9 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
         name, value = _split(rest[i])
         if name == "--":
             positionals += rest[i + 1:]
+            pos_at += range(len(out) + 1, len(out) + len(rest) - i)
             out += rest[i:]
             break
-        known = GIT_REFUSED | value_flags
         if name.startswith("--") and name not in known and any(k.startswith(name) for k in known):
             raise Refused(f"{name}: spell git options in full")  # git takes unambiguous abbreviations
         if name in GIT_REFUSED or (name == "-u" and sub in ("clone", "ls-remote")):
@@ -338,10 +340,11 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
             raise Refused(f"{name} needs a value")
         if name == "--repo":
             repo_opt = value if value is not None else rest[i + 1]
-        if name in ("--all", "--multiple") and sub == "fetch":
-            remotes_all = remotes_all or name == "--all"
+        if name == "--all" and sub == "fetch":
+            remotes_all = True
         if not name.startswith("-"):
             positionals.append(name)
+            pos_at.append(len(out))
         out += [name, rest[i + 1]] if takes else [rest[i]]
         i += 2 if takes else 1
     if sub == "clone":
@@ -349,8 +352,7 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
             raise Refused("git clone needs a URL")
         _url_ok(positionals[0])
         if len(positionals) > 1:
-            dest = req.directory(positionals[1])
-            out[len(out) - 1 - out[::-1].index(positionals[1])] = dest
+            out[pos_at[1]] = req.directory(positionals[1])
         return out
     push = sub == "push"
     if remotes_all:

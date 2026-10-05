@@ -83,7 +83,7 @@ def render_harness_settings(plan: SessionPlan) -> dict:
         "filesystem": {
             "denyRead": hide,
             "allowRead": [],
-            "allowWrite": [_work(plan), *rw, HARNESS_HOME_MOUNT, TMP, *nono_policies.channel_paths(plan)],
+            "allowWrite": [_work(plan), *rw, HARNESS_HOME_MOUNT, TMP, *plan.composition.channel_paths],
             "denyWrite": protected_paths(plan),
         },
         # No `network` block: srt then creates no network namespace or proxy

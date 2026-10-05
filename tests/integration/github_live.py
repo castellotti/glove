@@ -27,6 +27,7 @@ import sys
 import time
 from pathlib import Path
 
+from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, _resolve_extensions
 from glove.harnessconfig import render_home
@@ -171,11 +172,8 @@ def main(directory: str, repo: str | None) -> int:
         if plan.composition.by_name("observe"):
             print("== observe")
             time.sleep(2)
-            net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
-            recs = []
-            for f in sorted(net.glob("flows*.ndjson")):
-                recs += [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
-            gh = [r for r in recs if r.get("type") == "flow" and r.get("service") == "github-egress"]
+            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
+            gh = [r for r in recs if r.get("service") == "github-egress"]
             hosts = sorted({(r.get("dest") or {}).get("host") for r in gh} - {None})
             check("flows: github-egress → github.com, client github, tool gh",
                   "github.com" in hosts and all((r.get("client"), r.get("tool")) == ("github", "gh") for r in gh),
