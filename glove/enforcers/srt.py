@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR
+from .base import ENFORCER_DIR, SRT
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -54,6 +54,14 @@ SETTINGS_FILE = "srt-settings.json"
 # stock apply-seccomp, or run with no filter).
 SRT_DIR = "/opt/glove/srt"
 APPLY_SECCOMP = f"{SRT_DIR}/apply-seccomp"
+
+# `enforcer_options.srt` (setting specs, as in an extension manifest).
+# nested: srt's user namespace (strong needs systempaths=unconfined);
+# hide_env: nono+srt hides /work's .env files from the harness.
+OPTIONS = {
+    "nested": {"type": "enum", "values": ["weak", "strong"], "default": "weak"},
+    "hide_env": {"type": "bool", "default": True},
+}
 GLOVE_SRT = f"{SRT_DIR}/glove-srt.mjs"  # srt's library without a network namespace (nono+srt)
 NODE = f"{SRT_DIR}/node"
 
@@ -109,13 +117,12 @@ def render_settings(plan: SessionPlan) -> dict:
 
 
 def tool_wrapper_argv() -> list[str]:
-    return ["srt", "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+    return [SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
 
 class SrtEnforcer:
     name = "srt"
-    def tools_run_browsers(self, options: dict) -> bool:
-        return True
+    tool_sandbox = "srt"
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return {

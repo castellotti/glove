@@ -1,0 +1,252 @@
+{
+ "flow": {
+  "v": 1,
+  "type": "flow",
+  "phase": "open",
+  "id": "f_01JBQ8WJ7K3M2N4P5R6S7T8V9W",
+  "env": "pi-search",
+  "session": "pi-search",
+  "t": "2026-09-23T04:12:33.412Z",
+  "t_open": "2026-09-23T04:12:33.412Z",
+  "t_close": null,
+  "service": "proxy",
+  "tool": "web_fetch",
+  "client": "harness",
+  "proto": "http-connect",
+  "dest": {
+   "host": "en.wikipedia.org",
+   "port": 443,
+   "ip": "185.15.59.224",
+   "resolution": "in-tunnel"
+  },
+  "scope": "tunnelled",
+  "route": {
+   "kind": "vpn",
+   "upstream": "http://egress-proxy:8888"
+  },
+  "bytes": {
+   "up": 1420,
+   "down": 88213
+  },
+  "verdict": "allow",
+  "rule": null,
+  "close_reason": null,
+  "request": null
+ },
+ "status": {
+  "v": 1,
+  "gate": "0.1.0",
+  "state": "running",
+  "record": "metadata",
+  "upstream": {
+   "kind": "vpn",
+   "healthy": true
+  },
+  "resolver": {
+   "mode": "in-tunnel",
+   "healthy": true
+  },
+  "rules": {
+   "loaded_at": "x",
+   "source_mtime": "x",
+   "ok": true,
+   "error": null,
+   "active_count": 3
+  }
+ },
+ "exit": {
+  "v": 1,
+  "type": "exit",
+  "t": "x",
+  "env": "pi-search",
+  "session": "pi-search",
+  "kind": "vpn",
+  "ip": "198.51.100.7",
+  "country": "NL",
+  "city": "Amsterdam",
+  "lat": 52.37,
+  "lon": 4.9,
+  "source": "gluetun-control",
+  "healthy": true
+ },
+ "rules": {
+  "v": 1,
+  "env": "pi-search",
+  "session": "pi-search",
+  "updated_at": "2026-09-23T04:20:00.000Z",
+  "updated_by": "layman",
+  "default": "allow",
+  "rules": [
+   {
+    "id": "r_01JBQx",
+    "action": "block",
+    "match": {
+     "host": "*.doubleclick.net"
+    },
+    "terminate": false,
+    "note": "ad tracker"
+   },
+   {
+    "id": "r_01JBRx",
+    "action": "block",
+    "match": {
+     "ip": "203.0.113.0/24",
+     "port": 443
+    }
+   },
+   {
+    "id": "r_01JBSx",
+    "action": "allow",
+    "match": {
+     "service": "llm"
+    }
+   }
+  ]
+ },
+ "states": [
+  {
+   "state": "Active flow",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Finished normally",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Refused by glove's guard",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Blocked by a user rule",
+   "fixture": true,
+   "scenarios": [
+    "terminate"
+   ]
+  },
+  {
+   "state": "Blocked by the default",
+   "fixture": false,
+   "scenarios": [
+    "default-block"
+   ]
+  },
+  {
+   "state": "Rules rejected",
+   "fixture": false,
+   "scenarios": [
+    "rules-rejected"
+   ]
+  },
+  {
+   "state": "Tunnel/upstream failure",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Cut by gate shutdown",
+   "fixture": true,
+   "scenarios": [
+    "stopped"
+   ]
+  },
+  {
+   "state": "Local link",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Tunnelled",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "**Untunnelled**",
+   "fixture": false,
+   "scenarios": [
+    "direct"
+   ]
+  },
+  {
+   "state": "Route declared, not verified",
+   "fixture": false,
+   "scenarios": [
+    "exit-none",
+    "exit-unhealthy"
+   ]
+  },
+  {
+   "state": "Exit observed",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Resolver down",
+   "fixture": false,
+   "scenarios": [
+    "resolver-down"
+   ]
+  },
+  {
+   "state": "Unresolved destination",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Unknown destination",
+   "fixture": true,
+   "scenarios": [
+    "empty"
+   ]
+  },
+  {
+   "state": "Service not watched",
+   "fixture": true,
+   "scenarios": []
+  },
+  {
+   "state": "Telemetry degraded",
+   "fixture": false,
+   "scenarios": [
+    "telemetry-dropped"
+   ]
+  },
+  {
+   "state": "Gate stale or stopped",
+   "fixture": false,
+   "scenarios": [
+    "stopped"
+   ]
+  },
+  {
+   "state": "Full record mode",
+   "fixture": false,
+   "scenarios": [
+    "record-full"
+   ]
+  },
+  {
+   "state": "Pooled (idle)",
+   "fixture": false,
+   "scenarios": [
+    "pooled"
+   ]
+  },
+  {
+   "state": "Cut by a gate that went away (inferred)",
+   "fixture": false,
+   "scenarios": [
+    "gate-lost"
+   ]
+  },
+  {
+   "state": "Empty connection",
+   "fixture": false,
+   "scenarios": [
+    "empty"
+   ]
+  }
+ ]
+}

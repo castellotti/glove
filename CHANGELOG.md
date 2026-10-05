@@ -6,6 +6,14 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
+  (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
+  through Docker Desktop's file sharing. An extension (`github`: `'*'`) or the
+  session's `env:` replaces it.
+- Extension manifests: a harness `env` entry may be `{value, when}` (unset
+  unless `when:` matches); `when:` takes `renders: <contribution>` (e.g. `mcp`,
+  instead of a list of harnesses) and `{set: true|false}`.
+
 - **Claude Code harness** (`harness: claude-code`, image
   `glove/claude-code:0.2.0`: the native binary, pinned, no Node). glove's
   guard rails are read-only managed settings at `/etc/claude-code`: a shell
@@ -114,6 +122,36 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- `enforcer_options` is checked against a schema under every enforcer: an
+  unknown section or key (e.g. `nono: {browser: true}`) or a value of the
+  wrong type is refused instead of ignored, and `nono.browsers: true` is
+  refused unless a toolchain bakes `browsers`.
+- Gate client labels are open: an endpoint's `observe.client` is any name
+  (never `harness`), defaulting to the declaring extension's name on a
+  `harness: false` hop and `unknown` otherwise, instead of a closed list in
+  netgate. Labels are not read by any policy.
+- relayd has no work root unless the consumer passes `--work` (github passes
+  `/work`), and refuses to start when the one it names is missing, instead of
+  quietly running in `/tmp`. A policy's `prepare()` returns only the argv.
+- Relay fragments take channel paths from the context (`channel.<name>.path`);
+  the ssh policy dials each host's forwarder at the address `RELAY_SETTINGS`
+  gives it instead of assembling it from the session prefix and port 22.
+- A harness `env` value that renders empty is set (empty), not dropped; use
+  `when:` to leave a variable unset. `search`, `webfetch` and `rag` now do.
+- Launch-time probes (`llm`'s model list) retry only while the endpoint
+  refuses fast (curl 6, 7, 52, 56); a timeout fails at once (was ~110 s). The
+  retry is in core (`probe_http`), so every extension's `resolve` gets it.
+- The policy and system-file directories are written in place: an unchanged
+  file is left alone and a stale one is removed (policies from a previous
+  enforcer were left behind).
+- Harness images use `COPY --chmod=0755` (one layer fewer each).
+- Tests: a fresh clone passes the gate tests (a tracked
+  `tests/fixtures/netobs-contract.json`); `playwright`'s `all_tools` records its
+  `playwright-core` version (checked against the lockfile and, live, the
+  image's tools); `test_toolchains.sh` runs with `RT=podman`; the live drivers
+  share `tests/integration/live_common.py`, and `tui_probe.py` drives a
+  harness TUI by hand.
+
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.
 - `search` for Vibe (and now Claude Code) is the `searxng` MCP server over HTTP
@@ -154,6 +192,43 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- `glove down` removes a harness container whose terminal was killed (a
+  `compose run` client that dies leaves its container, which kept the
+  session's networks too): it removes the project's `compose run` containers
+  first (Podman's compose keeps them even with `--remove-orphans`), then runs
+  `compose down --remove-orphans`.
+- **Pi and Vibe could be reconfigured by their own agent** (security). The
+  agent's in-process write tools could edit what the harness loads at the next
+  start, outside the ring-1 tool sandbox. A project `.vibe/hooks.toml` with a
+  hook named like glove's ran first and shadowed it, so commands ran unwrapped
+  (verified live). Now:
+  - Vibe's project `.vibe/` and `.agents/` are masked (an empty read-only
+    directory; the repo's own copy is not loaded either);
+  - Pi skips the project's `.pi/` and `.agents/skills` (`defaultProjectTrust:
+    never`, an empty trust store);
+  - what each loads from its home is read-only to the agent: the config and
+    hooks glove renders, Vibe's `.env`, Pi's trust store, and the dirs either
+    loads code, skills, prompts or themes from (`~/.agents` too); a Pi
+    `SYSTEM.md`/`APPEND_SYSTEM.md` in the home is removed at each start.
+  Settings saved from a harness UI (Pi's `/model` default, Vibe's `/theme`)
+  now fail silently (see README). An existing session's home keeps
+  what those dirs already hold: check them before resuming one. Harness
+  profiles gain `masked_files` and `protected_home`, and `trusted_files` takes
+  directories (a trailing `/`).
+- The tool wrapper runs `/usr/bin/nono` and `/usr/local/bin/srt` by absolute
+  path: Pi puts its agent `bin/` first on a tool command's PATH.
+- webfetch asks the egress gate why only when a tunnel was refused (403),
+  instead of after every failed fetch (a probe of up to 15s).
+- github's URL-rewrite check runs once per request, and only when a remote is
+  given as a URL.
+- Claude Code's `.claude.json` trust entry follows the session's working
+  directory when glove runs from a subdirectory (it always named the mount
+  root). Adapters' `render_home` now gets the plan's resolved mount plan.
+- Validators anchored with `$` accepted a trailing newline (session ids, env
+  keys, extension names, ssh users/hosts, WireGuard keys, toolchain packages
+  and versions, gate host names): all anchor with `\Z` now.
+- A harness adapter's bad `system_files` fails at `glove plan`/`check`, not at
+  `up`.
 - `toolchains` (node): with no project, the global `packages` are linked into
   the pinned node's global require path, so `require('playwright')` works from
   a shell command in any directory (it needed `NODE_PATH` before). The brief

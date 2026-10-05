@@ -13,6 +13,23 @@ image: glove/pi:0.5.0
 entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enforcer]
 config_home: { env: PI_CODING_AGENT_DIR, path: /home/agent/.pi/agent }
 context_file: /home/agent/.pi/agent/AGENTS.md
+# Read-only to the agent (ring 0), relative to the home: the settings, models
+# and trust store glove renders, and the dirs Pi loads code, skills, prompts
+# and themes from (`bin/` also comes first on a tool command's PATH). The
+# rendered `defaultProjectTrust: never` and empty trust store keep the
+# project's `.pi/` and `.agents/skills` from loading.
+protected_home:
+  - .pi/agent/settings.json
+  - .pi/agent/models.json
+  - .pi/agent/trust.json
+  - .pi/agent/extensions/
+  - .pi/agent/skills/
+  - .pi/agent/prompts/
+  - .pi/agent/themes/
+  - .pi/agent/bin/
+  - .pi/agent/npm/
+  - .pi/agent/git/
+  - .agents/
 # PI_OFFLINE stops Pi's startup egress attempts (fd download, version check,
 # telemetry) that fail in the no-egress sandbox.
 env: { PI_CODING_AGENT_DIR: /home/agent/.pi/agent, PI_OFFLINE: "1" }

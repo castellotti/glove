@@ -1,15 +1,15 @@
 services:
   # The github relay: relayd runs the harness's gh and network git commands
-  # (requests left in the `github` channel, /run/glove/github) under
-  # relay_policy.py, with the token in its environment (hooks.py). Children reach only
-  # GitHub's hosts, through relayd's fence and then
+  # (requests left in the `github` channel) under relay_policy.py, with the
+  # token in its environment (hooks.py). Children reach only GitHub's hosts,
+  # through relayd's fence and then
   # {{ endpoint['github-egress'].url }} — the egress provider's proxy, or (with
   # observe) a gate in front of it, and then this sidecar is not on the egress
   # network at all. Either network is internal, so it has no other way out.
   gh:
     image: "{{ libs.relay.images.relayd }}"
-    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "/run/glove/github",
-              "--policy", "/opt/glove/github/relay_policy.py"]
+    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel.github.path }}",
+              "--policy", "/opt/glove/github/relay_policy.py", "--work", "/work"]
 {% if endpoint['github-egress'].interposed %}
     networks: [ghnet]
 {% else %}
@@ -27,7 +27,7 @@ services:
           read_only: true }
     tmpfs: ["/tmp"]
     healthcheck:
-      test: ["CMD", "test", "-p", "/run/glove/github/door"]
+      test: ["CMD", "test", "-p", "{{ channel.github.path }}/door"]
       interval: 2s
       timeout: 3s
       retries: 20

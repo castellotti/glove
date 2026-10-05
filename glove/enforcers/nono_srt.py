@@ -76,8 +76,7 @@ def protected_paths(plan: SessionPlan) -> list[str]:
 
 
 def render_harness_settings(plan: SessionPlan) -> dict:
-    opts = plan.enforcer_options.get("srt") or {}
-    hide = [] if opts.get("hide_env") is False else [f"{_work(plan)}/{g}" for g in HIDDEN]
+    hide = [f"{_work(plan)}/{g}" for g in HIDDEN] if plan.enforcer_options["srt"]["hide_env"] else []
     rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
     return {
         "filesystem": {
@@ -97,8 +96,7 @@ def render_harness_settings(plan: SessionPlan) -> dict:
 
 class NonoSrtEnforcer:
     name = "nono+srt"
-    def tools_run_browsers(self, options: dict) -> bool:
-        return nono_policies.browsers_enabled(options)  # its tool sandbox is nono's
+    tool_sandbox = "nono"
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         out = nono_policies.render_all(plan)

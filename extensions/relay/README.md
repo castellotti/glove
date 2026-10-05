@@ -38,6 +38,10 @@ One request:
 3. A refusal reaches the agent as `glove relay: refused: <why>`, with exit code
    126.
 
+A consumer that works on the checkout passes `--work /work` (relayd refuses to
+start when it is missing). Without it, commands run in `/tmp` and file and
+destination arguments are refused.
+
 Relayed commands get **no stdin**, so input goes in a file under `/work`. If
 the client goes away (an aborted tool call), relayd kills the command. A command
 that runs past `timeout` is stopped with exit code 124. At most `--max` commands
@@ -53,7 +57,8 @@ The consumer supplies the policy, a Python file that relayd loads by path:
 - `HOSTS`: the hosts its commands may reach, either exact (`github.com`) or a
   suffix (`.githubusercontent.com`).
 - `setup(ctx)`: builds the children's environment from nothing.
-- `prepare(req, env)`: returns `(argv, extra env)` or raises its `Refused`.
+- `prepare(req, env)`: returns the argv to run (with `setup`'s environment) or
+  raises its `Refused`.
 
 `req.file(path)` opens a file argument inside `/work` and returns `/dev/fd/<n>`
 for the child. It checks the file it actually opened, through that file's

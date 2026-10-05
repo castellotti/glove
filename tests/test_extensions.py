@@ -142,6 +142,16 @@ def test_when_predicates():
     assert when_matches(None, ctx)
 
 
+@pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])
+def test_when_renders_follows_the_harness_contributions(harness, mcp):
+    from glove.extensions import when_context
+
+    ctx = when_context({"dir": "", "n": 0}, harness)
+    assert when_matches({"renders": "mcp"}, ctx) is mcp
+    assert when_matches({"renders": ["mcp", "skills"]}, ctx)  # every harness renders skills
+    assert when_matches({"dir": {"set": False}, "n": {"set": True}}, ctx)  # 0 is a value; "" is not
+
+
 # --- slots, requires, conflicts, auto ----------------------------------------------------
 
 
@@ -487,6 +497,38 @@ def test_a_contribute_hook_env_is_checked_like_a_manifest_env(tree):
     (tree / "b" / "hooks.py").write_text(hooks.replace("ENV", '{"X\\n    privileged": "true"}'))
     with pytest.raises(ExtensionError, match="must match"):
         compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+
+
+def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
+    _ext(tree, "e", """\
+        api: 1
+        name: e
+        summary: x
+        settings: { dir: { type: string } }
+        harness:
+          env:
+            EMPTY: ""
+            PI_ONLY: { value: "{{ harness }}", when: { harness: pi } }
+            DIR_SET: { value: "{{ settings.dir }}/x", when: { dir: { set: true } } }
+            DIR_UNSET: { value: none, when: { dir: { set: false } } }
+        """)
+
+    def env(harness, **settings):
+        return compose({"llm": STUB_LLM, "e": settings}, harness=harness, session="s", state_root=Path("/x"),
+                       manifests=discover(tree)).harness_env
+
+    assert {k: v for k, v in env("pi").items() if k in ("EMPTY", "PI_ONLY", "DIR_SET", "DIR_UNSET")} == {
+        "EMPTY": "", "PI_ONLY": "pi", "DIR_UNSET": "none"}  # an empty value is set as given
+    got = env("vibe", dir="/d")
+    assert "PI_ONLY" not in got and got["DIR_SET"] == "/d/x" and "DIR_UNSET" not in got
+
+
+@pytest.mark.parametrize("value", ["{ value: x, when: {}, extra: 1 }", "{ when: { harness: pi } }", "null"])
+def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
+    _ext(tree, "e", f"api: 1\nname: e\nsummary: x\nharness:\n  env: {{ K: {value} }}\n")
+    with pytest.raises(ExtensionError, match="env 'K'"):
+        compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
                 manifests=discover(tree))
 
 

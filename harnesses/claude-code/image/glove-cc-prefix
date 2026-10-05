@@ -13,6 +13,20 @@
 # `source`, and hooks are managed-only.
 set -uo pipefail
 WRAPPER=/etc/glove/enforcer/tool-wrapper.argv
+
+# load_argv <array> <file> <refusal>: the file's lines (one argument each) into
+# <array>; a missing or unreadable file, or an empty first line, exits 126.
+load_argv() {
+  local -n into=$1
+  into=()
+  if [ -r "$2" ]; then
+    mapfile -t into < "$2"
+  fi
+  if [ "${#into[@]}" -eq 0 ] || [ -z "${into[0]}" ]; then
+    echo "glove: $3 (fail closed)" >&2
+    exit 126
+  fi
+}
 if [ "$#" -ne 1 ]; then
   echo "glove: shell prefix expects one argument, got $# — shell blocked (fail closed)" >&2
   exit 126
@@ -24,25 +38,10 @@ for name in $(compgen -e); do
   case "$name" in NONO_*|SRT_*) unset "$name" ;; esac
 done
 if [[ "$1" =~ ^/opt/glove/bin/glove-cc-prefix\ --mcp\ ([A-Za-z0-9_-]+)$ ]]; then
-  server=()
-  argvf="/etc/claude-code/mcp-${BASH_REMATCH[1]}.argv"
-  if [ -r "$argvf" ]; then
-    mapfile -t server < "$argvf"
-  fi
-  if [ "${#server[@]}" -eq 0 ] || [ -z "${server[0]}" ]; then
-    echo "glove: no MCP server ${BASH_REMATCH[1]} — blocked (fail closed)" >&2
-    exit 126
-  fi
+  load_argv server "/etc/claude-code/mcp-${BASH_REMATCH[1]}.argv" "no MCP server ${BASH_REMATCH[1]} — blocked"
   exec "${server[@]}"
 fi
-argv=()
-if [ -r "$WRAPPER" ]; then
-  mapfile -t argv < "$WRAPPER"
-fi
-if [ "${#argv[@]}" -eq 0 ] || [ -z "${argv[0]}" ]; then
-  echo "glove: tool wrapper missing — shell blocked (fail closed)" >&2
-  exit 126
-fi
+load_argv argv "$WRAPPER" "tool wrapper missing — shell blocked"
 # --norc: bash's rshd heuristic would otherwise source /etc/bash.bashrc, which
 # the tool policy denies, and print an error on every command.
 exec "${argv[@]}" /bin/bash --norc -c "$1"

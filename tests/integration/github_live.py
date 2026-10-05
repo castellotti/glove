@@ -22,57 +22,22 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
 
+from live_common import check, live_session, summary
+
 from extensions.observe.netview import read_records
 from glove import registry
-from glove.cli import _materialize_plan, _open, _resolve_extensions
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
 
-RESULTS: list[bool] = []
-BASH_TOOL = {"claude-code": "Bash"}
 PUBLIC_REPO = "https://github.com/octocat/Hello-World.git"
 
 
-def check(name: str, ok: bool, detail: str = "") -> None:
-    RESULTS.append(ok)
-    print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f"  [{detail}]" if detail and not ok else ""), flush=True)
-
-
 def main(directory: str, repo: str | None) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    rt = cfg.provider
-    base = None
-    env = dict(os.environ)
-    try:
-        plan, _, _ = _materialize_plan(sd, sid, cfg)
-        secrets = secret_env(plan)
-        token = next(v for k, v in secrets.items() if k.endswith("GITHUB_TOKEN"))
-        env = {**os.environ, **secrets}
-        base = _compose_base(rt, plan.project, sd.compose)
-        print(f"== session {sid} ({cfg.harness}, enforcer {plan.enforcer}, runtime {rt})")
-        ensure_images(cfg, plan, rt)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)
-        _resolve_extensions(plan, rt, secrets)
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
-
-        def run(*argv: str, entry: str | None = None) -> subprocess.CompletedProcess:
-            return subprocess.run([*base, "run", "--rm", "-T", *(["--entrypoint", entry] if entry else []),
-                                   plan.harness_service, *argv], env=env, stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, timeout=300)
-
-        tool = BASH_TOOL.get(cfg.harness, "bash")
-
-        def sh(cmd: str) -> str:
-            """One shell command through the agent's own tool; what the model saw."""
-            r = run(*plan.harness_command, "-p", f"CALL {tool} {json.dumps({'command': cmd})}")
-            out = r.stdout + r.stderr
-            return " ".join(out[out.find("TOOL RESULT"):].split()) if "TOOL RESULT" in out else out[-600:]
+    with live_session(directory, logs="gh") as s:
+        sd, sid, plan, run, sh = s.sd, s.sid, s.plan, s.run, s.sh
+        token = next(v for k, v in s.secrets.items() if k.endswith("GITHUB_TOKEN"))
 
         print("== the harness side")
         # the harness container itself, outside the enforcer (the token is never
@@ -179,14 +144,7 @@ def main(directory: str, repo: str | None) -> int:
                   "github.com" in hosts and all((r.get("client"), r.get("tool")) == ("github", "gh") for r in gh),
                   json.dumps(hosts))
             print(f"    (relay destinations: {', '.join(hosts)})")
-    finally:
-        if base:
-            logs = subprocess.run([rt, "logs", f"glove-{sid}-gh"], capture_output=True, text=True)
-            print("== relayd log (last lines)\n" + "".join(f"    {ln}\n" for ln in
-                                                           (logs.stdout + logs.stderr).splitlines()[-25:]))
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    print(f"== RESULT: {sum(RESULTS)} passed, {len(RESULTS) - sum(RESULTS)} failed")
-    return 0 if all(RESULTS) else 1
+    return summary()
 
 
 if __name__ == "__main__":

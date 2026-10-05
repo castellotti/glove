@@ -15,7 +15,8 @@
   "environment": {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
-    "DISABLE_AUTOUPDATER": "1"
+    "DISABLE_AUTOUPDATER": "1",
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'"
   },
   "image": "glove/claude-code:0.2.0",
   "passthrough_env": [

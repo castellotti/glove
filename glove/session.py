@@ -136,11 +136,11 @@ def build_harness(
 
 def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = False) -> None:
     """Build every image an active extension declares (`images:` in its manifest)."""
-    from .extensions import image_tag, when_matches
+    from .extensions import image_tag, when_context, when_matches
 
     for a in plan.composition.active:
         for name, spec in (a.manifest.raw.get("images") or {}).items():
-            ctx = {"settings": a.settings, "harness": plan.composition.harness}
+            ctx = when_context(a.settings, plan.composition.harness)
             if not when_matches((spec or {}).get("when"), ctx):
                 continue  # e.g. the browser sidecar's image in host mode
             tag = image_tag(a, name)
@@ -259,6 +259,13 @@ def launch(
         )
 
 
+# curl exit codes that mean "nothing answers yet", and fail fast: 6 (the name
+# does not resolve: a sidecar not yet on the network), 7 (refused), 52 (empty
+# reply) and 56 (reset: a forwarder accepted but cannot relay yet).
+FAST_FAILURES = frozenset({6, 7, 52, 56})
+CONNECT_RETRIES = (1, 2, 3, 4)  # seconds between attempts
+
+
 def probe_http(
     provider: str, plan: SessionPlan, url: str, *, method: str = "GET", body: dict | None = None,
     auth_env: dict[str, str] | None = None, auth_header: str = "Authorization", auth_scheme: str = "Bearer",
@@ -267,19 +274,29 @@ def probe_http(
     """HTTP request from a throwaway, hardened container on the harness network,
     so the host never resolves or contacts the endpoint itself. A key travels
     only as an env var of that container (never in any argv); `headers` are
-    public request headers (e.g. an API version)."""
+    public request headers (e.g. an API version).
+
+    A fast failure to reach the endpoint (see `FAST_FAILURES`: a sidecar or
+    forwarder still starting) is retried inside the one container after each
+    of `CONNECT_RETRIES` seconds; a timeout is not. Status 0: no HTTP answer
+    (the text is then curl's own message)."""
     import json as _json
     import shlex
 
-    script = 'curl -sS -m 20 -o /tmp/b -w "%{http_code}" -X "$M" "$U"'
+    curl = 'curl -sS -m 20 -o /tmp/b -w "%{http_code}" -X "$M" "$U"'
     for k, v in (headers or {}).items():
-        script += " -H " + shlex.quote(f"{k}: {v}")
+        curl += " -H " + shlex.quote(f"{k}: {v}")
     if body is not None:
-        script += ' -H "content-type: application/json" --data "$B"'
+        curl += ' -H "content-type: application/json" --data "$B"'
     if auth_env:
         prefix = f"{auth_scheme} " if auth_scheme else ""
-        script += f' -H "{auth_header}: {prefix}$GLOVE_LLM_API_KEY"'
-    script += "; echo; cat /tmp/b"
+        curl += f' -H "{auth_header}: {prefix}$GLOVE_LLM_API_KEY"'
+    waits = " ".join(str(w) for w in CONNECT_RETRIES)
+    fast = "|".join(str(c) for c in sorted(FAST_FAILURES))
+    # "<http code> <curl exit code>", then the body
+    script = (f'for w in {waits} 0; do code=$({curl}); rc=$?; '
+              f'case $rc in {fast}) [ "$w" -gt 0 ] && sleep "$w" && continue;; esac; break; done; '
+              'echo "$code $rc"; cat /tmp/b 2>/dev/null')
     cmd = [
         provider, "run", "--rm", "--network", plan.network.internal_network,
         "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
@@ -291,15 +308,24 @@ def probe_http(
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
     head, _, rest = r.stdout.partition("\n")
     try:
-        return int(head.strip() or 0), rest
-    except ValueError:
+        status, curl_rc = (int(x) for x in head.split())
+    except ValueError:  # the probe container itself failed
         return 0, (r.stdout + r.stderr)[-400:]
+    return status, rest if curl_rc == 0 else r.stderr[-400:]
 
 
 def teardown(session: str, *, provider: str, wipe: bool) -> None:
     project = project_name(session)
-    cmd = [provider, "compose", "-p", project, "down"]
+    console.print(f"[bold]tearing down[/bold] {project}")
+    # a `compose run` (the harness) whose client was killed leaves its container,
+    # which `down` keeps, and with it the networks (Podman's compose keeps it even
+    # with --remove-orphans): remove the project's runs first
+    runs = subprocess.run([provider, "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}",
+                           "--filter", "label=com.docker.compose.oneoff=True"],
+                          capture_output=True, text=True, check=False).stdout.split()
+    if runs:
+        subprocess.run([provider, "rm", "-f", *runs], stdout=subprocess.DEVNULL, check=False)
+    cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]  # services since removed
     if wipe:
         cmd.append("--volumes")
-    console.print(f"[bold]tearing down[/bold] {project}")
     subprocess.run(cmd, check=False)

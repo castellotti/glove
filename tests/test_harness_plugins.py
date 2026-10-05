@@ -70,7 +70,7 @@ def test_every_harness_image_bakes_the_shared_entrypoint():
         assert not (image / "entrypoint.sh").exists()
         df = (image / "Dockerfile").read_text()
         if re.search(r"^ENTRYPOINT", df, re.M):
-            assert "COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
+            assert "COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
 
 
 def _manifest(tmp_path: Path, name: str, body: str) -> Path:
@@ -102,10 +102,20 @@ def test_a_minimal_manifest_loads(tmp_path):
     (GOOD.replace("api: 1", "api: 2"), "h"),           # wrong api
     (GOOD, "other"),                                   # name ≠ directory
     (GOOD + "contributions: [tools]\n", "h"),          # unknown contribution
+    (GOOD + "masked_files: [../x/]\n", "h"),           # outside the working dir
+    (GOOD + "protected_home: [/etc/x]\n", "h"),        # absolute
+    (GOOD + "protected_home: [.h/../x]\n", "h"),       # escapes the home
+    (GOOD + "protected_home: [./]\n", "h"),            # the home itself
+    (GOOD + "protected_home: [.h//x]\n", "h"),         # empty component
 ])
 def test_bad_manifests_are_refused(tmp_path, body, dirname):
     with pytest.raises(ConfigError):
         load_profile(_manifest(tmp_path, dirname, body))
+
+
+def test_protected_home_keeps_its_directory_marker(tmp_path):
+    p = load_profile(_manifest(tmp_path, "h", GOOD + "protected_home: [.h/settings.json, .h/tools/]\n"))
+    assert p.protected_home == (".h/settings.json", ".h/tools/")
 
 
 def test_unknown_harness_is_refused():

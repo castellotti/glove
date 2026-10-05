@@ -25,7 +25,7 @@ services:
     networks: [searchnet]
     volumes:
       - { type: tmpfs, target: /data }
-{% if harness in ["vibe", "claude-code"] %}
+{% if "mcp" in renders %}
   # web_search for harnesses that speak MCP: streamable HTTP on :8000, reached
   # only through the harness's `search-mcp` forwarder (and only under that
   # name: MCP_ALLOWED_HOST). It talks to SearXNG on searchnet and nothing else.

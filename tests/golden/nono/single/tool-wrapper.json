@@ -3,7 +3,7 @@
     "/opt/glove/bin/glove-pty",
     "notty",
     "--",
-    "nono",
+    "/usr/bin/nono",
     "wrap",
     "-s",
     "--allow-cwd",

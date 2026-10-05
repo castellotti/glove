@@ -7,7 +7,8 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from extensions.gate.tests.test_netgate_invariants import _jsonc_blocks, _shape
+from extensions.gate.tests.contract import CONTRACT
+from extensions.gate.tests.test_netgate_invariants import _shape
 
 FIXTURE = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "netobs"
 
@@ -26,7 +27,7 @@ def _flows() -> list[dict]:
 
 
 def test_every_record_has_exactly_the_handoff_shape():
-    spec = _shape(_jsonc_blocks("## 2. Flow schema")[0])
+    spec = _shape(CONTRACT["flow"])
     for rec in _flows():
         assert _shape(rec) == spec, rec["id"]
         for key, allowed in ENUMS.items():
@@ -65,7 +66,7 @@ def test_fixture_covers_every_state_a_ui_must_render():
 
 def test_status_and_session_samples():
     status = json.loads((FIXTURE / "status.json").read_text())
-    for key, sub in _shape(_jsonc_blocks("### `status.json`")[0]).items():
+    for key, sub in _shape(CONTRACT["status"]).items():
         assert key in status
         if isinstance(sub, dict):
             assert set(sub) <= set(status[key])
@@ -86,7 +87,7 @@ def test_rules_sample_is_what_the_gate_accepts_and_caused_the_user_block():
 
 
 def test_exit_sample_matches_the_handoff_shape_and_resolutions_are_mixed():
-    spec = _shape(_jsonc_blocks("### `exit.ndjson`")[0])
+    spec = _shape(CONTRACT["exit"])
     exits = [json.loads(line) for line in (FIXTURE / "exit.ndjson").read_text().splitlines() if line]
     assert exits and all(_shape(e) == spec for e in exits)
     assert exits[0]["kind"] == "vpn" and exits[0]["source"].startswith("via-proxy:")

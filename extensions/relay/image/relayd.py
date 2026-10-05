@@ -169,7 +169,7 @@ class Relay:
         self.channel = channel
         self.policy = policy
         self.env = env
-        self.work = work if os.path.isdir(work) else ""  # "": a relay without /work (ssh)
+        self.work = work  # "": a relay without a work root (ssh)
         self.settings = settings
         self.timeout = timeout
         self.slots = threading.BoundedSemaphore(max_active)
@@ -252,10 +252,9 @@ class Relay:
         return Request(argv, cfd, self.work, self.settings)
 
     def _run(self, req: Request, out: int, err: int) -> int:
-        argv, extra = self.policy.prepare(req, dict(self.env))
-        env = {**self.env, **(extra or {})}
+        argv = self.policy.prepare(req, dict(self.env))
         # the child changes into the very directory that was checked (its fd)
-        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=env,
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=self.env,
                              cwd=f"/proc/self/fd/{req.cwd_fd}", pass_fds=tuple(req.fds), start_new_session=True)
         deadline = time.monotonic() + self.timeout
         while True:
@@ -397,11 +396,14 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="relayd")
     ap.add_argument("--channel", required=True)
     ap.add_argument("--policy", required=True)
-    ap.add_argument("--work", default="/work")
+    ap.add_argument("--work", default="", help="the work root its commands run in; none by default")
     ap.add_argument("--upstream", default=os.environ.get("RELAY_UPSTREAM", ""))
     ap.add_argument("--timeout", type=int, default=int(os.environ.get("RELAY_TIMEOUT", "600")))
     ap.add_argument("--max", type=int, default=8)
     args = ap.parse_args(argv)
+    if args.work and not os.path.isdir(args.work):
+        raise SystemExit(f"relayd: the work root {args.work} is not a directory")
+    work = os.path.realpath(args.work) if args.work else ""
     policy = load_policy(args.policy)
     settings = json.loads(os.environ.get("RELAY_SETTINGS") or "{}")
     fence = None
@@ -409,8 +411,8 @@ def main(argv: list[str] | None = None) -> None:
         if not args.upstream:
             raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
         fence = Fence(args.upstream, policy.HOSTS)
-    env = policy.setup({"proxy": fence.url if fence else None, "settings": settings, "work": args.work})
-    Relay(args.channel, policy, env, work=os.path.realpath(args.work), settings=settings,
+    env = policy.setup({"proxy": fence.url if fence else None, "settings": settings, "work": work})
+    Relay(args.channel, policy, env, work=work, settings=settings,
           timeout=args.timeout, max_active=args.max).serve()
 
 

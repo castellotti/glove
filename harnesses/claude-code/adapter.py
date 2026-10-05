@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 from glove.config import ConfigError
 from glove.enforcers.base import argv_lines
 from glove.extensions import ExtensionError, render_value
-from glove.harnessconfig import _mount_plan_for, mcp_tool_names, rel_config_home
+from glove.harnessconfig import mcp_tool_names, rel_config_home
 from glove.naming import scoped
 
 MANAGED_DIR = "/etc/claude-code"
@@ -241,7 +241,7 @@ def image_lines(comp) -> tuple[list[str], list]:
                                                 for name, dest in links)], []
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
+def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
     hc = _config(cfg)
     if model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}")
@@ -258,7 +258,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
     p_settings = cfg_dir / "settings.json"
     p_settings.write_text(json.dumps(settings, indent=2) + "\n")
 
-    work = _mount_plan_for(cfg).working_dir
+    work = mount_plan.working_dir
     p_state = cfg_dir / ".claude.json"
     _merge_json(p_state, {"hasCompletedOnboarding": True,
                           "projects": {work: {"hasTrustDialogAccepted": True}}})

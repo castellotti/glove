@@ -38,6 +38,7 @@ services:
       CLAUDE_OBSIDIAN_VAULT: "/work/data/store/vault"
       SEARXNG_URL: "http://glove-s-search:8080"
       GLOVE_FETCH_PROXY: "http://glove-s-proxy:8888"
+      GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -48,6 +49,82 @@ services:
       - type: bind
         source: "<TMP>/models"
         target: /mnt/rag-models
+        read_only: true
+      # ring 0: re-bound so it is a mount point and cannot be renamed away
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi"
+        target: "/home/agent/.pi"
+      # ring 0: re-bound so it is a mount point and cannot be renamed away
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent"
+        target: "/home/agent/.pi/agent"
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/settings.json"
+        target: "/home/agent/.pi/agent/settings.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/models.json"
+        target: "/home/agent/.pi/agent/models.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/trust.json"
+        target: "/home/agent/.pi/agent/trust.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/extensions"
+        target: "/home/agent/.pi/agent/extensions"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/skills"
+        target: "/home/agent/.pi/agent/skills"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/prompts"
+        target: "/home/agent/.pi/agent/prompts"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/themes"
+        target: "/home/agent/.pi/agent/themes"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/bin"
+        target: "/home/agent/.pi/agent/bin"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/npm"
+        target: "/home/agent/.pi/agent/npm"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/git"
+        target: "/home/agent/.pi/agent/git"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.agents"
+        target: "/home/agent/.agents"
         read_only: true
       # observe export: the harness writes its transcripts straight into
       # ~/.glove/observe/<id>/transcripts (after the home bind, so it overlays it)
@@ -99,7 +176,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - collect
     - --net-dir
@@ -242,7 +319,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service
@@ -306,7 +383,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service
@@ -368,7 +445,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service
@@ -424,7 +501,7 @@ services:
     mem_limit: 512m
   glove-s-search:
     container_name: glove-s-search
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service
@@ -486,7 +563,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service
@@ -540,7 +617,7 @@ services:
     mem_limit: 512m
   glove-s-proxy:
     container_name: glove-s-proxy
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:e4d2bf8ba564
     command:
     - forward
     - --service

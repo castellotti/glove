@@ -4,6 +4,7 @@ hardening and settings — the handoff's invariants 1-5 on the rendered project.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,9 @@ def test_one_playwright_pin():
     assert lock["packages"]["node_modules/playwright-core"]["version"] == version
     assert f"FROM mcr.microsoft.com/playwright:v{version}-noble@sha256:" in (IMAGE / "Dockerfile").read_text()
     assert "npx" not in (IMAGE / "Dockerfile").read_text().replace("No runtime `npx -y`", "")
+    # all_tools was listed for this version: re-list it when the pin moves
+    stamp = re.search(r"playwright-core (\S+), as in", (IMAGE.parent / "extension.yml").read_text())
+    assert stamp and stamp.group(1) == version
 
 
 def test_mcp_config_and_dirs(tmp_path):

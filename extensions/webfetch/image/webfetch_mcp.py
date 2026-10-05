@@ -258,12 +258,13 @@ def fetch(url: str, max_chars: int = 20000, raw: bool = False) -> str:
                     return _policy(url, text.strip())
             return f"HTTP {e.code} for {url}"
         except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
-            # urllib does not say why a tunnel failed; ask the proxy once. A 403
-            # is a policy decision, not a network failure.
-            refused = tunnel_refusal(url)
-            if refused is not None:
-                return _policy(url, refused)
             cause = getattr(e, "reason", None) or e
+            # urllib drops the body of a refused tunnel; only a 403 is a policy
+            # decision worth asking the proxy about (once).
+            if str(cause).startswith("Tunnel connection failed: 403"):
+                refused = tunnel_refusal(url)
+                if refused is not None:
+                    return _policy(url, refused)
             if isinstance(cause, socket.timeout):
                 cause = "timed out"
             return (f"Fetch failed for this URL ({cause}). This is a per-request failure, not necessarily an "

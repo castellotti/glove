@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -15,7 +14,8 @@ import pytest
 
 from extensions.gate.netgate.policy import PolicyError, parse_bytes, sha256_hex
 from extensions.gate.netgate.writer import rotated_files, rotation_key
-from extensions.gate.tests.test_netgate_invariants import ADDITIVE_FLOW_KEYS, HANDOFF, _jsonc_blocks, _shape
+from extensions.gate.tests.contract import CONTRACT
+from extensions.gate.tests.test_netgate_invariants import ADDITIVE_FLOW_KEYS, _shape
 from extensions.gate.tests.test_netobs_fixture import ENUMS
 from extensions.observe.netview import ended_runs, iter_records
 
@@ -61,26 +61,18 @@ def _status(name: str) -> dict:
     return json.loads((SCENARIOS / name / "status.json").read_text())
 
 
-def _named(text: str) -> set[str]:
-    """Scenario names in `*(…scenario: `a`, `b`…)*` markers."""
-    return {n for m in re.findall(r"\*\(([^)]*scenario[^)]*)\)\*", text) for n in re.findall(r"`([a-z-]+)`", m)}
-
-
 def test_there_is_a_scenario_for_every_state_the_handoff_names():
-    text = HANDOFF.read_text()
-    table = text[text.index("### 6.1 States"):text.index("**Correlation with the transcript")]
-    rows = [r for r in table.splitlines() if r.startswith("| ") and not r.startswith("| State") and "---" not in r]
-    assert rows
-    for row in rows:
-        assert _named(row) or "*(fixture" in row, f"no fixture or scenario for: {row[:60]}"
-        assert _named(row) <= set(NAMES), row[:60]
+    states = CONTRACT["states"]
+    for st in states:
+        assert st["fixture"] or st["scenarios"], f"no fixture or scenario for: {st['state']}"
+        assert set(st["scenarios"]) <= set(NAMES), st["state"]
     # every scenario is either a §6.1 state or behaviour §2 describes
-    assert set(NAMES) - _named(table) <= {"search", "sni-refined", "rotation"}
+    assert set(NAMES) - {n for st in states for n in st["scenarios"]} <= {"search", "sni-refined", "rotation"}
 
 
 @pytest.mark.parametrize("name", NAMES)
 def test_every_record_matches_the_handoff(name):
-    spec_flow = _jsonc_blocks("## 2. Flow schema")[0]
+    spec_flow = CONTRACT["flow"]
     recs = _records(name)
     assert recs and all(r["v"] == 1 for r in recs)
     for r in recs:
@@ -107,7 +99,7 @@ def test_every_record_matches_the_handoff(name):
 def test_status_session_and_rules_match_the_handoff(name):
     d = SCENARIOS / name
     status = _status(name)
-    for key, sub in _shape(_jsonc_blocks("### `status.json`")[0]).items():
+    for key, sub in _shape(CONTRACT["status"]).items():
         assert key in status
         if isinstance(sub, dict):
             assert set(sub) <= set(status[key])

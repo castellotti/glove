@@ -46,7 +46,7 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 PLACEHOLDER = "<set-me>"
 
 # <dirname>-<6 hex>: a valid compose project suffix and Layman's SAFE_NAME.
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
 # for the v2 keys that v3 replaced.

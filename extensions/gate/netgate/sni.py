@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 MAX_HELLO = 16 * 1024 + 5  # one TLS record
-_HOST_RE = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,62})(\.[a-z0-9_]([a-z0-9_-]{0,62}))*$")
+_HOST_RE = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,62})(\.[a-z0-9_]([a-z0-9_-]{0,62}))*\Z")
 
 
 def is_tls_handshake(data: bytes) -> bool:

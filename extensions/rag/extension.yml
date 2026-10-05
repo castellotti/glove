@@ -30,7 +30,7 @@ harness:
     KSTORE_QUERY_STORES: "{{ settings.query_stores }}"
     # fastembed/huggingface must never try the network (there is none)
     HF_HUB_OFFLINE: "1"
-    CLAUDE_OBSIDIAN_CORE: "{{ mount.obsidian ~ '/scripts/claude-obsidian.py' if mount.obsidian is defined else '' }}"
+    CLAUDE_OBSIDIAN_CORE: { value: "{{ mount.obsidian }}/scripts/claude-obsidian.py", when: { obsidian_dir: { set: true } } }
     CLAUDE_OBSIDIAN_VAULT: /work/data/store/vault
   skills:                               # SKILL.md dirs, for harnesses that load skills (pi)
     - skills/rag-parse

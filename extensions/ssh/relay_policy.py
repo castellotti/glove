@@ -28,7 +28,7 @@ HOSTS = ()  # raw TCP over the per-host forwarders: no proxy, no fence
 
 AGENT = "/tmp/relay-agent.sock"
 KNOWN_HOSTS = "/opt/glove/ssh/known_hosts"
-FLAGS = frozenset({"-q", "-v", "-T", "-n", "-4", "-6", "-C"})
+FLAGS = frozenset({"-q", "-v", "-vv", "-vvv", "-T", "-n", "-4", "-6", "-C"})
 OPTIONS = {  # -o key → allowed value pattern
     "connecttimeout": re.compile(r"\d{1,3}"),
     "serveraliveinterval": re.compile(r"\d{1,4}"),
@@ -92,23 +92,23 @@ def setup(ctx: dict) -> dict[str, str]:
 
 
 def _hosts(req) -> dict[str, dict]:
-    """`hosts` as the session file gives them ({name, to, user}; hooks.py
-    validated them at plan time) → name → {host, port, user}."""
+    """RELAY_SETTINGS' `hosts` ({name, to, user, forwarder: {host, port}}; hooks.py
+    validated `to` at plan time) → name → {host, port, user, forwarder}."""
     out = {}
     for h in req.settings.get("hosts") or []:
         host, _, port = str(h["to"]).rpartition(":")
-        out[str(h["name"])] = {"host": host, "port": int(port), "user": str(h["user"])}
+        out[str(h["name"])] = {"host": host, "port": int(port), "user": str(h["user"]), "forwarder": h["forwarder"]}
     return out
 
 
-def prepare(req, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+def prepare(req, env: dict[str, str]) -> list[str]:
     args = req.argv[1:]
     hosts = _hosts(req)
     opts: list[str] = []
     i = 0
     while i < len(args) and args[i].startswith("-"):
         tok = args[i]
-        if tok in FLAGS or re.fullmatch(r"-v{2,3}", tok):
+        if tok in FLAGS:
             opts.append(tok)
         elif tok.startswith("-o"):
             if tok == "-o":
@@ -139,9 +139,9 @@ def prepare(req, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
         raise Refused(f"{name} is reached as {h['user']}, not {user!r}")
     if not command:
         raise Refused("relayed ssh runs a command (`ssh <host> <command>`); there is no interactive shell")
-    # the forwarder listens on 22 whatever the host's port; the host key is
-    # looked up under the host's own known_hosts name (`[host]:port` off 22)
+    # ssh dials the host's forwarder; the host key is looked up under the
+    # host's own known_hosts name (`[host]:port` off 22)
     alias = h["host"] if h["port"] == 22 else f"[{h['host']}]:{h['port']}"
-    forwarder = f"{req.settings['prefix']}ssh-{name}"
-    return ["ssh", *FORCED, "-o", f"HostKeyAlias={alias}", *opts, "-p", "22", "-l", h["user"],
-            "--", forwarder, *command], {}
+    fwd = h["forwarder"]
+    return ["ssh", *FORCED, "-o", f"HostKeyAlias={alias}", *opts, "-p", str(fwd["port"]), "-l", h["user"],
+            "--", fwd["host"], *command]

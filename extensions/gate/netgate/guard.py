@@ -35,8 +35,8 @@ LOCAL_SUFFIXES = (
     ".localdomain", ".intranet", ".corp", ".private",
 )
 _LABEL = r"[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?"
-_HOST_RE = re.compile(rf"^{_LABEL}(\.{_LABEL})*$")
-_NUMERICISH = re.compile(r"^[0-9a-fx.]+$")
+_HOST_RE = re.compile(rf"^{_LABEL}(\.{_LABEL})*\Z")
+_NUMERICISH = re.compile(r"^[0-9a-fx.]+\Z")
 
 
 def ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

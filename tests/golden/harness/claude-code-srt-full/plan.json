@@ -23,6 +23,7 @@
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
     "CLAUDE_OBSIDIAN_VAULT": "/work/data/store/vault",
     "DISABLE_AUTOUPDATER": "1",
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "HF_HUB_OFFLINE": "1",
     "KSTORE_EMBED_CACHE": "/mnt/rag-models",
     "KSTORE_EMBED_MODEL": "BAAI/bge-small-en-v1.5",

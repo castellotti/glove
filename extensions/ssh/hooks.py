@@ -22,9 +22,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
-USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
-HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}\Z")
+USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}\Z")
+HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\Z")
 
 
 def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -51,12 +51,11 @@ def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _known_hosts(ctx: dict[str, Any]) -> Path:
+    """The named known_hosts file (core's `up` always passes the session directory)."""
     rel = ctx["settings"]["known_hosts"]
-    sd = ctx.get("session_dir")
-    if sd is None:
-        raise ValueError("ssh.known_hosts needs the session directory")
-    path = (Path(sd) / rel).resolve()
-    if not path.is_relative_to(Path(sd).resolve()) or not path.is_file():
+    sd = Path(ctx["session_dir"]).resolve()
+    path = (sd / rel).resolve()
+    if not path.is_relative_to(sd) or not path.is_file():
         raise ValueError(f"ssh.known_hosts: {rel!r} is not a file in the session directory "
                          "(e.g. `ssh-keyscan -p <port> <host> > local/known_hosts`, then check the keys)")
     return path
@@ -69,10 +68,10 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     for h in hosts(ctx["settings"]):
         endpoints[f"ssh-{h['name']}"] = {
             "harness": False,
-            "port": 22,  # whatever the host's port: the policy always dials :22
+            "port": 22,  # the forwarder's, whatever the host's (RELAY_SETTINGS carries it)
             "target": {"address": f"{h['host']}:{h['port']}", "via": "lan"},
             "listen_networks": ["sshnet"],
-            "observe": {"client": "ssh", "tool": "ssh", "scope": "lan"},
+            "observe": {"tool": "ssh", "scope": "lan"},  # client: ssh, the default
         }
     return {"endpoints": endpoints}
 

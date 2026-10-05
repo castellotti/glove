@@ -79,7 +79,7 @@ def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
     return out
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
+def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
     cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     model_id = model.model
@@ -106,6 +106,9 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
         "defaultModel": model_id,
         "defaultThinkingLevel": "low",
         "theme": "dark",
+        # skip the project's `.pi/` and `.agents/skills` without asking (the
+        # empty trust store below holds no saved decision to override it)
+        "defaultProjectTrust": "never",
     }
     # Endpoint URLs (e.g. SEARXNG_URL) reach Pi as container env from the
     # extensions' `harness.env`, which the Pi extensions read directly.
@@ -130,14 +133,20 @@ def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
     for name, data in (
         ("models.json", models_json),
         ("settings.json", settings_json),
+        ("trust.json", {}),
     ):
         p = cfg_dir / name
         p.write_text(json.dumps(data, indent=2) + "\n")
         written.append(p)
 
+    # Pi loads these in place of (and after) its own system prompt. glove renders
+    # neither, and an empty one would blank the prompt, so they are not
+    # protected: one there was written in an earlier run, and goes at each start.
+    for stale in ("SYSTEM.md", "APPEND_SYSTEM.md"):
+        (cfg_dir / stale).unlink(missing_ok=True)
+
     # glove's always-on enforcer extension (and any selected extensions' Pi
     # extensions) are baked into the image and loaded via `pi -e`; nothing to
-    # seed here. A user extensions/ dir in the config home still auto-loads and
-    # is left untouched.
-    (cfg_dir / "extensions").mkdir(parents=True, exist_ok=True)
+    # seed here. The config home's extensions/ (read-only to the agent) still
+    # auto-loads what the operator puts there, and is left untouched.
     return written

@@ -29,6 +29,10 @@ PTY_DIR = Path(__file__).parent / "pty"
 # validates the ring-1 policies, then execs the compose command.
 ENTRYPOINT_DIR = Path(__file__).parent / "entrypoint"
 GLOVE_PTY = "/opt/glove/bin/glove-pty"
+# The sandboxes the tool wrapper runs, by absolute path: a harness may put a
+# directory of its home first on a tool command's PATH (Pi's agent `bin/`).
+NONO = "/usr/bin/nono"  # every harness base image
+SRT = "/usr/local/bin/srt"  # the -srt overlay (srt_image)
 
 # Enforcers that run srt (bubblewrap) in the harness container: the `-srt`
 # image overlay and the relaxed nested-userns seccomp profile.
@@ -71,11 +75,9 @@ def srt_suffix() -> str:
 @runtime_checkable
 class Enforcer(Protocol):
     name: str
-    def tools_run_browsers(self, options: dict) -> bool:
-        """Whether a browser (Chromium) can start inside a per-command sandbox,
-        given the session's `enforcer_options`: told to the agent when
-        `toolchains` bakes browsers."""
-        ...
+    # The sandbox each shell command runs in ("nono", "srt", or None): what
+    # `tools_run_browsers` asks.
+    tool_sandbox: str | None
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         """Map of filename → file contents, written to the session enforcer dir."""

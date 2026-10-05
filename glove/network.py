@@ -91,11 +91,12 @@ def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
     return {n: str(s) for n, s in zip(networks, slices, strict=False)}
 
 
-def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...]) -> dict[str, Any]:
-    """What a `forwarder` hook is told about one endpoint (plain data)."""
+def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target: str) -> dict[str, Any]:
+    """What a `forwarder` hook is told about one endpoint (plain data); `target`
+    is the `host:port` its forwarder dials (a second hop's, when there is one)."""
     return {
         "name": ep.name, "extension": ep.extension, "port": ep.port,
-        "target": f"{ep.target.host}:{ep.target.port}", "target_kind": ep.target.kind,
+        "target": target, "target_kind": ep.target.kind,
         "harness": ep.harness, "host_gateway": ep.target.kind == "host", "networks": list(networks),
         "aliases": list(ep.aliases), "observe": ep.observe, "interpose": ep.interpose,
         "container": ep.host(session),
@@ -127,7 +128,7 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
             hop = Sidecar(role=f"{ep.name}-out", listen_port=ep.target.port, target=target, harness=False,
                           networks=tuple(nets))
             target = f"{scoped(session, hop.role)}:{ep.target.port}"
-        info = {**endpoint_info(ep, session, tuple(nets)), "target": target}
+        info = endpoint_info(ep, session, tuple(nets), target)
         impl = forwarder_service(comp, info)
         sidecars.append(Sidecar(
             role=ep.name, listen_port=ep.port, target=target,

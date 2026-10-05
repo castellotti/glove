@@ -30,7 +30,7 @@ from .harness import adapter_call, known_harnesses
 from .harnessconfig import render_home
 from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .naming import scoped
-from .plan import build_session_plan
+from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
 
@@ -233,17 +233,14 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     # exists; they live in .glove/, never inside /work, never agent-writable.
     if plan.policies:
         enforcer_dir = sd.state / "enforcer"
-        enforcer_dir.mkdir(parents=True, exist_ok=True)
-        for fname, content in plan.policies.items():
-            (enforcer_dir / fname).write_text(content)
+        write_in_place(enforcer_dir, plan.policies)
         plan.policies_host_dir = str(enforcer_dir)
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
-    from .mounts import make_pinned_dirs
-    from .plan import write_system_files
+    from .mounts import make_bind_sources
 
     write_system_files(plan, sd.state / "harness")
-    make_pinned_dirs(plan.protect)  # a pinned dir over a trusted file may not exist yet
+    make_bind_sources(plan.protect)  # a pinned dir, or a protected file in the home, may not exist yet
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 
@@ -348,29 +345,31 @@ def up(
     # Only transcripts written at/after launch belong to this run (see the hint).
     launched_at = time.time()
 
-    def prepare() -> None:
-        # Launch-time resolution (e.g. llm `model: auto`) through a throwaway
-        # container on the harness network, recorded in effective.yml, then the
-        # final harness home.
-        from dataclasses import asdict
-
-        _resolve_extensions(plan, cfg.provider, secrets)
-        # keeps what plan time recorded (the extensions' resolutions)
-        _, resolved = sdm.read_effective(sd.effective)
-        sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
-                    toolchains=plan.toolchains)
-
     import subprocess
 
     try:
-        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets, prepare=prepare)
+        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets,
+               prepare=lambda: prepare_harness(sd, cfg, plan, secrets))
     except ConfigError as e:
         raise _fail(str(e)) from e
     except subprocess.CalledProcessError as e:
         raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
                     "`glove down` removes what did start.") from e
     _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
+
+
+def prepare_harness(sd, cfg, plan, secrets: dict[str, str]) -> None:
+    """`glove up` once the sidecars are up: launch-time resolution (e.g. llm
+    `model: auto`) through a throwaway container on the harness network,
+    recorded in effective.yml, then the final harness home."""
+    from dataclasses import asdict
+
+    _resolve_extensions(plan, cfg.provider, secrets)
+    # keeps what plan time recorded (the extensions' resolutions)
+    _, resolved = sdm.read_effective(sd.effective)
+    sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
+    render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
+                toolchains=plan.toolchains)
 
 
 def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:

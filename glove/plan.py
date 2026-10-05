@@ -23,7 +23,8 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile
-from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
+from .harnessconfig import CONTAINER_HOME
+from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_home, protected_paths
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -139,34 +140,47 @@ def secret_env_names(plan: SessionPlan) -> list[str]:
     return [plan.model.api_key_env] if plan.model is not None and plan.model.api_key_env else []
 
 
-def write_system_files(plan: SessionPlan, root: Path) -> None:
-    """Write `plan.system_files` under `root` (one dir per container dir) and
-    record the read-only binds. Only a dir of its own under /etc qualifies: never
-    /etc itself, glove's enforcer dir, or a path the agent writes.
-
-    A running session binds these dirs, so they are updated in place (each file
-    replaced atomically, stale ones removed), never deleted and recreated: a
-    re-plan must not leave the live container an empty or orphaned dir."""
-    plan.system_mounts = []
-    dirs: set[Path] = set()
-    for target, files in sorted(plan.system_files.items()):
+def validate_system_files(plan: SessionPlan) -> None:
+    """Only a dir of its own under /etc qualifies for `plan.system_files`: never
+    /etc itself, glove's enforcer dir, or a path the agent writes."""
+    for target, files in plan.system_files.items():
         if not re.fullmatch(r"/etc/[a-z0-9][a-z0-9._-]*", target) or target == plan.policies_container_dir:
             raise ConfigError(f"harness {plan.profile.name!r}: system files must go in a dir of their own "
                               f"under /etc, not {target!r}")
         bad = [f for f in files if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", f)]
         if bad:
             raise ConfigError(f"harness {plan.profile.name!r}: bad system file name {bad[0]!r}")
+
+
+def write_in_place(d: Path, files: dict[str, str]) -> None:
+    """Make `d` hold exactly `files` (mode 0644). A running session binds such
+    dirs read-only (policies, system files), so `d` is updated in place, never
+    deleted and recreated: a changed file is replaced atomically, an unchanged
+    one is left alone, and stale entries are removed."""
+    d.mkdir(parents=True, exist_ok=True)
+    for stale in set(d.iterdir()) - {d / f for f in files}:
+        _remove(stale)
+    for fname, content in files.items():
+        dest = d / fname
+        if dest.is_file() and not dest.is_symlink() and dest.read_text() == content:
+            continue
+        fd, tmp = tempfile.mkstemp(dir=d.parent, prefix=".tmp-")  # beside, not inside, the bound dir
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+
+
+def write_system_files(plan: SessionPlan, root: Path) -> None:
+    """Write `plan.system_files` under `root` (one dir per container dir) and
+    record the read-only binds."""
+    validate_system_files(plan)
+    plan.system_mounts = []
+    dirs: set[Path] = set()
+    for target, files in sorted(plan.system_files.items()):
         d = root / target.removeprefix("/etc/")
-        d.mkdir(parents=True, exist_ok=True)
+        write_in_place(d, files)
         dirs.add(d)
-        for stale in set(d.iterdir()) - {d / f for f in files}:
-            _remove(stale)
-        for fname, content in files.items():
-            fd, tmp = tempfile.mkstemp(dir=root, prefix=".tmp-")
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-            os.chmod(tmp, 0o644)
-            os.replace(tmp, d / fname)
         plan.system_mounts.append((str(d), target))
     if root.is_dir():
         for stale in set(root.iterdir()) - dirs:  # a dir the harness no longer renders
@@ -225,8 +239,7 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
     """(seccomp profile path, systempaths_unconfined) for the selected enforcer."""
     if uses_srt(cfg.enforcer):
-        strong = str(cfg.enforcer_options.get("srt", {}).get("nested", "weak")) == "strong"
-        return nested_userns_profile_path(), strong
+        return nested_userns_profile_path(), cfg.enforcer_options["srt"]["nested"] == "strong"
     # nono (default) and none run under the vendored Docker default profile.
     return default_profile_path(), False
 
@@ -249,6 +262,21 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
         taken.add(target)
         out.append(Mount(host_path=host, container_path=target, mode="ro"))
     return out
+
+
+def git_safe_directories(roots: list[str]) -> str:
+    """`GIT_CONFIG_PARAMETERS` trusting the session's own mount roots.
+
+    Through Docker Desktop's file sharing a `.git` the agent just created can
+    read as another uid, and git refuses it ("dubious ownership"). The
+    container has one user, so safe.directory's guard (another user's repo
+    configuring this user's git) has nothing to protect at the mount roots.
+    Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
+    nested deeper (a clone into /work/<repo>) needs an opt-in.
+    """
+    def q(s: str) -> str:
+        return "'" + s.replace("'", "'\\''") + "'"
+    return " ".join(f"{q('safe.directory')}={q(r)}" for r in roots)
 
 
 def build_session_plan(
@@ -297,15 +325,23 @@ def build_session_plan(
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
     )
+    session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    trusted = [posixpath.normpath(posixpath.join(mount_plan.working_dir, f)) for f in profile.trusted_files]
+    def in_working_dir(files: tuple[str, ...]) -> list[str]:
+        return [posixpath.join(mount_plan.working_dir, f) for f in files]
+
+    home = Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
     mount_plan = replace(mount_plan, protect=protected_paths(
-        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files, trusted=trusted))
+        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
+        trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
+    ) + protected_home(home, profile.protected_home))
     network = build_network_plan(cfg, session, comp)
 
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
+    # an extension (github: '*') or an explicit `env:` entry replaces it
+    environment.setdefault("GIT_CONFIG_PARAMETERS", git_safe_directories(session_roots))
     toolchains: list[Toolchain] = []
     if cfg.toolchains:
         from . import toolchains as tcs
@@ -317,6 +353,9 @@ def build_session_plan(
             if k in comp.harness_env:
                 raise ConfigError(f"toolchains: env {k!r} is also set by an extension")
             environment.setdefault(k, v)
+    if cfg.enforcer_options["nono"]["browsers"] and not any(tc.browsers for tc in toolchains):
+        raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "
+                          "`toolchains` block bakes `browsers:`; drop the option or add the browsers")
     corporate_ca = None
     if cfg.corporate_ca:
         from .cafile import resolve_ca_file
@@ -368,7 +407,7 @@ def build_session_plan(
         gid=gid,
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
-        enforcer_options=dict(cfg.enforcer_options or {}),
+        enforcer_options=cfg.enforcer_options,
         tools=dict(cfg.tools or {}),
         composition=comp,
         model=harness_model(profile, comp.slot_exports("inference")) if "inference" in comp.slots else None,
@@ -395,6 +434,7 @@ def build_session_plan(
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
     plan.system_files = adapter_call(profile, "system_files", cfg, plan, default={})
+    validate_system_files(plan)  # a bad adapter fails at `plan`, not at `up`
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)
 

@@ -59,17 +59,15 @@ echo "$out" | grep -q 'INTEGRATION-SECRET' && bad "tool command sees the LLM key
 echo "== harness /proc/<pid>/environ from a tool command =="
 # A long-lived process holding the key stands in for the harness (same uid,
 # same container /proc) — the question is whether srt's /proc hides it.
-cat > "$WORKDIR/environ-probe.sh" <<'PROBE'
-# count processes whose /proc/<pid>/environ holds the key (ours is unset)
-for f in /proc/[0-9]*/environ; do tr '\0' '\n' < "$f" 2>/dev/null; done | grep -c INTEGRATION-SECRET
-PROBE
+cp "$ROOT/tests/integration/fixtures/environ-probe.sh" "$WORKDIR/"
 proc_probe() {  # $1 = settings file, rest = extra docker args
   local settings="$1"; shift
   "$RT" run --rm --security-opt seccomp="$SECCOMP" --security-opt no-new-privileges:true \
     --cap-drop ALL --user 1000:1000 -w /work "$@" \
     -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent" -e HOME=/home/agent \
     -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET -v "$POLDIR:/etc/glove/enforcer:ro" "$IMAGE" \
-    bash -c "sleep 30 & sleep 0.5; srt -s $settings -- bash /work/environ-probe.sh" 2>&1 | tail -1
+    bash -c "sleep 30 & s=\$!; sleep 0.5; srt -s $settings -- bash /work/environ-probe.sh INTEGRATION-SECRET; kill \$s" \
+    2>&1 | sed -n 's/^environ-seen=//p'
 }
 weak_leak="$(proc_probe /etc/glove/enforcer/srt-settings.json)"
 echo "  weak mode: processes whose environ exposes the key = $weak_leak"

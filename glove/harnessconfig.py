@@ -181,13 +181,16 @@ def render_home(
 
     `model` is the (launch-resolved) descriptor of the inference slot;
     `mount_plan` is the runtime's resolved mount plan (recomputed from `cfg`
-    when omitted) so the context file reflects the real mounts.
+    when omitted) so the context file and the adapter see the real mounts and
+    working dir.
     """
     home_dir.mkdir(parents=True, exist_ok=True)
+    if mount_plan is None:
+        mount_plan = _mount_plan_for(cfg)
     written: list[Path] = []
 
     # the harness's native config (its adapter: harnesses/<name>/adapter.py)
-    written += adapter_call(profile, "render_home", cfg, profile, home_dir, model, comp, default=[])
+    written += adapter_call(profile, "render_home", cfg, profile, home_dir, model, comp, mount_plan, default=[])
 
     written.append(_write_context_file(cfg, profile, home_dir, mount_plan, comp, toolchains))
     return written

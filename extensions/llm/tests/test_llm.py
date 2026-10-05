@@ -364,17 +364,3 @@ def test_an_alias_matches_its_dated_snapshot(tmp_path):
     (tmp_path / "b").mkdir()
     with pytest.raises(hooks.LlmError, match="is not served"):
         _resolve(tmp_path / "b", PagedServer(["claude-x-2-20251001"]), **ANTHROPIC, model="claude-x")
-
-
-def test_a_forwarder_still_starting_is_retried(tmp_path, monkeypatch):
-    monkeypatch.setattr(hooks.time, "sleep", lambda s: None)
-    answers = iter([(0, ""), (0, ""), (200, json.dumps({"data": [{"id": "test-model"}]}))])
-    ex, _ = _resolve(tmp_path, lambda url, method="GET", body=None, auth=False: next(answers, (404, "")),
-                     model="test-model", capabilities={"context_window": 8192})
-    assert ex["model"] == "test-model"
-
-
-def test_a_forwarder_that_never_answers_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(hooks.time, "sleep", lambda s: None)
-    with pytest.raises(hooks.LlmError, match="HTTP 0"):
-        _resolve(tmp_path, lambda url, method="GET", body=None, auth=False: (0, ""), model="test-model")

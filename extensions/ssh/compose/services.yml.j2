@@ -1,17 +1,25 @@
+{#- each host with the address of its forwarder (hooks.py's endpoint), the only
+    route the sidecar has to it -#}
+{% set ns = namespace(hosts=[]) %}
+{% for h in settings.hosts %}
+{%   set fwd = endpoint['ssh-' ~ h.name] %}
+{%   set ns.hosts = ns.hosts + [{"name": h.name, "to": h.to, "user": h.user,
+                                 "forwarder": {"host": fwd.host, "port": fwd.port}}] %}
+{% endfor %}
 services:
   # The ssh relay: relayd runs the harness's `ssh <host> <command>` (requests
-  # left in the `ssh` channel, /run/glove/ssh) under relay_policy.py, with the
-  # key in an ssh-agent here (loaded from its environment, hooks.py). Its only
+  # left in the `ssh` channel) under relay_policy.py, with the key in an
+  # ssh-agent here (loaded from its environment, hooks.py). Its only
   # network is sshnet, whose only other members are one forwarder per host
   # (glove-<id>-ssh-<name>), each dialling exactly that host.
   ssh:
     image: "{{ libs.relay.images.relayd }}"
-    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "/run/glove/ssh",
+    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel.ssh.path }}",
               "--policy", "/opt/glove/ssh/relay_policy.py"]
     networks: [sshnet]
     environment:
       RELAY_TIMEOUT: "{{ settings.timeout }}"
-      RELAY_SETTINGS: {{ {"prefix": names.prefix, "hosts": settings.hosts} | tojson | tojson }}
+      RELAY_SETTINGS: {{ {"hosts": ns.hosts} | tojson | tojson }}
       RELAY_SSH_KEY:    # from glove's environment at `compose up` (hooks.py); never stored here
     volumes:
       - { type: bind, source: "{{ assets }}/relay_policy.py", target: /opt/glove/ssh/relay_policy.py,
@@ -19,7 +27,7 @@ services:
       - { type: bind, source: "{{ state }}/known_hosts", target: /opt/glove/ssh/known_hosts, read_only: true }
     tmpfs: ["/tmp"]
     healthcheck:
-      test: ["CMD", "test", "-p", "/run/glove/ssh/door"]
+      test: ["CMD", "test", "-p", "{{ channel.ssh.path }}/door"]
       interval: 2s
       timeout: 3s
       retries: 20

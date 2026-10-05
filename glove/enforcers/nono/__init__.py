@@ -16,10 +16,7 @@ if TYPE_CHECKING:
 
 class NonoEnforcer:
     name = "nono"
-    def tools_run_browsers(self, options: dict) -> bool:
-        # Chromium needs /proc, which the tool profile grants only when the
-        # session opts in (`enforcer_options: {nono: {browsers: true}}`).
-        return policies.browsers_enabled(options)
+    tool_sandbox = "nono"
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return policies.render_all(plan)

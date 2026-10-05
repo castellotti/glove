@@ -10,9 +10,11 @@ compute the container working_dir instead of adding a redundant mount.
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 
@@ -60,7 +62,8 @@ class Protect:
     """A read-only bind nested over a path inside a rw mount (ring 0).
 
     Files the *host* later executes or trusts (git hooks and config, IDE and
-    direnv settings) must not be plantable by the agent. ``host_path`` is None
+    direnv settings), or the harness loads its config or code from, must not
+    be plantable by the agent. ``host_path`` is None
     for a placeholder: the path does not exist yet, so an empty file/dir from
     glove's session state is bound over it (docker creates the mountpoint)."""
 
@@ -218,6 +221,7 @@ def _hooks_path(git_config: str, repo: str) -> str | None:
 
 def protected_paths(
     mounts: list[Mount], *, protect_ide_files: bool = False, trusted: Sequence[str] = (),
+    masked: Sequence[str] = (),
 ) -> tuple[Protect, ...]:
     """Ring-0 read-only binds for every rw mount (§6.3 of the v3 plan).
 
@@ -230,19 +234,15 @@ def protected_paths(
     Residual gap (documented): a path created later (e.g. `git init` in a
     directory with no repo yet) or a nested repo/submodule is not covered.
 
-    `trusted` (container paths; the harness profile's `trusted_files`) are
-    always protected: a missing file gets a placeholder, and each directory
-    between it and the mount root is pinned read-write (a missing one is
-    created at launch), so `mv .claude x` cannot swap in a fresh copy."""
-    out: list[Protect] = []
-    seen: set[str] = set()
-
-    def add(root: Mount, host: str | None, rel: str, kind: str, read_only: bool = True) -> None:
-        cpath = os.path.normpath(os.path.join(root.container_path, rel))
-        if cpath not in seen:
-            seen.add(cpath)
-            out.append(Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only))
-
+    `trusted` (container paths; the harness profile's `trusted_files`, a
+    trailing `/` marking a directory) are always protected: a missing one gets
+    a placeholder, and each directory between it and the mount root is pinned
+    read-write (a missing one is created at launch), so `mv .claude x` cannot
+    swap in a fresh copy. `masked` (the profile's `masked_files`) are pinned
+    the same way but always get the placeholder: the harness never sees the
+    mount's own copy."""
+    out: dict[str, Protect] = {}
+    add = partial(_add, out)
     for m in mounts:
         if m.mode != "rw":
             continue
@@ -266,10 +266,35 @@ def protected_paths(
                     add(m, real, os.path.relpath(real, m.host_path), kind)
     for path in trusted:
         _protect_trusted(mounts, path, add)
-    return tuple(out)
+    for path in masked:
+        _protect_trusted(mounts, path, add, source="empty")
+    return tuple(out.values())
 
 
-def _protect_trusted(mounts: list[Mount], path: str, add) -> None:
+def protected_home(home: Mount, paths: Sequence[str]) -> tuple[Protect, ...]:
+    """Ring-0 read-only binds over what the harness loads from its own writable
+    home (the profile's `protected_home`, relative to `home`; a trailing `/`
+    marks a directory), pinned like a trusted file. They bind the home's own
+    copy, never a placeholder: glove renders the files there (a missing one is
+    created empty at launch), and an empty directory changes nothing."""
+    out: dict[str, Protect] = {}
+    for rel in paths:
+        _protect_trusted([home], posixpath.join(home.container_path, rel), partial(_add, out), source="own")
+    return tuple(out.values())
+
+
+def _add(out: dict[str, Protect], root: Mount, host: str | None, rel: str, kind: str, read_only: bool = True) -> None:
+    cpath = os.path.normpath(os.path.join(root.container_path, rel))
+    out.setdefault(cpath, Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only))
+
+
+def _protect_trusted(mounts: list[Mount], path: str, add, *, source: str = "auto") -> None:
+    """Protect `path` (a trailing `/` marks a directory), pinning the dirs above
+    it. Its bind source: the mount's own copy if it exists, else a placeholder
+    ("auto"); always the placeholder ("empty"); always its own ("own", created
+    at launch when missing)."""
+    kind = "dir" if path.endswith("/") else "file"
+    path = path.rstrip("/")
     m = max((m for m in mounts if _is_ancestor(Path(m.container_path), Path(path))),
             key=lambda m: len(m.container_path), default=None)
     if m is None or m.mode != "rw":
@@ -278,14 +303,16 @@ def _protect_trusted(mounts: list[Mount], path: str, add) -> None:
     for i in range(1, len(parts) + 1):
         sub = "/".join(parts[:i])
         host = os.path.join(m.host_path, sub)
-        is_file = i == len(parts)
-        if os.path.islink(host) or (os.path.exists(host) and os.path.isdir(host) == is_file):
+        last = i == len(parts)
+        is_dir = not last or kind == "dir"
+        if os.path.islink(host) or (os.path.exists(host) and os.path.isdir(host) != is_dir):
             raise MountError(f"{host}: the harness loads its config from here, so glove protects it; "
-                             f"it must be a {'regular file' if is_file else 'directory'}, not a symlink")
-        if not is_file:
+                             f"it must be a {'directory' if is_dir else 'regular file'}, not a symlink")
+        if not last:
             add(m, host, sub, "dir", read_only=False)  # pin: no rename
         else:
-            add(m, host if os.path.exists(host) else None, sub, "file")
+            own = source == "own" or (source == "auto" and os.path.exists(host))
+            add(m, host if own else None, sub, kind)
 
 
 def _resolve_working_dir(
@@ -310,12 +337,16 @@ def _resolve_working_dir(
     return os.path.normpath(os.path.join(best.container_path, rel))
 
 
-def make_pinned_dirs(protect: tuple[Protect, ...]) -> None:
-    """Create the pinned dirs over a trusted file (`_protect_trusted`) that do
-    not exist yet, so their binds have a source."""
+def make_bind_sources(protect: tuple[Protect, ...]) -> None:
+    """Create the bind sources that do not exist yet: the dirs pinned over a
+    trusted file, and the home's protected files and dirs (empty)."""
     for p in protect:
-        if p.kind == "dir" and p.host_path and not os.path.lexists(p.host_path):
-            os.makedirs(p.host_path)
+        if p.host_path and not os.path.lexists(p.host_path):
+            if p.kind == "dir":
+                os.makedirs(p.host_path)
+            else:
+                os.makedirs(os.path.dirname(p.host_path), exist_ok=True)
+                Path(p.host_path).touch()
 
 
 def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:

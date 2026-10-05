@@ -38,9 +38,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ...config import ConfigError
 from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR, GLOVE_PTY
+from ..base import ENFORCER_DIR, GLOVE_PTY, NONO
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
@@ -75,13 +74,9 @@ DEFAULT_ALLOW_COMMANDS = ["cp", "mv", "rm"]
 # processes' cmdline and status, and /proc/net, /proc/sys, /proc/mounts.
 BROWSER_READ = ["/proc"]
 
-
-def browsers_enabled(options: dict | None) -> bool:
-    nono = (options or {}).get("nono") or {}
-    on = nono.get("browsers", False) if isinstance(nono, dict) else None
-    if not isinstance(on, bool):
-        raise ConfigError("enforcer_options.nono must be a mapping and its `browsers` true or false")
-    return on
+# `enforcer_options.nono` (setting specs, as in an extension manifest).
+# browsers: Chromium in a shell command — the tool profile reads /proc.
+OPTIONS = {"browsers": {"type": "bool", "default": False}}
 
 
 def _rw_mounts(plan: SessionPlan) -> list[str]:
@@ -139,7 +134,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
     tools = plan.tools or {}
     allow_commands = list(tools.get("allow_commands", DEFAULT_ALLOW_COMMANDS))
     deny_commands = list(tools.get("deny_commands", []))
-    read = _read_paths(plan) + (BROWSER_READ if browsers_enabled(plan.enforcer_options) else [])
+    read = _read_paths(plan) + (BROWSER_READ if plan.enforcer_options["nono"]["browsers"] else [])
     profile = {
         "meta": {"name": "glove-tool"},
         "extends": "default",
@@ -172,7 +167,7 @@ def tool_wrapper_argv() -> list[str]:
     harness TUI."""
     return [
         GLOVE_PTY, "notty", "--",
-        "nono", "wrap", "-s", "--allow-cwd",
+        NONO, "wrap", "-s", "--allow-cwd",
         "--profile", f"{ENFORCER_DIR}/tool.json", "--",
     ]
 

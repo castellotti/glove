@@ -3,6 +3,7 @@
   "defaultModel": "test-model",
   "defaultThinkingLevel": "medium",
   "theme": "dark",
+  "defaultProjectTrust": "never",
   "skills": [
     "/opt/glove/skills/rag/rag-parse",
     "/opt/glove/skills/rag/rag-query"
