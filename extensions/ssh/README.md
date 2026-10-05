@@ -21,6 +21,11 @@ extensions:
   base64-encoded: run `base64 < key | tr -d '\n'` and paste the result. Use a
   key made for the session and authorize it only on the hosts listed (for
   example with `restrict` and `from=` options in `authorized_keys`).
+- **`to`** is a private IPv4 address (10/8, 172.16/12, 192.168/16) or a LAN
+  name: one label (`nas`) or under `.lan`, `.local`, `.home.arpa` or
+  `.internal`. The forwarder dials it directly, not through the egress
+  provider, so a public host is refused. A name is resolved when the forwarder
+  connects; name the IP if your LAN's DNS can't be trusted.
 - **`known_hosts`.** Run `ssh-keyscan -p <port> <host> > local/known_hosts`,
   then check the keys against the host. The file must sit inside the session
   directory. It is copied into the extension's state and bound read-only into

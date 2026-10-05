@@ -95,7 +95,15 @@ Every capability (the model, search, the browser, …) is an extension in
 - **LAN hosts** (`via: lan`, in-tree or trusted only): an endpoint may dial a
   host:port the user named, for a sidecar only (never `harness: true`), over
   core's routable `lan` network, which only those forwarders may join
-  (re-checked on the merged project). It exists for `ssh` (below).
+  (re-checked on the merged project). It exists for `ssh` (below). `lan` is a
+  direct, untunnelled route (no egress provider, VPN or its DNS), so core takes
+  only a private IPv4 address (10/8, 172.16/12, 192.168/16) or a LAN name (one
+  label, or under `.lan`, `.local`, `.home.arpa`, `.internal`; never
+  `*.docker.internal`, `localhost`, loopback, link-local or a public address).
+  Residual: a name is resolved by the forwarder's resolver when it connects, so
+  a LAN resolver that answers it with a public address is followed (name an IP
+  to rule that out); and a private range also covers the Docker host's own
+  bridge gateways.
 - **The `work` privilege** (in-tree or trusted only) binds the harness's whole
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
   it. It exists for `github` (below).

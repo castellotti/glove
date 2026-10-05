@@ -482,7 +482,9 @@ Core validates all of it:
   inference provider (`via: llm`), the egress provider (`via: wan`), or, for a
   trusted extension's sidecar, a LAN host the user named (`via: lan`, never a
   harness endpoint; core's routable `lan` network carries only those
-  forwarders).
+  forwarders). `lan` is a direct route that bypasses the egress provider, so a
+  `via: lan` address must be a private IPv4 address or a LAN name (one label,
+  or under `.lan`/`.local`/`.home.arpa`/`.internal`); a public host is refused.
 - **Harness mounts** from an extension (`mounts: {models: {setting: models_dir}}`)
   are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
   `path` setting (such a setting may not have a default), checked like the

@@ -28,8 +28,8 @@ def _load(name, file):
 policy = _load("ssh_relay_policy", "relay_policy.py")
 hooks = _load("ssh_hooks", "hooks.py")
 Refused = policy.Refused
-HOSTS = [{"name": "build", "to": "192.0.2.10:22", "user": "dev"},
-         {"name": "nas", "to": "nas.example:2222", "user": "admin"}]
+HOSTS = [{"name": "build", "to": "192.168.1.10:22", "user": "dev"},
+         {"name": "nas", "to": "nas.lan:2222", "user": "admin"}]
 
 
 class Req:
@@ -55,7 +55,7 @@ def test_a_command_to_a_named_host():
     assert argv[argv.index("-l") + 1] == "dev" and argv[argv.index("-p") + 1] == "22"
     assert argv[1:3] == ["-F", "/dev/null"]
     assert _opt(argv, "StrictHostKeyChecking") == ["StrictHostKeyChecking=yes"]
-    assert _opt(argv, "HostKeyAlias") == ["HostKeyAlias=192.0.2.10"]
+    assert _opt(argv, "HostKeyAlias") == ["HostKeyAlias=192.168.1.10"]
     for forced in ("ProxyCommand=none", "ForwardAgent=no", "ClearAllForwardings=yes", "PermitLocalCommand=no",
                    "RequestTTY=no", "ControlPath=none", "BatchMode=yes"):
         assert forced in argv
@@ -63,7 +63,7 @@ def test_a_command_to_a_named_host():
 
 def test_a_host_off_port_22_is_looked_up_as_host_port():
     argv = ssh("admin@nas", "df")
-    assert _opt(argv, "HostKeyAlias") == ["HostKeyAlias=[nas.example]:2222"]
+    assert _opt(argv, "HostKeyAlias") == ["HostKeyAlias=[nas.lan]:2222"]
     assert argv[argv.index("-p") + 1] == "22"  # the forwarder listens on 22
 
 
@@ -134,7 +134,7 @@ def test_hosts_become_lan_endpoints_for_the_sidecar_only():
     eps = hooks.contribute({"settings": {"hosts": HOSTS, "known_hosts": "local/kh"}})["endpoints"]
     assert set(eps) == {"ssh-build", "ssh-nas"}
     assert eps["ssh-nas"] == {"harness": False, "port": 22,
-                              "target": {"address": "nas.example:2222", "via": "lan"},
+                              "target": {"address": "nas.lan:2222", "via": "lan"},
                               "listen_networks": ["sshnet"],
                               "observe": {"client": "ssh", "tool": "ssh", "scope": "lan"}}
 
@@ -149,6 +149,10 @@ def test_hosts_become_lan_endpoints_for_the_sidecar_only():
     ([{"name": "b", "to": "h:22"}], "want"),
     ([{"name": "b", "to": "h:22", "user": "u", "key": "x"}], "want"),
     ([{"name": "b", "to": "h:22", "user": "u"}, {"name": "b", "to": "i:22", "user": "u"}], "twice"),
+    # `$` would admit a trailing newline; every pattern is fullmatch'd
+    ([{"name": "b\n", "to": "h:22", "user": "u"}], "name must match"),
+    ([{"name": "b", "to": "h\n:22", "user": "u"}], "<host>:<port>"),
+    ([{"name": "b", "to": "h:22", "user": "u\n"}], "user must match"),
 ])
 def test_bad_hosts(bad, why):
     with pytest.raises(ValueError, match=why):
@@ -161,11 +165,11 @@ def test_known_hosts_must_be_a_file_in_the_session_and_is_copied_to_state(tmp_pa
            "state_dir": tmp_path / "state"}
     with pytest.raises(ValueError, match="not a file in the session directory"):
         hooks.contribute(ctx)
-    (tmp_path / "local" / "kh").write_text("192.0.2.10 ssh-ed25519 AAAA\n")
+    (tmp_path / "local" / "kh").write_text("192.168.1.10 ssh-ed25519 AAAA\n")
     hooks.contribute(ctx)
     (tmp_path / "state").mkdir()
     hooks.materialize(ctx)
-    assert (tmp_path / "state" / "known_hosts").read_text() == "192.0.2.10 ssh-ed25519 AAAA\n"
+    assert (tmp_path / "state" / "known_hosts").read_text() == "192.168.1.10 ssh-ed25519 AAAA\n"
     (tmp_path / "out").write_text("x")
     with pytest.raises(ValueError, match="not a file in the session directory"):
         hooks.contribute({**ctx, "settings": {**ctx["settings"], "known_hosts": "local/../../out"}})
@@ -203,7 +207,7 @@ def test_the_relay_sidecar_and_its_forwarders(tmp_path, observe):
     assert svc["environment"]["RELAY_SSH_KEY"] is None
     assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == {"prefix": "glove-s-", "hosts": HOSTS}
     assert "github/gh" not in plan.composition.privileges and "ssh/ssh" not in plan.composition.privileges
-    for name, target in (("build", "192.0.2.10:22"), ("nas", "nas.example:2222")):
+    for name, target in (("build", "192.168.1.10:22"), ("nas", "nas.lan:2222")):
         fwd = doc["services"][f"glove-s-ssh-{name}"]
         assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-sshnet"}
         assert target in json.dumps(fwd["command"])

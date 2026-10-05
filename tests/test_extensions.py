@@ -582,10 +582,10 @@ _LANNISH = """\
     """
 
 
-def _lannish(oot, *, harness=False, net="side"):
+def _lannish(oot, *, harness=False, net="side", address="192.168.1.10:22"):
     extra = ("networks: { side: { internal: true } }\n"
              f"endpoints: {{ box: {{ harness: {str(harness).lower()}, port: 22, listen_networks: [side], "
-             "target: { address: '192.0.2.10:22', via: lan } } }\n")
+             f"target: {{ address: '{address}', via: lan }} }} }}\n")
     _svc_ext(oot, "lannish", service=_LANNISH.format(digest=DIGEST, net=net), extra=extra)
 
 
@@ -602,7 +602,7 @@ def test_a_lan_endpoint_serves_a_sidecar_over_the_lan_network_only(tmp_path, gho
     _, doc = _render_with(tmp_path, {"lannish": {}})
     fwd = doc["services"]["glove-s-box"]
     assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-side"}
-    assert "TCP4:192.0.2.10:22" in fwd["command"]
+    assert "TCP4:192.168.1.10:22" in fwd["command"]
     assert doc["networks"]["glove-s-lan"].get("internal") is not True
     assert list(doc["services"]["glove-s-harness"]["networks"]) == ["glove-s-net"]
 
@@ -611,6 +611,26 @@ def test_lan_rules(tmp_path, ghome):
     oot = _oot_named(tmp_path, ghome, "lannish", trusted=True)
     _lannish(oot, harness=True)
     with pytest.raises(ExtensionError, match="never reaches a LAN host itself"):
+        _render_with(tmp_path, {"lannish": {}})
+
+
+@pytest.mark.parametrize("host,ok", [
+    ("10.1.2.3", True), ("172.16.0.5", True), ("172.31.255.1", True), ("192.168.1.10", True),
+    ("nas", True), ("nas.lan", True), ("NAS.Local", True), ("box.home.arpa", True), ("db.corp.internal", True),
+    ("8.8.8.8", False), ("172.32.0.1", False), ("192.0.2.10", False), ("127.0.0.1", False),
+    ("169.254.169.254", False), ("100.64.0.1", False), ("0.0.0.0", False), ("::1", False), ("fd00::1", False),
+    ("github.com", False), ("nas.example", False), ("localhost", False), ("host.docker.internal", False),
+    ("gateway.docker.internal", False), ("docker.internal", False), ("10.0.0", False), ("nas\n", False),
+])
+def test_lan_host(host, ok):
+    from glove.extensions import lan_host
+
+    assert lan_host(host) is ok
+
+
+def test_a_lan_endpoint_refuses_a_public_host(tmp_path, ghome):
+    _lannish(_oot_named(tmp_path, ghome, "lannish", trusted=True), address="github.com:22")
+    with pytest.raises(ExtensionError, match="bypass the egress provider"):
         _render_with(tmp_path, {"lannish": {}})
 
 

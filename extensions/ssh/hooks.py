@@ -36,11 +36,11 @@ def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValueError(f"{where}: want {{name: <name>, to: <host>:<port>, user: <user>}}")
         name, to, user = str(h["name"]), str(h["to"]), str(h["user"])
         host, _, port = to.rpartition(":")
-        if not NAME.match(name):
+        if not NAME.fullmatch(name):
             raise ValueError(f"{where}: name must match {NAME.pattern}, got {name!r}")
-        if not HOST.match(host) or not port.isdigit() or not 0 < int(port) < 65536:
+        if not HOST.fullmatch(host) or not port.isdigit() or not 0 < int(port) < 65536:
             raise ValueError(f"{where}: `to` must be <host>:<port>, got {to!r}")
-        if not USER.match(user):
+        if not USER.fullmatch(user):
             raise ValueError(f"{where}: user must match {USER.pattern}, got {user!r}")
         if any(x["name"] == name for x in out):
             raise ValueError(f"{where}: host name {name!r} is used twice")

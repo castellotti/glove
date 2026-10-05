@@ -84,7 +84,13 @@ All notable changes to glove are documented here.
     `/work` (file arguments refused) and no fence when its policy names no hosts.
 - Core: **`via: lan`** endpoints, a host:port the user named, dialled for a
   trusted extension's sidecar only, over a routable `lan` network that only
-  those forwarders may join.
+  those forwarders may join. The address must be a private IPv4 address
+  (10/8, 172.16/12, 192.168/16) or a LAN name (one label, or under `.lan`,
+  `.local`, `.home.arpa`, `.internal`): `lan` bypasses the egress provider, so a
+  public host (or `host.docker.internal`) is refused.
+- Validation patterns in core (extension, endpoint, alias and env names) and in
+  `ssh` (host names, hosts, users) are matched whole (`fullmatch`), so a value
+  with a trailing newline is refused at `glove check`.
 - Core: **channels** (`channels:`), a session tmpfs volume at
   `/run/glove/<name>` shared by the harness and named sidecars, which every
   enforcer lets the harness and its commands write (no network). A relay uses
