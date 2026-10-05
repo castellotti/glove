@@ -40,7 +40,10 @@ One request:
 
 Relayed commands get **no stdin**, so input goes in a file under `/work`. If
 the client goes away (an aborted tool call), relayd kills the command. A command
-that runs past `timeout` is stopped with exit code 124.
+that runs past `timeout` is stopped with exit code 124. At most `--max` commands
+run at once (a request past that gets `busy`), and at most four times that may
+wait for their client to open its FIFOs: more are dropped, and a request whose
+FIFOs aren't all open within 10s is dropped and its directory removed.
 
 ## The policy
 
@@ -62,4 +65,5 @@ validates a destination under `/work`.
 Children reach the network only through relayd's in-process CONNECT proxy on
 `127.0.0.1`. It tunnels to the session's egress proxy (`--upstream`, or with
 `observe` a gate in front of it) for the policy's `HOSTS` on port 443, and
-refuses everything else, whatever arguments the policy let through.
+refuses everything else, whatever arguments the policy let through. A
+connection that hasn't sent its `CONNECT` request within 10s is closed.

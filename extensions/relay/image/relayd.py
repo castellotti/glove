@@ -58,6 +58,7 @@ ID = re.compile(r"[0-9a-f]{16,64}")
 MAX_SMALL = 256 * 1024  # argv / cwd files
 MAX_FILE = 16 * 1024 * 1024  # a file argument (a PR body, an API query)
 OPEN_DEADLINE = 10.0  # seconds for the client to open its FIFO ends
+HEAD_TIMEOUT = 10.0  # seconds for a fence client to send its CONNECT request
 REFUSED_RC = 126
 
 
@@ -169,19 +170,37 @@ class Relay:
         self.settings = settings
         self.timeout = timeout
         self.slots = threading.BoundedSemaphore(max_active)
+        # requests still waiting for the client to open its FIFOs: each holds a
+        # thread for up to OPEN_DEADLINE, so a flood of ids is bounded here
+        self.pending = threading.BoundedSemaphore(max_active * 4)
         self.refused = getattr(policy, "Refused", Refused)  # the policy's own refusal type
+
+    def dispatch(self, rid: str) -> None:
+        """Handle one request id from the door on its own thread, or drop it
+        when too many requests are still opening their FIFOs."""
+        if not self.pending.acquire(blocking=False):
+            log(f"{rid[:8]}: dropped (too many requests waiting to start)")
+            shutil.rmtree(os.path.join(self.channel, "req", rid), ignore_errors=True)
+            return
+        threading.Thread(target=self.handle, args=(rid,), daemon=True).start()
 
     def handle(self, rid: str) -> None:
         dfd = out = err = rcf = -1
         req: Request | None = None
         rc = REFUSED_RC
         what = "?"
+        pending = True
         try:
             dfd = os.open(os.path.join(self.channel, "req", rid), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             if os.fstat(dfd).st_uid != os.getuid():
                 return
             deadline = time.monotonic() + OPEN_DEADLINE
-            out, err, rcf = (_open_fifo(dfd, n, deadline) for n in ("1", "2", "rc"))
+            # one at a time, so `finally` closes whichever opened before a failure
+            out = _open_fifo(dfd, "1", deadline)
+            err = _open_fifo(dfd, "2", deadline)
+            rcf = _open_fifo(dfd, "rc", deadline)
+            self.pending.release()
+            pending = False
             if not self.slots.acquire(blocking=False):
                 os.write(err, b"glove relay: busy (too many relayed commands at once); try again\n")
                 return
@@ -200,6 +219,8 @@ class Relay:
             log(f"{rid[:8]}: dropped ({e})")
             return
         finally:
+            if pending:
+                self.pending.release()
             if req is not None:
                 req.close()
             if rcf >= 0:
@@ -266,7 +287,7 @@ class Relay:
             for line in lines:
                 rid = line.decode("ascii", "replace").strip()
                 if ID.fullmatch(rid):
-                    threading.Thread(target=self.handle, args=(rid,), daemon=True).start()
+                    self.dispatch(rid)
 
 
 # --- the egress fence -------------------------------------------------------------
@@ -307,6 +328,7 @@ class Fence:
     def _serve(self, c: socket.socket) -> None:
         up = None
         try:
+            c.settimeout(HEAD_TIMEOUT)  # a client that never finishes its CONNECT
             head = self._head(c)
             first = head.split(b"\r\n", 1)[0].decode("latin-1").split()
             if len(first) < 2 or first[0] != "CONNECT":

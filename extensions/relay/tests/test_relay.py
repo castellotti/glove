@@ -5,10 +5,13 @@ in tests/integration/test_github.sh)."""
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import select
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -76,6 +79,63 @@ def test_the_fence_tunnels_to_the_policys_hosts_only():
         out = _ask(fence.url, first)
         assert out.startswith(b"HTTP/1.1 403") and b"glove relay refused" in out, first
     assert len(seen) == 1  # nothing refused ever reached the upstream
+
+
+def test_the_fence_drops_a_client_that_never_sends_its_connect(monkeypatch):
+    monkeypatch.setattr(relayd, "HEAD_TIMEOUT", 0.3)
+    fence = relayd.Fence("http://127.0.0.1:9", ("github.com",))
+    port = int(fence.url.rsplit(":", 1)[1])
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"CONNECT github.com:443 HTTP/1.1\r\n")  # no blank line, ever
+        assert s.recv(4096) == b""  # closed by the fence, not left hanging
+
+
+def _relay(tmp_path, max_active=1):
+    (tmp_path / "req").mkdir()
+    return relayd.Relay(str(tmp_path), relayd, {}, work=str(tmp_path), settings={},
+                        timeout=5, max_active=max_active)
+
+
+def _request(tmp_path, rid, fifos=("1", "2", "rc")):
+    d = tmp_path / "req" / rid
+    d.mkdir()
+    for name in fifos:
+        os.mkfifo(d / name)
+    return d
+
+
+def test_a_half_opened_request_leaks_no_fifo_end(tmp_path, monkeypatch):
+    monkeypatch.setattr(relayd, "OPEN_DEADLINE", 0.3)
+    relay = _relay(tmp_path)
+    d = _request(tmp_path, "a" * 16, fifos=("1",))  # the client never makes `2`
+    reader = os.open(d / "1", os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        relay.pending.acquire()  # as dispatch() does
+        relay.handle("a" * 16)
+        r, _, _ = select.select([reader], [], [], 2)
+        assert r and os.read(reader, 1) == b""  # EOF: relayd closed its write end
+    finally:
+        os.close(reader)
+    assert not d.exists()
+
+
+def test_a_flood_of_unopened_requests_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(relayd, "OPEN_DEADLINE", 1.0)
+    relay = _relay(tmp_path)  # max_active=1: four may wait to start
+    ids = [f"{i:016x}" for i in range(6)]
+    for rid in ids:
+        _request(tmp_path, rid)
+    before = threading.active_count()
+    for rid in ids:
+        relay.dispatch(rid)
+    assert threading.active_count() - before <= 4
+    assert sum((tmp_path / "req" / rid).exists() for rid in ids) == 4  # the rest were dropped
+    for _ in range(100):  # the waiting ones give up after OPEN_DEADLINE and free their places
+        if relay.pending.acquire(blocking=False):
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("pending places were never released")
 
 
 def test_the_client_is_valid_bash_and_executable():

@@ -64,6 +64,10 @@ All notable changes to glove are documented here.
   - Traffic reaches GitHub's hosts only, through an in-process fence and then
     the egress. With `observe`, a gate labels the flows `client: github` (a new
     netgate client label).
+  - A misbehaving client can't wear the sidecar down: requests waiting to
+    start are capped (4× the concurrent limit, the rest dropped), a request
+    left half-open holds no descriptors past 10s, and the fence drops a
+    connection that sends no `CONNECT` within 10s.
 - Core: **channels** (`channels:`), a session tmpfs volume at
   `/run/glove/<name>` shared by the harness and named sidecars, which every
   enforcer lets the harness and its commands write (no network). A relay uses
