@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -355,16 +356,24 @@ def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(("wipe", "tail"), [(False, []), (True, ["--volumes"])])
-def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail):
-    # a `compose run` whose client was killed leaves its container (and so the
-    # networks) unless down also removes orphans
+@pytest.mark.parametrize("runs", ["", "abc123\ndef456\n"])
+def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail, runs):
+    # one-off (`compose run`) containers are removed before `down`
     from glove import session
 
     calls = []
-    monkeypatch.setattr(session.subprocess, "run", lambda cmd, **k: calls.append(cmd))
-    session.teardown("s-0a0b0c", provider="docker", wipe=wipe)
-    assert calls == [["docker", "compose", "-p", session.project_name("s-0a0b0c"), "down", "--remove-orphans",
-                      *tail]]
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=runs if cmd[1] == "ps" else "")
+
+    monkeypatch.setattr(session.subprocess, "run", run)
+    session.teardown("s-0a0b0c", provider="podman", wipe=wipe)
+    project = session.project_name("s-0a0b0c")
+    assert calls[0] == ["podman", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}",
+                        "--filter", "label=com.docker.compose.oneoff=True"]
+    assert calls[1:] == ([["podman", "rm", "-f", "abc123", "def456"]] if runs else []) + [
+        ["podman", "compose", "-p", project, "down", "--remove-orphans", *tail]]
 
 
 def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):

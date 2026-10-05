@@ -12,11 +12,12 @@
 # lockfile that installs only with legacy-peer-deps (baked `.npmrc`, then
 # `install_flags`), and the plan-time refusals (incl. the flag allow-list).
 #
-# Usage:  bash tests/integration/test_toolchains.sh
-# Requires: docker (the build downloads Node, uv, Python, npm/PyPI packages and
+# Usage:  bash tests/integration/test_toolchains.sh     RT=podman …  (skips session 3: no srt)
+# Requires: docker or podman (the build downloads Node, uv, Python, npm/PyPI packages and
 # Chromium, so the first run takes a few minutes).
 set -u
 RT="${RT:-docker}"
+export PODMAN_COMPOSE_WARNING_LOGS=false  # podman's "external compose provider" banner, in captured output
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FIX="$ROOT/tests/integration/fixtures/toolchains"
 GLOVE_HOME="$(mktemp -d)"
@@ -146,23 +147,27 @@ cleanup
 trap - EXIT
 
 echo "== session 3: pi + enforcer: srt — the baked Chromium inside a shell command =="
-S3="$SESSIONS/s3"
-mkdir -p "$S3/projects"
-cp -R "$FIX/node-app" "$S3/projects/"
-mkdir -p "$S3/work" && cp -R "$FIX/node-app" "$S3/work/"
-new_session "$S3" pi "enforcer: srt
-toolchains:
-  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
-" || { bad "glove plan (srt) failed"; exit 1; }
-trap cleanup EXIT
-IMAGE="$(build "$S3" | tail -1)"
-[ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "srt build failed"
-# srt points TMPDIR at /tmp/claude without creating it
-out="$(tool "mkdir -p \"\$TMPDIR\" && cd /work/node-app && node check.js")"
-echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (srt): baked Chromium launches offline" \
-  || bad "tool (srt): check.js: $out"
-cleanup
-trap - EXIT
+if [ "$RT" = podman ]; then
+  echo "  (skipped: srt is refused on podman)"
+else
+  S3="$SESSIONS/s3"
+  mkdir -p "$S3/projects"
+  cp -R "$FIX/node-app" "$S3/projects/"
+  mkdir -p "$S3/work" && cp -R "$FIX/node-app" "$S3/work/"
+  new_session "$S3" pi "enforcer: srt
+  toolchains:
+    - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+  " || { bad "glove plan (srt) failed"; exit 1; }
+  trap cleanup EXIT
+  IMAGE="$(build "$S3" | tail -1)"
+  [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "srt build failed"
+  # srt points TMPDIR at /tmp/claude without creating it
+  out="$(tool "mkdir -p \"\$TMPDIR\" && cd /work/node-app && node check.js")"
+  echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (srt): baked Chromium launches offline" \
+    || bad "tool (srt): check.js: $out"
+  cleanup
+  trap - EXIT
+fi
 
 echo "== session 3b: pi + the default enforcer with enforcer_options {nono: {browsers: true}} =="
 S3B="$SESSIONS/s3b"
@@ -174,20 +179,21 @@ toolchains:
   - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
 " || { bad "glove plan (nono browsers) failed"; exit 1; }
 trap cleanup EXIT
-# the derived image is content-addressed and the same as session 3's: no rebuild
+# the derived image is content-addressed and the same as session 3's (docker): no rebuild
 IMAGE="$(build "$S3B" | tail -1)"
 [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "nono browsers build failed"
 out="$(tool "cd /work/node-app && node check.js")"
 echo "$out" | grep -q 'is-number=true title=glove-offline' && ok "tool (nono, browsers): baked Chromium launches offline" \
   || bad "tool (nono, browsers): check.js: $out"
 # /proc is readable now, but not another domain's environ: under the session's own
-# harness wrapper (srt), a harness-side process holding the LLM key is readable
-# from the harness and denied to a wrapped command.
+# harness wrapper (srt on docker; nono on podman, whose Landlock domain is the
+# parent of each command's), a harness-side process holding the LLM key is
+# readable from the harness and denied to a wrapped command.
 wrap="$(uv run --quiet --project "$ROOT" python -c '
 import sys, yaml
 svc = next(v for k, v in yaml.safe_load(open(sys.argv[1]))["services"].items() if k.endswith("-harness"))
 cmd = svc["command"]
-print(" ".join(cmd[:cmd.index("ctty") - 1]))' "$S_COMPOSE")"
+print(" ".join(cmd[:cmd.index("ctty") - 1] if "ctty" in cmd else cmd[:cmd.index("--") + 1]))' "$S_COMPOSE")"
 w="$(tool_wrapper)"
 cp "$ROOT/tests/integration/fixtures/environ-probe.sh" "$S3B/work/"
 probe="bash /work/environ-probe.sh ^GLOVE_LLM_API_KEY=glove-test-key"

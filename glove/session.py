@@ -316,10 +316,16 @@ def probe_http(
 
 def teardown(session: str, *, provider: str, wipe: bool) -> None:
     project = project_name(session)
-    # --remove-orphans: a `compose run` (the harness) whose client was killed
-    # leaves its container, which `down` alone keeps, and with it the networks
-    cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]
+    console.print(f"[bold]tearing down[/bold] {project}")
+    # a `compose run` (the harness) whose client was killed leaves its container,
+    # which `down` keeps, and with it the networks (Podman's compose keeps it even
+    # with --remove-orphans): remove the project's runs first
+    runs = subprocess.run([provider, "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}",
+                           "--filter", "label=com.docker.compose.oneoff=True"],
+                          capture_output=True, text=True, check=False).stdout.split()
+    if runs:
+        subprocess.run([provider, "rm", "-f", *runs], stdout=subprocess.DEVNULL, check=False)
+    cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]  # services since removed
     if wipe:
         cmd.append("--volumes")
-    console.print(f"[bold]tearing down[/bold] {project}")
     subprocess.run(cmd, check=False)
