@@ -145,6 +145,12 @@ All notable changes to glove are documented here.
   file is left alone and a stale one is removed (policies from a previous
   enforcer were left behind).
 - Harness images use `COPY --chmod=0755` (one layer fewer each).
+- Tests: a fresh clone passes the gate tests (a tracked
+  `tests/fixtures/netobs-contract.json`); `playwright`'s `all_tools` records its
+  `playwright-core` version (checked against the lockfile and, live, the
+  image's tools); `test_toolchains.sh` runs with `RT=podman`; the live drivers
+  share `tests/integration/live_common.py`, and `tui_probe.py` drives a
+  harness TUI by hand.
 
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.
@@ -204,9 +210,11 @@ All notable changes to glove are documented here.
     hooks glove renders, Vibe's `.env`, Pi's trust store, and the dirs either
     loads code, skills, prompts or themes from (`~/.agents` too); a Pi
     `SYSTEM.md`/`APPEND_SYSTEM.md` in the home is removed at each start.
-  An existing session's home keeps what those dirs already hold: check them
-  before resuming one. Harness profiles gain `masked_files` and `protected_home`, and
-  `trusted_files` takes directories (a trailing `/`).
+  Settings saved from a harness UI (Pi's `/model` default, Vibe's `/theme`)
+  now fail silently (see README). An existing session's home keeps
+  what those dirs already hold: check them before resuming one. Harness
+  profiles gain `masked_files` and `protected_home`, and `trusted_files` takes
+  directories (a trailing `/`).
 - The tool wrapper runs `/usr/bin/nono` and `/usr/local/bin/srt` by absolute
   path: Pi puts its agent `bin/` first on a tool command's PATH.
 - webfetch asks the egress gate why only when a tunnel was refused (403),
