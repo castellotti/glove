@@ -16,6 +16,7 @@
     "NONO_NO_PROXY": "localhost,127.0.0.1"
   },
   "environment": {
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
     "PI_OFFLINE": "1"
   },

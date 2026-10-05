@@ -30,6 +30,7 @@ services:
       BROWSER_MCP_URL: "http://glove-s-browser:8931/mcp"
       BROWSER_MCP_TOOLS: "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog"
       BROWSER_MODE: "headless"
+      GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -87,7 +88,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - collect
     - --net-dir
@@ -296,7 +297,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -360,7 +361,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -422,7 +423,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -478,7 +479,7 @@ services:
     mem_limit: 512m
   glove-s-search-mcp:
     container_name: glove-s-search-mcp
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -540,7 +541,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -594,7 +595,7 @@ services:
     mem_limit: 512m
   glove-s-webfetch-mcp:
     container_name: glove-s-webfetch-mcp
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -656,7 +657,7 @@ services:
     mem_limit: 512m
   glove-s-webfetch-egress:
     container_name: glove-s-webfetch-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service

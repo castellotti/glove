@@ -6,6 +6,14 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
+  (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
+  through Docker Desktop's file sharing. An extension (`github`: `'*'`) or the
+  session's `env:` replaces it.
+- Extension manifests: a harness `env` entry may be `{value, when}` (unset
+  unless `when:` matches); `when:` takes `renders: <contribution>` (e.g. `mcp`,
+  instead of a list of harnesses) and `{set: true|false}`.
+
 - **Claude Code harness** (`harness: claude-code`, image
   `glove/claude-code:0.2.0`: the native binary, pinned, no Node). glove's
   guard rails are read-only managed settings at `/etc/claude-code`: a shell
@@ -114,6 +122,20 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- `enforcer_options` is checked against a schema under every enforcer: an
+  unknown section or key (e.g. `nono: {browser: true}`) or a value of the
+  wrong type is refused instead of ignored, and `nono.browsers: true` is
+  refused unless a toolchain bakes `browsers`.
+- A harness `env` value that renders empty is set (empty), not dropped; use
+  `when:` to leave a variable unset. `search`, `webfetch` and `rag` now do.
+- Launch-time probes (`llm`'s model list) retry only while the endpoint
+  refuses fast (curl 6, 7, 52, 56); a timeout fails at once (was ~110 s). The
+  retry is in core (`probe_http`), so every extension's `resolve` gets it.
+- The policy and system-file directories are written in place: an unchanged
+  file is left alone and a stale one is removed (policies from a previous
+  enforcer were left behind).
+- Harness images use `COPY --chmod=0755` (one layer fewer each).
+
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.
 - `search` for Vibe (and now Claude Code) is the `searxng` MCP server over HTTP
@@ -154,6 +176,14 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- Claude Code's `.claude.json` trust entry follows the session's working
+  directory when glove runs from a subdirectory (it always named the mount
+  root). Adapters' `render_home` now gets the plan's resolved mount plan.
+- Validators anchored with `$` accepted a trailing newline (session ids, env
+  keys, extension names, ssh users/hosts, WireGuard keys, toolchain packages
+  and versions, gate host names): all anchor with `\Z` now.
+- A harness adapter's bad `system_files` fails at `glove plan`/`check`, not at
+  `up`.
 - `toolchains` (node): with no project, the global `packages` are linked into
   the pinned node's global require path, so `require('playwright')` works from
   a shell command in any directory (it needed `NODE_PATH` before). The brief

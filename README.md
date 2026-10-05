@@ -1,7 +1,8 @@
 # glove
 
-`glove` is a Python CLI that launches an agentic coding harness (Pi, Mistral
-Vibe or Claude Code) inside a **sandbox**, presents the harness's normal TUI
+`glove` is an AI **sandbox** that launches an agentic coding harness (Pi, Claude Code, 
+Mistral Vibe, etc.) and is distributed and managed inside containers (Docker or Podman).
+Interface to the user is via a Python CLI, which presents the harness's normal TUI
 in your terminal, and guarantees that the harness - and every shell command,
 extension, skill, or MCP server it spawns - can only touch the host directories
 you explicitly exposed, can only reach the network endpoints you explicitly
@@ -130,7 +131,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
-enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }
+enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
 # toolchains:                              # pinned runtimes + deps baked into the image (see below)
@@ -266,7 +267,7 @@ toolchains:                       # a list; order is install and PATH order; one
   `mkdir -p "$TMPDIR"`). Under `nono` and the default `nono+srt`, Chromium
   needs `/proc` (`/proc/self/maps`, `/proc/sys`), which nono's per-command
   profile doesn't grant, so it doesn't start. `enforcer_options: {nono:
-  {browsers: true}}` opts in: the tool profile reads all of `/proc`, and
+  {browsers: true}}` opts in (refused unless a block bakes `browsers`): the tool profile reads all of `/proc`, and
   Chromium starts with `chromiumSandbox: false`. Other processes' `environ`,
   memory and fd links stay closed (Landlock refuses access to processes outside
   the command's own sandbox, so the harness's LLM key stays hidden); their
@@ -389,7 +390,17 @@ An adapter may also render read-only **system config** (`system_files`): files
 in a directory of its own under `/etc`, written to `.glove/harness/` and bound
 read-only like the ring-1 policies. Every enforcer with a tool wrapper also
 renders it one argument per line (`tool-wrapper.argv`) beside
-`tool-wrapper.json`, for glue that has no JSON parser.
+`tool-wrapper.json`, for glue that has no JSON parser. Both directories are
+updated in place on a re-plan (a changed file replaced atomically, stale ones
+removed), since a running session binds them.
+
+**git in `/work`.** Through Docker Desktop's file sharing, a `.git` the agent
+just made can read as another uid, and git refuses it ("dubious ownership").
+Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's own mount roots
+(`/work` and each add-dir) as `safe.directory`, exact paths only (the images'
+git 2.39 has no `dir/*` patterns), so `git init` in `/work` works. A repo
+nested deeper (a clone into `/work/<repo>`) needs an opt-in: the `github`
+extension sets `'*'`, or set `GIT_CONFIG_PARAMETERS` in the session's `env:`.
 
 ### Claude Code
 
@@ -503,6 +514,13 @@ Core validates all of it:
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
+  - `env: {K: value}` or `{K: {value: …, when: …}}`: a value is set as rendered,
+    even when empty; `when:` leaves the variable unset unless it matches. A
+    `when:` (here, on endpoints, services, verify checks and list items) matches
+    setting names, `harness`, `renders` (the contributions the harness renders,
+    e.g. `renders: mcp` rather than a list of harnesses), dotted
+    `slot.<slot>.<key>`, a list of allowed values, or `{set: true|false}`
+    (whether the value is set at all);
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
     an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
     with `tools` as an allowlist; Claude Code: `managed-mcp.json`, `tools` as

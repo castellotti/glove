@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from helpers import make_cfg
 
-from glove.config import AddDir
+from glove import plan as plan_mod
+from glove.config import AddDir, ConfigError
 from glove.hardening import Limits
-from glove.plan import build_session_plan
+from glove.plan import build_session_plan, write_in_place
 from glove.runtimes.seccomp import DEFAULT_PROFILE, NESTED_USERNS_PROFILE
 
 
@@ -78,3 +80,40 @@ def test_add_dir_modes(tmp_path):
     )
     ro_mounts = [m for m in plan.mounts if m.container_path.startswith("/mnt/")]
     assert ro_mounts and all(m.read_only for m in ro_mounts)
+
+
+def test_git_trusts_the_session_mount_roots(tmp_path):
+    # Docker Desktop shows a fresh .git as another uid: the session's own mount
+    # roots (not extension mounts) are safe.directory, exact paths only
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    plan = build_session_plan(_cfg(tmp_path, add_dirs=[AddDir(str(lib), "ro")]), home_dir=str(tmp_path / "h"))
+    assert plan.environment["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='/work' 'safe.directory'='/mnt/lib'"
+
+
+def test_an_explicit_git_config_replaces_the_default(tmp_path):
+    cfg = _cfg(tmp_path, env={"GIT_CONFIG_PARAMETERS": "'safe.directory'='*'"})
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"))
+    assert plan.environment["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='*'"
+
+
+def test_write_in_place_keeps_unchanged_files_and_drops_stale_ones(tmp_path):
+    d = tmp_path / "enforcer"
+    write_in_place(d, {"a.json": "1", "b.json": "2", "old.json": "x"})
+    a, b = (d / "a.json").stat().st_ino, (d / "b.json").stat().st_ino
+    write_in_place(d, {"a.json": "1", "b.json": "3"})
+    assert (d / "a.json").stat().st_ino == a  # unchanged: not rewritten
+    assert (d / "b.json").stat().st_ino != b and (d / "b.json").read_text() == "3"
+    assert sorted(p.name for p in d.iterdir()) == ["a.json", "b.json"]
+    assert not list(tmp_path.glob(".tmp-*"))
+    assert oct((d / "b.json").stat().st_mode & 0o777) == "0o644"
+
+
+def test_a_bad_system_files_target_fails_at_plan_time(tmp_path, monkeypatch):
+    real = plan_mod.adapter_call
+
+    def adapter_call(profile, name, *a, **kw):
+        return {"/work/x": {"f": "x"}} if name == "system_files" else real(profile, name, *a, **kw)
+    monkeypatch.setattr(plan_mod, "adapter_call", adapter_call)
+    with pytest.raises(ConfigError, match="under /etc"):
+        build_session_plan(_cfg(tmp_path), home_dir=str(tmp_path / "h"))

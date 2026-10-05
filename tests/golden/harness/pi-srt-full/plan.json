@@ -27,6 +27,7 @@
     "BROWSER_MCP_URL": "http://glove-s-browser:8931/mcp",
     "BROWSER_MODE": "headless",
     "CLAUDE_OBSIDIAN_VAULT": "/work/data/store/vault",
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "GLOVE_FETCH_PROXY": "http://glove-s-proxy:8888",
     "HF_HUB_OFFLINE": "1",
     "KSTORE_EMBED_CACHE": "/mnt/rag-models",

@@ -27,6 +27,7 @@ services:
     environment:
       HOME: "/home/agent"
       VIBE_HOME: "/home/agent/.vibe"
+      GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
       NONO_NO_PROXY: "localhost,127.0.0.1"
     volumes:
       - type: bind

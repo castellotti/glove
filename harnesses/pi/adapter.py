@@ -79,7 +79,7 @@ def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
     return out
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
+def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
     cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     model_id = model.model

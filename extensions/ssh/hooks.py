@@ -22,9 +22,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
-USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
-HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}\Z")
+USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}\Z")
+HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\Z")
 
 
 def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:

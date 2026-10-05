@@ -51,10 +51,9 @@ RUN if [ -n "$GLOVE_PIP" ]; then \
 # CLAUDE_CODE_SHELL_PREFIX (set in glove's read-only managed settings, so the
 # agent's own settings cannot blank it): every command Claude Code runs goes
 # through the session's tool wrapper, or fails closed.
-COPY glove-cc-prefix /opt/glove/bin/glove-cc-prefix
+COPY --chmod=0755 glove-cc-prefix /opt/glove/bin/glove-cc-prefix
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
-COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
-RUN chmod 0755 /opt/glove/bin/glove-cc-prefix /opt/glove/entrypoint.sh
+COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
 
 RUN mkdir -p /home/agent && chmod 0777 /home/agent
 ENV HOME=/home/agent

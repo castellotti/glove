@@ -32,7 +32,7 @@ PROBE_IMAGE = "docker.io/library/python:3.12-slim"
 
 # Compact probe run inside a hardened container: reports Landlock ABI, whether
 # an unprivileged user namespace is creatable, /dev/kvm, and the effective caps.
-_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 
 _PROBE = r"""
 import ctypes, json, os

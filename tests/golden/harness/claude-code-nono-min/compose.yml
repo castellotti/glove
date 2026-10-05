@@ -29,6 +29,7 @@ services:
       CLAUDE_CONFIG_DIR: "/home/agent/.claude"
       DISABLE_AUTOUPDATER: "1"
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
       NONO_NO_PROXY: "localhost,127.0.0.1"
       CLAUDE_CODE_OAUTH_TOKEN: null  # from glove's environment at run time; never stored here
     volumes:

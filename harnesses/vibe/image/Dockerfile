@@ -44,11 +44,10 @@ RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
 # Ring-1 tool hook: rewrites every `bash` tool call to run under the enforcer's
 # per-command sandbox (declared in ~/.vibe/hooks.toml by glove). Baked as an
 # executable so hooks.toml can invoke it directly.
-COPY vibe_hook.py /opt/glove/vibe-hook
+COPY --chmod=0755 vibe_hook.py /opt/glove/vibe-hook
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
 # The shared entrypoint (glove/enforcers/entrypoint, the `gloveentry` build context).
-COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
-RUN chmod 0755 /opt/glove/vibe-hook /opt/glove/entrypoint.sh
+COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
 
 # Baked home is overlaid by the per-session bind mount; keep it world-writable
 # so an arbitrary runtime uid can use it if the mount is ever absent.

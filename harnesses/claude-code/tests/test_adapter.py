@@ -195,6 +195,19 @@ def test_home_seeds_onboarding_and_trust_and_keeps_claude_codes_state(tmp_path):
     assert "How your environment works" in (home / ".claude" / "CLAUDE.md").read_text()
 
 
+def test_trust_follows_the_plans_working_dir_from_a_subdirectory(tmp_path):
+    # glove run from <work>/sub starts Claude Code in /work/sub: the trust entry
+    # must name that directory, not the mount root
+    cfg, _ = _plan(tmp_path)
+    (tmp_path / "work" / "sub").mkdir()
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), cwd=str(tmp_path / "work" / "sub"), uid=501, gid=20)
+    assert plan.mount_plan.working_dir == "/work/sub"
+    home = tmp_path / "h"
+    render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+    doc = json.loads((home / ".claude" / ".claude.json").read_text())
+    assert list(doc["projects"]) == ["/work/sub"]
+
+
 def test_skills_are_baked_outside_the_config_home(tmp_path):
     # the config home is denied to Read and to tool commands, so a skill's files
     # must be reachable by the path Claude Code shows: <add-dir>/.claude/skills/<name>

@@ -57,8 +57,7 @@ COPY extensions/enforcer /opt/glove/pi-extensions/enforcer
 # the `gloveentry` build context) validates the enforcer policies then execs the
 # compose command.
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
-COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
-RUN chmod 0755 /opt/glove/entrypoint.sh
+COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
 
 RUN mkdir -p /home/agent && chmod 0777 /home/agent
 ENV HOME=/home/agent

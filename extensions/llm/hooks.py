@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -69,7 +68,7 @@ def _auth(s: dict[str, Any], cat: dict[str, Any], harness: str) -> tuple[dict[st
     """The auth block for `s["auth"]` and the public headers a probe sends."""
     auth = cat.get("auth") or {}
     headers = _headers(cat)
-    if s.get("auth", "api-key") != "oauth":
+    if s["auth"] != "oauth":  # the schema default (api-key) is always applied
         return auth, headers
     oauth = auth.get("oauth")
     if not oauth:
@@ -177,7 +176,7 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         "api_key_secret": "api_key" if s.get("api_key") else None,
         "auth_header": auth.get("header", "Authorization"),
         "auth_scheme": auth.get("scheme", "Bearer"),
-        "api_key_kind": s.get("auth") or "api-key",
+        "api_key_kind": s["auth"],
         "probe_headers": headers,
         "capabilities": _capabilities(s, cat),
         "capabilities_auto": s.get("capabilities") == "auto",
@@ -219,7 +218,6 @@ def _extract(doc: Any, spec: Any) -> Any:
 
 
 MAX_MODEL_PAGES = 20
-CONNECT_RETRIES = (1, 2, 3, 4)  # seconds between attempts while nothing answers
 
 
 def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
@@ -228,14 +226,7 @@ def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
     endpoint, cursor = cat.get("models_endpoint", "/v1/models"), cat.get("models_cursor")
     url, ids = root + endpoint, []
     for _ in range(MAX_MODEL_PAGES):
-        status, text = probe(url, auth=auth)
-        for wait in CONNECT_RETRIES:
-            if status != 0:
-                break
-            # no HTTP answer at all: a forwarder that implements more than socat
-            # (observe's gate) can still be starting
-            time.sleep(wait)
-            status, text = probe(url, auth=auth)
+        status, text = probe(url, auth=auth)  # core retries while a forwarder is still starting
         if status != 200:
             raise LlmError(f"llm: {cat['name']} did not answer {endpoint} (HTTP {status}): "
                            f"{text[:200]} — is the server running and reachable at the configured endpoint?")

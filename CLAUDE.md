@@ -11,9 +11,9 @@ in-container kernel enforcer wrapping the agent and every command it runs.
   - `uv run ruff check glove harnesses extensions tests` — lint (must be clean before moving on).
   - `uv run pytest -q` — run the test suite (must be green before moving on).
   - `uv run glove …` — run the CLI.
-- `podman`, `nono`, `srt`, and Apple `container` are **not** installed on this
-  host — anything needing them runs inside Docker images or the integration
-  scripts under `tests/integration/`.
+- Docker Desktop and `podman` (an applehv machine; `podman machine start`) are
+  installed. `nono`, `srt` and Apple `container` are **not** — anything needing
+  them runs inside the images or the integration scripts under `tests/integration/`.
 
 ## Security defaults are not negotiable
 
@@ -42,3 +42,21 @@ and glove's own `apply-seccomp` re-denies namespaces/mounts below srt.
   them and paste the output. If something can't be verified on this machine, say
   so and mark it "untested" rather than claiming it works.
 - Keep `README.md` and `CHANGELOG.md` current with each change.
+
+## Change workflow (always)
+
+Work in rounds: **one branch and one PR per round**, never stacked PRs (stacked
+merges once left #20–#24 off `main`). A round's plan lives in `docs/planning/`
+(git-ignored, private). Each phase of the round is one commit:
+
+1. Implement the phase; ruff clean and pytest green.
+2. `/code-review` the uncommitted diff and fix what it finds, then `/simplify`.
+3. Ask, then commit the phase.
+4. Update the planning documents: results go into the completed plan, and what
+   future plans need goes into theirs. Add every skipped finding, suggestion,
+   untested check and missing test to `docs/planning/TODO.md`, and prune the
+   items the phase implemented.
+5. The operator runs `/compact` before the next phase starts.
+
+Live verification runs once at the end of the round, then (after asking) push
+and open the round's single PR to `main`.

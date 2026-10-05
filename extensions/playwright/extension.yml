@@ -30,7 +30,7 @@ settings:
   keep_browser:      { type: bool, default: false }     # leave the host Chrome running after `glove down`
   i_accept_host_rce: { type: bool, default: false }     # Vibe/Claude Code + host: see README
 validate:
-  - when: { mode: host, harness: [vibe, claude-code], i_accept_host_rce: false }
+  - when: { mode: host, renders: mcp, i_accept_host_rce: false }
     error: >-
       mode: host with harness vibe or claude-code exposes Playwright's `browser_run_code_unsafe` on YOUR HOST: glove
       hides or denies it in the client, but that is a client-side filter, not a boundary. Use Pi, a sidecar
@@ -86,7 +86,7 @@ harness:
     BROWSER_MCP_TOOLS: "{{ settings.tools | join(',') }}"
     BROWSER_MODE: "{{ settings.mode }}"
   pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
-  mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
+  mcp:                                  # rendered by harnesses that speak MCP
     - name: playwright
       transport: http
       url: "{{ endpoint.browser.url }}/mcp"

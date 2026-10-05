@@ -30,7 +30,7 @@ from .harness import adapter_call, known_harnesses
 from .harnessconfig import render_home
 from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .naming import scoped
-from .plan import build_session_plan
+from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
 
@@ -233,14 +233,11 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     # exists; they live in .glove/, never inside /work, never agent-writable.
     if plan.policies:
         enforcer_dir = sd.state / "enforcer"
-        enforcer_dir.mkdir(parents=True, exist_ok=True)
-        for fname, content in plan.policies.items():
-            (enforcer_dir / fname).write_text(content)
+        write_in_place(enforcer_dir, plan.policies)
         plan.policies_host_dir = str(enforcer_dir)
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
     from .mounts import make_pinned_dirs
-    from .plan import write_system_files
 
     write_system_files(plan, sd.state / "harness")
     make_pinned_dirs(plan.protect)  # a pinned dir over a trusted file may not exist yet

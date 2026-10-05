@@ -21,6 +21,8 @@ from glove.plan import build_session_plan
 from glove.runtimes.podman import PodmanRuntime
 from glove.runtimes.seccomp import NESTED_USERNS_PROFILE
 
+CHROMIUM = {"lang": "node", "version": "22.11.0", "packages": ["playwright@1.63.0"], "browsers": ["chromium"]}
+
 
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
@@ -28,7 +30,7 @@ def _plan(tmp_path, **kw):
     cfg = make_cfg(harness=kw.pop("harness", "pi"), workdir=str(work), name="s",
                    enforcer=kw.pop("enforcer", "nono+srt"), **kw)
     return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
-                              state_dir=str(tmp_path / "ext"))
+                              state_dir=str(tmp_path / "ext"), session_dir=str(tmp_path))
 
 
 def test_harness_runs_under_srt_on_a_relayed_terminal(tmp_path):
@@ -123,7 +125,7 @@ def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
     """`enforcer_options: {nono: {browsers: true}}`: Chromium needs /proc in the tool
     profile (read-only); off by default, and the harness side is unchanged."""
     def policies(**kw):
-        return _plan(tmp_path, enforcer=enforcer, **kw).policies
+        return _plan(tmp_path, enforcer=enforcer, toolchains=[CHROMIUM], **kw).policies
 
     off, on = policies(), policies(enforcer_options={"nono": {"browsers": True}})
     assert "/proc" not in json.loads(off["tool.json"])["filesystem"]["read"]
@@ -132,3 +134,28 @@ def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
     assert {k: v for k, v in on.items() if k != "tool.json"} == {k: v for k, v in off.items() if k != "tool.json"}
     with pytest.raises(ConfigError, match="browsers"):
         policies(enforcer_options={"nono": {"browsers": "yes"}})
+
+
+@pytest.mark.parametrize("enforcer", ["nono", "nono+srt", "srt", "none"])
+@pytest.mark.parametrize(("options", "match"), [
+    ({"nono": {"browser": True}}, r"nono takes \['browsers'\]"),  # a typo is refused, not ignored
+    ({"nono": {"browsers": "yes"}}, "browsers must be true|false"),
+    ({"nono": {"browsers": 1}}, "browsers must be true|false"),
+    ({"srt": {"nested": "medium"}}, "nested must be one of"),
+    ({"landlock": {}}, "takes the sections"),
+    ({"srt": True}, "srt takes"),
+])
+def test_enforcer_options_are_checked_under_every_enforcer(tmp_path, enforcer, options, match):
+    with pytest.raises(ConfigError, match=match):
+        _plan(tmp_path, enforcer=enforcer, enforcer_options=options)
+
+
+def test_browsers_without_baked_browsers_is_refused(tmp_path):
+    # /proc for a Chromium no toolchain bakes: a grant with nothing to use it
+    with pytest.raises(ConfigError, match="no `toolchains` block bakes `browsers:`"):
+        _plan(tmp_path, enforcer_options={"nono": {"browsers": True}})
+
+
+def test_enforcer_options_are_filled_with_the_defaults(tmp_path):
+    assert _plan(tmp_path).enforcer_options == {"nono": {"browsers": False},
+                                               "srt": {"nested": "weak", "hide_env": True}}

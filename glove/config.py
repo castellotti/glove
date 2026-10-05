@@ -108,6 +108,12 @@ class Config:
     # subnet pool, recorded in the registry; each session network gets a /27.
     subnet: str | None = None
 
+    def __post_init__(self) -> None:
+        from .enforcers import enforcer_options
+
+        # checked and filled once, so every reader sees the same normalized value
+        self.enforcer_options = enforcer_options(self.enforcer_options)
+
     def resolved_name(self) -> str:
         # The session id (glove/sessiondir.py); the CLI always sets it.
         return self.name or "session"

@@ -24,7 +24,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-WG_KEY = re.compile(r"^[A-Za-z0-9+/]{43}=$")
+WG_KEY = re.compile(r"^[A-Za-z0-9+/]{43}=\Z")
 HOOK_KEYS = ("WIREGUARD_PRIVATE_KEY", "WIREGUARD_PUBLIC_KEY", "WIREGUARD_ENDPOINT_IP", "WIREGUARD_ENDPOINT_PORT",
              "WIREGUARD_ADDRESSES")
 

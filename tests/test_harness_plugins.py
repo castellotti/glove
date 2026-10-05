@@ -70,7 +70,7 @@ def test_every_harness_image_bakes_the_shared_entrypoint():
         assert not (image / "entrypoint.sh").exists()
         df = (image / "Dockerfile").read_text()
         if re.search(r"^ENTRYPOINT", df, re.M):
-            assert "COPY --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
+            assert "COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
 
 
 def _manifest(tmp_path: Path, name: str, body: str) -> Path:

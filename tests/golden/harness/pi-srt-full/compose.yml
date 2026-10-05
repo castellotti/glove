@@ -38,6 +38,7 @@ services:
       CLAUDE_OBSIDIAN_VAULT: "/work/data/store/vault"
       SEARXNG_URL: "http://glove-s-search:8080"
       GLOVE_FETCH_PROXY: "http://glove-s-proxy:8888"
+      GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -99,7 +100,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - collect
     - --net-dir
@@ -242,7 +243,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -306,7 +307,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -368,7 +369,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -424,7 +425,7 @@ services:
     mem_limit: 512m
   glove-s-search:
     container_name: glove-s-search
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -486,7 +487,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service
@@ -540,7 +541,7 @@ services:
     mem_limit: 512m
   glove-s-proxy:
     container_name: glove-s-proxy
-    image: glove/ext-gate-netgate:d4c3234e44e3
+    image: glove/ext-gate-netgate:4e1f2ea3e559
     command:
     - forward
     - --service

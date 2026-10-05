@@ -41,7 +41,7 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
     return servers, disabled
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp=None) -> list[Path]:
+def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
     cfg_dir = home_dir / rel_config_home(profile)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     # Pre-create the session-log dir so an external monitor (e.g. Layman) can

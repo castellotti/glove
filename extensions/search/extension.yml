@@ -13,7 +13,7 @@ networks:
 images:
   # harnesses that speak MCP get web_search from a sidecar over HTTP: one server for
   # each of them, nothing baked into the harness image
-  mcp: { build: image, when: { harness: [vibe, claude-code] } }
+  mcp: { build: image, when: { renders: mcp } }
 services: compose/services.yml.j2
 endpoints:
   search:                               # Pi's extension queries SearXNG itself
@@ -21,7 +21,7 @@ endpoints:
     port: 8080
     target: { service: searxng, network: searchnet, port: 8080 }
   search-mcp:
-    when: { harness: [vibe, claude-code] }
+    when: { renders: mcp }
     port: 8000
     target: { service: searxng-mcp, network: searchnet, port: 8000 }
     observe: { tool: web_search }
@@ -37,11 +37,11 @@ endpoints:
 verify:
   - { name: searxng-up, kind: http-ok, url: "http://glove-{{ session.id }}-searxng:8080/healthz",
       network: searchnet, retries: 20, interval: 3, service: searxng }
-  - { name: search-mcp-up, kind: container-healthy, service: searxng-mcp, when: { harness: [vibe, claude-code] } }
+  - { name: search-mcp-up, kind: container-healthy, service: searxng-mcp, when: { renders: mcp } }
 harness:
   env:
-    SEARXNG_URL: "{{ endpoint.search.url if endpoint.search is defined else '' }}"
+    SEARXNG_URL: { value: "{{ endpoint.search.url }}", when: { endpoint.search: { set: true } } }
   pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
-  mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
+  mcp:                                  # rendered by harnesses that speak MCP
     - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp" }
   brief: brief.md

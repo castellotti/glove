@@ -71,11 +71,9 @@ def srt_suffix() -> str:
 @runtime_checkable
 class Enforcer(Protocol):
     name: str
-    def tools_run_browsers(self, options: dict) -> bool:
-        """Whether a browser (Chromium) can start inside a per-command sandbox,
-        given the session's `enforcer_options`: told to the agent when
-        `toolchains` bakes browsers."""
-        ...
+    # The sandbox each shell command runs in ("nono", "srt", or None): what
+    # `tools_run_browsers` asks.
+    tool_sandbox: str | None
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         """Map of filename → file contents, written to the session enforcer dir."""

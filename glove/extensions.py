@@ -65,8 +65,8 @@ MANIFEST_KEYS = frozenset({
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
-_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
-_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
+_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*\Z")
 
 
 # A channel's directory in the harness and in the sidecars that serve it (see
@@ -297,15 +297,29 @@ def _lookup(ctx: dict[str, Any], dotted: str) -> Any:
 
 def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
     """Minimal predicate: every key's value equals (or is in, for a list) the
-    context value. Keys are setting names, `harness`, or dotted `slot.<s>.<k>`."""
+    context value. Keys are setting names, `harness`, `renders` (the harness's
+    contributions, a list: it matches when it holds a wanted one) or dotted
+    `slot.<s>.<k>`. `{set: true|false}` asks whether the value is set (not null
+    or empty)."""
     if not when:
         return True
     for key, want in when.items():
         have = _lookup(ctx, key) if "." in key else ctx.get("settings", {}).get(key, ctx.get(key))
+        if isinstance(want, dict) and set(want) == {"set"}:
+            if (have not in (None, "", [], {})) != bool(want["set"]):
+                return False
+            continue
         wants = want if isinstance(want, list) else [want]
-        if not any(have == w or str(have) == str(w) for w in wants):
+        haves = have if isinstance(have, list) else [have]
+        if not any(h == w or str(h) == str(w) for w in wants for h in haves):
             return False
     return True
+
+
+def when_context(settings: dict[str, Any], harness: str) -> dict[str, Any]:
+    """What a `when:` sees for an extension: its settings, the harness and the
+    contributions the harness renders (`renders: mcp`, not a list of harnesses)."""
+    return {"settings": settings, "harness": harness, "renders": sorted(get_profile(harness).contributions)}
 
 
 _JINJA = ImmutableSandboxedEnvironment(undefined=StrictUndefined, keep_trailing_newline=True)
@@ -538,8 +552,7 @@ def _names(session: str) -> dict[str, Any]:
 def base_context(comp: Composition, a: Active) -> dict[str, Any]:
     """The restricted template context for extension `a`."""
     return {
-        "settings": a.settings,
-        "harness": comp.harness,
+        **when_context(a.settings, comp.harness),
         "session": {"id": comp.session, "subnet": comp.subnet or "", "secrets_dir": SECRETS_DIR},
         "names": _names(comp.session),
         "slot": {s: {"provider": p.name, **p.exports} for s, p in comp.slots.items()},
@@ -562,7 +575,7 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
 def required_libs(comp: Composition, a: Active) -> list[Active]:
     """Active extensions `a` requires by name (e.g. `gate`): their images are
     `a`'s to run."""
-    names = {r for kind, r in _requirements(a.manifest, {"settings": a.settings, "harness": comp.harness})
+    names = {r for kind, r in _requirements(a.manifest, when_context(a.settings, comp.harness))
              if kind == "extension"}
     return [x for x in comp.active if x.name in names]
 
@@ -600,7 +613,7 @@ def select(
         chosen[name] = Active(m, validate_settings(m, given))
 
     def ctx_of(a: Active, slots: dict[str, Active]) -> dict[str, Any]:
-        return {"settings": a.settings, "harness": harness,
+        return {**when_context(a.settings, harness),
                 "slot": {s: {"provider": p.name, **p.manifest.raw.get("exports", {})} for s, p in slots.items()}}
 
     # Expand auto-added library requirements to a fixed point.
@@ -663,7 +676,7 @@ def _fill_slots(chosen: dict[str, Active]) -> dict[str, Active]:
 def _toposort(chosen: dict[str, Active], slots: dict[str, Active], harness: str) -> list[Active]:
     deps: dict[str, set[str]] = {}
     for a in chosen.values():
-        ctx = {"settings": a.settings, "harness": harness}
+        ctx = when_context(a.settings, harness)
         d = set()
         for kind, req in _requirements(a.manifest, ctx):
             d.add(slots[req].name if kind == "slot" else req)
@@ -774,7 +787,7 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
     )
 
 
-_HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+_HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\Z")
 
 # What a `via: lan` endpoint may dial. `lan` is a routable, NAT'd bridge with no
 # tunnel, so it must never carry a public host (that would bypass the egress
@@ -850,9 +863,16 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                 if layer.get(k):
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
-    for k, v in render_value(h.get("env") or {}, ctx, where).items():
-        if v not in (None, ""):  # renders empty (e.g. its endpoint is off for this harness): not set
-            set_harness_env(comp, where, k, v)
+    for k, v in (h.get("env") or {}).items():  # a value, or {value:, when:} (unset unless it matches)
+        if isinstance(v, dict):
+            if set(v) - {"value", "when"} or "value" not in v:
+                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …}}")
+            if not when_matches(v.get("when"), ctx):
+                continue
+            v = v["value"]
+        if v is None:
+            raise ExtensionError(f"{where}: env {k!r} has no value (use `when:` to leave it unset)")
+        set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)

@@ -56,8 +56,8 @@ UV_SHA256 = {
 
 # A package token: a name with an optional version/extras/specifier. Never an
 # option (leading `-`) and never whitespace; quoted on render regardless.
-_PACKAGE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/+:=<>!~,\[\]-]*$")
-_MANAGER_VERSION = re.compile(r"^[0-9][0-9A-Za-z.+-]*$")
+_PACKAGE = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._/+:=<>!~,\[\]-]*\Z")
+_MANAGER_VERSION = re.compile(r"^[0-9][0-9A-Za-z.+-]*\Z")
 _NPM_FLAGS = "--no-audit --no-fund --cache /tmp/npm-cache"
 # An install flag: one long option, optionally `=value`; no whitespace or shell
 # metacharacters, so it can only ever be an argument to the install command.
@@ -224,7 +224,7 @@ def _copy_project(tc: Toolchain) -> str:
 
 class NodeHandler(Handler):
     lang = "node"
-    version_re = re.compile(r"^\d+\.\d+\.\d+$")
+    version_re = re.compile(r"^\d+\.\d+\.\d+\Z")
     version_hint = "an exact X.Y.Z, e.g. 22.11.0"
     managers: ClassVar[dict[str, Manager]] = {
         "npm": Manager({"ci": Mode((("package.json",), ("package-lock.json", "npm-shrinkwrap.json")),
@@ -268,14 +268,13 @@ class NodeHandler(Handler):
                           rt)]
         globals_ = ([f"{tc.manager}@{tc.manager_version or 'latest'}"] if tc.manager != "npm" else []) \
             + list(tc.packages)
-        # with no project, the global packages take `<prefix>/lib/node` (in the pinned node's
-        # global require path), so `require` finds them from any directory
-        link = [] if tc.project_files or not tc.packages else [f"ln -s {rt}/lib/node_modules {rt}/lib/node"]
+        # `<prefix>/lib/node` is in the pinned node's global require path, so `require`
+        # finds what it links from any directory: the project's deps, else the global packages
+        link = [] if tc.project_spec or not tc.packages else [f"ln -s {rt}/lib/node_modules {rt}/lib/node"]
         tools = [_run(tc, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache", *link)] \
             if globals_ else []
         project = []
-        if tc.project_files:
-            # `<prefix>/lib/node` is in the pinned node's global require path: deps resolve from anywhere
+        if tc.project_spec:
             project += [_copy_project(tc), _run(tc, path, f"cd {tc.project_dir}",
                                                 self.install(tc),
                                                 "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
@@ -326,7 +325,7 @@ class NodeHandler(Handler):
 
 class PythonHandler(Handler):
     lang = "python"
-    version_re = re.compile(r"^\d+\.\d+(\.\d+)?$")
+    version_re = re.compile(r"^\d+\.\d+(\.\d+)?\Z")
     version_hint = "X.Y or X.Y.Z, e.g. 3.12"
     _UV_ADD = "{uv} pip install --python {py} {pkgs}"
     managers: ClassVar[dict[str, Manager]] = {
@@ -601,11 +600,12 @@ def dockerfile_lines(blocks: Sequence[Toolchain]) -> tuple[list[str], list[tuple
     return lines, [(tc.label, f) for tc in blocks for f in tc.project_files]
 
 
-def brief(blocks: Sequence[Toolchain], enforcer: str, options: dict | None = None) -> str:
-    """The context-file section telling the agent what is baked in."""
-    from .enforcers import get_enforcer
+def brief(blocks: Sequence[Toolchain], enforcer: str, options: dict[str, dict]) -> str:
+    """The context-file section telling the agent what is baked in (`options`:
+    the session's normalized `enforcer_options`)."""
+    from .enforcers import tools_run_browsers
 
-    browsers_ok = get_enforcer(enforcer).tools_run_browsers(options)
+    browsers_ok = tools_run_browsers(enforcer, options)
     lines = ["## Toolchains", "",
              "Baked into this image at build time (shell commands have no network, so nothing can be "
              f"installed now). Everything lives under `{ROOT}` (read-only):", ""]

@@ -17,6 +17,7 @@
     "NONO_NO_PROXY": "localhost,127.0.0.1"
   },
   "environment": {
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "VIBE_HOME": "/home/agent/.vibe"
   },
   "image": "glove/vibe:0.5.0",
