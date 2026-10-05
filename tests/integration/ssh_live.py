@@ -17,6 +17,7 @@ the agent's own shell tool, so every command runs where an agent's would:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -25,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, _resolve_extensions
 from glove.harnessconfig import render_home
@@ -50,7 +52,6 @@ def main(directory: str, name: str, user: str) -> int:
         secrets = secret_env(plan)
         key = secrets["RELAY_SSH_KEY"]
         # what would betray the key: its stored form, and a line from the middle of its PEM body
-        import base64
         pem = key if key.startswith("-----BEGIN") else base64.b64decode(key).decode()
         needles = [key[:40], pem.strip().splitlines()[2][:40]]
         env = {**os.environ, **secrets}
@@ -127,10 +128,7 @@ def main(directory: str, name: str, user: str) -> int:
         if plan.composition.by_name("observe"):
             print("== observe")
             time.sleep(2)
-            net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
-            recs = []
-            for f in sorted(net.glob("flows*.ndjson")):
-                recs += [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
+            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
             fl = [r for r in recs if r.get("type") == "flow" and r.get("service") == f"ssh-{name}"]
             check(f"flows: ssh-{name}, client ssh, tool ssh, scope lan",
                   bool(fl) and all((r.get("client"), r.get("tool"), r.get("scope")) == ("ssh", "ssh", "lan")

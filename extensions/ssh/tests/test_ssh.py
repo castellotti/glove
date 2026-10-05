@@ -3,7 +3,6 @@ the hooks (hosts → endpoints, known_hosts, the key) and the rendered session."
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -13,20 +12,11 @@ import pytest
 import yaml
 from helpers import make_cfg, render
 
-from glove.extensions import ExtensionError
+from glove.extensions import ExtensionError, load_module
 
 HERE = Path(__file__).resolve().parent.parent
-
-
-def _load(name, file):
-    spec = importlib.util.spec_from_file_location(name, HERE / file)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-policy = _load("ssh_relay_policy", "relay_policy.py")
-hooks = _load("ssh_hooks", "hooks.py")
+policy = load_module(HERE / "relay_policy.py", "ssh_relay_policy")
+hooks = load_module(HERE / "hooks.py", "ssh_hooks")
 Refused = policy.Refused
 HOSTS = [{"name": "build", "to": "192.168.1.10:22", "user": "dev"},
          {"name": "nas", "to": "nas.lan:2222", "user": "admin"}]

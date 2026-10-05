@@ -169,7 +169,7 @@ class Relay:
         self.channel = channel
         self.policy = policy
         self.env = env
-        self.work = work
+        self.work = work if os.path.isdir(work) else ""  # "": a relay without /work (ssh)
         self.settings = settings
         self.timeout = timeout
         self.slots = threading.BoundedSemaphore(max_active)
@@ -240,7 +240,7 @@ class Relay:
     def _request(self, argv: list[str], cwd: str) -> Request:
         if not argv or argv[0] not in self.policy.COMMANDS:
             raise Refused(f"this relay runs only {sorted(self.policy.COMMANDS)}")
-        if not os.path.isdir(self.work):  # a relay without /work (ssh): commands run in /tmp, no file arguments
+        if not self.work:  # commands run in /tmp, and Request refuses file arguments
             return Request(argv, os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY), "", self.settings)
         try:
             cfd = os.open(cwd if cwd.startswith("/") else self.work, os.O_RDONLY | os.O_DIRECTORY)

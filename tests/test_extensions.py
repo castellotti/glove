@@ -524,10 +524,10 @@ def _relayish(oot, *, work=True, target="/work", ro="", channel="ch", services="
     _svc_ext(oot, "relayish", service=body, extra=extra)
 
 
-def _oot(tmp_path, ghome, trusted: bool):
+def _oot(tmp_path, ghome, trusted: bool, name: str = "relayish"):
     oot = tmp_path / "oot"
     ghome.mkdir(parents=True, exist_ok=True)
-    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + ("trusted_extensions: [relayish]\n"
+    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + (f"trusted_extensions: [{name}]\n"
                                                                          if trusted else ""))
     return oot
 
@@ -589,16 +589,8 @@ def _lannish(oot, *, harness=False, net="side", address="192.168.1.10:22"):
     _svc_ext(oot, "lannish", service=_LANNISH.format(digest=DIGEST, net=net), extra=extra)
 
 
-def _oot_named(tmp_path, ghome, name, trusted):
-    oot = tmp_path / "oot"
-    ghome.mkdir(parents=True, exist_ok=True)
-    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + (f"trusted_extensions: [{name}]\n"
-                                                                         if trusted else ""))
-    return oot
-
-
 def test_a_lan_endpoint_serves_a_sidecar_over_the_lan_network_only(tmp_path, ghome):
-    _lannish(_oot_named(tmp_path, ghome, "lannish", trusted=True))
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"))
     _, doc = _render_with(tmp_path, {"lannish": {}})
     fwd = doc["services"]["glove-s-box"]
     assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-side"}
@@ -608,7 +600,7 @@ def test_a_lan_endpoint_serves_a_sidecar_over_the_lan_network_only(tmp_path, gho
 
 
 def test_lan_rules(tmp_path, ghome):
-    oot = _oot_named(tmp_path, ghome, "lannish", trusted=True)
+    oot = _oot(tmp_path, ghome, trusted=True, name="lannish")
     _lannish(oot, harness=True)
     with pytest.raises(ExtensionError, match="never reaches a LAN host itself"):
         _render_with(tmp_path, {"lannish": {}})
@@ -629,19 +621,19 @@ def test_lan_host(host, ok):
 
 
 def test_a_lan_endpoint_refuses_a_public_host(tmp_path, ghome):
-    _lannish(_oot_named(tmp_path, ghome, "lannish", trusted=True), address="github.com:22")
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"), address="github.com:22")
     with pytest.raises(ExtensionError, match="bypass the egress provider"):
         _render_with(tmp_path, {"lannish": {}})
 
 
 def test_an_untrusted_extension_dials_no_lan_host(tmp_path, ghome):
-    _lannish(_oot_named(tmp_path, ghome, "lannish", trusted=False))
+    _lannish(_oot(tmp_path, ghome, trusted=False, name="lannish"))
     with pytest.raises(ExtensionError, match="dialling a remote address is a privilege"):
         _render_with(tmp_path, {"lannish": {}})
 
 
 def test_no_sidecar_joins_the_lan_network(tmp_path, ghome):
-    _lannish(_oot_named(tmp_path, ghome, "lannish", trusted=True), net="lan")
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"), net="lan")
     with pytest.raises(ExtensionError, match="may not join network 'lan'"):
         _render_with(tmp_path, {"lannish": {}})
     from glove.compose import validate_project

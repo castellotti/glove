@@ -110,9 +110,12 @@ def prepare(req, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
         tok = args[i]
         if tok in FLAGS or re.fullmatch(r"-v{2,3}", tok):
             opts.append(tok)
-        elif tok == "-o" or tok.startswith("-o"):
-            value = tok[2:] if tok != "-o" else (args[i + 1] if i + 1 < len(args) else "")
-            i += 0 if tok != "-o" else 1
+        elif tok.startswith("-o"):
+            if tok == "-o":
+                i += 1
+                value = args[i] if i < len(args) else ""
+            else:
+                value = tok[2:]
             k, sep, v = value.replace(" ", "=", 1).partition("=")
             pat = OPTIONS.get(k.lower())
             if not sep or pat is None or not pat.fullmatch(v):

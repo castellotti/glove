@@ -32,7 +32,7 @@ def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:
     out = []
     for i, h in enumerate(settings.get("hosts") or []):
         where = f"ssh.hosts[{i}]"
-        if not isinstance(h, dict) or set(h) - {"name", "to", "user"} or not {"name", "to", "user"} <= set(h):
+        if not isinstance(h, dict) or set(h) != {"name", "to", "user"}:
             raise ValueError(f"{where}: want {{name: <name>, to: <host>:<port>, user: <user>}}")
         name, to, user = str(h["name"]), str(h["to"]), str(h["user"])
         host, _, port = to.rpartition(":")
