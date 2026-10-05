@@ -52,11 +52,13 @@ crun() {  # compose's own progress lines (Container/Network …) dropped
   "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T "glove-$S_ID-harness" "$@" 2>&1 \
     | grep -v -E '^ (Container|Network|Volume) '
 }
+tool_wrapper() {  # its argv has no spaces (bash 3.2 on macOS has no mapfile)
+  uv run --quiet --project "$ROOT" python -c \
+    'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json"
+}
 tool() {
-  # the wrapper's argv has no spaces (bash 3.2 on macOS has no mapfile)
   local w
-  w="$(uv run --quiet --project "$ROOT" python -c \
-    'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json")"
+  w="$(tool_wrapper)"
   # shellcheck disable=SC2086
   crun $w bash -c "$1"
 }
@@ -183,8 +185,7 @@ import sys, yaml
 svc = next(v for k, v in yaml.safe_load(open(sys.argv[1]))["services"].items() if k.endswith("-harness"))
 cmd = svc["command"]
 print(" ".join(cmd[:cmd.index("ctty") - 1]))' "$S_COMPOSE")"
-w="$(uv run --quiet --project "$ROOT" python -c \
-  'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json")"
+w="$(tool_wrapper)"
 cat > "$S3B/work/scan.sh" <<'EOF2'
 for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue
   tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -q '^GLOVE_LLM_API_KEY=glove-test-key' && echo "KEY-SEEN $p"
@@ -193,9 +194,11 @@ EOF2
 # shellcheck disable=SC2086
 out="$("$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T -e GLOVE_LLM_API_KEY=glove-test-key \
   "glove-$S_ID-harness" $wrap bash -c "sleep 30 & bash /work/scan.sh; echo TOOL; $w bash /work/scan.sh" 2>&1)"
-echo "$out" | sed -n '/^TOOL$/q;p' | grep -q KEY-SEEN && ok "control: the harness side reads its own processes' environ" \
+harness_side="$(echo "$out" | sed -n '/^TOOL$/q;p')"
+tool_side="$(echo "$out" | sed -n '/^TOOL$/,$p')"
+echo "$harness_side" | grep -q KEY-SEEN && ok "control: the harness side reads its own processes' environ" \
   || bad "control: no key seen from the harness side: $out"
-echo "$out" | sed -n '/^TOOL$/,$p' | grep -q scanned && ! echo "$out" | sed -n '/^TOOL$/,$p' | grep -q KEY-SEEN \
+echo "$tool_side" | grep -q scanned && ! echo "$tool_side" | grep -q KEY-SEEN \
   && ok "tool (nono, browsers): /proc readable, no other process's environ (the key stays hidden)" \
   || bad "tool (nono, browsers): environ scan: $out"
 cleanup

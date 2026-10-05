@@ -605,7 +605,7 @@ def brief(blocks: Sequence[Toolchain], enforcer: str, options: dict | None = Non
     """The context-file section telling the agent what is baked in."""
     from .enforcers import get_enforcer
 
-    browsers_ok = get_enforcer(enforcer).tools_run_browsers(options or {})
+    browsers_ok = get_enforcer(enforcer).tools_run_browsers(options)
     lines = ["## Toolchains", "",
              "Baked into this image at build time (shell commands have no network, so nothing can be "
              f"installed now). Everything lives under `{ROOT}` (read-only):", ""]

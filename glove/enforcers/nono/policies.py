@@ -76,11 +76,12 @@ DEFAULT_ALLOW_COMMANDS = ["cp", "mv", "rm"]
 BROWSER_READ = ["/proc"]
 
 
-def browsers_enabled(options: dict) -> bool:
+def browsers_enabled(options: dict | None) -> bool:
     nono = (options or {}).get("nono") or {}
-    if not isinstance(nono, dict) or not isinstance(nono.get("browsers", False), bool):
+    on = nono.get("browsers", False) if isinstance(nono, dict) else None
+    if not isinstance(on, bool):
         raise ConfigError("enforcer_options.nono must be a mapping and its `browsers` true or false")
-    return nono.get("browsers", False)
+    return on
 
 
 def _rw_mounts(plan: SessionPlan) -> list[str]:
@@ -138,6 +139,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
     tools = plan.tools or {}
     allow_commands = list(tools.get("allow_commands", DEFAULT_ALLOW_COMMANDS))
     deny_commands = list(tools.get("deny_commands", []))
+    read = _read_paths(plan) + (BROWSER_READ if browsers_enabled(plan.enforcer_options) else [])
     profile = {
         "meta": {"name": "glove-tool"},
         "extends": "default",
@@ -148,7 +150,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
             # command can exec node/python; read-only, and the widened read
             # surface is bounded by network.block + deny_vars (module docstring).
             "allow": [work, *_rw_mounts(plan), TMP, *plan.composition.channel_paths],
-            "read": [*_read_paths(plan), *(BROWSER_READ if browsers_enabled(plan.enforcer_options) else [])],
+            "read": read,
         },
         "network": {"block": True},
         "environment": {"deny_vars": list(SECRET_DENY_VARS)},

@@ -25,7 +25,8 @@ from glove.runtimes.seccomp import NESTED_USERNS_PROFILE
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    cfg = make_cfg(harness=kw.pop("harness", "pi"), workdir=str(work), name="s", enforcer="nono+srt", **kw)
+    cfg = make_cfg(harness=kw.pop("harness", "pi"), workdir=str(work), name="s",
+                   enforcer=kw.pop("enforcer", "nono+srt"), **kw)
     return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
                               state_dir=str(tmp_path / "ext"))
 
@@ -122,11 +123,7 @@ def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
     """`enforcer_options: {nono: {browsers: true}}`: Chromium needs /proc in the tool
     profile (read-only); off by default, and the harness side is unchanged."""
     def policies(**kw):
-        work = tmp_path / "work"
-        work.mkdir(exist_ok=True)
-        cfg = make_cfg(harness="pi", workdir=str(work), name="s", enforcer=enforcer, **kw)
-        return build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=1000, gid=1000,
-                                  state_dir=str(tmp_path / "ext")).policies
+        return _plan(tmp_path, enforcer=enforcer, **kw).policies
 
     off, on = policies(), policies(enforcer_options={"nono": {"browsers": True}})
     assert "/proc" not in json.loads(off["tool.json"])["filesystem"]["read"]
