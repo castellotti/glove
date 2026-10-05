@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -167,3 +168,43 @@ def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
     assert {a.name for a in comp.active} == {"llm", "gate", "corporate", "webfetch", "observe"}
     assert comp.slot_exports("egress")["route"] == "corporate"
     assert comp.slots["forwarder"].name == "observe"
+
+
+def _plan_template(tmp_path, monkeypatch, name, fill):
+    """Materialize template `name`, fill its placeholders with `fill(text)`, plan it."""
+    from glove.plan import build_session_plan
+
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    assert name in sdm.list_templates()
+    sd, sid = sdm.materialize(name, tmp_path / name)
+    sd.file.write_text(fill(sd.file.read_text()))
+    raw = sdm.load_file(sd)
+    assert sdm.placeholders_left(raw) == []
+    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
+    return cfg, build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                                   session_dir=str(sd.root))
+
+
+def test_vibe_search_template_plans_once_filled(tmp_path, monkeypatch):
+    cfg, plan = _plan_template(tmp_path, monkeypatch, "vibe-search", lambda text: (
+        text.replace("provider: <set-me>         # openai", "provider: llama.cpp  # openai")
+        .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
+        .replace("provider: <set-me>", "provider: mullvad").replace("keychain:<set-me>", "keychain:wg")))
+    comp = plan.composition
+    assert cfg.harness == "vibe"
+    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert {"search-mcp", "webfetch-mcp"} <= {e.name for e in comp.endpoints}
+
+
+def test_claude_code_template_plans_once_filled(tmp_path, monkeypatch):
+    def fill(text):
+        assert text.count("keychain:<set-me>") >= 2  # the token and the GitHub token are references
+        return text.replace("keychain:<set-me>", "keychain:svc")
+
+    cfg, plan = _plan_template(tmp_path, monkeypatch, "claude-code", fill)
+    comp = plan.composition
+    assert cfg.harness == "claude-code" and plan.enforcer == "nono+srt"
+    assert {"direct", "webfetch", "playwright", "github", "relay", "observe", "filter"} <= {a.name for a in comp.active}
+    assert comp.by_name("ssh") is None
+    assert "/proc" in json.loads(plan.policies["tool.json"])["filesystem"]["read"]  # browsers in shell commands
+    assert [tc["lang"] for tc in cfg.toolchains] == ["python", "node"]

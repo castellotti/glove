@@ -63,7 +63,7 @@ glove up                                # build → sidecars → resolve model �
 glove down                              # stop (glove rm: also delete .glove/)
 ```
 
-`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `pi-rag`, `browse-watch`, `corporate`), a path to a
+`glove new` takes a bundled template (`templates/`: `minimal`, `pi-search`, `pi-rag`, `browse-watch`, `corporate`, `claude-code`, `vibe-search`), a path to a
 directory or file, or a git URL. Templates are *materialized*, not inherited:
 the file is a full copy, so upgrading glove never silently widens a session.
 `glove check` warns when the template changed since, and `glove new --diff`
@@ -91,6 +91,8 @@ shows how.
 | `pi-rag` | offline investigation of local documents and media | `llm`, `ocr`, `rag`, `media` |
 | `browse-watch` | a real browser you can watch (noVNC) | `llm`, `direct`, `playwright` (`novnc`) |
 | `corporate` | corporate resources over this machine's corporate VPN, nothing else | `llm`, `corporate`, `webfetch`, `observe` |
+| `claude-code` | Claude Code on an Anthropic subscription, for software work | `llm` (`auth: oauth`), `direct`, `webfetch`, `playwright`, `github`, `observe`, `filter`; Python/Node toolchains, Playwright's Chromium usable from shell commands |
+| `vibe-search` | `pi-search` with Mistral Vibe as the harness | as `pi-search` |
 
 Each has a `README.md` in `templates/<name>/`. A template's private parts
 (Keychain service names, VPN register hooks, local model paths) never live in
@@ -128,7 +130,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
 limits: { pids: 512, memory: 4g, cpus: 2 }
-enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true)
+enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
 # toolchains:                              # pinned runtimes + deps baked into the image (see below)
@@ -196,7 +198,9 @@ toolchains:                       # a list; order is install and PATH order; one
   `NODE_PATH`, because nono strips it (and `NODE_OPTIONS`/`PYTHONPATH`) from every
   wrapped command. Instead a node project's `node_modules` is linked into the
   pinned node's own global folder (`<runtime>/lib/node`), so `require` finds the
-  deps from any directory under every enforcer. The harness always runs on the
+  deps from any directory under every enforcer. With no project, the global
+  `packages` take that folder instead (so `require('playwright')` works from a
+  shell command anywhere). The harness always runs on the
   image's own interpreter, toolchain or not: Pi starts as
   `/usr/local/bin/node /usr/local/bin/pi`, and Vibe's hook runs as
   `/usr/local/bin/python3 /opt/glove/vibe-hook`. Claude Code is a native
@@ -259,11 +263,18 @@ toolchains:                       # a list; order is install and PATH order; one
 - **Browsers.** `browsers` runs `playwright install --with-deps` at build time,
   which installs the engines and their OS libraries. The engines launch offline
   from a shell command under `enforcer: srt` (with `chromiumSandbox: false`, after
-  `mkdir -p "$TMPDIR"`). Under `nono` and the default `nono+srt`, nono's
-  per-command profile stops Chromium starting: it is denied `/proc/self/maps`,
-  `/proc/sys` and `/etc/fonts`. Widening that profile would expose `/proc`, so
-  it isn't done; the agent is told. For a browser under the default enforcer,
-  use the `playwright` extension (a sidecar). The engines are installed by the
+  `mkdir -p "$TMPDIR"`). Under `nono` and the default `nono+srt`, Chromium
+  needs `/proc` (`/proc/self/maps`, `/proc/sys`), which nono's per-command
+  profile doesn't grant, so it doesn't start. `enforcer_options: {nono:
+  {browsers: true}}` opts in: the tool profile reads all of `/proc`, and
+  Chromium starts with `chromiumSandbox: false`. Other processes' `environ`,
+  memory and fd links stay closed (Landlock refuses access to processes outside
+  the command's own sandbox, so the harness's LLM key stays hidden); their
+  command lines and `/proc/net` become readable. Verified live under
+  `nono+srt` (Docker); untested under plain `nono` (Podman's default), where the
+  harness's own Landlock domain is the parent of each command's. The agent is
+  told which applies. For browsing the internet, use the `playwright` extension (a
+  sidecar). The engines are installed by the
   project's own `playwright` when its `package.json` depends on it, otherwise by
   the global one from `packages`.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
@@ -951,7 +962,7 @@ bash tests/integration/test_observe.sh direct # observe + filter end to end (als
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
-bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (35 checks)
+bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (42 checks)
 # RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal)
 # (images are per runtime: `glove build pi --provider podman`)
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers

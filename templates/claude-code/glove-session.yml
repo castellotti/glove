@@ -1,0 +1,49 @@
+# A glove session: Claude Code on your Anthropic account, for software work.
+# Edit this file, then `glove check && glove up`. Schema: README "Session file".
+glove: 3
+template: claude-code
+harness: claude-code
+# enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
+runtime: docker                # docker | podman
+mounts: []                     # extra host dirs, e.g. [{path: ~/src/some-library, mode: rw}]; work/ is always /work
+limits: { pids: 1024, memory: 8g, cpus: 4 }
+# Lets a shell command start the baked Chromium (Playwright against pages served
+# inside the sandbox): shell commands may read /proc, while other processes'
+# environment (the harness's token) stays hidden. README "Toolchains".
+enforcer_options: { nono: { browsers: true } }
+toolchains:                    # baked into the image at build time; shell commands are offline
+  - { lang: python, version: "3.12", manager: uv }
+  - { lang: node, version: "24.21.0", manager: "pnpm@12.9.1", packages: ["playwright@1.63.0"], browsers: [chromium] }
+extensions:
+  llm:                         # the model (required): see extensions/llm/README.md
+    provider: anthropic
+    auth: oauth                # a Claude subscription token from `claude setup-token`; drop for an API key
+    model: claude-opus-5-5
+    api_key: keychain:<set-me> # store it with `glove keychain set <service>`
+  direct: {}                   # egress for WebFetch, gh/git and the browser (no tunnel)
+  webfetch: {}                 # Claude Code's own WebFetch, through the egress
+  playwright: {}               # a real Chromium in a sidecar for remote pages (browser_* tools)
+  github:                      # gh and git push/fetch/clone from shell commands; the token stays in a sidecar
+    token: keychain:<set-me>   # a fine-grained token, scoped to the repositories this session works on
+  # ssh:                       # `ssh <host> <command>` to LAN hosts (extensions/ssh/README.md)
+  #   key: keychain:<set-me>   # a key made for this session, base64 of the PEM
+  #   hosts: [{name: <set-me>, to: "<set-me>:22", user: <set-me>}]
+  #   known_hosts: local/known_hosts
+  # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
+  observe: {}
+  filter: {}                   # also let `glove filter …` / Layman block destinations (needs observe)
+harness_config:
+  settings:
+    env:
+      ANTHROPIC_DEFAULT_OPUS_MODEL: claude-opus-5-5
+      ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-5-5
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: claude-haiku-4-5
+      ENABLE_TOOL_SEARCH: auto
+brief: |
+  # claude-code — session brief
+
+  Software development in `/work`. Shell commands are offline:
+  - GitHub: `gh` and `git push`/`fetch`/`pull`/`clone` are relayed (see Capabilities).
+  - The web: WebFetch to read a page, the `browser_*` tools to drive one.
+  - Local Playwright (from a shell command) only for pages served inside the sandbox
+    (`localhost`, `file://`).
