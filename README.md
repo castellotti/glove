@@ -270,8 +270,10 @@ toolchains:                       # a list; order is install and PATH order; one
   Chromium starts with `chromiumSandbox: false`. Other processes' `environ`,
   memory and fd links stay closed (Landlock refuses access to processes outside
   the command's own sandbox, so the harness's LLM key stays hidden); their
-  command lines and `/proc/net` become readable. The agent is told which
-  applies. For browsing the internet, use the `playwright` extension (a
+  command lines and `/proc/net` become readable. Verified live under
+  `nono+srt` (Docker); untested under plain `nono` (Podman's default), where the
+  harness's own Landlock domain is the parent of each command's. The agent is
+  told which applies. For browsing the internet, use the `playwright` extension (a
   sidecar). The engines are installed by the
   project's own `playwright` when its `package.json` depends on it, otherwise by
   the global one from `packages`.

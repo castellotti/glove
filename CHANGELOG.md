@@ -88,6 +88,7 @@ All notable changes to glove are documented here.
   (Landlock denies access to processes outside the command's own domain), so the
   harness's LLM key stays hidden; their command lines and `/proc/net` become
   readable. Off by default; the toolchains brief tells the agent which applies.
+  Verified live under `nono+srt`; untested under plain `nono` (Podman).
 - Templates **`claude-code`** (Claude Code on an Anthropic subscription: `github`,
   WebFetch and a sidecar Chromium through `direct`, Python/uv and Node/pnpm with
   Playwright's Chromium usable from shell commands, `observe` + `filter`; `ssh`
