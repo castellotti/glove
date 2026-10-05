@@ -14,7 +14,7 @@ from helpers import make_cfg, render
 
 from glove.config import ConfigError
 from glove.enforcers import get_enforcer
-from glove.enforcers.base import ENFORCER_DIR, GLOVE_PTY, srt_suffix
+from glove.enforcers.base import ENFORCER_DIR, GLOVE_PTY, NONO, srt_suffix
 from glove.enforcers.nono_srt import render_harness_settings
 from glove.enforcers.srt import APPLY_SECCOMP, GLOVE_SRT, NODE
 from glove.plan import build_session_plan
@@ -49,7 +49,7 @@ def test_tool_commands_drop_the_terminal_then_run_under_nono(tmp_path):
     plan = _plan(tmp_path)
     argv = json.loads(plan.policies["tool-wrapper.json"])["argv"]
     assert argv[:3] == [GLOVE_PTY, "notty", "--"]
-    assert argv[3:5] == ["nono", "wrap"] and f"{ENFORCER_DIR}/tool.json" in argv
+    assert argv[3:5] == [NONO, "wrap"] and f"{ENFORCER_DIR}/tool.json" in argv
     assert "tool.json" in plan.policies and "harness.json" not in plan.policies
     tool = json.loads(plan.policies["tool.json"])
     assert tool["network"]["block"] is True and "GLOVE_LLM_API_KEY" in tool["environment"]["deny_vars"]

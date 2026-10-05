@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from glove.mounts import MountError, compute_mounts, protected_paths
+from glove.mounts import Mount, MountError, compute_mounts, make_bind_sources, protected_home, protected_paths
 
 
 def _by_container(plan):
@@ -223,7 +223,69 @@ def test_trusted_path_that_cannot_be_protected_is_refused(tmp_path, plant):
         protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)
 
 
+def test_masked_paths_always_get_the_placeholder(tmp_path):
+    work = tmp_path / "w"
+    (work / ".vibe").mkdir(parents=True)
+    (work / ".vibe" / "hooks.toml").write_text("[[hooks]]\n")
+    got = [(p.container_path, p.host_path, p.kind, p.read_only)
+           for p in protected_paths(compute_mounts(str(work)).mounts, trusted=["/work/.claude/"],
+                                    masked=["/work/.vibe/", "/work/.agents/"])]
+    real = os.path.realpath(work)
+    assert got == [
+        ("/work/.claude", None, "dir", True),  # a trusted dir: the placeholder only while missing
+        ("/work/.vibe", None, "dir", True),  # masked: the repo's own .vibe/ is never seen
+        ("/work/.agents", None, "dir", True),
+    ]
+    (work / ".claude").mkdir()
+    got = {p.container_path: p.host_path for p in protected_paths(compute_mounts(str(work)).mounts,
+                                                                   trusted=["/work/.claude/"])}
+    assert got == {"/work/.claude": f"{real}/.claude"}
+
+
 def test_trusted_files_outside_a_rw_mount_are_skipped(tmp_path):
     work = tmp_path / "w"
     work.mkdir()
     assert protected_paths(compute_mounts(str(work)).mounts, trusted=["/opt/x/settings.json"]) == ()
+
+
+HOME_PROTECTED = [".vibe/hooks.toml", ".vibe/tools/", ".agents/"]
+
+
+def _home(tmp_path):
+    return Mount(host_path=str(tmp_path / "home"), container_path="/home/agent", mode="rw")
+
+
+def test_protected_home_binds_the_homes_own_copy_with_its_dirs_pinned(tmp_path):
+    got = [(p.container_path, p.host_path, p.kind, p.read_only)
+           for p in protected_home(_home(tmp_path), HOME_PROTECTED)]
+    home = tmp_path / "home"
+    assert got == [
+        ("/home/agent/.vibe", f"{home}/.vibe", "dir", False),  # pinned: `mv .vibe x` fails
+        # never a placeholder: glove renders the file there (or creates it empty)
+        ("/home/agent/.vibe/hooks.toml", f"{home}/.vibe/hooks.toml", "file", True),
+        ("/home/agent/.vibe/tools", f"{home}/.vibe/tools", "dir", True),
+        ("/home/agent/.agents", f"{home}/.agents", "dir", True),
+    ]
+
+
+def test_bind_sources_are_created_empty_and_existing_ones_kept(tmp_path):
+    (tmp_path / "home" / ".vibe").mkdir(parents=True)
+    (tmp_path / "home" / ".vibe" / "hooks.toml").write_text("kept")
+    make_bind_sources(protected_home(_home(tmp_path), HOME_PROTECTED))
+    assert (tmp_path / "home" / ".vibe" / "hooks.toml").read_text() == "kept"
+    assert (tmp_path / "home" / ".vibe" / "tools").is_dir()
+    assert (tmp_path / "home" / ".agents").is_dir()
+
+
+@pytest.mark.parametrize("plant", ["file-link", "file-is-dir", "dir-is-file"])
+def test_protected_home_path_of_the_wrong_kind_is_refused(tmp_path, plant):
+    vibe = tmp_path / "home" / ".vibe"
+    vibe.mkdir(parents=True)
+    if plant == "file-link":
+        (vibe / "hooks.toml").symlink_to(tmp_path)
+    elif plant == "file-is-dir":
+        (vibe / "hooks.toml").mkdir()
+    else:
+        (vibe / "tools").write_text("")
+    with pytest.raises(MountError, match="glove protects it"):
+        protected_home(_home(tmp_path), HOME_PROTECTED)

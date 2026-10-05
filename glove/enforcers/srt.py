@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR
+from .base import ENFORCER_DIR, SRT
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -117,7 +117,7 @@ def render_settings(plan: SessionPlan) -> dict:
 
 
 def tool_wrapper_argv() -> list[str]:
-    return ["srt", "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+    return [SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
 
 class SrtEnforcer:

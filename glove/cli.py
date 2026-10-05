@@ -237,10 +237,10 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         plan.policies_host_dir = str(enforcer_dir)
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
-    from .mounts import make_pinned_dirs
+    from .mounts import make_bind_sources
 
     write_system_files(plan, sd.state / "harness")
-    make_pinned_dirs(plan.protect)  # a pinned dir over a trusted file may not exist yet
+    make_bind_sources(plan.protect)  # a pinned dir, or a protected file in the home, may not exist yet
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 

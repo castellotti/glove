@@ -423,6 +423,59 @@ Claude Code from starting (fail closed).
   tool wrapper, without network. A live Layman gate for a gloved Claude Code
   would need a loopback relay inside the harness container: not built.
 
+## Pi and Vibe: their own config (ring 0)
+
+Pi and Vibe keep their configuration in a home the harness process writes, and
+the agent's file tools (Pi's `write`/`edit`, Vibe's `write_file` and
+`search_replace`) run in that process, outside the tool wrapper. Both also load
+config and code from the project in `/work`. Without protection, the agent
+could set up code to run inside the harness at the next start, with the
+harness's rights (its env, including the LLM key; the home; the session's
+forwarders), and could switch off the wrapper itself. Verified live before the
+fix: a `/work/.vibe/hooks.toml` defining a `pre_tool` hook named
+`glove-enforcer` loads before glove's (project hook files come first, and
+Vibe drops a later hook with the same name), so the next command ran with no
+wrapper and the planted hook ran in the harness.
+
+- **Vibe's project config is masked.** glove runs Vibe with `--trust`, which
+  trusts `/work` for that run (no trust dialog) and loads the project's
+  `.vibe/` (config, hooks, tools, plugins, agents, prompts, skills) and
+  `.agents/skills`. Ring 0 binds an empty read-only directory over `.vibe/` and
+  `.agents/` (`masked_files`), whether or not the repo has them: a committed
+  `.vibe/hooks.toml` could shadow glove's hook as well as a planted one. The
+  alternative, running untrusted, shows Vibe's trust dialog at every start in
+  a repo with an `AGENTS.md`, and answering it fails on a read-only trust store.
+- **Pi skips the project's resources.** The rendered `settings.json` sets
+  `defaultProjectTrust: never` and `trust.json` is empty, both read-only, so
+  `.pi/settings.json`, `.pi/extensions`, skills, prompts, themes,
+  `SYSTEM.md`/`APPEND_SYSTEM.md` and `.agents/skills` never load, and there is
+  no prompt.
+- **The home's loaders are read-only** (`protected_home`): the files glove
+  renders there (Vibe's `config.toml` and `hooks.toml`, Pi's `settings.json`,
+  `models.json` and `trust.json`), Vibe's `.env` (it sets `VIBE_*` config), and
+  every directory either harness loads code, skills, prompts or themes from,
+  including Pi's `bin/` (first on a tool command's PATH, and where Pi looks
+  for `rg`/`fd` before the system's) and `npm/`/`git/` (installed packages),
+  and `~/.agents`. The config dir is pinned (`mv ~/.vibe x` fails with
+  `EBUSY`). The tool wrapper runs `nono` and `srt` by absolute path.
+- **Tested:** `test_nono_srt.sh pi|vibe` checks that none of the protected
+  paths can be changed from the harness position, plants the project config
+  above (a shadowing Vibe hook, a Pi project extension) with an `AGENTS.md`,
+  and checks that the next agent turn's command is still wrapped and nothing
+  planted ran. With the mask removed (Vibe) or `defaultProjectTrust: always`
+  (Pi), the same checks fail.
+- **Pi's `SYSTEM.md` and `APPEND_SYSTEM.md`** replace and extend its system
+  prompt. An empty placeholder would blank the prompt, so they are not bound;
+  glove renders neither and removes them from the agent dir at each start.
+- **Gaps:** Pi's `auth.json` (credentials for other providers) and
+  `keybindings.json` stay writable; context files (`AGENTS.md`) are prompts,
+  re-rendered at each start. A session home from before this protection keeps
+  whatever its protected directories already hold, now read-only: check
+  `extensions/`, `tools/`, `plugins/` and the rest before resuming one. Pi reads the project's
+  `sessionDir` before it resolves trust, so a planted `.pi/settings.json` can
+  move where sessions are written. Claude Code's own home is guarded by
+  managed deny rules on its file tools, not by ring 0.
+
 ## Tool commands and the terminal (TIOCSTI)
 
 nono's base policy grants `/dev/tty`, and Docker Desktop's kernel has

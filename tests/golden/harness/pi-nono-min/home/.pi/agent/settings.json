@@ -2,5 +2,6 @@
   "defaultProvider": "glove",
   "defaultModel": "test-model",
   "defaultThinkingLevel": "low",
-  "theme": "dark"
+  "theme": "dark",
+  "defaultProjectTrust": "never"
 }

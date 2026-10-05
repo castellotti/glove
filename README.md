@@ -15,8 +15,8 @@ Delete the directory and the session is gone.
 
 The sandbox is *distributed as a container image* (Docker or Podman), but the
 security does not rest on the container alone: a kernel-level capability
-sandbox (srt/bubblewrap around the harness and nono/Landlock around every
-command on Docker; nono alone on Podman) runs *inside* the container and wraps
+sandbox (Anthropic's **sandbox-runtime**, aka "[srt](https://github.com/anthropics/sandbox-runtime)"/[bubblewrap](https://github.com/containers/bubblewrap) around the harness and [nono](https://github.com/nolabs-ai/nono)/Landlock around every
+command on Docker; [nono](https://github.com/nolabs-ai/nono) alone on Podman) runs *inside* the container and wraps
 every command the agent executes. See [How it works](#how-it-works---three-rings-defense-in-depth).
 
 **Minimal core + plugins.** The core (`glove/`) knows runtimes, enforcers and
@@ -28,7 +28,7 @@ selected one's code runs. Every capability is an **extension** in
 containers, no mounts, no image layers. Bundled: **`llm`** (the inference
 engine; required), the egress providers **`vpn`** (gluetun), **`tor`**,
 **`direct`** and **`corporate`** (corporate resources only), **`search`** (a
-per-session SearXNG), **`webfetch`** (read a page through the egress), **`observe`** (network
+per-session [SearXNG](https://github.com/searxng/searxng)), **`webfetch`** (read a page through the egress), **`observe`** (network
 observability, read) and **`filter`** (network rules, write), **`media`**
 (analysis toolchain), **`ocr`**/**`rag`** (documents), **`playwright`** (a
 real Chromium: a hardened headless sidecar, a noVNC-watched one, or the host's
@@ -393,6 +393,32 @@ renders it one argument per line (`tool-wrapper.argv`) beside
 `tool-wrapper.json`, for glue that has no JSON parser. Both directories are
 updated in place on a re-plan (a changed file replaced atomically, stale ones
 removed), since a running session binds them.
+
+**What a harness loads is not the agent's to write.** The agent's file tools
+run inside the harness process, which can write `/work` and its own home, so
+ring 0 binds read-only what the harness would load from either (each listed in
+`harness.yml`; a trailing `/` marks a directory, and the directories above one
+are pinned so they can't be renamed aside):
+
+- `trusted_files`: in the working dir, bound read-only as the repo holds them
+  (an empty placeholder when missing). Claude Code's `.claude/settings*.json`.
+- `masked_files`: in the working dir, always the empty placeholder. Vibe's
+  `.vibe/` and `.agents/`: a project hook runs before glove's and shadows one of
+  the same name, so a repo's own Vibe config is not loaded under glove (put it
+  in `harness_config`).
+- `protected_home`: in the home, the home's own copy (glove renders the files;
+  a missing one is created empty). Pi: `settings.json`, `models.json`,
+  `trust.json` and `extensions/`, `skills/`, `prompts/`, `themes/`, `bin/`,
+  `npm/`, `git/`. Vibe: `config.toml`, `hooks.toml`, `.env` and `tools/`,
+  `plugins/`, `agents/`, `prompts/`, `skills/`. Both: `~/.agents`. Sessions,
+  logs and caches stay writable. glove re-renders the files at each start, so
+  a choice the harness saves there (Pi's `/model`, a theme) never outlived a
+  session; now the save itself fails.
+
+Pi also skips the project's `.pi/` and `.agents/skills` (rendered
+`defaultProjectTrust: never` and an empty trust store; a session may set
+`harness_config.settings.defaultProjectTrust` to relax it). Its `AGENTS.md`
+and Vibe's still load: they are prompts, like any file the agent reads.
 
 **git in `/work`.** Through Docker Desktop's file sharing, a `.git` the agent
 just made can read as another uid, and git refuses it ("dubious ownership").

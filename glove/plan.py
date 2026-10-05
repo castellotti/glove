@@ -23,7 +23,8 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile
-from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_paths
+from .harnessconfig import CONTAINER_HOME
+from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_home, protected_paths
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -326,9 +327,14 @@ def build_session_plan(
     )
     session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    trusted = [posixpath.normpath(posixpath.join(mount_plan.working_dir, f)) for f in profile.trusted_files]
+    def in_working_dir(files: tuple[str, ...]) -> list[str]:
+        return [posixpath.join(mount_plan.working_dir, f) for f in files]
+
+    home = Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
     mount_plan = replace(mount_plan, protect=protected_paths(
-        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files, trusted=trusted))
+        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
+        trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
+    ) + protected_home(home, profile.protected_home))
     network = build_network_plan(cfg, session, comp)
 
     environment = _resolve_env(cfg, profile)

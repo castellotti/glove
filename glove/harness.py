@@ -28,6 +28,7 @@ MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
     "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
+    "masked_files", "protected_home",
 })
 REQUIRED_KEYS = ("name", "image", "entry", "config_home", "context_file")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
@@ -72,8 +73,18 @@ class HarnessProfile:
     contributions: frozenset[str] = frozenset()
     # Files under its working dir the harness loads its own config from (e.g.
     # Claude Code's project settings, whose `env` and commands it applies
-    # outside ring 1): ring 0 binds them read-only, so the agent cannot plant one.
+    # outside ring 1), a trailing `/` marking a directory: ring 0 binds them
+    # read-only (an empty placeholder when missing), so the agent cannot plant one.
     trusted_files: tuple[str, ...] = ()
+    # Like trusted_files, but the harness never sees the working dir's own copy
+    # (always the empty placeholder): config a repo could use against glove,
+    # e.g. Vibe's project hooks, which run before glove's and can shadow it.
+    masked_files: tuple[str, ...] = ()
+    # What it loads from its own (writable) home, relative to the home; a
+    # trailing `/` marks a directory: its settings, hooks and trust store, and
+    # the dirs it loads code from. Ring 0 binds them read-only, so the agent
+    # cannot reconfigure the harness or plant code in it for the next start.
+    protected_home: tuple[str, ...] = ()
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
 
@@ -134,10 +145,12 @@ def load_profile(path: Path) -> HarnessProfile:
         opt["transcript_subdir"] = raw["transcript_subdir"]
     if "runtime_paths" in raw:
         opt["runtime_paths"] = _strs(raw["runtime_paths"], f"{where} runtime_paths")
-    if "trusted_files" in raw:
-        opt["trusted_files"] = _strs(raw["trusted_files"], f"{where} trusted_files")
-        if any(f.startswith("/") or ".." in f.split("/") for f in opt["trusted_files"]):
-            raise ConfigError(f"{where}: trusted_files are relative to the working dir, without '..'")
+    for key, base in (("trusted_files", "working dir"), ("masked_files", "working dir"), ("protected_home", "home")):
+        if key in raw:
+            opt[key] = _strs(raw[key], f"{where} {key}")
+            # a trailing `/` marks a directory; no other empty, `.` or `..` part
+            if any(f.startswith("/") or {"", ".", ".."} & set(f.removesuffix("/").split("/")) for f in opt[key]):
+                raise ConfigError(f"{where}: {key} are relative to the {base}, without '.' or '..'")
     return HarnessProfile(
         name=raw["name"], image=str(raw["image"]), entry=list(_strs(raw["entry"], f"{where} entry")),
         config_home_env=str(home["env"]), config_home_path=str(home["path"]),

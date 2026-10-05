@@ -39,7 +39,7 @@ import json
 from typing import TYPE_CHECKING
 
 from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR, GLOVE_PTY
+from ..base import ENFORCER_DIR, GLOVE_PTY, NONO
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
@@ -167,7 +167,7 @@ def tool_wrapper_argv() -> list[str]:
     harness TUI."""
     return [
         GLOVE_PTY, "notty", "--",
-        "nono", "wrap", "-s", "--allow-cwd",
+        NONO, "wrap", "-s", "--allow-cwd",
         "--profile", f"{ENFORCER_DIR}/tool.json", "--",
     ]
 

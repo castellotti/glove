@@ -131,7 +131,18 @@ def test_pi_config(tmp_path):
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultModel"] == "test-model"
     assert "SEARXNG_URL" not in settings.get("env", {})  # container env, not settings
-    assert (agent / "extensions").is_dir()
+    # the project's .pi/ never loads: no prompt, and no saved decision to override it
+    assert settings["defaultProjectTrust"] == "never"
+    assert json.loads((agent / "trust.json").read_text()) == {}
+
+
+def test_pi_drops_a_system_prompt_left_in_its_home(tmp_path):
+    agent = tmp_path / "home" / ".pi" / "agent"
+    agent.mkdir(parents=True)
+    for name in ("SYSTEM.md", "APPEND_SYSTEM.md"):
+        (agent / name).write_text("planted")
+    _home("pi", tmp_path)
+    assert not (agent / "SYSTEM.md").exists() and not (agent / "APPEND_SYSTEM.md").exists()
 
 
 @pytest.mark.parametrize("vision,expected", [(True, ["text", "image"]), (False, ["text"])])

@@ -186,6 +186,24 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Pi and Vibe could be reconfigured by their own agent** (security). The
+  agent's in-process write tools could edit what the harness loads at the next
+  start, outside the ring-1 tool sandbox. A project `.vibe/hooks.toml` with a
+  hook named like glove's ran first and shadowed it, so commands ran unwrapped
+  (verified live). Now:
+  - Vibe's project `.vibe/` and `.agents/` are masked (an empty read-only
+    directory; the repo's own copy is not loaded either);
+  - Pi skips the project's `.pi/` and `.agents/skills` (`defaultProjectTrust:
+    never`, an empty trust store);
+  - what each loads from its home is read-only to the agent: the config and
+    hooks glove renders, Vibe's `.env`, Pi's trust store, and the dirs either
+    loads code, skills, prompts or themes from (`~/.agents` too); a Pi
+    `SYSTEM.md`/`APPEND_SYSTEM.md` in the home is removed at each start.
+  An existing session's home keeps what those dirs already hold: check them
+  before resuming one. Harness profiles gain `masked_files` and `protected_home`, and
+  `trusted_files` takes directories (a trailing `/`).
+- The tool wrapper runs `/usr/bin/nono` and `/usr/local/bin/srt` by absolute
+  path: Pi puts its agent `bin/` first on a tool command's PATH.
 - webfetch asks the egress gate why only when a tunnel was refused (403),
   instead of after every failed fetch (a probe of up to 15s).
 - github's URL-rewrite check runs once per request, and only when a remote is

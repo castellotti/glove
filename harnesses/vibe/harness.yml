@@ -4,9 +4,25 @@ summary: Mistral Vibe.
 # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,
 # pre_tool hook) only. Optional capabilities are opt-in extensions.
 image: glove/vibe:0.5.0
+# `--trust` trusts /work for this run (no trust dialog; the project's AGENTS.md
+# loads): what else Vibe would load from the project is masked below.
 entry: [vibe, --trust, --yolo, --workdir, /work]
 config_home: { env: VIBE_HOME, path: /home/agent/.vibe }
 context_file: /home/agent/.vibe/AGENTS.md
+# Read-only to the agent (ring 0), relative to the home: the config and hooks
+# glove renders (its pre_tool hook wraps every command), `.env` (VIBE_*
+# settings), and the dirs Vibe loads tools, plugins, agents, prompts and
+# skills from.
+protected_home:
+  - .vibe/config.toml
+  - .vibe/hooks.toml
+  - .vibe/.env
+  - .vibe/tools/
+  - .vibe/plugins/
+  - .vibe/agents/
+  - .vibe/prompts/
+  - .vibe/skills/
+  - .agents/
 env: { VIBE_HOME: /home/agent/.vibe }
 # Vibe 2.x writes each session to logs/session/session_<ts>_<id>/messages.jsonl
 # (and never creates sessions/).
@@ -22,3 +38,7 @@ pip: { install: [uv, pip, install, --system] }
 # continue-last must map to --continue, not --resume. A specific id is `--resume <id>`.
 resume: { continue: [--continue], session: [--resume, "{id}"] }
 contributions: [mcp]
+# The project's own config (a trusted /work): hooks there run before glove's
+# and shadow a hook of the same name, and its config, tools and plugins load
+# into Vibe. Masked: an empty read-only directory, whatever the repo holds.
+masked_files: [.vibe/, .agents/]
