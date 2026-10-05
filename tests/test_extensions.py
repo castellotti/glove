@@ -503,3 +503,70 @@ def test_endpoint_aliases_must_be_hostnames(tree):
     with pytest.raises(ExtensionError, match="aliases must be hostnames"):
         compose({"llm": STUB_LLM, "egress-a": {}, "fetch": {}}, harness="pi", session="s",
                 state_root=Path("/x"), manifests=discover(tree))
+
+
+# --- channels and the `work` privilege ---------------------------------------------------
+
+_RELAYISH = """\
+    services:
+      worker:
+        image: {digest}
+        networks: [egress]
+        volumes:
+          - {{ type: bind, source: "{{{{ work }}}}", target: {target}{ro} }}
+    """
+
+
+def _relayish(oot, *, work=True, target="/work", ro="", channel="ch", services="[worker]"):
+    body = _RELAYISH.format(digest=DIGEST, target=target, ro=ro)
+    extra = (f"channels: {{ {channel}: {{ services: {services} }} }}\n"
+             + ("privileges: { worker: { work: true } }\n" if work else ""))
+    _svc_ext(oot, "relayish", service=body, extra=extra)
+
+
+def _oot(tmp_path, ghome, trusted: bool):
+    oot = tmp_path / "oot"
+    ghome.mkdir(parents=True, exist_ok=True)
+    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n" + ("trusted_extensions: [relayish]\n"
+                                                                         if trusted else ""))
+    return oot
+
+
+def test_a_channel_is_shared_by_the_harness_and_its_services(tmp_path, ghome):
+    _relayish(_oot(tmp_path, ghome, trusted=True))
+    plan, doc = _render_with(tmp_path, {"direct": {}, "relayish": {}})
+    mount = {"type": "volume", "source": "glove-s-chan-ch", "target": "/run/glove/ch"}
+    assert mount in doc["services"]["glove-s-harness"]["volumes"]
+    assert mount in doc["services"]["glove-s-worker"]["volumes"]
+    assert doc["volumes"]["glove-s-chan-ch"]["driver_opts"]["o"].startswith("size=4m,mode=0700,uid=")
+    assert plan.composition.privileges["relayish/worker"] == [{"work": True}]
+    tool = json.loads(plan.policies["tool.json"])
+    assert "/run/glove/ch" in tool["filesystem"]["allow"] and tool["network"] == {"block": True}
+
+
+def test_an_untrusted_extension_gets_no_channel_and_no_work(tmp_path, ghome):
+    _relayish(_oot(tmp_path, ghome, trusted=False), work=False)
+    with pytest.raises(ExtensionError, match="shared with the harness is a privilege"):
+        _render_with(tmp_path, {"direct": {}, "relayish": {}})
+
+
+@pytest.mark.parametrize("kw,why", [
+    ({"work": False}, "never binds all of /work"),
+    ({"target": "/data"}, "read-write at /work"),
+    ({"ro": ", read_only: true"}, "read-write at /work"),
+    ({"services": "[nope]"}, r"no service\(s\) \['nope'\]"),
+    ({"channel": "Bad_Name"}, "want"),
+])
+def test_channel_and_work_rules(tmp_path, ghome, kw, why):
+    _relayish(_oot(tmp_path, ghome, trusted=True), **kw)
+    with pytest.raises(ExtensionError, match=why):
+        _render_with(tmp_path, {"direct": {}, "relayish": {}})
+
+
+def test_the_harness_mounts_no_volume_but_a_channel(tmp_path):
+    from glove.compose import validate_project
+
+    plan, doc = _render_with(tmp_path, {"direct": {}})
+    doc["services"]["glove-s-harness"]["volumes"].append({"type": "volume", "source": "x", "target": "/x"})
+    with pytest.raises(ExtensionError, match="no volume but a channel"):
+        validate_project(doc, plan, plan.composition)

@@ -29,9 +29,10 @@ engine; required), the egress providers **`vpn`** (gluetun), **`tor`**,
 **`direct`** and **`corporate`** (corporate resources only), **`search`** (a
 per-session SearXNG), **`webfetch`** (read a page through the egress), **`observe`** (network
 observability, read) and **`filter`** (network rules, write), **`media`**
-(analysis toolchain), **`ocr`**/**`rag`** (documents) and **`playwright`** (a
+(analysis toolchain), **`ocr`**/**`rag`** (documents), **`playwright`** (a
 real Chromium: a hardened headless sidecar, a noVNC-watched one, or the host's
-Chrome). See [Extensions](#extensions).
+Chrome) and **`github`** (`gh` and `git push` from shell commands, relayed to a
+sidecar that holds the token). See [Extensions](#extensions).
 
 ## Quick start
 
@@ -120,6 +121,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url)
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
+  # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
 tools: { net: block, allow_commands: [cp, mv, rm] }
@@ -462,7 +464,17 @@ Core validates all of it:
   session rather than dropping it (podman). No extension publishes ports, joins
   the harness network, mounts the docker socket, or binds host paths other
   than its own session state and, for a trusted extension and a setting the
-  user chose, a named subdirectory of `work/` (never all of it).
+  user chose, a named subdirectory of `work/` (all of it only with the `work`
+  privilege: `github`'s sidecar, which pushes the agent's checkout). A
+  read-only sidecar cannot take an environment-sourced compose secret (Docker
+  refuses), so it gets one as the harness gets its LLM key: a `launch_env` hook
+  fills an `environment:` key declared without a value, at `compose up`.
+- **Channels** (`channels: {name: {services: [...]}}`, in-tree or trusted only)
+  are a directory shared by the harness and some of the extension's sidecars: a
+  session tmpfs volume at `/run/glove/<name>`, which every enforcer lets the
+  harness and its commands write (and grants no network for). A relay's client
+  leaves requests there as files and FIFOs; glove's seccomp below srt forbids
+  Unix sockets, so there is no socket.
 - **The harness** only ever gets forwarders on its internal network.
 - **Harness mounts** from an extension (`mounts: {models: {setting: models_dir}}`)
   are read-only binds at `/mnt/<ext>-<name>` of a directory the user named in a
@@ -737,6 +749,28 @@ through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 
+### GitHub: `github` (and the `relay` library)
+
+`gh`, and `git push`/`fetch`/`pull`/`clone`/`ls-remote`, work from the agent's
+shell, with every other shell command still offline. Shims in the harness image
+relay each call over a channel to a sidecar holding the token (`token:
+keychain:<service>`), which runs the real command under a policy:
+
+- **gh:** an allowlist of subcommands; `auth`/`secret`/`extension`/… never
+  (`gh auth token` is refused); `gh api` GET only; github.com only.
+- **git:** network verbs to `https://github.com/<owner>/<repo>` remotes only, with
+  the repo's own config defanged (no hooks, helpers, fsmonitor, other protocols).
+- **Files:** file arguments are opened inside `/work` only.
+- **Network:** traffic reaches GitHub's hosts only, through an in-process fence
+  and then the egress (with `observe`, a gate: `client: github`).
+
+The sidecar binds `/work` read-write (the `work` privilege) so pushes and PRs
+work on the agent's checkout. The token never enters the harness. Use a
+fine-grained token. Details:
+[extensions/github/README.md](extensions/github/README.md),
+[extensions/relay/README.md](extensions/relay/README.md),
+[docs/SECURITY.md](docs/SECURITY.md#relays-gh-and-git-from-shell-commands-relay-github).
+
 ## How it works - three rings (defense in depth)
 
 The agent and everything it spawns are treated as **untrusted** (the real threat
@@ -823,6 +857,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` 6/6 and `test_netgate_shutdown.sh` 9/9 on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
+| Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`, 26 checks): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (30/30 with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (35/35, nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
 
 The sidecar modes need nothing on the host. Host mode needs Node/npx and a
@@ -885,6 +920,9 @@ HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP +
                                               # (13/14 checks; also: vibe 16/18; OBSERVE=1 adds flows)
 bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (19 checks;
                                               # also: headless, novnc, control, vibe)
+bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (26 checks each;
+                                              # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only;
+                                              # GH_SCRATCH_REPO=owner/repo also a push)
 bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)

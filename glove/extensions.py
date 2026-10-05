@@ -61,11 +61,16 @@ EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
-    "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts",
+    "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+# A channel's directory in the harness and in the sidecars that serve it (see
+# `Channel`).
+CHANNEL_ROOT = "/run/glove"
 
 
 class ExtensionError(ConfigError):
@@ -379,6 +384,26 @@ class Endpoint:
         return f"http://{self.host(session)}:{self.port}"
 
 
+@dataclass(frozen=True)
+class Channel:
+    """A directory the harness (and every command it runs) shares with some of
+    an extension's sidecars: a session tmpfs volume at /run/glove/<name> in
+    both, writable by the session uid. It carries no network: a relay's client
+    leaves requests there (files and FIFOs, which every enforcer allows, unlike
+    a Unix socket) and the sidecar answers them."""
+
+    name: str
+    extension: str
+    services: tuple[str, ...]
+
+    @property
+    def path(self) -> str:
+        return f"{CHANNEL_ROOT}/{self.name}"
+
+    def volume(self, session: str) -> str:
+        return scoped(session, f"chan-{self.name}")
+
+
 @dataclass
 class Active:
     """One selected extension, resolved."""
@@ -415,6 +440,7 @@ class Composition:
     # (ext, host dir, container path): read-only harness binds from `mounts:`
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
+    channels: list[Channel] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
@@ -438,6 +464,12 @@ class Composition:
 
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
+
+    @property
+    def channel_paths(self) -> list[str]:
+        """The channels' directories in the harness: writable under every
+        enforcer and profile (they carry no network)."""
+        return [c.path for c in self.channels]
 
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
@@ -844,6 +876,25 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         comp.harness_mounts.append((a.name, str(host), target))
 
 
+def _channels(comp: Composition, a: Active, ctx: dict) -> None:
+    """`channels: {<name>: {services: [<its service>, …], when: …}}` — a
+    directory shared by the harness and those sidecars (`Channel`). A new edge
+    into the harness, so a privilege: in-tree or trusted extensions only."""
+    for name, spec in (a.manifest.raw.get("channels") or {}).items():
+        where = f"extension {a.name!r} channel {name!r}"
+        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
+            raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
+        if not when_matches(spec.get("when"), ctx):
+            continue
+        services = spec.get("services") or []
+        if not isinstance(services, list) or not services or not all(isinstance(x, str) for x in services):
+            raise ExtensionError(f"{where}: `services` must name at least one of its services")
+        require_trust(a, f"{where}: a directory shared with the harness")
+        if any(c.name == name for c in comp.channels):
+            raise ExtensionError(f"{where}: channel {name!r} is declared twice")
+        comp.channels.append(Channel(name=str(name), extension=a.name, services=tuple(services)))
+
+
 def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:
     for item in active_items(items, ctx):
         require_trust(a, f"extension {a.name!r}: a host service")
@@ -935,6 +986,7 @@ def compose(
             spec = setting if isinstance(setting, dict) else {"from": setting}
             if when_matches(spec.get("when"), ctx):
                 comp.secrets[f"{a.name}-{sname}"] = (a.name, str(spec["from"]))
+        _channels(comp, a, ctx)
         frag = a.manifest.raw.get("services")
         if frag:
             path = a.manifest.path / frag

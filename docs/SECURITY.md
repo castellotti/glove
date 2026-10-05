@@ -70,8 +70,8 @@ Every capability (the model, search, the browser, …) is an extension in
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state (or an
   export root it owns, below, or — trusted extensions, on a setting the user
-  chose — a named subdirectory of `work/`, never all of it), or a sidecar on
-  the harness network. The harness reaches extensions only through
+  chose — a named subdirectory of `work/`; all of `work/` only with the `work`
+  privilege, below), or a sidecar on the harness network. The harness reaches extensions only through
   single-purpose forwarders. Only the active egress provider joins the routable
   `wan` network.
 - **Seccomp exceptions** name a core profile; the only one is `chromium-userns`
@@ -82,7 +82,19 @@ Every capability (the model, search, the browser, …) is an extension in
   podman rejects it, so there it must be turned off explicitly, never dropped.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
-  setting is refused.
+  setting is refused. A read-only sidecar cannot take an environment-sourced
+  compose secret (Docker refuses), so such a sidecar gets its secret the way the
+  harness gets its LLM key: a `launch_env` hook fills an `environment:` key
+  declared without a value, for that `compose up` only (it is in the container's
+  config, like the harness's key; never in a glove file).
+- **Channels** (`channels:`, in-tree or trusted only) are the one non-network
+  edge into the harness: a session tmpfs volume at `/run/glove/<name>` shared
+  with named sidecars of the same extension, writable by the harness and its
+  commands (every enforcer grants exactly those paths, and no network). The
+  harness mounts no other volume (re-checked on the merged project).
+- **The `work` privilege** (in-tree or trusted only) binds the harness's whole
+  `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
+  it. It exists for `github` (below).
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
@@ -220,6 +232,61 @@ has no server-side switch for it). The controls:
 - **Background traffic.** Chromium still contacts Google services
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
+
+## Relays: gh and git from shell commands (`relay`, `github`)
+
+Shell commands have no network, under every enforcer, and that stays true.
+`github` gives the agent `gh` and git's network verbs by *relaying* them: shims
+in the harness image hand each invocation to a sidecar that holds the token and
+runs the real command. What that adds, and what bounds it:
+
+- **The token never enters the harness.** It is resolved from the Keychain in
+  memory at `glove up` and reaches relayd's environment for that `compose up`
+  (as the harness's LLM key reaches the harness). relayd passes it only to gh
+  and git. The live test finds it in neither the harness's environment, its
+  pid 1, nor any file under `/run`, `/tmp` or the home, and a wrapped command's
+  `env` has no `GH_TOKEN`.
+- **No socket, no route.** The shims talk over the `github` channel (files and
+  FIFOs; glove's seccomp below srt forbids Unix sockets, which stays). A relayed
+  command is not a network grant: the agent gets exactly what the policy runs.
+- **The policy is the boundary of the new trust edge.**
+  - `gh` runs only subcommands in `github.allow`. `auth`, `extension`, `alias`,
+    `config`, `codespace`, `secret`, `variable`, `ssh-key` and `gpg-key` are
+    never relayed (no `gh auth token`).
+  - `gh api` is GET only: no GraphQL, no full URLs.
+  - Every host named must be github.com.
+  - git relays only `push`, `fetch`, `clone` and `ls-remote`, to
+    `https://github.com/<owner>/<repo>` remotes, judged by the URLs they resolve
+    to (`insteadOf` included). Options that run programs or read outside `/work`
+    are refused, and so are their abbreviations.
+  - The policy judges every argument token on its own: a parser that misread a
+    boolean flag as taking a value would let an unchecked file argument through.
+- **The sidecar binds `/work` read-write (the `work` privilege).** The agent
+  controls everything in it, including `.git/config`, so:
+  - git runs with command-scope config that overrides the repo's: no hooks, no
+    fsmonitor, no SSH command, askpass, editor or pager, and no credential
+    helper but ours, which answers for `https://github.com` only. Only https,
+    with no submodule recursion, signing or gc. The unit tests run a hostile
+    repo config against real git; none of its helpers run.
+  - Every file argument (`--body-file`, …) is opened by relayd, inside `/work`
+    only, and handed over as `/dev/fd/N`. So a symlink to `/proc/<pid>/environ`
+    (the token) or out of `/work` is refused, even if swapped in after the
+    check. Relayed commands get no stdin.
+  - `gh pr checkout` and `gh issue develop` stay out of the default set: they
+    would check out the agent's files in the sidecar, where `.gitattributes`
+    filters could run. `git pull` is a relayed fetch plus a *local* merge.
+- **Egress fence.** Whatever got past the policy, gh and git reach the network
+  only through relayd's in-process CONNECT proxy, which tunnels to GitHub's
+  hosts and refuses the rest. With `observe` the sidecar's only way out is its
+  own gate (`client: github`), so each GitHub host is a flow and
+  `glove filter` can block it. The relayed command line itself is not network
+  traffic; it is visible in the transcript's shell call.
+- **Residual risk.** The token can do whatever its scopes allow within the
+  allowlist (push to any branch it can reach, comment, merge, close). Use a
+  fine-grained token limited to the session's repositories, and narrow `allow`.
+  A prompt-injected agent can push the contents of `/work` to a repository the
+  token can write. The fence keeps that on GitHub; it cannot tell your
+  repositories apart.
 
 ## Claude Code: managed settings and the shell prefix
 

@@ -1,0 +1,14 @@
+api: 1
+name: relay
+summary: The relay (library) — run named commands in a credential-holding sidecar over a channel, never a socket or a route.
+# A library: added automatically by the extensions that relay commands
+# (github); never selected on its own. It brings the sidecar image (relayd +
+# the tools relayed commands run) and the harness-side client.
+auto: true
+selectable: false
+images:
+  relayd: { build: image }
+harness:
+  image:
+    "*":
+      copy: [[glove-relay, /opt/glove/bin/glove-relay]]

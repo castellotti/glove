@@ -1,0 +1,33 @@
+#!/bin/bash
+# glove-relay <channel> <command> [args...] — run <command> in the sidecar that
+# serves /run/glove/<channel> (see relay's relayd.py for the protocol). Files and
+# FIFOs only: no socket, no network. The command gets no stdin; its stdout,
+# stderr and exit code are this script's. Installed by the `relay` extension at
+# /opt/glove/bin/glove-relay; consumers add a wrapper per command (e.g. `gh`).
+set -u
+chan="/run/glove/${1:?usage: glove-relay <channel> <command> [args...]}"
+shift
+if [ ! -p "$chan/door" ]; then
+    echo "glove relay: $chan is not being served (is the sidecar up? see \`glove status\`)" >&2
+    exit 127
+fi
+id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+d="$chan/req/$id"
+umask 077
+mkdir "$d" || exit 126
+trap 'rm -rf "$d"' EXIT
+printf '%s\0' "$@" > "$d/argv"
+printf '%s' "$PWD" > "$d/cwd"
+mkfifo "$d/1" "$d/2" "$d/rc" || exit 126
+# relayd always has the door open; the timeout only covers a sidecar that died
+if ! timeout 10 bash -c 'printf "%s\n" "$1" > "$2"' _ "$id" "$chan/door"; then
+    echo "glove relay: $chan is not answering" >&2
+    exit 127
+fi
+cat "$d/1" &
+out=$!
+cat "$d/2" >&2 &
+err=$!
+rc=$(cat "$d/rc")
+wait "$out" "$err"
+exit "${rc:-125}"
