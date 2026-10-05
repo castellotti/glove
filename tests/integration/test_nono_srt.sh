@@ -11,6 +11,8 @@ RT="${RT:-docker}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${STUB_PORT:-18080}"
 TMPROOT="$(mktemp -d)"; S="$TMPROOT/nonosrt"; export GLOVE_HOME="$TMPROOT/gh"
+. "$ROOT/tests/integration/lib_session.sh"
+stub_llm "$HARNESS" "$PORT"
 STUB=
 trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 
@@ -23,14 +25,8 @@ harness: $HARNESS
 enforcer: nono+srt
 env: {FAKE_API_KEY: sk-probe-not-a-secret}
 extensions:
-  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:$PORT", model: auto}
+  llm: $LLM
 YAML
-if [ "$HARNESS" = claude-code ]; then
-  # Claude Code speaks the Anthropic Messages API: the anthropic stub, a fake key
-  sed -i.bak "s|  llm: .*|  llm: {provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$PORT\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}|" "$S/glove-session.yml"
-  export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
-  STUB_PY=anthropic_stub.py
-fi
 mkdir -p "$S/work/.git/hooks" "$S/work/.vscode" "$S/work/sub"; : > "$S/work/.git/config"; : > "$S/work/.envrc"
 echo 'PROBE-DOTENV=1' > "$S/work/.env"; echo 'PROBE-DOTENV=1' > "$S/work/sub/.env.local"
 
@@ -43,7 +39,7 @@ if [ "$RT" = podman ]; then
   echo "  FAIL: podman did not refuse nono+srt"; echo "$out" | tail -20; exit 1
 fi
 
-uv run --quiet --no-project python "$ROOT/tests/integration/stubs/${STUB_PY:-llm_stub.py}" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
+uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!
 sleep 1
 uv run --project "$ROOT" python "$ROOT/tests/integration/nono_srt_live.py" "$S"

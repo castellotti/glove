@@ -91,9 +91,11 @@ harness:
       transport: http
       url: "{{ endpoint.browser.url }}/mcp"
       tools: "{{ settings.tools | join(',') }}"
-      # every tool the pinned MCP (image/package-lock.json) defines: a harness
-      # whose rules can't express "only these" (Claude Code) denies the rest by
-      # name, so approving one at a prompt is not possible either
+      # every tool the pinned MCP defines (playwright-core 1.63.0, as in
+      # image/package-lock.json; a unit test holds the two equal, and
+      # playwright_live.py the list to the built image): a harness whose rules
+      # can't express "only these" (Claude Code) denies the rest by name, so
+      # approving one at a prompt is not possible either
       all_tools: >-
         browser_annotate,browser_check,browser_click,browser_close,browser_console_clear,browser_console_messages,
         browser_cookie_clear,browser_cookie_delete,browser_cookie_get,browser_cookie_list,browser_cookie_set,

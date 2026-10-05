@@ -186,6 +186,9 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- `glove down` removes a harness container whose terminal was killed (a
+  `compose run` client that dies leaves its container, which kept the
+  session's networks too): it now runs `compose down --remove-orphans`.
 - **Pi and Vibe could be reconfigured by their own agent** (security). The
   agent's in-process write tools could edit what the harness loads at the next
   start, outside the ring-1 tool sandbox. A project `.vibe/hooks.toml` with a

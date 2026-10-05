@@ -138,6 +138,13 @@ def main(directory: str) -> int:
         check("no direct route (1.1.1.1:443)", "rc=0" not in r.stdout, r.stdout.strip()[-80:])
         r = exec_pw("awk 'NR>1 && $2==\"00000000\"' /proc/net/route | wc -l")
         check("no default route", r.stdout.strip() == "0", f"{r.stdout.strip()} default route(s)")
+        # the manifest's all_tools against the pinned MCP's own tool definitions
+        defined = set(exec_pw("grep -rhoE 'name: \"browser_[a-z_]+\"' /opt/glove/pw/node_modules/playwright-core/lib"
+                              " | cut -d'\"' -f2").stdout.split())
+        listed = {t.strip() for t in comp.by_name("playwright").manifest.raw["harness"]["mcp"][0]["all_tools"]
+                  .split(",")}
+        check(f"all_tools names exactly the {len(defined)} tools the pinned MCP defines",
+              bool(defined) and defined == listed, f"unlisted {sorted(defined - listed)}, gone {sorted(listed - defined)}")
         r = exec_pw(f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-llm/8080' 2>&1; echo rc=$?")
         check("the harness's llm endpoint is unreachable from the browser", "rc=0" not in r.stdout,
               r.stdout.strip()[-80:])

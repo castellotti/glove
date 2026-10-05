@@ -14,7 +14,7 @@ import pytest
 from extensions.gate.netgate.collector import Collector
 from extensions.gate.netgate.forward import Forwarder, ForwardSpec
 from extensions.gate.netgate.policy import PolicyError, PolicyWatcher, RuleSet, validate
-from extensions.gate.tests.test_netgate_invariants import _jsonc_blocks
+from extensions.gate.tests.contract import CONTRACT
 from extensions.gate.tests.test_netgate_proxy import Captured, StubUpstreamProxy, _exchange, _origin, client_hello, run
 
 ENV = SESSION = "pi-search"
@@ -34,7 +34,7 @@ def rule(rid="r_1", action="block", **match) -> dict:
 
 
 def test_handoff_example_validates():
-    rs = validate(_jsonc_blocks("## 3. Rules schema")[0], env="pi-search", session="pi-search")
+    rs = validate(CONTRACT["rules"], env="pi-search", session="pi-search")
     assert [r.action for r in rs.rules] == ["block", "block", "allow"]
 
 

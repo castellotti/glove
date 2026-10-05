@@ -10,7 +10,7 @@ import json
 
 import pytest
 import yaml
-from helpers import make_cfg, render
+from helpers import CHROMIUM, make_cfg, render
 
 from glove.config import ConfigError
 from glove.enforcers import get_enforcer
@@ -20,8 +20,6 @@ from glove.enforcers.srt import APPLY_SECCOMP, GLOVE_SRT, NODE
 from glove.plan import build_session_plan
 from glove.runtimes.podman import PodmanRuntime
 from glove.runtimes.seccomp import NESTED_USERNS_PROFILE
-
-CHROMIUM = {"lang": "node", "version": "22.11.0", "packages": ["playwright@1.63.0"], "browsers": ["chromium"]}
 
 
 def _plan(tmp_path, **kw):

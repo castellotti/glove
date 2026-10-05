@@ -10,6 +10,11 @@ from glove.config import Config
 STUB_LLM = {"provider": "llama.cpp", "location": "host", "endpoint": "127.0.0.1:8080", "model": "test-model"}
 
 
+# Toolchain blocks: a pinned Node, and that Node baking Playwright's Chromium.
+NODE = {"lang": "node", "version": "22.11.0"}
+CHROMIUM = {**NODE, "packages": ["playwright@1.63.0"], "browsers": ["chromium"]}
+
+
 def with_llm(extensions: dict | None = None) -> dict:
     return {"llm": dict(STUB_LLM), **(extensions or {})}
 

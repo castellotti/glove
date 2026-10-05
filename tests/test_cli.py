@@ -354,6 +354,19 @@ def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
     assert calls == [(_sid(d), {"provider": "docker", "wipe": False})]
 
 
+@pytest.mark.parametrize(("wipe", "tail"), [(False, []), (True, ["--volumes"])])
+def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail):
+    # a `compose run` whose client was killed leaves its container (and so the
+    # networks) unless down also removes orphans
+    from glove import session
+
+    calls = []
+    monkeypatch.setattr(session.subprocess, "run", lambda cmd, **k: calls.append(cmd))
+    session.teardown("s-0a0b0c", provider="docker", wipe=wipe)
+    assert calls == [["docker", "compose", "-p", session.project_name("s-0a0b0c"), "down", "--remove-orphans",
+                      *tail]]
+
+
 def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
     monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
     d = make_session(tmp_path / "s", "  observe: {}\n  filter: {}\n")

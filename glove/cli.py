@@ -345,29 +345,31 @@ def up(
     # Only transcripts written at/after launch belong to this run (see the hint).
     launched_at = time.time()
 
-    def prepare() -> None:
-        # Launch-time resolution (e.g. llm `model: auto`) through a throwaway
-        # container on the harness network, recorded in effective.yml, then the
-        # final harness home.
-        from dataclasses import asdict
-
-        _resolve_extensions(plan, cfg.provider, secrets)
-        # keeps what plan time recorded (the extensions' resolutions)
-        _, resolved = sdm.read_effective(sd.effective)
-        sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
-                    toolchains=plan.toolchains)
-
     import subprocess
 
     try:
-        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets, prepare=prepare)
+        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets,
+               prepare=lambda: prepare_harness(sd, cfg, plan, secrets))
     except ConfigError as e:
         raise _fail(str(e)) from e
     except subprocess.CalledProcessError as e:
         raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
                     "`glove down` removes what did start.") from e
     _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
+
+
+def prepare_harness(sd, cfg, plan, secrets: dict[str, str]) -> None:
+    """`glove up` once the sidecars are up: launch-time resolution (e.g. llm
+    `model: auto`) through a throwaway container on the harness network,
+    recorded in effective.yml, then the final harness home."""
+    from dataclasses import asdict
+
+    _resolve_extensions(plan, cfg.provider, secrets)
+    # keeps what plan time recorded (the extensions' resolutions)
+    _, resolved = sdm.read_effective(sd.effective)
+    sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
+    render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
+                toolchains=plan.toolchains)
 
 
 def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:

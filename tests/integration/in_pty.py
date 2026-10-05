@@ -9,24 +9,9 @@ terminal, e.g. to check that a tool command cannot open the harness's /dev/tty.
 from __future__ import annotations
 
 import os
-import pty
-import select
 import sys
-import time
 
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], sys.argv[1:])
-out = b""
-end = time.time() + float(os.environ.get("IN_PTY_TIMEOUT", "60"))
-while time.time() < end:
-    r, _, _ = select.select([fd], [], [], 0.2)
-    if r:
-        try:
-            chunk = os.read(fd, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        out += chunk
+from ptyio import Tui
+
+out = Tui(sys.argv[1:], dict(os.environ)).pump(float(os.environ.get("IN_PTY_TIMEOUT", "60")))
 sys.stdout.write(out.decode(errors="replace").replace("\r", ""))

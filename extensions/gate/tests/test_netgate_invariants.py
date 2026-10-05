@@ -11,8 +11,8 @@ docs/planning/network-observability.md §2.6 / §7:
    (the behavioural tests live in tests/test_netgate.py; the structural half —
    the send path cannot block — is here).
 
-Also: the emitted records match the normative handoff schema, parsed straight
-out of docs/planning/network-observability-layman-handoff.md.
+Also: the emitted records match the normative handoff schema (its tracked copy,
+tests/fixtures/netobs-contract.json; see contract.py).
 
 The render-level halves of 1-3 (and 4 for `glove plan`) are in
 extensions/observe/tests/test_observe.py and test_observe_filter_split.py.
@@ -22,9 +22,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import json
 import os
-import re
 import socket
 from pathlib import Path
 
@@ -33,10 +31,9 @@ import pytest
 from extensions.gate.netgate.collector import Collector
 from extensions.gate.netgate.forward import EventSink, Forwarder, ForwardSpec
 from extensions.gate.netgate.records import flow_record
+from extensions.gate.tests.contract import CONTRACT, HANDOFF, ROOT, SECTIONS, from_handoff
 
-ROOT = Path(__file__).resolve().parents[3]
 NETGATE = ROOT / "extensions" / "gate" / "netgate"
-HANDOFF = ROOT / "docs" / "planning" / "network-observability-layman-handoff.md"
 
 
 # --- 1. no API on the internal network --------------------------------------
@@ -199,18 +196,6 @@ def test_event_sink_is_non_blocking_and_never_raises(tmp_path):
 # --- schema conformance with the normative handoff brief ---------------------
 
 
-def _jsonc_blocks(section: str) -> list[dict]:
-    text = HANDOFF.read_text()
-    start = text.index(section)
-    blocks = re.findall(r"```jsonc\n(.*?)```", text[start:], flags=re.S)
-    out = []
-    for b in blocks:
-        b = re.sub(r"(?m)(^|\s)//.*$", "", b)  # strip // comments (not the // in URLs)
-        b = b.replace("…", "x")
-        out.append(json.loads(b))
-    return out
-
-
 def _shape(obj):
     if isinstance(obj, dict):
         return {k: _shape(v) for k, v in obj.items()}
@@ -218,7 +203,7 @@ def _shape(obj):
 
 
 def test_flow_record_matches_handoff_schema_exactly():
-    spec_flow = _jsonc_blocks("## 2. Flow schema")[0]
+    spec_flow = CONTRACT["flow"]
     ours = flow_record(phase="open", flow_id="f_x", env="e", session="e", t=0, t_open=0, t_close=None,
                        service="llm", tool="llm", client="harness", proto="tcp", dest_host="h", dest_port=1,
                        dest_ip=None, resolution="unavailable", scope="local", route_kind="tcp",
@@ -233,7 +218,7 @@ ADDITIVE_FLOW_KEYS = ["run"]
 
 
 def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
-    spec_flow = _jsonc_blocks("## 2. Flow schema")[0]
+    spec_flow = CONTRACT["flow"]
 
     async def main():
         async def up(r, w):
@@ -262,13 +247,10 @@ def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
     for rec in flows:
         assert list(rec) == [*spec_flow, *ADDITIVE_FLOW_KEYS]
         assert {k: _shape(v) for k, v in rec.items() if k in spec_flow} == _shape(spec_flow)
-    text = HANDOFF.read_text()
-    for key in ADDITIVE_FLOW_KEYS:
-        assert f"`{key}`" in text[text.index("## 2. Flow schema"):text.index("## 3. Rules schema")], key
 
 
 def test_status_json_carries_every_handoff_field(tmp_path):
-    spec_status = _jsonc_blocks("### `status.json`")[0]
+    spec_status = CONTRACT["status"]
     # with the filter grant (a rules path) every handoff field is there...
     ours = Collector(tmp_path, "/tmp/unused.sock", rules_path=tmp_path / "rules.json").status("running")
     for key, sub in _shape(spec_status).items():
@@ -278,3 +260,13 @@ def test_status_json_carries_every_handoff_field(tmp_path):
     assert ours["v"] == 1 and ours["record"] == "metadata"
     # ...and without it `rules` is absent: no gate reads a rules file (v3 §5.2)
     assert "rules" not in Collector(tmp_path, "/tmp/unused.sock").status("running")
+
+
+@pytest.mark.skipif(not HANDOFF.exists(), reason="the handoff brief is a private planning doc")
+def test_the_contract_fixture_is_what_the_handoff_says():
+    text = HANDOFF.read_text()
+    # on a change: uv run python -m extensions.gate.tests.contract
+    assert from_handoff(text) == CONTRACT
+    flow_section = text[text.index(SECTIONS["flow"]):text.index(SECTIONS["rules"])]
+    for key in ADDITIVE_FLOW_KEYS:
+        assert f"`{key}`" in flow_section, key

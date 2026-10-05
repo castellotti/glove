@@ -48,9 +48,11 @@ EOF
 # compose run of the rendered harness service: same image, env, hardening,
 # mounts and internal-only network; `tool` adds the rendered tool wrapper
 # (what the harness prepends to every shell command).
-crun() {  # compose's own progress lines (Container/Network …) dropped
-  "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T "glove-$S_ID-harness" "$@" 2>&1 \
-    | grep -v -E '^ (Container|Network|Volume) '
+crun() {  # [compose-run flags… --] command…; compose's own progress lines (Container/Network …) dropped
+  local flags=()
+  if [ "${1#-}" != "$1" ]; then while [ $# -gt 0 ] && [ "$1" != -- ]; do flags+=("$1"); shift; done; shift; fi
+  "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T ${flags[@]+"${flags[@]}"} \
+    "glove-$S_ID-harness" "$@" 2>&1 | grep -v -E '^ (Container|Network|Volume) '
 }
 tool_wrapper() {  # its argv has no spaces (bash 3.2 on macOS has no mapfile)
   uv run --quiet --project "$ROOT" python -c \
@@ -172,6 +174,7 @@ toolchains:
   - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
 " || { bad "glove plan (nono browsers) failed"; exit 1; }
 trap cleanup EXIT
+# the derived image is content-addressed and the same as session 3's: no rebuild
 IMAGE="$(build "$S3B" | tail -1)"
 [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "nono browsers build failed"
 out="$(tool "cd /work/node-app && node check.js")"
@@ -186,19 +189,16 @@ svc = next(v for k, v in yaml.safe_load(open(sys.argv[1]))["services"].items() i
 cmd = svc["command"]
 print(" ".join(cmd[:cmd.index("ctty") - 1]))' "$S_COMPOSE")"
 w="$(tool_wrapper)"
-cat > "$S3B/work/scan.sh" <<'EOF2'
-for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] && continue
-  tr '\0' '\n' < "$p/environ" 2>/dev/null | grep -q '^GLOVE_LLM_API_KEY=glove-test-key' && echo "KEY-SEEN $p"
-done; echo scanned
-EOF2
+cp "$ROOT/tests/integration/fixtures/environ-probe.sh" "$S3B/work/"
+probe="bash /work/environ-probe.sh ^GLOVE_LLM_API_KEY=glove-test-key"
 # shellcheck disable=SC2086
-out="$("$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T -e GLOVE_LLM_API_KEY=glove-test-key \
-  "glove-$S_ID-harness" $wrap bash -c "sleep 30 & bash /work/scan.sh; echo TOOL; $w bash /work/scan.sh" 2>&1)"
+out="$(crun -e GLOVE_LLM_API_KEY=glove-test-key -- $wrap bash -c \
+  "sleep 30 & s=\$!; $probe; echo TOOL; $w $probe; kill \$s")"
 harness_side="$(echo "$out" | sed -n '/^TOOL$/q;p')"
 tool_side="$(echo "$out" | sed -n '/^TOOL$/,$p')"
-echo "$harness_side" | grep -q KEY-SEEN && ok "control: the harness side reads its own processes' environ" \
+echo "$harness_side" | grep -q 'environ-seen=[1-9]' && ok "control: the harness side reads its own processes' environ" \
   || bad "control: no key seen from the harness side: $out"
-echo "$tool_side" | grep -q scanned && ! echo "$tool_side" | grep -q KEY-SEEN \
+echo "$tool_side" | grep -q 'environ-seen=0' \
   && ok "tool (nono, browsers): /proc readable, no other process's environ (the key stays hidden)" \
   || bad "tool (nono, browsers): environ scan: $out"
 cleanup

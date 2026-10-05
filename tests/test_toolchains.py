@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg, make_session
+from helpers import CHROMIUM, NODE, make_cfg, make_session
 
 from glove import sessiondir as sdm
 from glove import toolchains as tcs
@@ -19,7 +19,6 @@ from glove.image import content_hash, stage_context
 from glove.plan import build_session_plan
 from glove.runtimes.docker import DockerRuntime
 
-NODE = {"lang": "node", "version": "22.11.0"}
 PY = {"lang": "python", "version": "3.12"}
 # The runtime bind-mount roots a baked install must never sit under.
 MOUNT_ROOTS = ("/work", "/home/agent", "/mnt", "/etc/glove/enforcer")
@@ -510,7 +509,7 @@ def test_context_file_section_only_when_set(tmp_path):
 ])
 def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, options, warned):
     cfg = _cfg(tmp_path, enforcer=enforcer, enforcer_options=options,
-               toolchains=[{**NODE, "packages": ["playwright@1.63.0"], "browsers": ["chromium"]}])
+               toolchains=[CHROMIUM])
     text = build_environment_context(cfg)
     assert "PLAYWRIGHT_BROWSERS_PATH" in text
     assert ("cannot start inside a shell command" in text) is warned

@@ -316,7 +316,9 @@ def probe_http(
 
 def teardown(session: str, *, provider: str, wipe: bool) -> None:
     project = project_name(session)
-    cmd = [provider, "compose", "-p", project, "down"]
+    # --remove-orphans: a `compose run` (the harness) whose client was killed
+    # leaves its container, which `down` alone keeps, and with it the networks
+    cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]
     if wipe:
         cmd.append("--volumes")
     console.print(f"[bold]tearing down[/bold] {project}")
