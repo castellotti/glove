@@ -23,7 +23,7 @@ endpoints:
     interpose: true
     target: { slot: egress }
     listen_networks: [ghnet]
-    observe: { client: github, tool: gh }
+    observe: { tool: gh }   # client: github (the default off a harness hop)
 # /run/glove/github in the harness and the sidecar: where the gh/git shims leave
 # requests (files and FIFOs; no socket, no network)
 channels:

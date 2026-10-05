@@ -77,7 +77,7 @@ endpoints:
     harness: false
     target: { slot: egress }
     listen_networks: [browser-net]
-    observe: { client: playwright, tool: browser }
+    observe: { tool: browser }   # client: playwright (the default off a harness hop)
 verify:
   - { name: browser-up, kind: container-healthy, service: pw, when: { mode: [headless, novnc] } }
 harness:

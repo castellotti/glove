@@ -25,11 +25,12 @@ HOSTS = [{"name": "build", "to": "192.168.1.10:22", "user": "dev"},
 class Req:
     def __init__(self, argv):
         self.argv = argv
-        self.settings = {"prefix": "glove-s-", "hosts": HOSTS}
+        self.settings = {"hosts": [{**h, "forwarder": {"host": f"glove-s-ssh-{h['name']}", "port": 22}}
+                                   for h in HOSTS]}
 
 
 def ssh(*args):
-    return policy.prepare(Req(["ssh", *args]), {})[0]
+    return policy.prepare(Req(["ssh", *args]), {})
 
 
 def _opt(argv, key):
@@ -71,6 +72,7 @@ def test_allowed_options_come_after_the_forced_ones():
     (["-J", "x", "build", "true"], "not relayed"),
     (["-W", "h:22", "build"], "not relayed"),
     (["-i", "/work/k", "build", "true"], "not relayed"),
+    (["-vvvv", "build", "true"], "not relayed"),
     (["-F", "/work/cfg", "build", "true"], "not relayed"),
     (["-A", "build", "true"], "not relayed"),
     (["-t", "build", "true"], "not relayed"),
@@ -126,7 +128,7 @@ def test_hosts_become_lan_endpoints_for_the_sidecar_only():
     assert eps["ssh-nas"] == {"harness": False, "port": 22,
                               "target": {"address": "nas.lan:2222", "via": "lan"},
                               "listen_networks": ["sshnet"],
-                              "observe": {"client": "ssh", "tool": "ssh", "scope": "lan"}}
+                              "observe": {"tool": "ssh", "scope": "lan"}}
 
 
 @pytest.mark.parametrize("bad,why", [
@@ -195,7 +197,9 @@ def test_the_relay_sidecar_and_its_forwarders(tmp_path, observe):
     targets = {v["target"] for v in svc["volumes"]}
     assert "/work" not in targets and {"/opt/glove/ssh/known_hosts", "/run/glove/ssh"} <= targets
     assert svc["environment"]["RELAY_SSH_KEY"] is None
-    assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == {"prefix": "glove-s-", "hosts": HOSTS}
+    assert svc["command"][2:] == ["--channel", "/run/glove/ssh", "--policy", "/opt/glove/ssh/relay_policy.py"]
+    assert svc["healthcheck"]["test"] == ["CMD", "test", "-p", "/run/glove/ssh/door"]
+    assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == Req([]).settings  # each host with its forwarder
     assert "github/gh" not in plan.composition.privileges and "ssh/ssh" not in plan.composition.privileges
     for name, target in (("build", "192.168.1.10:22"), ("nas", "nas.lan:2222")):
         fwd = doc["services"][f"glove-s-ssh-{name}"]

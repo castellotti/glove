@@ -473,3 +473,32 @@ def test_ulid_shape_and_order():
 
 def test_iso_utc_format():
     assert iso_utc(0) == "1970-01-01T00:00:00.000Z"
+
+
+def _ep(**kw):
+    return {"name": "e", "extension": "ext", "target": "h:1", "target_kind": "address", **kw}
+
+
+def test_the_client_label_defaults_to_the_extension_off_a_harness_hop():
+    from extensions.gate.gatelib import gate_spec
+
+    assert gate_spec(_ep(harness=False), {}).client == "ext"
+    assert gate_spec(_ep(harness=True), {}).client == "unknown"  # a stray peer on a harness hop
+    assert gate_spec(_ep(harness=False, observe={"client": "searxng"}), {}).client == "searxng"
+    assert gate_spec(_ep(harness=False, extension="harness"), {}).client == "unknown"  # never claimable
+    assert gate_spec(_ep(harness=False, extension="x" * 80), {}).client == "x" * 80
+
+
+@pytest.mark.parametrize("label", ["harness", "Bad", "x\n", "", 7])
+def test_a_client_label_is_a_name_and_never_harness(label):
+    from extensions.gate.gatelib import gate_spec
+    from extensions.gate.netgate import __main__ as entry
+
+    with pytest.raises(ValueError, match=r"observe\.client"):
+        gate_spec(_ep(harness=False, observe={"client": label}), {})
+    if isinstance(label, str):
+        argv = ["forward", "--service", "e", "--listen", "1", "--upstream", "h:1", "--env", "x", "--session", "s",
+                "--client"]
+        assert entry._parser().parse_args([*argv, "ext"]).client == "ext"
+        with pytest.raises(SystemExit):
+            entry._parser().parse_args([*argv, label])

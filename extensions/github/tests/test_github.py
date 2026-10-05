@@ -54,7 +54,7 @@ def work(tmp_path):
 
 
 def gh(work, *args, settings=None):
-    return policy.prepare(Req(["gh", *args], work, work, settings), {})[0][1:]
+    return policy.prepare(Req(["gh", *args], work, work, settings), {})[1:]
 
 
 # --- gh -------------------------------------------------------------------------------
@@ -160,7 +160,7 @@ def _repo(path: Path, **remotes) -> Path:
 
 
 def git(work, cwd, *args, env=None):
-    return policy.prepare(Req(["git", *args], cwd, work), env or _env(work))[0][1:]
+    return policy.prepare(Req(["git", *args], cwd, work), env or _env(work))[1:]
 
 
 @pytest.mark.parametrize("args,why", [
@@ -220,6 +220,18 @@ def test_git_url_rewrites_are_resolved(work):
         git(work, repo, "push", "origin")
     with pytest.raises(Refused, match="rewrites URLs"):
         git(work, repo, "push", "https://github.com/o/r.git")
+
+
+def test_the_rewrite_lookup_runs_once_and_only_for_url_remotes(work, monkeypatch):
+    repo = _repo(work / "r", origin="https://github.com/o/r.git")
+    calls = []
+    real = policy._git_out
+    monkeypatch.setattr(policy, "_git_out", lambda req, env, *a: calls.append(a) or real(req, env, *a))
+    git(work, repo, "fetch", "--multiple", "https://github.com/o/r", "https://github.com/o/s")
+    assert [a for a in calls if "--get-regexp" in a] == [("config", "--get-regexp", r"^url\..*insteadof$")]
+    calls.clear()
+    git(work, repo, "fetch", "origin")
+    assert not [a for a in calls if "--get-regexp" in a]
 
 
 def test_clone_destination_is_rewritten_inside_work(work):
@@ -300,6 +312,9 @@ def test_the_relay_sidecar(tmp_path, observe):
                                          "target": "/run/glove/github"}
     assert plan.composition.privileges["github/gh"] == [{"work": True}]
     assert svc["environment"]["RELAY_GITHUB_TOKEN"] is None  # filled at `compose up`, never in the file
+    assert svc["command"][2:] == ["--channel", "/run/glove/github", "--policy", "/opt/glove/github/relay_policy.py",
+                                  "--work", "/work"]
+    assert svc["healthcheck"]["test"] == ["CMD", "test", "-p", "/run/glove/github/door"]
     assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == {"allow": []}
     assert svc["image"].startswith("glove/ext-relay-relayd:")
     if observe:  # only through its own gate, labelled for Layman

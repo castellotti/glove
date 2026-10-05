@@ -1045,6 +1045,7 @@ def compose(
             if when_matches(spec.get("when"), ctx):
                 comp.secrets[f"{a.name}-{sname}"] = (a.name, str(spec["from"]))
         _channels(comp, a, ctx)
+        ctx["channel"] = {c.name: {"path": c.path} for c in comp.channels}  # for services fragments
         frag = a.manifest.raw.get("services")
         if frag:
             path = a.manifest.path / frag

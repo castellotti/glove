@@ -159,6 +159,16 @@ class _Proxy(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_CONNECT(self):
+        # The gate refuses a tunnel with 403 and a reason; anything else is a network failure.
+        refused = self.path.startswith("blocked.example:")
+        data = b"glove netgate refused: rule tunnel" if refused else b""
+        self.send_response(403 if refused else 502)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
 
 @pytest.fixture
 def server(monkeypatch):
@@ -184,6 +194,13 @@ def test_fetch_reports_policy_refusals_and_rate_limits(server):
     assert server.fetch("http://example.com/slow").startswith("Rate-limited (HTTP 429)")
     assert server.fetch("http://example.com/missing") == "HTTP 404 for http://example.com/missing"
     assert server.fetch("http://example.com/page", max_chars=5).startswith("Examp\n\n[truncated to 5 chars]")
+
+
+def test_fetch_asks_the_proxy_why_only_when_a_tunnel_is_refused(server, monkeypatch):
+    assert server.fetch("https://blocked.example/").startswith(
+        "Refused by this session's network policy for https://blocked.example/: glove netgate refused: rule tunnel")
+    monkeypatch.setattr(server, "tunnel_refusal", lambda url: pytest.fail(f"probed {url}"))
+    assert server.fetch("https://down.example/").startswith("Fetch failed for this URL (Tunnel connection failed: 502")
 
 
 def test_fetch_falls_back_to_utf8_for_an_unknown_charset(server):

@@ -110,11 +110,11 @@ def setup(ctx: dict) -> dict[str, str]:
     return env
 
 
-def prepare(req, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+def prepare(req, env: dict[str, str]) -> list[str]:
     cmd, args = req.argv[0], req.argv[1:]
     if cmd == "gh":
-        return ["gh", *_gh(req, args)], {}
-    return ["git", *_git(req, args, env)], {}
+        return ["gh", *_gh(req, args)]
+    return ["git", *_git(req, args, env)]
 
 
 # --- gh ----------------------------------------------------------------------------
@@ -288,11 +288,14 @@ def _git_out(req, env: dict[str, str], *args: str) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def _is_url(remote: str) -> bool:
+    return "://" in remote or bool(re.match(r"^[^/]+@[^:]+:", remote))
+
+
 def _remote_urls(req, env, remote: str, push: bool) -> list[str]:
-    """Every URL `remote` (a name or a URL) resolves to, rewrites applied."""
-    if "://" in remote or re.match(r"^[^/]+@[^:]+:", remote):
-        if _git_out(req, env, "config", "--get-regexp", r"^url\..*insteadof$"):
-            raise Refused("this repository rewrites URLs (url.*.insteadOf): push and fetch by remote name")
+    """Every URL `remote` (a name or a URL; the caller refused URL rewrites
+    for a URL) resolves to, rewrites applied."""
+    if _is_url(remote):
         return [remote]
     urls = _git_out(req, env, "remote", "get-url", "--all", *(["--push"] if push else []), remote).splitlines()
     if not urls:
@@ -363,6 +366,9 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
         remotes = [repo_opt or (positionals[0] if positionals else _default_remote(req, env, push))]
     if not remotes:
         raise Refused("this repository has no remotes")
+    # git would rewrite a URL given as-is; only a named remote's URLs come back rewritten
+    if any(_is_url(r) for r in remotes) and _git_out(req, env, "config", "--get-regexp", r"^url\..*insteadof$"):
+        raise Refused("this repository rewrites URLs (url.*.insteadOf): push and fetch by remote name")
     for r in remotes:
         for url in _remote_urls(req, env, r, push):
             _url_ok(url)

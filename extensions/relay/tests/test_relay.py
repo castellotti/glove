@@ -135,6 +135,11 @@ def test_a_flood_of_unopened_requests_is_bounded(tmp_path, monkeypatch):
         pytest.fail("pending places were never released")
 
 
+def test_a_declared_work_root_must_exist(tmp_path):
+    with pytest.raises(SystemExit, match=r"work root .*/gone is not a directory"):
+        relayd.main(["--channel", str(tmp_path), "--policy", "/nonexistent", "--work", str(tmp_path / "gone")])
+
+
 def test_the_client_is_valid_bash_and_executable():
     assert (HERE / "glove-relay").stat().st_mode & 0o111
     subprocess.run(["bash", "-n", str(HERE / "glove-relay")], check=True)

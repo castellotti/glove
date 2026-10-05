@@ -126,6 +126,16 @@ All notable changes to glove are documented here.
   unknown section or key (e.g. `nono: {browser: true}`) or a value of the
   wrong type is refused instead of ignored, and `nono.browsers: true` is
   refused unless a toolchain bakes `browsers`.
+- Gate client labels are open: an endpoint's `observe.client` is any name
+  (never `harness`), defaulting to the declaring extension's name on a
+  `harness: false` hop and `unknown` otherwise, instead of a closed list in
+  netgate. Labels are not read by any policy.
+- relayd has no work root unless the consumer passes `--work` (github passes
+  `/work`), and refuses to start when the one it names is missing, instead of
+  quietly running in `/tmp`. A policy's `prepare()` returns only the argv.
+- Relay fragments take channel paths from the context (`channel.<name>.path`);
+  the ssh policy dials each host's forwarder at the address `RELAY_SETTINGS`
+  gives it instead of assembling it from the session prefix and port 22.
 - A harness `env` value that renders empty is set (empty), not dropped; use
   `when:` to leave a variable unset. `search`, `webfetch` and `rag` now do.
 - Launch-time probes (`llm`'s model list) retry only while the endpoint
@@ -176,6 +186,10 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- webfetch asks the egress gate why only when a tunnel was refused (403),
+  instead of after every failed fetch (a probe of up to 15s).
+- github's URL-rewrite check runs once per request, and only when a remote is
+  given as a URL.
 - Claude Code's `.claude.json` trust entry follows the session's working
   directory when glove runs from a subdirectory (it always named the mount
   root). Adapters' `render_home` now gets the plan's resolved mount plan.

@@ -18,6 +18,8 @@ Telemetry fails open: a missing, slow or broken collector costs records, never
 traffic. See ``docs/planning/network-observability.md``.
 """
 
+import re
+
 GATE_VERSION = "0.2.0"
 SCHEMA_VERSION = 1
 
@@ -34,9 +36,20 @@ MODES = ("tcp", "http-proxy")
 # What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
 # plain one, so the operator declares it; `direct` makes every flow loud.
 ROUTES = ("vpn", "tor", "direct", "corporate")  # corporate: the host's corporate VPN
-CLIENTS = ("searxng", "playwright", "webfetch", "github", "ssh", "unknown")  # labels for peers off the internal network
 RESOLVE_MODES = ("in-tunnel", "none")
 RECORD_MODES = ("metadata", "full")
+
+# The label for peers that did not arrive on the harness ingress (gatelib picks
+# the default). A label only, read by no policy; never `harness`, which only the
+# ingress assigns.
+CLIENT = re.compile(r"^[a-z][a-z0-9-]*\Z")  # an extension name (glove.extensions._NAME)
+
+
+def client_problem(label: str) -> str | None:
+    if CLIENT.fullmatch(label) and label != "harness":
+        return None
+    return f"a client label matches {CLIENT.pattern} and is not `harness`, got {label!r}"
+
 
 # Forwarders re-announce `gate start` this often (a heartbeat); the collector
 # writes an inferred `stop` for a run silent for RUN_LOST_AFTER.

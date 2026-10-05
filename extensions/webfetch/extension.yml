@@ -32,7 +32,7 @@ endpoints:
     interpose: true
     target: { slot: egress }
     listen_networks: [fetchnet]
-    observe: { client: webfetch, tool: web_fetch }
+    observe: { tool: web_fetch }   # client: webfetch (the default off a harness hop)
 verify:
   - { name: fetcher-up, kind: container-healthy, service: fetcher, when: { harness: vibe } }
 harness:

@@ -8,7 +8,14 @@ import os
 import signal
 import sys
 
-from . import CLIENTS, EVENTS_SOCKET, GATE_VERSION, MODES, NET_DIR, RECORD_MODES, RESOLVE_MODES, ROUTES, SCOPES
+from . import EVENTS_SOCKET, GATE_VERSION, MODES, NET_DIR, RECORD_MODES, RESOLVE_MODES, ROUTES, SCOPES, client_problem
+
+
+def _client(label: str) -> str:
+    problem = client_problem(label)
+    if problem:
+        raise argparse.ArgumentTypeError(problem)
+    return label
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
     f.add_argument("--resolver", default=None, help="in-tunnel resolver: dns://h:p | tor-socks://h:p")
     f.add_argument("--exit-url", default=None, help="https IP-echo URL polled through the chain")
-    f.add_argument("--client", default="unknown", choices=CLIENTS,
+    f.add_argument("--client", default="unknown", type=_client,
                    help="label for connections that did not arrive on the harness ingress")
     f.add_argument("--record", default="metadata", choices=RECORD_MODES)
     f.add_argument("--record-headers", action="store_true")

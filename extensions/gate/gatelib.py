@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .netgate import CLIENTS, CONTROL_DIR, EVENTS_DIR, EVENTS_SOCKET, MODES, NET_DIR, ROUTES, RULES_FILE, SCOPES
+from .netgate import CONTROL_DIR, EVENTS_DIR, EVENTS_SOCKET, MODES, NET_DIR, ROUTES, RULES_FILE, SCOPES, client_problem
 
 # §2.4 tool labels by conventional endpoint name. An explicit `observe.tool`
 # (e.g. the llm extension's annotation) always wins.
@@ -108,10 +108,13 @@ def gate_spec(ep: dict[str, Any], egress: dict[str, Any]) -> GateSpec:
     if mode not in MODES:
         raise ValueError(f"endpoint {name!r}: unknown observe.mode {mode!r} (supported: {', '.join(MODES)})")
     tool = raw.get("tool") or DEFAULT_TOOLS.get(name)
-    client = raw.get("client", "unknown")
-    if client not in CLIENTS:
-        raise ValueError(f"endpoint {name!r}: observe.client labels peers that are NOT the harness — one of "
-                         f"{CLIENTS}, got {client!r}")
+    # off a harness hop, the peer is the declaring extension's own sidecar; on
+    # one, a peer that did not come through the harness ingress is unknown
+    own = "unknown" if ep.get("harness", True) or ep["extension"] == "harness" else ep["extension"]
+    client = raw.get("client", own)
+    problem = client_problem(client) if isinstance(client, str) else f"got {client!r}"
+    if problem:
+        raise ValueError(f"endpoint {name!r}: observe.client labels peers that are NOT the harness — {problem}")
     host, port = _split(ep["target"], name)
     if mode == "http-proxy":
         if "scope" in raw:
