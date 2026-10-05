@@ -34,7 +34,7 @@ MODES = ("tcp", "http-proxy")
 # What a `chain:` upstream actually is. glove cannot tell a VPN proxy from a
 # plain one, so the operator declares it; `direct` makes every flow loud.
 ROUTES = ("vpn", "tor", "direct", "corporate")  # corporate: the host's corporate VPN
-CLIENTS = ("searxng", "playwright", "unknown")  # labels for peers off the internal network
+CLIENTS = ("searxng", "playwright", "webfetch", "github", "ssh", "unknown")  # labels for peers off the internal network
 RESOLVE_MODES = ("in-tunnel", "none")
 RECORD_MODES = ("metadata", "full")
 

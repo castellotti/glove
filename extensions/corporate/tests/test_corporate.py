@@ -109,7 +109,7 @@ def test_other_egress_routes_give_webfetch_no_allowlist(tmp_path):
     work.mkdir()
     cfg = make_cfg(harness="pi", name="s", workdir=str(work), extensions={"direct": {}, "webfetch": {}})
     plan, _ = render(cfg, tmp_path)
-    assert plan.environment["GLOVE_FETCH_ALLOW"] == ""
+    assert "GLOVE_FETCH_ALLOW" not in plan.environment
 
 
 @pytest.mark.parametrize(("corp", "match"), [

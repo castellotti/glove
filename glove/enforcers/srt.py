@@ -69,7 +69,7 @@ HARNESS_HOME_MOUNT = "/home/agent"
 def _rw_paths(plan: SessionPlan) -> list[str]:
     work = next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
     rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
-    return [work, *rw, TMP]
+    return [work, *rw, TMP, *plan.composition.channel_paths]
 
 
 def denied_env_vars(plan: SessionPlan) -> list[str]:
@@ -114,7 +114,8 @@ def tool_wrapper_argv() -> list[str]:
 
 class SrtEnforcer:
     name = "srt"
-    tools_run_browsers = True
+    def tools_run_browsers(self, options: dict) -> bool:
+        return True
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return {

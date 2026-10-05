@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from ...config import ConfigError
 from ...harnessconfig import LLM_API_KEY_ENV
 from ..base import ENFORCER_DIR, GLOVE_PTY
 
@@ -63,6 +64,24 @@ SECRET_DENY_VARS = [
 # tool profile re-allows them (startup-only gate — the strong guarantee is the
 # filesystem/network policy, which confines these to /work anyway).
 DEFAULT_ALLOW_COMMANDS = ["cp", "mv", "rm"]
+
+# What Chromium needs to start inside a shell command (`enforcer_options:
+# {nono: {browsers: true}}`): all of /proc, read-only (it reads /proc/self/maps
+# and /proc/sys, and /proc/self can't be granted on its own: Landlock resolves it
+# to one pid when the ruleset is built). Other processes' environ, mem, fd links
+# and root stay closed: Landlock denies ptrace-mode access to any process outside
+# the command's own domain (the harness, pid 1, other commands), so the LLM key
+# in the harness's environment is still out of reach. What it does open: other
+# processes' cmdline and status, and /proc/net, /proc/sys, /proc/mounts.
+BROWSER_READ = ["/proc"]
+
+
+def browsers_enabled(options: dict | None) -> bool:
+    nono = (options or {}).get("nono") or {}
+    on = nono.get("browsers", False) if isinstance(nono, dict) else None
+    if not isinstance(on, bool):
+        raise ConfigError("enforcer_options.nono must be a mapping and its `browsers` true or false")
+    return on
 
 
 def _rw_mounts(plan: SessionPlan) -> list[str]:
@@ -102,7 +121,7 @@ def render_harness_profile(plan: SessionPlan) -> dict:
         "extends": "default",
         "workdir": {"access": "readwrite"},
         "filesystem": {
-            "allow": [work, *_rw_mounts(plan), config_home, TMP],
+            "allow": [work, *_rw_mounts(plan), config_home, TMP, *plan.composition.channel_paths],
             # The harness's interpreter/runtime (its venv or node prefix) must be
             # readable or `nono run` cannot exec the TUI (exit 127 under Landlock).
             "read": _read_paths(plan),
@@ -120,6 +139,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
     tools = plan.tools or {}
     allow_commands = list(tools.get("allow_commands", DEFAULT_ALLOW_COMMANDS))
     deny_commands = list(tools.get("deny_commands", []))
+    read = _read_paths(plan) + (BROWSER_READ if browsers_enabled(plan.enforcer_options) else [])
     profile = {
         "meta": {"name": "glove-tool"},
         "extends": "default",
@@ -129,8 +149,8 @@ def render_tool_profile(plan: SessionPlan) -> dict:
             # Interpreter/runtime paths ARE readable (see _read_paths) so a tool
             # command can exec node/python; read-only, and the widened read
             # surface is bounded by network.block + deny_vars (module docstring).
-            "allow": [work, *_rw_mounts(plan), TMP],
-            "read": _read_paths(plan),
+            "allow": [work, *_rw_mounts(plan), TMP, *plan.composition.channel_paths],
+            "read": read,
         },
         "network": {"block": True},
         "environment": {"deny_vars": list(SECRET_DENY_VARS)},

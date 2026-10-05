@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -47,7 +47,7 @@ remaining gaps for a session.
 |---|---|---|---|
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
-| LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
+| LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
@@ -70,8 +70,8 @@ Every capability (the model, search, the browser, …) is an extension in
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state (or an
   export root it owns, below, or — trusted extensions, on a setting the user
-  chose — a named subdirectory of `work/`, never all of it), or a sidecar on
-  the harness network. The harness reaches extensions only through
+  chose — a named subdirectory of `work/`; all of `work/` only with the `work`
+  privilege, below), or a sidecar on the harness network. The harness reaches extensions only through
   single-purpose forwarders. Only the active egress provider joins the routable
   `wan` network.
 - **Seccomp exceptions** name a core profile; the only one is `chromium-userns`
@@ -82,7 +82,31 @@ Every capability (the model, search, the browser, …) is an extension in
   podman rejects it, so there it must be turned off explicitly, never dropped.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
-  setting is refused.
+  setting is refused. A read-only sidecar cannot take an environment-sourced
+  compose secret (Docker refuses), so such a sidecar gets its secret the way the
+  harness gets its LLM key: a `launch_env` hook fills an `environment:` key
+  declared without a value, for that `compose up` only (it is in the container's
+  config, like the harness's key; never in a glove file).
+- **Channels** (`channels:`, in-tree or trusted only) are the one non-network
+  edge into the harness: a session tmpfs volume at `/run/glove/<name>` shared
+  with named sidecars of the same extension, writable by the harness and its
+  commands (every enforcer grants exactly those paths, and no network). The
+  harness mounts no other volume (re-checked on the merged project).
+- **LAN hosts** (`via: lan`, in-tree or trusted only): an endpoint may dial a
+  host:port the user named, for a sidecar only (never `harness: true`), over
+  core's routable `lan` network, which only those forwarders may join
+  (re-checked on the merged project). It exists for `ssh` (below). `lan` is a
+  direct, untunnelled route (no egress provider, VPN or its DNS), so core takes
+  only a private IPv4 address (10/8, 172.16/12, 192.168/16) or a LAN name (one
+  label, or under `.lan`, `.local`, `.home.arpa`, `.internal`; never
+  `*.docker.internal`, `localhost`, loopback, link-local or a public address).
+  Residual: a name is resolved by the forwarder's resolver when it connects, so
+  a LAN resolver that answers it with a public address is followed (name an IP
+  to rule that out); and a private range also covers the Docker host's own
+  bridge gateways.
+- **The `work` privilege** (in-tree or trusted only) binds the harness's whole
+  `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
+  it. It exists for `github` (below).
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
@@ -220,6 +244,184 @@ has no server-side switch for it). The controls:
 - **Background traffic.** Chromium still contacts Google services
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
+
+## Relays: gh and git from shell commands (`relay`, `github`)
+
+Shell commands have no network, under every enforcer, and that stays true.
+`github` gives the agent `gh` and git's network verbs by *relaying* them: shims
+in the harness image hand each invocation to a sidecar that holds the token and
+runs the real command. What that adds, and what bounds it:
+
+- **The token never enters the harness.** It is resolved from the Keychain in
+  memory at `glove up` and reaches relayd's environment for that `compose up`
+  (as the harness's LLM key reaches the harness). relayd passes it only to gh
+  and git. The live test finds it in neither the harness's environment, its
+  pid 1, nor any file under `/run`, `/tmp` or the home, and a wrapped command's
+  `env` has no `GH_TOKEN`.
+- **No socket, no route.** The shims talk over the `github` channel (files and
+  FIFOs; glove's seccomp below srt forbids Unix sockets, which stays). A relayed
+  command is not a network grant: the agent gets exactly what the policy runs.
+- **The policy is the boundary of the new trust edge.**
+  - `gh` runs only subcommands in `github.allow`. `auth`, `extension`, `alias`,
+    `config`, `codespace`, `secret`, `variable`, `ssh-key` and `gpg-key` are
+    never relayed (no `gh auth token`).
+  - `gh api` is GET only: no GraphQL, no full URLs.
+  - Every host named must be github.com.
+  - git relays only `push`, `fetch`, `clone` and `ls-remote`, to
+    `https://github.com/<owner>/<repo>` remotes, judged by the URLs they resolve
+    to (`insteadOf` included). Options that run programs or read outside `/work`
+    are refused, and so are their abbreviations.
+  - The policy judges every argument token on its own: a parser that misread a
+    boolean flag as taking a value would let an unchecked file argument through.
+- **The sidecar binds `/work` read-write (the `work` privilege).** The agent
+  controls everything in it, including `.git/config`, so:
+  - git runs with command-scope config that overrides the repo's: no hooks, no
+    fsmonitor, no SSH command, askpass, editor or pager, and no credential
+    helper but ours, which answers for `https://github.com` only. Only https,
+    with no submodule recursion, signing or gc. The unit tests run a hostile
+    repo config against real git; none of its helpers run.
+  - Every file argument (`--body-file`, …) is opened by relayd, inside `/work`
+    only, and handed over as `/dev/fd/N`. So a symlink to `/proc/<pid>/environ`
+    (the token) or out of `/work` is refused, even if swapped in after the
+    check. Relayed commands get no stdin.
+  - `gh pr checkout` and `gh issue develop` stay out of the default set: they
+    would check out the agent's files in the sidecar, where `.gitattributes`
+    filters could run. `git pull` is a relayed fetch plus a *local* merge.
+- **Egress fence.** Whatever got past the policy, gh and git reach the network
+  only through relayd's in-process CONNECT proxy, which tunnels to GitHub's
+  hosts and refuses the rest. With `observe` the sidecar's only way out is its
+  own gate (`client: github`), so each GitHub host is a flow and
+  `glove filter` can block it. The relayed command line itself is not network
+  traffic; it is visible in the transcript's shell call.
+- **Residual risk.** The token can do whatever its scopes allow within the
+  allowlist (push to any branch it can reach, comment, merge, close). Use a
+  fine-grained token limited to the session's repositories, and narrow `allow`.
+  A prompt-injected agent can push the contents of `/work` to a repository the
+  token can write. The fence keeps that on GitHub; it cannot tell your
+  repositories apart.
+
+### `ssh`: the same relay, to named LAN hosts
+
+- **The key never enters the harness.** It reaches the sidecar's environment at
+  `compose up` and is loaded into an `ssh-agent` there; no key file exists. The
+  live test finds no key material in the harness.
+- **Routes:** each named host gets one forwarder (`via: lan`), the sidecar's
+  only route; the harness has none. The live test checks that a shell command
+  cannot reach the host, and that the sidecar cannot reach it (or the internet)
+  except through its forwarder. With `observe`, every connection is a flow
+  (`client: ssh`, `scope: lan`) and `glove filter` can block it.
+- **The policy:**
+  - destinations are the named hosts as their configured users;
+  - options are an allowlist; refused: `-L`/`-R`/`-D`/`-W`, `-J`, `-i`, `-F`,
+    `-A`, `-t`, and every `-o` but a few timeouts;
+  - `ProxyCommand=none`, `ClearAllForwardings`, batch mode and the agent socket
+    are pinned first in argv, where ssh keeps them;
+  - host keys are checked strictly against the session's `known_hosts`, never
+    learned.
+- **Residual risk:** whatever the key may do on those hosts, a prompt-injected
+  agent may do (the remote command is the agent's). Use a key made for the
+  session, restricted in `authorized_keys` (`restrict`, `from=`, or a forced
+  command), as an unprivileged user.
+
+## Claude Code: managed settings and the shell prefix
+
+Claude Code is the one harness whose ring-2 glue can live outside its writable
+config home. glove renders `/etc/claude-code/managed-settings.json` (and
+`managed-mcp.json`) to `.glove/harness/` and binds it read-only; managed
+settings override every other scope, and an unparseable managed file stops
+Claude Code from starting (fail closed).
+
+- **`CLAUDE_CODE_SHELL_PREFIX`** = `/opt/glove/bin/glove-cc-prefix` (baked,
+  read-only rootfs). Claude Code runs `<prefix> "<shell string>"` for the Bash
+  tool (main agent and subagents), operator `!` commands, hooks and MCP stdio
+  servers. The prefix reads the tool wrapper from
+  `/etc/glove/enforcer/tool-wrapper.argv` (read-only), drops `NONO_*`/`SRT_*`
+  from its environment, and execs `<wrapper> bash --norc -c "<string>"`. A
+  missing or empty wrapper, or anything but one argument, exits 126 without
+  running the command. The prefix is set **only** in managed settings: Phase-0
+  testing showed the agent's user `settings.json` `env` overrides one in the
+  process environment, but not a managed one (`test_cc_nono.sh` re-checks it
+  with the user setting blanked). With `enforcer: none` no prefix is set (there
+  is no wrapper to run under).
+- **MCP stdio servers** are rendered as `glove-cc-prefix --mcp <name>`; on
+  exactly that string the prefix execs `/etc/claude-code/mcp-<name>.argv`
+  (read-only) without the tool wrapper, so the server runs under the harness's
+  sandbox, with network, as under Pi and Vibe. The agent cannot produce that
+  string: a Bash or `!` string always starts with Claude Code's snapshot
+  `source`, and hooks are managed-only. An unknown name exits 126.
+- **Project settings** (`/work/.claude/settings.json`, `settings.local.json`)
+  are bound read-only at ring 0, on every enforcer (`trusted_files` in
+  `harness.yml`; an empty placeholder when missing, created on the host, and
+  `.claude` pinned as a mount point so it can't be renamed aside). Claude Code
+  applies their `env` to processes it starts itself, outside ring 1: tested,
+  a planted `LD_PRELOAD` loaded into its `git`/`cat`/`id`, `BASH_ENV` and
+  exported functions ran in its shells and in the bash prefix before it could
+  scrub anything. Their command settings (`apiKeyHelper`, `statusLine`, …)
+  are closed the same way. Only what the operator brought in is loaded
+  (`test_cc_nono.sh` plants both files with the Write tool and a command).
+- **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
+  `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
+  servers). A project's hooks and `.mcp.json` servers do not run.
+- **Config home:** `Read(//home/agent/.claude/**)` and
+  `Edit(//home/agent/.claude/**)` are denied to the agent's file tools (`//`
+  is an absolute path; Edit rules cover every writing tool). Tool commands
+  cannot reach the home at all (ring 1). Contributed skills are therefore
+  linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
+  home, so a skill's files are readable by the path Claude Code shows.
+- **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
+  every command still runs under ring 1. `WebFetch` is denied unless the
+  session has `webfetch` (see "Claude Code's own WebFetch" below). An extension's
+  MCP allowlist (`tools`) becomes allow rules, and every other tool the server
+  is known to have (`all_tools`) a deny rule, so Claude Code never offers it
+  and no prompt can approve it (Playwright's `browser_run_code_unsafe`,
+  `browser_evaluate`). A tool unknown to `all_tools` would prompt.
+- **Network:** with a subscription token Claude Code dials only
+  `api.anthropic.com`, through the `llm` forwarder (plus WebFetch through the
+  egress proxy, with `webfetch`); non-essential traffic, telemetry, error
+  reporting, auto-update, claude.ai connectors and artifacts are off.
+- **Claude Code's own WebFetch (with `webfetch`).** glove keeps the tool Claude
+  Code expects rather than substituting one, and points it at the egress:
+  managed `HTTPS_PROXY`/`HTTP_PROXY` = the `proxy` endpoint, `NO_PROXY` = every
+  session forwarder name and alias plus loopback (managed, so the agent cannot
+  change either). Compared with Pi's `web_fetch` and Vibe's `fetch_url`, this
+  is broader in these ways:
+  - **no client-side destination guard.** Private, loopback and metadata
+    destinations are refused only at the egress: tinyproxy's filter under
+    `direct`, the tunnel under `tor`/`vpn`, the corporate gate's allowlist, and
+    with `observe` the gate's SSRF guard (both verified live with `direct`:
+    "proxy refused the connection"). Redirects are not followed across hosts by
+    Claude Code itself, so a redirect into the LAN needs a second WebFetch call,
+    which the egress refuses the same way;
+  - **the harness process holds the raw egress proxy**, as Pi does. Anything in
+    Claude Code that honours `HTTPS_PROXY` and is not a session forwarder goes
+    out through the egress, not just WebFetch. Tool commands still have no
+    network;
+  - **domain preflight**: Claude Code asks `api.anthropic.com` whether it may
+    fetch each domain, so Anthropic learns the domains fetched (over the
+    inference link with `provider: anthropic`, otherwise through the egress).
+    `skipWebFetchPreflight` is left unset: the blocklist is Claude Code's
+    default safety check;
+  - **page content goes to the inference provider**, summarised by a second
+    model call (as any tool result does), and Claude Code's request headers
+    identify it, so behind `tor`/`vpn` its fetches are distinguishable from a
+    browser's.
+- **Key:** `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) in the harness
+  env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
+  from every tool command. glove never writes key material: with an API key,
+  Claude Code itself asks once whether to use it and records the answer.
+- **Gaps:** a glove MCP stdio server has the harness's rights (config home,
+  network to the session's forwarders), as under Pi and Vibe. Project settings
+  are protected in the working dir Claude Code starts in (its project root);
+  whether it also loads a `.claude/settings*.json` from a subdirectory is
+  **untested**. The project's
+  `.claude/skills`, `agents` and `commands` stay writable (prompts; whatever
+  they run goes through ring 1). A `statusLine` command is not overridden (the
+  agent cannot write the settings that would add one).
+- **No HTTP hooks to the session's forwarders.** Claude Code refuses an `http`
+  hook whose host resolves to a private address (only loopback is allowed), and
+  every glove forwarder is on a private network; `command` hooks run under the
+  tool wrapper, without network. A live Layman gate for a gloved Claude Code
+  would need a loopback relay inside the harness container: not built.
 
 ## Tool commands and the terminal (TIOCSTI)
 
@@ -359,7 +561,13 @@ reporting `rules`).
   on the search extension's private network. The gate is never on the harness
   network and is never offered to the harness (tests and a live check assert
   SearXNG cannot reach the proxy directly). The SSRF guard and, with filter, the
-  rules cover SearXNG's requests too.
+  rules cover SearXNG's requests too. The `fetcher` (`webfetch` for Vibe) is held the same way behind `webfetch-egress` (`client:
+  webfetch`); without observe it dials the proxy on the internal egress network.
+- **MCP sidecars.** `searxng-mcp` and `fetcher` serve MCP over HTTP to their
+  harness forwarder only: they are not on the harness network, get the full
+  sidecar hardening, and refuse a request whose Host is not their forwarder's
+  name (DNS-rebinding protection). Their Python dependencies install from a
+  hash-pinned `requirements.txt` onto a digest-pinned base image.
 - **`record: full` is a deliberate privacy trade.** It writes the method and
   URL of cleartext HTTP requests (and, opted in, headers with credentials
   redacted) to disk. HTTPS paths are never visible, because there is no TLS

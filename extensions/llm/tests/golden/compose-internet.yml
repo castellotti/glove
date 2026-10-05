@@ -70,11 +70,11 @@ services:
     networks:
       - glove-s-net
 
-  # --- forwarder: llm -> api.openai.com:443
+  # --- forwarder: llm -> glove-s-llm-out:443
   glove-s-llm:
     container_name: glove-s-llm
     image: glove/forwarder:0.2.0
-    command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:api.openai.com:443"
+    command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-out:443"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
     # read-only rootfs, pids/memory limits. Never NET_ADMIN, never the harness's
@@ -97,6 +97,32 @@ services:
       glove-s-net:
         aliases:
           - api.openai.com
+      glove-s-llm: {}
+
+  # --- forwarder: llm-out -> api.openai.com:443
+  glove-s-llm-out:
+    container_name: glove-s-llm-out
+    image: glove/forwarder:0.2.0
+    command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:api.openai.com:443"
+    restart: unless-stopped
+    # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
+    # read-only rootfs, pids/memory limits. Never NET_ADMIN, never the harness's
+    # network/PID namespace, never its home. No host binds, so never keep-id:
+    # its uid stays an unprivileged subuid on rootless podman.
+    user: "501:20"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    pids_limit: 64
+    mem_limit: 256m
+
+    # a low port as non-root: podman does not default this (docker does);
+    # namespaced to this forwarder's own network namespace
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    networks:
       glove-s-llm: {}
 
 networks:

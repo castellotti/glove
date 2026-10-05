@@ -51,7 +51,7 @@ PRIVILEGE_ALLOWLIST = {
     "cap_add": frozenset({"NET_ADMIN", "NET_RAW", "CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"}),
     "devices": frozenset({"/dev/net/tun"}),
 }
-PRIVILEGE_KEYS = frozenset({"cap_add", "devices", "user_root", "read_only", "seccomp", "low_ports"})
+PRIVILEGE_KEYS = frozenset({"cap_add", "devices", "user_root", "read_only", "seccomp", "low_ports", "work"})
 # Not privileges: the text shown when a runtime cannot grant one (e.g. a way to
 # run without it).
 PRIVILEGE_META = frozenset({"hint"})
@@ -79,7 +79,8 @@ def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
                     f"extension {a.name!r} service {short!r}: {key} {bad} not in the allowlist "
                     f"{sorted(PRIVILEGE_ALLOWLIST[key])}"
                 )
-            merged.setdefault(key, []).extend(x for x in p.get(key, []) if x not in merged.get(key, []))
+            if p.get(key):
+                merged.setdefault(key, []).extend(x for x in p[key] if x not in merged.get(key, []))
         if "seccomp" in p:
             if p["seccomp"] not in seccomp_profiles():
                 raise ExtensionError(
@@ -95,6 +96,8 @@ def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
             merged["read_only"] = False
         if p.get("low_ports") is True:
             merged["low_ports"] = True
+        if p.get("work") is True:  # binds the harness's whole /work, read-write, at /work
+            merged["work"] = True
     if merged and not a.manifest.trusted:
         raise ExtensionError(
             f"extension {a.name!r} requests privileges {sorted(merged)} for {short!r}, but it is out-of-tree "
@@ -120,7 +123,7 @@ def _within(path: str, root: str) -> bool:
 
 
 def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set[str],
-             extra: dict | None = None) -> list[dict]:
+             extra: dict | None = None, *, work: bool = False) -> list[dict]:
     out = []
     state = str(comp.state_dir(a.name))
     roots = {root: ro for root, ro in comp.export_access(a).items() if root in comp.export_dirs}
@@ -153,10 +156,15 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
                 bind = dict(v)
             elif comp.work_dir is not None and _within(src, str(comp.work_dir)):
                 # a named subdirectory of /work (a setting the user opted into),
-                # never /work itself: e.g. the browser's downloads
+                # never /work itself (e.g. the browser's downloads) — unless the
+                # service holds the `work` privilege, and then at /work, rw
                 if os.path.realpath(src) == os.path.realpath(comp.work_dir):
-                    raise ExtensionError(f"{where}: a sidecar never binds all of /work, only a subdirectory")
-                require_trust(a, f"{where}: binding a /work subdirectory")
+                    if not work:
+                        raise ExtensionError(f"{where}: a sidecar never binds all of /work, only a subdirectory "
+                                             "(or with the `work` privilege)")
+                    if v.get("target") != "/work" or v.get("read_only"):
+                        raise ExtensionError(f"{where}: the `work` privilege binds /work read-write at /work")
+                require_trust(a, f"{where}: binding /work or a subdirectory")
                 bind = dict(v)
             else:
                 raise ExtensionError(
@@ -216,7 +224,7 @@ def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
         full = scoped(comp.session, f"{a.name}-{vname}")
         if opts:
             # owned by the session uid as the mount sees ids, mode 0700
-            opts = {"type": "tmpfs", "device": "tmpfs", "o": extra.get("tmpfs_volume_opts", "size=1m,mode=0700")}
+            opts = {"type": "tmpfs", "device": "tmpfs", "o": f"size=1m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"}
         volumes[full] = {"name": full, **({"driver": "local", "driver_opts": opts} if opts else {})}
     return declared
 
@@ -248,7 +256,13 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         else:
             out["networks"] = nets
     if svc.get("volumes"):
-        out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra)
+        out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra, work=bool(priv.get("work")))
+    if priv.get("work") and not any(v.get("target") == "/work" for v in out.get("volumes") or []):
+        raise ExtensionError(f"{where}: holds the `work` privilege but binds no /work")
+    for c in comp.channels:
+        if c.extension == a.name and short in c.services:
+            out.setdefault("volumes", []).append({"type": "volume", "source": c.volume(comp.session),
+                                                  "target": c.path})
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
@@ -325,6 +339,7 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     volumes: dict[str, Any] = {}
     reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service}
     declared_by: dict[str, set[str]] = {}
+    _channel_volumes(comp, extra, volumes)
     for a, doc in comp.fragments:
         bad_top = set(doc) - {"services", "volumes"}
         if bad_top:
@@ -362,6 +377,21 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     return {"services": services, "volumes": volumes, "secrets": secrets}
 
 
+def _channel_volumes(comp: Composition, extra: dict, volumes: dict[str, Any]) -> None:
+    """One session tmpfs volume per channel (owned by the session uid, 0700),
+    and a check that each service it names is one of its extension's."""
+    for c in comp.channels:
+        owner = comp.by_name(c.extension)
+        doc = next((d for x, d in comp.fragments if x is owner), {})
+        missing = [x for x in c.services if x not in (doc.get("services") or {})]
+        if missing:
+            raise ExtensionError(f"extension {c.extension!r} channel {c.name!r}: no service(s) {missing}")
+        opts = f"size=4m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"
+        name = c.volume(comp.session)
+        volumes[name] = {"name": name, "driver": "local",
+                         "driver_opts": {"type": "tmpfs", "device": "tmpfs", "o": opts}}
+
+
 # --- final invariants on the merged project ----------------------------------------
 
 FORBIDDEN_ANYWHERE = ("privileged", "ports")
@@ -388,10 +418,13 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             extension_nets = {scoped(session, n) for n in comp.networks}
             if any(n in extension_nets for n in nets):
                 raise ExtensionError("the harness joins no extension network — only its own internal network")
+            channels = {c.volume(session) for c in comp.channels}
             for v in svc.get("volumes") or []:
                 bind = isinstance(v, dict) and v.get("type") == "bind"
                 if bind and _within(str(v["source"]), str(comp.state_root)):
                     raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
+                if isinstance(v, dict) and v.get("type") == "volume" and v.get("source") not in channels:
+                    raise ExtensionError(f"the harness mounts no volume but a channel ({v.get('source')})")
             h = plan.hardening
             if set(svc.get("cap_add") or []) != set(h.cap_add) or set(svc.get("cap_drop") or []) != set(h.cap_drop):
                 raise ExtensionError("the harness's capabilities differ from its hardening plan")
@@ -403,21 +436,22 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             continue
         if svc.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in (svc.get("security_opt") or []):
             raise ExtensionError(f"sidecar {name!r} is missing the hardening set")
-    wan = scoped(session, "wan")
+    wan, lan = scoped(session, "wan"), scoped(session, "lan")
     egress_provider = comp.slots.get("egress")
     for name, svc in services.items():
         nets = svc.get("networks") or {}
         nets = set(nets) if not isinstance(nets, dict) else set(nets.keys())
+        short = name.removeprefix(scoped(session, ""))
         if wan in nets:
-            short = name.removeprefix(scoped(session, ""))
             owner = next((a for a, d in comp.fragments if short in (d.get("services") or {})), None)
             # ...or the forwarder of an endpoint the egress provider declared (a raw TCP hop)
             ep_owner = next((comp.by_name(e.extension) for e in comp.endpoints if e.name == short), None)
             if egress_provider is None or egress_provider not in (owner, ep_owner):
                 raise ExtensionError(f"service {name!r} joins the wan network, which only the egress provider may")
-        if harness_net in nets and name != plan.harness_service:
-            role = name.removeprefix(scoped(session, ""))
-            if not any(e.name == role and e.harness for e in comp.endpoints) and role not in {
-                s.role for s in plan.network.sidecars if s.harness
-            }:
-                raise ExtensionError(f"service {name!r} joins the harness network but is not a harness endpoint")
+        if lan in nets and not any(e.target.network == "lan" and short in (e.name, f"{e.name}-out")
+                                   for e in comp.endpoints):
+            raise ExtensionError(f"service {name!r} joins the lan network, which only `via: lan` forwarders may")
+        if harness_net in nets and name != plan.harness_service and short not in {
+            e.name for e in comp.endpoints if e.harness
+        } | {s.role for s in plan.network.sidecars if s.harness}:
+            raise ExtensionError(f"service {name!r} joins the harness network but is not a harness endpoint")

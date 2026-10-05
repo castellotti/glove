@@ -5,32 +5,17 @@ enable_update_checks = false
 enable_auto_update = false
 enable_telemetry = false
 experimental_bash_tool = false
+mcp_servers = [
+    { name = "playwright", transport = "http", url = "http://glove-s-browser:8931/mcp" },
+    { name = "searxng", transport = "http", url = "http://glove-s-search-mcp:8000/mcp" },
+    { name = "webfetch", transport = "http", url = "http://glove-s-webfetch-mcp:8000/mcp" },
+    { name = "extra", transport = "http", url = "http://x:1/mcp" },
+]
 include_commit_signature = false
 disabled_tools = [
     "re:playwright_(?!(?:browser_navigate|browser_navigate_back|browser_snapshot|browser_take_screenshot|browser_click|browser_type|browser_hover|browser_select_option|browser_press_key|browser_wait_for|browser_tabs|browser_handle_dialog)$).*",
     "task",
 ]
-
-[[mcp_servers]]
-name = "playwright"
-transport = "http"
-url = "http://glove-s-browser:8931/mcp"
-
-[[mcp_servers]]
-name = "searxng"
-transport = "stdio"
-command = "python3"
-args = [
-    "/opt/glove/ext/search/searxng_mcp.py",
-]
-
-[mcp_servers.env]
-SEARXNG_URL = "http://glove-s-search:8080"
-
-[[mcp_servers]]
-name = "extra"
-transport = "http"
-url = "http://x:1/mcp"
 
 [[providers]]
 name = "glove"

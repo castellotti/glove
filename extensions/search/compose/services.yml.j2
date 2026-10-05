@@ -25,3 +25,22 @@ services:
     networks: [searchnet]
     volumes:
       - { type: tmpfs, target: /data }
+{% if harness in ["vibe", "claude-code"] %}
+  # web_search for harnesses that speak MCP: streamable HTTP on :8000, reached
+  # only through the harness's `search-mcp` forwarder (and only under that
+  # name: MCP_ALLOWED_HOST). It talks to SearXNG on searchnet and nothing else.
+  searxng-mcp:
+    image: "{{ images.mcp }}"
+    networks: [searchnet]
+    environment:
+      SEARXNG_URL: "http://glove-{{ session.id }}-searxng:8080"
+      MCP_ALLOWED_HOST: "{{ endpoint['search-mcp'].host }}:8000"
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    depends_on: [searxng]
+{% endif %}

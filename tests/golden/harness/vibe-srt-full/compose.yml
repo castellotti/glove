@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/vibe:0.5.0-242c6d84dd-srt-f5b44676c0
+    image: glove/vibe:0.5.0-b7906c6b97-srt-f5b44676c0
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "vibe", "--trust", "--yolo", "--workdir", "/work"]
     stdin_open: true
@@ -30,7 +30,6 @@ services:
       BROWSER_MCP_URL: "http://glove-s-browser:8931/mcp"
       BROWSER_MCP_TOOLS: "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog"
       BROWSER_MODE: "headless"
-      SEARXNG_URL: "http://glove-s-search:8080"
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -88,7 +87,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - collect
     - --net-dir
@@ -229,9 +228,75 @@ services:
     ipc: private
     pids_limit: 256
     mem_limit: 512m
+  glove-s-searxng-mcp:
+    container_name: glove-s-searxng-mcp
+    image: glove/ext-search-mcp:883587bb62e8
+    environment:
+      SEARXNG_URL: http://glove-s-searxng:8080
+      MCP_ALLOWED_HOST: glove-s-search-mcp:8000
+    tmpfs:
+    - /tmp
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1', 8000), 2)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    networks:
+      glove-s-searchnet: {}
+    depends_on:
+      glove-s-searxng:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-fetcher:
+    container_name: glove-s-fetcher
+    image: glove/ext-webfetch-mcp:136130ff00ed
+    environment:
+      GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
+      GLOVE_FETCH_ALLOW: ''
+      MCP_ALLOWED_HOST: glove-s-webfetch-mcp:8000
+    tmpfs:
+    - /tmp
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1', 8000), 2)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    networks:
+      glove-s-fetchnet: {}
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - forward
     - --service
@@ -295,7 +360,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - forward
     - --service
@@ -357,7 +422,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - forward
     - --service
@@ -411,19 +476,19 @@ services:
     ipc: private
     pids_limit: 256
     mem_limit: 512m
-  glove-s-search:
-    container_name: glove-s-search
-    image: glove/ext-gate-netgate:15bf46d76a76
+  glove-s-search-mcp:
+    container_name: glove-s-search-mcp
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - forward
     - --service
-    - search
+    - search-mcp
     - --mode
     - tcp
     - --listen
-    - '8080'
+    - '8000'
     - --upstream
-    - tcp:glove-s-searxng:8080
+    - tcp:glove-s-searxng-mcp:8000
     - --route
     - tcp
     - --env
@@ -441,7 +506,7 @@ services:
     - --rules
     - /etc/glove/netgate-control/rules.json
     - --ingress-alias
-    - glove-s-search-ingress
+    - glove-s-search-mcp-ingress
     - --scope
     - local
     - --tool
@@ -449,7 +514,7 @@ services:
     networks:
       glove-s-net:
         aliases:
-        - glove-s-search-ingress
+        - glove-s-search-mcp-ingress
       glove-s-searchnet: {}
     volumes:
     - type: volume
@@ -475,7 +540,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:15bf46d76a76
+    image: glove/ext-gate-netgate:d4c3234e44e3
     command:
     - forward
     - --service
@@ -527,6 +592,124 @@ services:
     ipc: private
     pids_limit: 256
     mem_limit: 512m
+  glove-s-webfetch-mcp:
+    container_name: glove-s-webfetch-mcp
+    image: glove/ext-gate-netgate:d4c3234e44e3
+    command:
+    - forward
+    - --service
+    - webfetch-mcp
+    - --mode
+    - tcp
+    - --listen
+    - '8000'
+    - --upstream
+    - tcp:glove-s-fetcher:8000
+    - --route
+    - tcp
+    - --env
+    - s
+    - --session
+    - s
+    - --resolve
+    - in-tunnel
+    - --events
+    - /run/glove-netgate/events.sock
+    - --client
+    - unknown
+    - --record
+    - metadata
+    - --rules
+    - /etc/glove/netgate-control/rules.json
+    - --ingress-alias
+    - glove-s-webfetch-mcp-ingress
+    - --scope
+    - local
+    - --tool
+    - web_fetch
+    networks:
+      glove-s-net:
+        aliases:
+        - glove-s-webfetch-mcp-ingress
+      glove-s-fetchnet: {}
+    volumes:
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    - type: bind
+      source: <GLOVE_HOME>/control/s
+      target: /etc/glove/netgate-control
+      read_only: true
+    depends_on:
+      glove-s-netgate:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-webfetch-egress:
+    container_name: glove-s-webfetch-egress
+    image: glove/ext-gate-netgate:d4c3234e44e3
+    command:
+    - forward
+    - --service
+    - webfetch-egress
+    - --mode
+    - http-proxy
+    - --listen
+    - '8888'
+    - --upstream
+    - chain:http://glove-s-direct-proxy:8888
+    - --route
+    - direct
+    - --env
+    - s
+    - --session
+    - s
+    - --resolve
+    - in-tunnel
+    - --events
+    - /run/glove-netgate/events.sock
+    - --client
+    - webfetch
+    - --record
+    - metadata
+    - --rules
+    - /etc/glove/netgate-control/rules.json
+    - --tool
+    - web_fetch
+    networks:
+      glove-s-egress: {}
+      glove-s-fetchnet: {}
+    volumes:
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    - type: bind
+      source: <GLOVE_HOME>/control/s
+      target: /etc/glove/netgate-control
+      read_only: true
+    depends_on:
+      glove-s-netgate:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
 
 networks:
   glove-s-net:
@@ -544,6 +727,9 @@ networks:
     internal: true
   glove-s-searchnet:
     name: glove-s-searchnet
+    internal: true
+  glove-s-fetchnet:
+    name: glove-s-fetchnet
     internal: true
 
 volumes:

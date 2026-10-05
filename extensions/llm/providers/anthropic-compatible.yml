@@ -1,0 +1,12 @@
+# Any server that speaks the Anthropic Messages API (`/v1/messages`): llama.cpp,
+# vLLM, LiteLLM, a gateway, … — the harness for it is Claude Code. The cloud API
+# itself is `anthropic` (fixed host, subscription tokens).
+name: anthropic-compatible
+api: anthropic-messages
+base_path: ""
+default_port: 8080
+locations: [host, lan, internet]
+auth: { header: x-api-key, scheme: "", required: false }
+headers: { anthropic-version: "2023-06-01" }
+models_endpoint: /v1/models
+defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: false }

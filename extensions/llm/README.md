@@ -19,6 +19,23 @@ extensions:
     extra_models: []           # e.g. [{id: some-vision-model, vision: true}]
 ```
 
+## Auth
+
+`api_key` is a reference (`keychain:<service>` or `env:<VAR>`), resolved at
+launch and handed to the harness only in its environment. The harness's adapter
+names the variable (Pi/Vibe: `GLOVE_LLM_API_KEY`; Claude Code:
+`ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` with `auth: oauth`).
+
+`auth: oauth` takes a subscription token instead of an API key, where the
+provider's catalog entry allows it: `anthropic` allows it for `claude-code`
+only (a token from `claude setup-token`). The launch-time probe then sends it as
+a bearer token with the catalog's OAuth headers. A catalog entry's `headers`
+(e.g. `anthropic-version`) go on every probe.
+
+Anthropic's model list is paginated and names dated snapshots; the probe follows
+every page (`models_cursor`) and accepts an alias such as `claude-haiku-4-5` for
+its snapshot `claude-haiku-4-5-20251001` (`dated_aliases`).
+
 ## Routing
 
 Each location renders exactly one forwarder, `glove-<id>-llm`, the only thing
@@ -32,7 +49,10 @@ the harness can reach for inference:
 
 For `internet` the provider hostname (e.g. `api.openai.com`) is an alias of the
 forwarder on the harness network, so the harness speaks TLS to the real name
-(correct SNI and certificate) and still reaches nothing else. `route: egress`
+(correct SNI and certificate) and still reaches nothing else. Docker's DNS would
+answer that alias to the forwarder itself, so it dials a second hop,
+`glove-<id>-llm-out`, which is not on the harness network and dials the real
+host. `route: egress`
 (cloud inference through the session's VPN/Tor) is not implemented yet.
 
 With `observe`, the forwarder records flows as `tool: llm`, `scope:

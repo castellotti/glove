@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "http",
+      "url": "http://glove-s-browser:8931/mcp"
+    },
+    "searxng": {
+      "type": "http",
+      "url": "http://glove-s-search-mcp:8000/mcp"
+    }
+  }
+}

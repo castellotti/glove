@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ipaddress
 import re
 import secrets as pysecrets
 from dataclasses import dataclass, field
@@ -61,11 +62,16 @@ EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
-    "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts",
+    "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+# A channel's directory in the harness and in the sidecars that serve it (see
+# `Channel`).
+CHANNEL_ROOT = "/run/glove"
 
 
 class ExtensionError(ConfigError):
@@ -129,7 +135,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     if not isinstance(raw, dict):
         raise ExtensionError(f"{f}: manifest must be a mapping")
     name = raw.get("name")
-    if not isinstance(name, str) or not _NAME.match(name):
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise ExtensionError(f"{f}: `name` must match {_NAME.pattern}, got {name!r}")
     if raw.get("api") != API_VERSION:
         raise ExtensionError(f"extension {name!r}: api must be {API_VERSION}, got {raw.get('api')!r}")
@@ -379,6 +385,26 @@ class Endpoint:
         return f"http://{self.host(session)}:{self.port}"
 
 
+@dataclass(frozen=True)
+class Channel:
+    """A directory the harness (and every command it runs) shares with some of
+    an extension's sidecars: a session tmpfs volume at /run/glove/<name> in
+    both, writable by the session uid. It carries no network: a relay's client
+    leaves requests there (files and FIFOs, which every enforcer allows, unlike
+    a Unix socket) and the sidecar answers them."""
+
+    name: str
+    extension: str
+    services: tuple[str, ...]
+
+    @property
+    def path(self) -> str:
+        return f"{CHANNEL_ROOT}/{self.name}"
+
+    def volume(self, session: str) -> str:
+        return scoped(session, f"chan-{self.name}")
+
+
 @dataclass
 class Active:
     """One selected extension, resolved."""
@@ -415,6 +441,7 @@ class Composition:
     # (ext, host dir, container path): read-only harness binds from `mounts:`
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
+    channels: list[Channel] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
@@ -438,6 +465,12 @@ class Composition:
 
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
+
+    @property
+    def channel_paths(self) -> list[str]:
+        """The channels' directories in the harness: writable under every
+        enforcer and profile (they carry no network)."""
+        return [c.path for c in self.channels]
 
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
@@ -666,20 +699,23 @@ def generate_secret() -> str:
 
 # Logical network names an extension may use. The harness network (`net`) is
 # core's alone; `llm` carries only inference forwarders; `hostgw` only
-# host-gateway forwarders; `wan` only the active egress provider's containers.
+# host-gateway forwarders; `wan` only the active egress provider's containers;
+# `lan` only the forwarders of `via: lan` endpoints (a named LAN host, never
+# reached by the harness itself).
 CORE_NETWORKS = {
     "net": {"internal": True},
     "egress": {"internal": True},
     "wan": {"internal": False},
     "llm": {"internal": False},
     "hostgw": {"internal": False},
+    "lan": {"internal": False},
 }
 HOST_GATEWAY = "host.docker.internal"
 
 
 def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
     where = f"extension {a.name!r} endpoint {name!r}"
-    if not _NAME.match(name):
+    if not _NAME.fullmatch(name):
         raise ExtensionError(f"{where}: name must match {_NAME.pattern}")
     t = spec.get("target") or {}
     harness = bool(spec.get("harness", True))
@@ -703,17 +739,28 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
         require_trust(a, f"{where}: reaching a host port")
         target = Target(HOST_GATEWAY, int(t["host_port"]), "host", "hostgw")
     elif "address" in t:
-        # a remote host:port: the inference provider over `llm`, or the egress
-        # provider over `wan` (e.g. corporate's raw TCP endpoints)
+        # a remote host:port: the inference provider over `llm`, the egress
+        # provider over `wan` (e.g. corporate's raw TCP endpoints), or — over
+        # `lan` — a host the user named, for a sidecar only (e.g. ssh)
         via = str(t.get("via", "llm"))
-        slot = {"llm": "inference", "wan": "egress"}.get(via)
-        if slot is None or slot not in a.manifest.provides:
-            raise ExtensionError(f"{where}: only the inference provider (via: llm) or the egress provider "
-                                 "(via: wan) may dial a remote address")
+        if via == "lan":
+            if harness:
+                raise ExtensionError(f"{where}: a `via: lan` endpoint is for a sidecar (harness: false); "
+                                     "the harness never reaches a LAN host itself")
+        else:
+            slot = {"llm": "inference", "wan": "egress"}.get(via)
+            if slot is None or slot not in a.manifest.provides:
+                raise ExtensionError(f"{where}: only the inference provider (via: llm), the egress provider "
+                                     "(via: wan) or a sidecar's LAN host (via: lan) may dial a remote address")
         require_trust(a, f"{where}: dialling a remote address")
         host, _, port = str(t["address"]).rpartition(":")
         if not host or not port.isdigit():
             raise ExtensionError(f"{where}: address must be host:port, got {t['address']!r}")
+        if via == "lan" and not lan_host(host):
+            raise ExtensionError(
+                f"{where}: a `via: lan` address must be a private IPv4 address (10/8, 172.16/12, "
+                f"192.168/16) or a LAN name (one label, or under {', '.join(LAN_SUFFIXES)}), got {host!r}; "
+                "`lan` is a direct route, so a public host would bypass the egress provider")
         target = Target(host, int(port), "remote", via)
     else:
         raise ExtensionError(f"{where}: target needs service|slot|host_port|address")
@@ -729,11 +776,34 @@ def _endpoint(comp: Composition, a: Active, name: str, spec: dict) -> Endpoint:
 
 _HOSTNAME = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
 
+# What a `via: lan` endpoint may dial. `lan` is a routable, NAT'd bridge with no
+# tunnel, so it must never carry a public host (that would bypass the egress
+# provider, its DNS and the VPN): private IPv4 literals, or names that only a
+# LAN resolver answers. Docker's own names (host.docker.internal, …) are the
+# host, reached only by `host_port` over `hostgw`.
+LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+LAN_SUFFIXES = (".lan", ".local", ".home.arpa", ".internal")
+
+
+def lan_host(host: str) -> bool:
+    h = host.lower()
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        pass
+    else:
+        return ip.version == 4 and any(ip in n for n in LAN_NETWORKS)
+    if not _HOSTNAME.fullmatch(h) or h == "localhost" or h.endswith(".docker.internal") or h == "docker.internal":
+        return False
+    if re.fullmatch(r"[0-9.]+", h):  # a malformed IPv4 literal, never a name
+        return False
+    return "." not in h or h.endswith(LAN_SUFFIXES)
+
 
 def _aliases(items: Any, where: str) -> tuple[str, ...]:
     """Network aliases (DNS names on the harness network), rendered into compose as-is."""
     out = tuple(str(x) for x in items or ())
-    bad = [x for x in out if not _HOSTNAME.match(x)]
+    bad = [x for x in out if not _HOSTNAME.fullmatch(x)]
     if bad:
         raise ExtensionError(f"{where}: aliases must be hostnames, got {bad!r}")
     return out
@@ -750,7 +820,7 @@ def require_trust(a: Active, what: str) -> None:
 def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
     """One harness env var from an extension (manifest or `contribute` hook):
     the key is rendered into compose as-is, so it must be a plain name."""
-    if not isinstance(k, str) or not _ENV_VAR.match(k):
+    if not isinstance(k, str) or not _ENV_VAR.fullmatch(k):
         raise ExtensionError(f"{where}: env key {k!r} must match {_ENV_VAR.pattern}")
     if k in comp.harness_env:
         raise ExtensionError(f"{where}: env {k!r} is already set by another extension")
@@ -781,7 +851,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
     for k, v in render_value(h.get("env") or {}, ctx, where).items():
-        set_harness_env(comp, where, k, v)
+        if v not in (None, ""):  # renders empty (e.g. its endpoint is off for this harness): not set
+            set_harness_env(comp, where, k, v)
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)
@@ -843,6 +914,25 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         comp.harness_mounts.append((a.name, str(host), target))
 
 
+def _channels(comp: Composition, a: Active, ctx: dict) -> None:
+    """`channels: {<name>: {services: [<its service>, …], when: …}}` — a
+    directory shared by the harness and those sidecars (`Channel`). A new edge
+    into the harness, so a privilege: in-tree or trusted extensions only."""
+    for name, spec in (a.manifest.raw.get("channels") or {}).items():
+        where = f"extension {a.name!r} channel {name!r}"
+        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
+            raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
+        if not when_matches(spec.get("when"), ctx):
+            continue
+        services = spec.get("services") or []
+        if not isinstance(services, list) or not services or not all(isinstance(x, str) for x in services):
+            raise ExtensionError(f"{where}: `services` must name at least one of its services")
+        require_trust(a, f"{where}: a directory shared with the harness")
+        if any(c.name == name for c in comp.channels):
+            raise ExtensionError(f"{where}: channel {name!r} is declared twice")
+        comp.channels.append(Channel(name=str(name), extension=a.name, services=tuple(services)))
+
+
 def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:
     for item in active_items(items, ctx):
         require_trust(a, f"extension {a.name!r}: a host service")
@@ -901,7 +991,7 @@ def compose(
             comp.slots[s] = a
         ctx = base_context(comp, a)
         for net, spec in (a.manifest.raw.get("networks") or {}).items():
-            if net in CORE_NETWORKS:
+            if net in CORE_NETWORKS or not when_matches((spec or {}).get("when"), ctx):
                 continue
             if not (spec or {}).get("internal", True):
                 raise ExtensionError(f"extension {a.name!r}: private network {net!r} must be internal")
@@ -934,6 +1024,7 @@ def compose(
             spec = setting if isinstance(setting, dict) else {"from": setting}
             if when_matches(spec.get("when"), ctx):
                 comp.secrets[f"{a.name}-{sname}"] = (a.name, str(spec["from"]))
+        _channels(comp, a, ctx)
         frag = a.manifest.raw.get("services")
         if frag:
             path = a.manifest.path / frag
@@ -1024,7 +1115,7 @@ def launch_env(comp: Composition) -> dict[str, str]:
                 raise ExtensionError(f"extension {a.name!r}: launch hook returned undeclared secret {name!r}")
             env[secret_env_var(f"{a.name}-{name}")] = str(value)
         for var, value in (out.get("env") or {}).items():
-            if not _ENV_VAR.match(var) or var.startswith("GLOVE_") or var in env:
+            if not _ENV_VAR.fullmatch(var) or var.startswith("GLOVE_") or var in env:
                 raise ExtensionError(f"extension {a.name!r}: launch hook returned a bad env name {var!r}")
             env[var] = str(value)
     return env

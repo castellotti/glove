@@ -4,8 +4,126 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code harness** (`harness: claude-code`, image
+  `glove/claude-code:0.2.0`: the native binary, pinned, no Node). glove's
+  guard rails are read-only managed settings at `/etc/claude-code`: a shell
+  prefix (`glove-cc-prefix`) that runs every Bash tool, `!` and hook command
+  under the ring-1 tool wrapper and fails closed, and each glove stdio MCP
+  server (`--mcp <name>`, from a read-only argv) under the harness sandbox,
+  with network; managed-only hooks, permission rules and MCP servers; the
+  config home denied to Read/Edit; non-essential traffic off. The project's
+  `.claude/settings.json` and `settings.local.json` are read-only to the agent
+  (their `env` reaches processes Claude Code starts outside ring 1). The home
+  gets `settings.json`, a merged `.claude.json` (onboarding, `/work` trust) and
+  `CLAUDE.md`; transcripts (`projects/`) are exported by `observe`. MCP
+  contributions render as managed MCP servers and permission rules; skills
+  are linked from `/opt/glove/cc` (`--add-dir`), outside the denied home.
+  `search` bakes its SearXNG MCP server into the Claude Code image.
+- Harness profiles may name `trusted_files` (relative to the working dir):
+  files the harness loads its own config from, always bound read-only at
+  ring 0 (a placeholder when missing; their directories pinned).
+- `llm`: `auth: oauth` for a subscription token where the catalog allows it
+  (`anthropic`, for `claude-code` only); catalog `headers` on every probe; a
+  paginated model list is followed (`models_cursor`) and an alias matches its
+  dated snapshot (`dated_aliases`). New provider `anthropic-compatible` (any
+  Anthropic Messages API server, host/LAN/internet).
+- Harness adapters may render read-only system config (`system_files`, a dir
+  of its own under `/etc`, from `.glove/harness/`) and name the env var the LLM
+  key travels in (`secret_env`). Every enforcer with a tool wrapper also renders
+  `tool-wrapper.argv` (one argument per line). System files are rewritten in
+  place (atomic per file), so a re-plan never swaps the dir a live session binds.
+- `webfetch` for Vibe: a `fetch_url` MCP tool served over HTTP by a hardened
+  `fetcher` sidecar (a port of Pi's web_fetch and its destination guard: public
+  pages only, every redirect re-checked, policy refusals named; IPv4 in hex,
+  octal or shortened form is refused, since Python does not normalise it as
+  Node does; an unknown page charset falls back to utf-8). The harness
+  reaches only the fetcher, never the egress proxy; with `observe` the fetcher's
+  traffic goes through its own gate (`client: webfetch`, a new netgate client
+  label).
+- `webfetch` for Claude Code: its own `WebFetch`, allowed and pointed at the
+  `proxy` endpoint (`HTTPS_PROXY` in the managed env, session forwarders in
+  `NO_PROXY`); private destinations are refused by the egress layer. Without
+  `webfetch`, `WebFetch` stays denied.
+- Claude Code with `playwright`: the `tools` allowlist becomes allow rules and
+  every other tool the pinned MCP defines (`all_tools`, a new neutral `mcp:`
+  key) a managed deny rule, so Claude Code never offers it; host mode needs
+  `i_accept_host_rce: true` as with Vibe.
+- Extension networks take `when:` (like endpoints and images).
+- **`github`** (with the new library **`relay`**): `gh`, and `git push`/`fetch`/
+  `pull`/`clone`/`ls-remote`, from the agent's shell. Shims in the harness image
+  relay each call to a hardened sidecar that holds the token (resolved in memory
+  at `glove up`, never in the harness). The sidecar runs the real command under
+  a policy:
+  - gh: a subcommand allowlist; `auth`/`secret`/`extension`/… never; `gh api`
+    GET only; github.com only.
+  - git: network verbs to `https://github.com/<owner>/<repo>` remotes, with the
+    repo's config defanged. `git clone <url> <dir>` hands git the checked,
+    resolved `<dir>` itself, even when an option value (`-o <dir>`) spells the
+    same word.
+  - File arguments are opened inside `/work` only.
+  - Traffic reaches GitHub's hosts only, through an in-process fence and then
+    the egress. With `observe`, a gate labels the flows `client: github` (a new
+    netgate client label).
+  - A misbehaving client can't wear the sidecar down: requests waiting to
+    start are capped (4× the concurrent limit, the rest dropped), a request
+    left half-open holds no descriptors past 10s, and the fence drops a
+    connection that sends no `CONNECT` within 10s.
+- **`ssh`**: `ssh <host> <command>` to LAN hosts the session names, relayed to a
+  hardened sidecar.
+  - **Key:** held in an `ssh-agent` there, delivered by `launch_env` and never
+    in the harness.
+  - **Routes:** each host gets one forwarder on core's new `lan` network, the
+    sidecar's only route. With `observe` it is a gate: `client: ssh` (a new
+    netgate client label), `scope: lan`.
+  - **Policy:** host keys checked strictly against the session's
+    `known_hosts`; an option allowlist with no forwarding, jump hosts,
+    ProxyCommand, identities or TTY.
+  - **relay** gains `openssh-client` and `libnss-wrapper`, runs a relay with no
+    `/work` (file arguments refused) and no fence when its policy names no hosts.
+- `enforcer_options: {nono: {browsers: true}}` (`nono` and `nono+srt`): shell
+  commands may start Playwright's baked Chromium, by granting the tool profile
+  read-only `/proc`. Other processes' `environ`, `mem` and fd links stay closed
+  (Landlock denies access to processes outside the command's own domain), so the
+  harness's LLM key stays hidden; their command lines and `/proc/net` become
+  readable. Off by default; the toolchains brief tells the agent which applies.
+  Verified live under `nono+srt`; untested under plain `nono` (Podman).
+- Templates **`claude-code`** (Claude Code on an Anthropic subscription: `github`,
+  WebFetch and a sidecar Chromium through `direct`, Python/uv and Node/pnpm with
+  Playwright's Chromium usable from shell commands, `observe` + `filter`; `ssh`
+  commented out) and **`vibe-search`** (`pi-search` with Vibe as the harness).
+- Core: **`via: lan`** endpoints, a host:port the user named, dialled for a
+  trusted extension's sidecar only, over a routable `lan` network that only
+  those forwarders may join. The address must be a private IPv4 address
+  (10/8, 172.16/12, 192.168/16) or a LAN name (one label, or under `.lan`,
+  `.local`, `.home.arpa`, `.internal`): `lan` bypasses the egress provider, so a
+  public host (or `host.docker.internal`) is refused.
+- Validation patterns in core (extension, endpoint, alias and env names) and in
+  `ssh` (host names, hosts, users) are matched whole (`fullmatch`), so a value
+  with a trailing newline is refused at `glove check`.
+- Core: **channels** (`channels:`), a session tmpfs volume at
+  `/run/glove/<name>` shared by the harness and named sidecars, which every
+  enforcer lets the harness and its commands write (no network). A relay uses
+  files and FIFOs there because glove's seccomp below srt forbids Unix sockets.
+  Also core: the **`work` privilege**, which binds the harness's whole `/work`
+  read-write into one sidecar. Both are for in-tree or trusted extensions only.
+- `github` sets `safe.directory=*` for git in the harness (`GIT_CONFIG_PARAMETERS`)
+  and in the sidecar. On Docker Desktop, a checkout that was just made reads as
+  root-owned inside the harness, so git refused it as "dubious ownership".
+
 ### Changed
 
+- `privileges` no longer records empty `cap_add`/`devices` lists for a service
+  that asks for neither.
+- `search` for Vibe (and now Claude Code) is the `searxng` MCP server over HTTP
+  from a hardened `searxng-mcp` sidecar (python slim + `mcp`, hash-pinned)
+  instead of a stdio server baked into the harness image: one server for both
+  harnesses, and the harness never reaches SearXNG itself. The raw SearXNG
+  endpoint (`search`) is Pi's only.
+- An extension's harness `env` value that renders empty is no longer set
+  (`GLOVE_FETCH_ALLOW` outside `corporate`, `rag`'s `CLAUDE_OBSIDIAN_CORE`
+  without a vault).
 - **Harness plugins.** Pi, Vibe and Claude Code moved from `glove/harnesses/`
   and core's registry/render code to `harnesses/<name>/` (`harness.yml`,
   `adapter.py`, `image/`, `tests/`). Core loads a harness's adapter only when a
@@ -35,6 +153,19 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- `toolchains` (node): with no project, the global `packages` are linked into
+  the pinned node's global require path, so `require('playwright')` works from
+  a shell command in any directory (it needed `NODE_PATH` before). The brief
+  says `mkdir -p "$TMPDIR"` only when `$TMPDIR` is set (srt sets it; nono
+  doesn't).
+- `llm` `location: internet` never connected: the forwarder carries the
+  provider's hostname as an alias on the harness network, and Docker's DNS
+  answers a container's own alias first, so it dialled itself. An aliased
+  endpoint now dials through a second hop off the harness network
+  (`glove-<id>-llm-out`). The cloud route is verified live with Anthropic.
+- The `llm` launch probe retries a few times while nothing answers, so a gate
+  forwarder (observe) still starting no longer fails the launch with "HTTP 0".
 
 - Vibe's `sessions_subdir` is `logs/session`, where Vibe 2.x writes its
   transcripts (it never creates `sessions/`), so `glove up --resume` finds them.

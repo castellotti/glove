@@ -9,12 +9,16 @@ Built from a resolved ``Config`` plus the mount and network plans.
 from __future__ import annotations
 
 import os
+import posixpath
+import re
+import shutil
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import Config, ConfigError
-from .enforcers.base import srt_suffix, uses_srt
+from .enforcers.base import argv_lines, srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
@@ -70,6 +74,12 @@ class SessionPlan:
     passthrough_env: list[str] = field(default_factory=list)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
+    # The adapter's read-only system config (`system_files(plan)`): container
+    # dir → {filename: contents}, e.g. Claude Code's /etc/claude-code managed
+    # settings. Rendered under .glove/harness/ like the policies; the CLI fills
+    # system_mounts with (host dir, container dir) once written.
+    system_files: dict[str, dict[str, str]] = field(default_factory=dict)
+    system_mounts: list[tuple[str, str]] = field(default_factory=list)
     # Empty files/dirs bound read-only over missing protected paths (set by the
     # CLI once materialised; placeholders are skipped while it is None).
     placeholder_host_dir: str | None = None
@@ -126,9 +136,48 @@ def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
 def secret_env_names(plan: SessionPlan) -> list[str]:
     """The harness's secret env var names (``SessionPlan.passthrough_env``).
     Planning needs only the names, so it never resolves a secret reference."""
-    from .harnessconfig import LLM_API_KEY_ENV
+    return [plan.model.api_key_env] if plan.model is not None and plan.model.api_key_env else []
 
-    return [LLM_API_KEY_ENV] if plan.model is not None and plan.model.api_key_env else []
+
+def write_system_files(plan: SessionPlan, root: Path) -> None:
+    """Write `plan.system_files` under `root` (one dir per container dir) and
+    record the read-only binds. Only a dir of its own under /etc qualifies: never
+    /etc itself, glove's enforcer dir, or a path the agent writes.
+
+    A running session binds these dirs, so they are updated in place (each file
+    replaced atomically, stale ones removed), never deleted and recreated: a
+    re-plan must not leave the live container an empty or orphaned dir."""
+    plan.system_mounts = []
+    dirs: set[Path] = set()
+    for target, files in sorted(plan.system_files.items()):
+        if not re.fullmatch(r"/etc/[a-z0-9][a-z0-9._-]*", target) or target == plan.policies_container_dir:
+            raise ConfigError(f"harness {plan.profile.name!r}: system files must go in a dir of their own "
+                              f"under /etc, not {target!r}")
+        bad = [f for f in files if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", f)]
+        if bad:
+            raise ConfigError(f"harness {plan.profile.name!r}: bad system file name {bad[0]!r}")
+        d = root / target.removeprefix("/etc/")
+        d.mkdir(parents=True, exist_ok=True)
+        dirs.add(d)
+        for stale in set(d.iterdir()) - {d / f for f in files}:
+            _remove(stale)
+        for fname, content in files.items():
+            fd, tmp = tempfile.mkstemp(dir=root, prefix=".tmp-")
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, d / fname)
+        plan.system_mounts.append((str(d), target))
+    if root.is_dir():
+        for stale in set(root.iterdir()) - dirs:  # a dir the harness no longer renders
+            _remove(stale)
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
@@ -144,10 +193,8 @@ def secret_env(plan: SessionPlan) -> dict[str, str]:
     comp = plan.composition
     inference = comp.slots.get("inference")
     setting = inference.exports.get("api_key_secret") if inference else None
-    if setting:
-        from .harnessconfig import LLM_API_KEY_ENV
-
-        env[LLM_API_KEY_ENV] = resolve_secret(inference.settings[setting])
+    if setting and plan.model is not None and plan.model.api_key_env:
+        env[plan.model.api_key_env] = resolve_secret(inference.settings[setting])
     hooked = launch_env(comp)
     env.update(hooked)
     env.update(resolve_secrets(comp, provided=hooked))
@@ -251,9 +298,9 @@ def build_session_plan(
         allow_sensitive=cfg.allow_sensitive,
     )
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    mount_plan = replace(
-        mount_plan, protect=protected_paths(mount_plan.mounts, protect_ide_files=cfg.protect_ide_files)
-    )
+    trusted = [posixpath.normpath(posixpath.join(mount_plan.working_dir, f)) for f in profile.trusted_files]
+    mount_plan = replace(mount_plan, protect=protected_paths(
+        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files, trusted=trusted))
     network = build_network_plan(cfg, session, comp)
 
     environment = _resolve_env(cfg, profile)
@@ -298,7 +345,7 @@ def build_session_plan(
 
     # Extension layers get their own content-addressed derived image. srt needs
     # bwrap/socat/srt baked in: its image is the `-srt` overlay (enforcers/srt_image).
-    from .harnessconfig import ModelDescriptor
+    from .harnessconfig import harness_model
     from .image import content_hash, render_dockerfile
 
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
@@ -324,7 +371,7 @@ def build_session_plan(
         enforcer_options=dict(cfg.enforcer_options or {}),
         tools=dict(cfg.tools or {}),
         composition=comp,
-        model=ModelDescriptor.from_exports(comp.slot_exports("inference")) if "inference" in comp.slots else None,
+        model=harness_model(profile, comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
         derived_staged=staged,
         corporate_ca_host_path=corporate_ca,
@@ -344,6 +391,10 @@ def build_session_plan(
     if resume or session_id is not None:
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
+    wrapper = enforcer.tool_wrapper_argv(plan)
+    if wrapper:
+        plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
+    plan.system_files = adapter_call(profile, "system_files", cfg, plan, default={})
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)
 

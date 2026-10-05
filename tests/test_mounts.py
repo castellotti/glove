@@ -181,3 +181,49 @@ def test_ide_files_opt_in_with_placeholders(tmp_path):
     assert got["/work/.envrc"].host_path == os.path.realpath(work / ".envrc")  # exists → real file
     assert got["/work/.vscode"].host_path is None and got["/work/.vscode"].kind == "dir"
     assert got["/work/.mcp.json"].host_path is None and got["/work/.mcp.json"].kind == "file"
+
+
+TRUSTED = ["/work/.claude/settings.json", "/work/.claude/settings.local.json"]
+
+
+def test_trusted_files_always_protected_with_their_dir_pinned(tmp_path):
+    work = tmp_path / "w"
+    (work / ".claude").mkdir(parents=True)
+    (work / ".claude" / "settings.json").write_text("{}")
+    got = [(p.container_path, p.host_path, p.kind, p.read_only)
+           for p in protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)]
+    real = os.path.realpath(work)
+    assert got == [
+        ("/work/.claude", f"{real}/.claude", "dir", False),  # pinned: `mv .claude x` fails
+        ("/work/.claude/settings.json", f"{real}/.claude/settings.json", "file", True),
+        ("/work/.claude/settings.local.json", None, "file", True),  # missing: a placeholder
+    ]
+
+
+def test_trusted_dir_missing_is_still_pinned(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    got = {p.container_path: p.host_path for p in protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)}
+    assert got["/work/.claude"] == f"{os.path.realpath(work)}/.claude"  # created at launch
+    assert got["/work/.claude/settings.json"] is None
+
+
+@pytest.mark.parametrize("plant", ["dir-link", "file-link", "file-is-dir"])
+def test_trusted_path_that_cannot_be_protected_is_refused(tmp_path, plant):
+    work = tmp_path / "w"
+    work.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    if plant == "dir-link":
+        (work / ".claude").symlink_to(tmp_path / "elsewhere")
+    else:
+        (work / ".claude").mkdir()
+        target = work / ".claude" / "settings.json"
+        target.symlink_to(tmp_path / "elsewhere") if plant == "file-link" else target.mkdir()
+    with pytest.raises(MountError, match="glove protects it"):
+        protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)
+
+
+def test_trusted_files_outside_a_rw_mount_are_skipped(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    assert protected_paths(compute_mounts(str(work)).mounts, trusted=["/opt/x/settings.json"]) == ()

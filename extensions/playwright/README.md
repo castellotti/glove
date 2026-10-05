@@ -2,7 +2,8 @@
 
 Provides the `browser` slot: Playwright's MCP server (`playwright-core mcp`,
 pinned in `image/package.json` + its lockfile), exposed to Pi as native
-`browser_*` tools and to Vibe as the `playwright` MCP server. Three modes:
+`browser_*` tools and to Vibe and Claude Code as the `playwright` MCP server.
+Three modes:
 
 | | `headless` (default) | `novnc` | `host` |
 |---|---|---|---|
@@ -35,7 +36,7 @@ extensions:
     # port: <free port>        # host MCP port (default: a free one, kept for the session)
     # cdp_port: <free port>    # host Chrome remote-debugging port (likewise)
     # keep_browser: false      # leave the host Chrome running after `glove down`
-    # i_accept_host_rce: false # Vibe + host: see below
+    # i_accept_host_rce: false # Vibe/Claude Code + host: see below
 ```
 
 ## Sidecar modes (`headless`, `novnc`)
@@ -84,8 +85,11 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   because your Chrome already uses your Mac's trust store.
 - The MCP always offers `browser_run_code_unsafe` (arbitrary code in the MCP
   process). glove never passes it on: Pi's extension registers only `tools`,
-  and Vibe gets a `disabled_tools` rule that hides every other `playwright_*`
-  tool. In the sidecar modes it would reach only the sidecar anyway.
+  Vibe gets a `disabled_tools` rule that hides every other `playwright_*`
+  tool, and Claude Code gets allow rules for `tools` and a managed deny rule
+  for every other tool the pinned MCP defines (`all_tools` in
+  `extension.yml`), so it never offers them and no prompt can approve one. In
+  the sidecar modes it would reach only the sidecar anyway.
 
 ### Watching: `glove playwright view` (`novnc`)
 
@@ -123,5 +127,6 @@ through the `browser` forwarder.
 your desktop, with your network, and any local process can drive its CDP port
 while it runs. It is refused when the session's egress is anonymising (vpn,
 tor). `browser_run_code_unsafe` runs code on your Mac: Pi never registers it
-in host mode, and Vibe hides it, but hiding it in the client is not a boundary,
-so `vibe` + host mode is refused unless you set `i_accept_host_rce: true`.
+in host mode, and Vibe hides it (Claude Code denies it), but a client-side
+filter is not a boundary, so `vibe` or `claude-code` + host mode is refused
+unless you set `i_accept_host_rce: true`.

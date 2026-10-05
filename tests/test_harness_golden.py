@@ -19,18 +19,33 @@ from helpers import make_cfg
 GOLDEN = Path(__file__).parent / "golden" / "harness"
 UPDATE = os.environ.get("GLOVE_UPDATE_GOLDEN") == "1"
 
-WEB = {"direct": {}, "search": {}, "playwright": {}, "media": {}, "ocr": {}, "observe": {}, "filter": {}}
+WEB = {"direct": {}, "search": {}, "webfetch": {}, "playwright": {}, "media": {}, "ocr": {}, "observe": {},
+       "filter": {}}
 
 CASES = {
     "pi-nono-min": {"harness": "pi", "enforcer": "nono", "extensions": {}},
     "pi-srt-full": {
         "harness": "pi", "enforcer": "nono+srt",
-        "extensions": {**WEB, "webfetch": {}, "rag": {"models_dir": "{tmp}/models"}},
+        "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"}},
         "harness_config": {"settings": {"defaultThinkingLevel": "medium", "env": {"X": "1"}},
                            "model": {"maxTokens": 4096}},
         "brief": "# brief\n\nDo the thing.",
     },
     "vibe-nono-min": {"harness": "vibe", "enforcer": "nono", "extensions": {}},
+    "claude-code-nono-min": {
+        "harness": "claude-code", "enforcer": "nono",
+        "extensions": {"llm": {"provider": "anthropic", "model": "claude-x", "auth": "oauth",
+                               "api_key": "keychain:test-cc"}},
+    },
+    "claude-code-srt-full": {
+        "harness": "claude-code", "enforcer": "nono+srt",
+        "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"},
+                       "llm": {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080",
+                               "model": "claude-stub", "api_key": "env:TEST_KEY"}},
+        "harness_config": {"settings": {"theme": "dark"},
+                           "permissions": {"defaultMode": "acceptEdits", "deny": ["Bash(rm -rf:*)"]}},
+        "brief": "# brief\n\nDo the thing.",
+    },
     "vibe-srt-full": {
         "harness": "vibe", "enforcer": "nono+srt", "extensions": dict(WEB),
         "harness_config": {"include_commit_signature": False, "disabled_tools": ["task"],
@@ -57,7 +72,10 @@ def _render(case: dict, tmp_path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for p in render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan,
                          comp=plan.composition, toolchains=plan.toolchains):
-        out[f"home/{p.relative_to(home)}"] = p.read_text()
+        out[f"home/{p.relative_to(home)}"] = f"-> {p.readlink()}\n" if p.is_symlink() else p.read_text()
+    for target, files in plan.system_files.items():
+        for name, text in files.items():
+            out[f"system{target}/{name}"] = text
     for name, text in (plan.policies or {}).items():
         out[f"policies/{name}"] = text
     out["compose.yml"] = DockerRuntime().render(plan, tmp_path / "state").compose_yaml

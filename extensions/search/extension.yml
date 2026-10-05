@@ -1,6 +1,6 @@
 api: 1
 name: search
-summary: Web search through a per-session SearXNG behind the egress slot — Pi's web_search extension / a Vibe MCP server.
+summary: Web search through a per-session SearXNG behind the egress slot — Pi's web_search extension / an MCP server (Vibe, Claude Code).
 requires: [egress]
 settings:
   # Engine groups to remove (all on by default): engines that block Tor, need
@@ -9,12 +9,22 @@ settings:
   engines: { type: map, default: {} }   # per-engine override: {"google": enable, "qwant": disable}
 hooks: hooks.py
 networks:
-  searchnet: { internal: true }         # searxng ↔ valkey, and the harness endpoint's forwarder
+  searchnet: { internal: true }         # searxng ↔ valkey (↔ searxng-mcp), and the harness endpoints' forwarders
+images:
+  # harnesses that speak MCP get web_search from a sidecar over HTTP: one server for
+  # each of them, nothing baked into the harness image
+  mcp: { build: image, when: { harness: [vibe, claude-code] } }
 services: compose/services.yml.j2
 endpoints:
-  search:
+  search:                               # Pi's extension queries SearXNG itself
+    when: { harness: pi }
     port: 8080
     target: { service: searxng, network: searchnet, port: 8080 }
+  search-mcp:
+    when: { harness: [vibe, claude-code] }
+    port: 8000
+    target: { service: searxng-mcp, network: searchnet, port: 8000 }
+    observe: { tool: web_search }
   # SearXNG's hop to the egress proxy. Only rendered when a forwarder provider
   # (observe) interposes a gate: then SearXNG leaves the egress network and
   # reaches the proxy only through it. Otherwise SearXNG dials the proxy.
@@ -27,16 +37,11 @@ endpoints:
 verify:
   - { name: searxng-up, kind: http-ok, url: "http://glove-{{ session.id }}-searxng:8080/healthz",
       network: searchnet, retries: 20, interval: 3, service: searxng }
+  - { name: search-mcp-up, kind: container-healthy, service: searxng-mcp, when: { harness: [vibe, claude-code] } }
 harness:
   env:
-    SEARXNG_URL: "{{ endpoint.search.url }}"
-  image:
-    vibe: { copy: [[searxng_mcp.py, /opt/glove/ext/search/searxng_mcp.py]], pip: ["mcp<2"] }
+    SEARXNG_URL: "{{ endpoint.search.url if endpoint.search is defined else '' }}"
   pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
-  mcp:                                  # rendered by harnesses that speak MCP (vibe)
-    - name: searxng
-      transport: stdio
-      command: python3
-      args: [/opt/glove/ext/search/searxng_mcp.py]
-      env: { SEARXNG_URL: "{{ endpoint.search.url }}" }
+  mcp:                                  # rendered by harnesses that speak MCP (vibe, claude-code)
+    - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp" }
   brief: brief.md

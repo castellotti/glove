@@ -18,3 +18,18 @@ new_session() {
   S_POLICIES="$dir/.glove/enforcer"
   S_COMPOSE="$dir/.glove/compose.yml"
 }
+
+#   stub_llm <harness> <port>
+#     sets STUB_PY (the stub under stubs/ to start on <port>) and LLM (the
+#     session's llm entry for it): Claude Code speaks the Anthropic Messages API,
+#     so it gets the anthropic stub and a fake key; every other harness llama.cpp.
+stub_llm() {
+  if [ "$1" = claude-code ]; then
+    STUB_PY=anthropic_stub.py
+    LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}"
+    export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
+  else
+    STUB_PY=llm_stub.py
+    LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$2\", model: auto}"
+  fi
+}

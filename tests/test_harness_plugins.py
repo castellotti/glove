@@ -34,8 +34,10 @@ def test_harness_names_are_stable():
     assert all(get_profile(n).name == n for n in known_harnesses())
 
 
-@pytest.mark.parametrize("harness", ["pi", "vibe"])
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
 def test_only_the_selected_adapter_is_imported(harness, tmp_path):
+    llm = {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080", "model": "m"}
+    exts = {"llm": llm} if harness == "claude-code" else {}
     code = textwrap.dedent(f"""
         import sys
         from pathlib import Path
@@ -45,7 +47,7 @@ def test_only_the_selected_adapter_is_imported(harness, tmp_path):
         from helpers import make_cfg
         from glove.harnessconfig import render_home
         from glove.plan import build_session_plan
-        cfg = make_cfg(harness={harness!r}, name="s", workdir={str(tmp_path)!r})
+        cfg = make_cfg(harness={harness!r}, name="s", workdir={str(tmp_path)!r}, extensions={exts!r})
         plan = build_session_plan(cfg, home_dir={str(tmp_path / "h")!r}, uid=501, gid=20)
         render_home(cfg, plan.profile, Path({str(tmp_path / "h")!r}), plan.model, comp=plan.composition)
         print(sorted(m for m in sys.modules if m.startswith("glove_harness_")))
@@ -53,7 +55,7 @@ def test_only_the_selected_adapter_is_imported(harness, tmp_path):
     env = {"GLOVE_HOME": str(tmp_path / "gh"), "PATH": "/usr/bin:/bin"}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr[-2000:]
-    assert out.stdout.strip() == str([f"glove_harness_{harness}"])
+    assert out.stdout.strip() == str([f"glove_harness_{harness.replace('-', '_')}"])
 
 
 def test_vibe_transcripts_and_resume_share_its_log_dir():

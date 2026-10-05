@@ -1,0 +1,9 @@
+{
+  "model": "claude-stub",
+  "includeCoAuthoredBy": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "theme": "dark"
+}

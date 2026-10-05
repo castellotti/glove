@@ -8,6 +8,3 @@ RUN uv pip install --system Pillow
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng ocrmypdf poppler-utils ghostscript file && rm -rf /var/lib/apt/lists/*
 COPY ocr/glove-ocr /usr/local/bin/glove-ocr
 RUN chmod 0755 /usr/local/bin/glove-ocr
-# extension: search
-RUN uv pip install --system 'mcp<2'
-COPY search/searxng_mcp.py /opt/glove/ext/search/searxng_mcp.py
