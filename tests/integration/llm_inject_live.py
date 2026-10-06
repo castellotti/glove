@@ -9,7 +9,7 @@ the way `glove up` does, then:
   2. the key is in no file under the session dir or GLOVE_HOME, in no
      container's config but llm-auth's (a harness container included: `inspect`
      and its /proc/1/environ), and not in a tool command's env;
-  3. llm-auth is hardened (read-only, cap-less, non-root, no-new-privileges)
+  3. llm-auth is hardened (read-only, no capabilities in its process, non-root, no-new-privileges)
      and on its own network only; the harness can't reach it or llm-upstream;
   4. a turn answers, and every request the stub saw carried the real key;
   5. a path off the allowlist is a 403 from llm-auth (its log names it, never
@@ -111,11 +111,15 @@ def main(directory: str, stub_log: str) -> int:
         a = by_name.get(auth, {})
         hc = a.get("HostConfig", {})
         user = a.get("Config", {}).get("User", "")
-        check("read-only rootfs, cap_drop ALL, no-new-privileges, non-root",
-              hc.get("ReadonlyRootfs") is True and "ALL" in [c.upper() for c in hc.get("CapDrop") or []]
+        # the process's capability sets, not the runtime's report of them
+        # (Docker says CapDrop [ALL], Podman lists what it dropped)
+        status = subprocess.run([rt, "exec", auth, "cat", "/proc/1/status"], capture_output=True, text=True).stdout
+        caps = dict(re.findall(r"^(Cap(?:Prm|Eff|Bnd)):\s*(\w+)", status, re.M))
+        check("read-only rootfs, no capabilities, no-new-privileges, non-root",
+              hc.get("ReadonlyRootfs") is True and len(caps) == 3 and not any(int(v, 16) for v in caps.values())
               and any("no-new-privileges" in o for o in hc.get("SecurityOpt") or [])
               and user not in ("", "0", "root") and not user.startswith("0:"),
-              f"ro={hc.get('ReadonlyRootfs')} caps={hc.get('CapDrop')} user={user!r}")
+              f"ro={hc.get('ReadonlyRootfs')} caps={caps} user={user!r}")
         nets = sorted(a.get("NetworkSettings", {}).get("Networks", {}))
         check("on the llmauth network only", nets == [f"{prefix}-llmauth"], ", ".join(nets))
 
