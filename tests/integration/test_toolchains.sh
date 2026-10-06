@@ -12,12 +12,11 @@
 # lockfile that installs only with legacy-peer-deps (baked `.npmrc`, then
 # `install_flags`), and the plan-time refusals (incl. the flag allow-list).
 #
-# Usage:  bash tests/integration/test_toolchains.sh     RT=podman …  (skips session 3: no srt)
+# Usage:  bash tests/integration/test_toolchains.sh     RT=podman …  (skips session 3 where srt is refused)
 # Requires: docker or podman (the build downloads Node, uv, Python, npm/PyPI packages and
 # Chromium, so the first run takes a few minutes).
 set -u
 RT="${RT:-docker}"
-export PODMAN_COMPOSE_WARNING_LOGS=false  # podman's "external compose provider" banner, in captured output
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FIX="$ROOT/tests/integration/fixtures/toolchains"
 GLOVE_HOME="$(mktemp -d)"
@@ -28,6 +27,7 @@ PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 . "$ROOT/tests/integration/lib_session.sh"
+runtime_facts
 
 NODE_V=22.23.3
 PY_V=3.11
@@ -147,8 +147,8 @@ cleanup
 trap - EXIT
 
 echo "== session 3: pi + enforcer: srt — the baked Chromium inside a shell command =="
-if [ "$RT" = podman ]; then
-  echo "  (skipped: srt is refused on podman)"
+if [ -n "$SRT_REFUSED" ]; then
+  echo "  (skipped: $SRT_REFUSED)"
 else
   S3="$SESSIONS/s3"
   mkdir -p "$S3/projects"

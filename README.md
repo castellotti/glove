@@ -997,6 +997,9 @@ bash tests/integration/test_vibe_nono.sh  # nono / Vibe (13 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (12 checks)
 bash tests/integration/test_nono_srt.sh pi    # nono+srt in a real session (32 checks; also: vibe 32, claude-code 28)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
+bash tests/integration/test_config_protect.sh vibe nono  # the harness's config vs the agent, any
+                                              # harness/enforcer (also: pi, claude-code; RT=podman)
+bash tests/integration/test_teardown.sh pi nono   # one harness per session, git config, `glove down`
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (10 checks)
 bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (22 checks per enforcer)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
@@ -1016,7 +1019,8 @@ bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarde
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
 bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (42 checks;
                                               # 40 with RT=podman: no srt session)
-# RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal)
+# RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal);
+# KEEP=1 leaves a driver's session running
 # (images are per runtime: `glove build pi --provider podman`)
 uv run python tests/integration/tui_probe.py <session-dir> '/model\r'  # drive a harness TUI on a pty by hand
 bash tests/integration/test_llm_host_stub.sh  # llm location: host vs a stub llama-server, Pi answers

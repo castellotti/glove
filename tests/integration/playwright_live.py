@@ -34,70 +34,24 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from glove import registry
-from glove.cli import _materialize_plan, _open, _resolve_extensions
+from live_common import check, inspect, live_session, summary, wait_for
+
 from glove.extensions import image_tag
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
 
 HERE = Path(__file__).parent
-results: list[tuple[str, bool]] = []
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
 
 
-def check(name: str, ok: bool, detail: str = "") -> None:
-    results.append((name, ok))
-    print(f"  {'PASS' if ok else 'FAIL'} {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-
-def inspect(rt: str, name: str) -> dict:
-    out = subprocess.run([rt, "inspect", name], capture_output=True, text=True).stdout
-    return (json.loads(out) or [{}])[0] if out.strip() else {}
-
-
-def flows(net: Path) -> list[dict]:
-    recs = []
-    for f in sorted(net.glob("flows*.ndjson")):
-        for line in f.read_text().splitlines():
-            try:
-                recs.append(json.loads(line))
-            except ValueError:
-                pass
-    return [r for r in recs if r.get("type") == "flow"]
-
-
-def wait_for(fn, timeout=30.0, step=1.0):
-    end = time.time() + timeout
-    while True:
-        v = fn()
-        if v or time.time() > end:
-            return v
-        time.sleep(step)
-
-
 def main(directory: str) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    rt = cfg.provider
-    s = f"glove-{sid}"
-    net = Path(os.path.realpath(registry.observe_dir(sid))) / "net"
-    base = None
-    env = dict(os.environ)
-    try:
-        plan, _, _ = _materialize_plan(sd, sid, cfg)
-        env = {**os.environ, **secret_env(plan)}
-        base = _compose_base(rt, plan.project, sd.compose)
-        t = time.time()
-        ensure_images(cfg, plan, rt)
-        print(f"  (images ready in {time.time() - t:.0f}s)", flush=True)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)
+    with live_session(directory) as live:
+        sd, cfg, plan, rt = live.sd, live.cfg, live.plan, live.rt
+        s = live.prefix
         comp = plan.composition
         pws = comp.by_name("playwright").settings
         mode, observed = pws["mode"], comp.by_name("observe") is not None
         check(f"sidecars up + verify passed (mode {mode}, egress {comp.slots['egress'].name})", True)
-        _resolve_extensions(plan, rt, secret_env(plan))
-        render_home(cfg, plan, sd.home)
+
         pw_image = image_tag(comp.by_name("playwright"), "pw")
 
         def exec_pw(script: str) -> subprocess.CompletedProcess:
@@ -110,12 +64,6 @@ def main(directory: str) -> int:
                                 f"http://{host}:8931/mcp", f"{host}:8931", json.dumps(steps)],
                                capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
-
-        def agent(tool: str, args: dict) -> str:
-            cmd = [*plan.harness_command, "-p", f"CALL {tool} {json.dumps(args)}"]
-            r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
-                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
-            return (r.stdout.strip() or r.stderr.strip())[-600:]
 
         print("== the browser sidecar")
         pw = inspect(rt, f"{s}-pw")
@@ -144,7 +92,8 @@ def main(directory: str) -> int:
         listed = {t.strip() for t in comp.by_name("playwright").manifest.raw["harness"]["mcp"][0]["all_tools"]
                   .split(",")}
         check(f"all_tools names exactly the {len(defined)} tools the pinned MCP defines",
-              bool(defined) and defined == listed, f"unlisted {sorted(defined - listed)}, gone {sorted(listed - defined)}")
+              bool(defined) and defined == listed,
+              f"unlisted {sorted(defined - listed)}, gone {sorted(listed - defined)}")
         r = exec_pw(f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-llm/8080' 2>&1; echo rc=$?")
         check("the harness's llm endpoint is unreachable from the browser", "rc=0" not in r.stdout,
               r.stdout.strip()[-80:])
@@ -162,7 +111,7 @@ def main(directory: str) -> int:
         log = Path(os.environ["STUB_LOG"]) if os.environ.get("STUB_LOG") else None
         mark = len(log.read_text()) if log else 0
         prefix = {"vibe": "playwright_", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
-        ans = agent(f"{prefix}browser_navigate", {"url": "https://example.com"})
+        ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
         offered = set()
@@ -180,35 +129,35 @@ def main(directory: str) -> int:
               and not any("run_code" in t or "evaluate" in t for t in offered), ", ".join(browser_tools)[:160])
         if cfg.harness == "claude-code":
             # a tool outside the allowlist is denied by a managed rule: never offered, so no prompt
-            ans = agent(f"{prefix}browser_evaluate", {"function": "() => document.title"})
+            ans = live.call(f"{prefix}browser_evaluate", {"function": "() => document.title"})
             check("a denied tool (browser_evaluate) is not even offered", "Example Domain" not in ans
                   and "no such tool available" in ans.lower(),
                   ans[-160:].replace("\n", " "))
         if cfg.harness in ("pi", "claude-code"):
             bash = "Bash" if cfg.harness == "claude-code" else "bash"
-            ans = agent(bash, {"command": f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-browser/8931' 2>&1; "
+            ans = live.call(bash, {"command": f"timeout 5 bash -c 'exec 3<>/dev/tcp/{s}-browser/8931' 2>&1; "
                                             "echo rc=$?"})
             check("a shell command cannot reach the MCP (ring 1)", "rc=0" not in ans, ans[-100:])
 
         if observed:
             print("== observe")
-            recs = wait_for(lambda: [r for r in flows(net) if r.get("service") == "browser-egress"
+            recs = wait_for(lambda: [r for r in live.flows() if r.get("service") == "browser-egress"
                                      and (r.get("dest") or {}).get("host") == "example.com"], 20)
             f = recs[-1] if recs else {}
             check("flow: browser-egress → example.com, client playwright, tool browser",
                   (f.get("client"), f.get("tool")) == ("playwright", "browser"),
                   json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
-            hop = [r for r in flows(net) if r.get("service") == "browser"]
+            hop = [r for r in live.flows() if r.get("service") == "browser"]
             check("flow: the harness → MCP hop, client harness", bool(hop) and hop[-1].get("client") == "harness"
                   and hop[-1].get("tool") == "browser", f"{len(hop)} flows")
-            ans = agent(f"{prefix}browser_navigate", {"url": "http://169.254.169.254/latest/meta-data/"})
-            meta = wait_for(lambda: [r for r in flows(net) if r.get("service") == "browser-egress"
+            ans = live.call(f"{prefix}browser_navigate", {"url": "http://169.254.169.254/latest/meta-data/"})
+            meta = wait_for(lambda: [r for r in live.flows() if r.get("service") == "browser-egress"
                                      and (r.get("dest") or {}).get("host") == "169.254.169.254"], 15)
             m = meta[-1] if meta else {}
-            check("SSRF guard: cloud metadata refused at the gate", bool(meta) and m.get("verdict") != "allow"
-                  or bool(meta) and m.get("close_reason") not in (None, "eof", "done"),
+            check("SSRF guard: cloud metadata refused at the gate",
+                  bool(meta) and (m.get("verdict") != "allow" or m.get("close_reason") not in (None, "eof", "done")),
                   json.dumps({k: m.get(k) for k in ("verdict", "close_reason", "rule")}))
-            hosts = sorted({(r.get("dest") or {}).get("host") for r in flows(net)
+            hosts = sorted({(r.get("dest") or {}).get("host") for r in live.flows()
                             if r.get("service") == "browser-egress"} - {None})
             print(f"    (browser destinations seen: {', '.join(hosts)})")
         if comp.by_name("filter") is not None:
@@ -217,8 +166,8 @@ def main(directory: str) -> int:
                                  capture_output=True, text=True)
             check("`glove filter block example.org`", out.returncode == 0, (out.stdout + out.stderr).strip()[-80:])
             time.sleep(4)
-            ans = agent(f"{prefix}browser_navigate", {"url": "https://example.org"})
-            blocked = wait_for(lambda: [r for r in flows(net) if r.get("verdict") == "block"
+            ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.org"})
+            blocked = wait_for(lambda: [r for r in live.flows() if r.get("verdict") == "block"
                                         and (r.get("dest") or {}).get("host") == "example.org"], 15)
             check("the browser's request is blocked at the gate", bool(blocked) and "Example Domain" not in ans,
                   ans[-120:].replace("\n", " "))
@@ -291,14 +240,7 @@ def main(directory: str) -> int:
             check(f"full password, allow_control {pws['allow_control']}: the click "
                   + ("lands" if want == "CLICKED" else "does NOT land"), auth == "auth ok" and title == want,
                   f"{auth}; title {title}")
-    except Exception as e:  # report, then tear down
-        check(f"live run ({type(e).__name__})", False, str(e)[-600:])
-    finally:
-        if base is not None and not os.environ.get("KEEP"):
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    failed = [n for n, ok in results if not ok]
-    print(f"== RESULT: {len(results) - len(failed)} passed, {len(failed)} failed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

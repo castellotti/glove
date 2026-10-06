@@ -19,17 +19,12 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from live_common import check, live_session, summary
-
-from extensions.observe.netview import read_records
-from glove import registry
 
 
 def main(directory: str, name: str, user: str) -> int:
@@ -94,8 +89,7 @@ def main(directory: str, name: str, user: str) -> int:
         if plan.composition.by_name("observe"):
             print("== observe")
             time.sleep(2)
-            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
-            fl = [r for r in recs if r.get("type") == "flow" and r.get("service") == f"ssh-{name}"]
+            fl = [r for r in s.flows() if r.get("service") == f"ssh-{name}"]
             check(f"flows: ssh-{name}, client ssh, tool ssh, scope lan",
                   bool(fl) and all((r.get("client"), r.get("tool"), r.get("scope")) == ("ssh", "ssh", "lan")
                                    for r in fl), json.dumps([{k: r.get(k) for k in ("client", "tool", "scope")}

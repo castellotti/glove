@@ -8,13 +8,10 @@
 # Requires: docker + `glove build pi --enforcer srt` (the -srt-<hash> overlay image).
 set -u
 RT="${RT:-docker}"   # docker | podman
-if [ "$RT" = podman ]; then
-  echo "SKIP: glove refuses enforcer srt on the podman runtime (its relaxed seccomp profile can't be"
-  echo "      applied through podman's compose provider); srt is docker-only for now."; exit 2
-fi
-
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/tests/integration/lib_session.sh"
+runtime_facts
+if [ -n "$SRT_REFUSED" ]; then echo "SKIP: $SRT_REFUSED"; exit 2; fi
 IMAGE="${GLOVE_PI_SRT_IMAGE:-$(glove_image pi srt)}"
 SECCOMP="$ROOT/glove/runtimes/seccomp/nested-userns.json"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"

@@ -198,6 +198,17 @@ All notable changes to glove are documented here.
   image's tools); `test_toolchains.sh` runs with `RT=podman`; the live drivers
   share `tests/integration/live_common.py`, and `tui_probe.py` drives a
   harness TUI by hand.
+- Live tests: every driver starts its session through `live_common` as
+  `glove up` does (preflight, images, sidecars, resolution, home, the runtime's
+  compose env); a failure is a FAIL with the summary, and `KEEP=1` leaves any
+  of them running (`egress_live.py --keep` is gone). TUI checks wait for what
+  they expect (`Tui.pump_until`) instead of fixed sleeps and print how long it
+  took. Scripts ask glove whether srt runs on `$RT` (`runtime_facts`) instead
+  of naming Podman. New: `test_config_protect.sh` (every read-only bind, the
+  agent's own write tool, planted project config, Vibe's hook denial in the
+  TUI; any harness, enforcer and runtime) and `test_teardown.sh` (git config
+  in the tool, a second `glove up` refused, a killed client's leftover
+  removed, nothing left after `glove down --wipe`).
 
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.

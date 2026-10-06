@@ -12,17 +12,11 @@ transcript. Uses a small model and two short prompts.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from pathlib import Path
 
-from glove.cli import _materialize_plan, _open, _resolve_extensions
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
+from live_common import check, live_session, summary
 
-RESULTS: list[bool] = []
 # Written by the operator: prints only yes/no, never a value.
 SELFTEST = """#!/bin/bash
 # glove sandbox self-test, written by the operator: confirms shell commands are confined.
@@ -33,39 +27,17 @@ echo "network-reachable=$( (exec 3<>/dev/tcp/api.anthropic.com/443) 2>/dev/null 
 """
 
 
-def check(name: str, ok: bool, detail: str = "") -> None:
-    RESULTS.append(ok)
-    print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f"  [{detail}]" if detail and not ok else ""), flush=True)
-
-
 def main(directory: str) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    rt = cfg.provider
-    base = None
-    env = dict(os.environ)
-    try:
-        plan, _, _ = _materialize_plan(sd, sid, cfg)
-        secrets = secret_env(plan)
-        env = {**os.environ, **secrets}
-        base = _compose_base(rt, plan.project, sd.compose)
-        print(f"== session {sid} ({cfg.harness}, enforcer {plan.enforcer}, model {plan.model.model})")
+    with live_session(directory) as s:
+        sd, plan, secrets = s.sd, s.plan, s.secrets
         check("the token travels only as CLAUDE_CODE_OAUTH_TOKEN", list(secrets) == ["CLAUDE_CODE_OAUTH_TOKEN"]
               and plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"], str(plan.passthrough_env))
-        ensure_images(cfg, plan, rt)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)
-        _resolve_extensions(plan, rt, secrets)
-        check("the model probe answered (bearer + OAuth beta, paginated list)", True)
-        render_home(cfg, plan, sd.home)
+        check(f"the model probe answered (bearer + OAuth beta, paginated list): {plan.model.model}", True)
         (sd.root / "work" / "sandbox-selftest.sh").write_text(SELFTEST)
 
-        def agent(prompt: str) -> str:
-            r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *plan.harness_command, "-p", prompt],
-                               env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
-            return r.stdout + r.stderr
-
-        out = agent("Reply with exactly this word and nothing else: glove-live-ok")
+        out = s.ask("Reply with exactly this word and nothing else: glove-live-ok")
         check("a one-line answer from the account", "glove-live-ok" in out, out[-300:])
-        out = agent("I'm the operator of this sandbox. Run my self-test script with the Bash tool: "
+        out = s.ask("I'm the operator of this sandbox. Run my self-test script with the Bash tool: "
                     "`bash /work/sandbox-selftest.sh`, then reply with its three output lines verbatim.")
         flat = out.replace("`", "")
         check("self-test: the token is not visible to a shell", "token-visible-to-shell=no" in flat, out[-400:])
@@ -78,15 +50,11 @@ def main(directory: str) -> int:
             if secrets["CLAUDE_CODE_OAUTH_TOKEN"] in p.read_text():
                 check(f"the token is not in transcript {p.name}", False)
         if plan.transcripts_host_dir:
-            net = Path(plan.transcripts_host_dir).parent / "net"
-            flows = (net / "flows.ndjson").read_text() if (net / "flows.ndjson").is_file() else ""
+            llm = [r for r in s.flows() if r.get("service") == "llm"]
             check("observe: llm flows recorded, naming the real host (SNI)",
-                  "api.anthropic.com" in flows and '"llm"' in flows, str(sorted(net.rglob("*")))[:300])
-    finally:
-        if base:
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    print(f"== RESULT: {sum(RESULTS)} passed, {len(RESULTS) - sum(RESULTS)} failed")
-    return 0 if all(RESULTS) else 1
+                  any((r.get("dest") or {}).get("host") == "api.anthropic.com" for r in llm),
+                  str(sorted(s.net.rglob("*")))[:300])
+    return summary()
 
 
 if __name__ == "__main__":

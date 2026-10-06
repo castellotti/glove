@@ -87,6 +87,6 @@ done
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
-echo "Manual (need a live LLM): run 'vibe -p ...'; the pre_tool hook fires and a"
-echo "prompt-injected bash command runs sandboxed; a hook denial shows in the TUI."
+# `vibe -p` through the stub (the pre_tool hook wraps the command) and a hook
+# denial shown in the TUI: test_config_protect.sh vibe.
 [ "$FAIL" -eq 0 ]

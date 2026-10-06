@@ -114,6 +114,6 @@ done
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
-echo "Manual (need a live LLM): the harness completes a trivial -p prompt (credential path);"
-echo "browser_navigate via the Pi tool opens the host Chrome; curl to the browser sidecar from a shell fails."
+# A harness turn through the stub (credential path, wrapped tools): test_config_protect.sh,
+# test_nono_srt.sh; the browser MCP from a shell: test_playwright.sh.
 [ "$FAIL" -eq 0 ]
