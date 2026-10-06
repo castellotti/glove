@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0
+    image: glove/claude-code:0.2.0-00bc6f9a16
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/claude"]
     stdin_open: true
@@ -44,6 +44,59 @@ services:
       - type: bind
         source: "<TMP>/work/.claude"
         target: "/work/.claude"
+      # ring 0: re-bound so it is a mount point and cannot be renamed away
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude"
+        target: "/home/agent/.claude"
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/settings.json"
+        target: "/home/agent/.claude/settings.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/CLAUDE.md"
+        target: "/home/agent/.claude/CLAUDE.md"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/agents"
+        target: "/home/agent/.claude/agents"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/commands"
+        target: "/home/agent/.claude/commands"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/skills"
+        target: "/home/agent/.claude/skills"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/plugins"
+        target: "/home/agent/.claude/plugins"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/output-styles"
+        target: "/home/agent/.claude/output-styles"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/rules"
+        target: "/home/agent/.claude/rules"
+        read_only: true
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under /home/agent overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
@@ -80,7 +133,7 @@ services:
   # --- forwarder: llm -> glove-s-llm-out:443
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/forwarder:0.2.0
+    image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-out:443"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
@@ -109,7 +162,7 @@ services:
   # --- forwarder: llm-out -> api.anthropic.com:443
   glove-s-llm-out:
     container_name: glove-s-llm-out
-    image: glove/forwarder:0.2.0
+    image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:api.anthropic.com:443"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,

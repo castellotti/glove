@@ -185,10 +185,11 @@ class SrtEnforcer:
             [cli, "images", "--filter", "reference=glove/*", "--format", "{{.Repository}}:{{.Tag}}"],
             capture_output=True, text=True,
         )
-        image = next((ln for ln in images.stdout.splitlines() if ln.strip().endswith(srt_suffix())), None)
+        suffix = srt_suffix()
+        image = next((ln for ln in images.stdout.splitlines() if ln.strip().endswith(suffix)), None)
         if not image:
             return Check("srt bwrap smoke", "skip",
-                         f"no local glove/*{srt_suffix()} image — run `glove build <harness> --enforcer srt`")
+                         f"no local glove/*{suffix} image — run `glove build <harness> --enforcer srt`")
         from ..runtimes.seccomp import nested_userns_profile_path
 
         proc = subprocess.run(

@@ -29,7 +29,7 @@
     "KSTORE_EMBED_MODEL": "BAAI/bge-small-en-v1.5",
     "KSTORE_QUERY_STORES": "both"
   },
-  "image": "glove/claude-code:0.2.0-81dbe3ba68-srt-f5b44676c0",
+  "image": "glove/claude-code:0.2.0-00bc6f9a16-e99c90f163-srt-46f57ff955",
   "passthrough_env": [
     "ANTHROPIC_API_KEY"
   ],

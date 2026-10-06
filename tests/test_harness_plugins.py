@@ -84,6 +84,8 @@ GOOD = """\
 api: 1
 name: h
 image: glove/h:1
+version: 1.0.0
+audited_version: 1.0.0
 entry: [h]
 config_home: { env: H_HOME, path: /home/agent/.h }
 context_file: /home/agent/.h/AGENTS.md
@@ -107,6 +109,8 @@ def test_a_minimal_manifest_loads(tmp_path):
     (GOOD + "protected_home: [.h/../x]\n", "h"),       # escapes the home
     (GOOD + "protected_home: [./]\n", "h"),            # the home itself
     (GOOD + "protected_home: [.h//x]\n", "h"),         # empty component
+    (GOOD.replace("version: 1.0.0\n", ""), "h"),      # no release pinned
+    (GOOD.replace("audited_version: 1.0.0", "audited_version: 0.9.0"), "h"),  # a release not re-audited
 ])
 def test_bad_manifests_are_refused(tmp_path, body, dirname):
     with pytest.raises(ConfigError):

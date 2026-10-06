@@ -19,11 +19,10 @@ import yaml
 from rich.console import Console
 
 from .config import Config
-from .enforcers.base import ENTRYPOINT_DIR, PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
-from .harness import HarnessProfile, effective_image
+from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
+from .harness import HarnessProfile, base_contexts, effective_image
 from .naming import project_name, scoped
-from .plan import FORWARDER_IMAGE
-from .runtimes.docker import TEMPLATES_DIR
+from .plan import FORWARDER_DIR, forwarder_image
 
 if TYPE_CHECKING:
     from .plan import SessionPlan
@@ -43,17 +42,11 @@ def _image_exists(provider: str, tag: str) -> bool:
 
 
 def build_forwarder(provider: str, *, force: bool = False) -> None:
-    if not force and _image_exists(provider, FORWARDER_IMAGE):
+    tag = forwarder_image()
+    if not force and _image_exists(provider, tag):
         return
-    console.print(f"[bold]building forwarder image[/bold] {FORWARDER_IMAGE}")
-    subprocess.run(
-        [
-            provider, "build", "-t", FORWARDER_IMAGE,
-            "-f", str(TEMPLATES_DIR / "forwarder.Dockerfile"),
-            str(TEMPLATES_DIR),
-        ],
-        check=True,
-    )
+    console.print(f"[bold]building forwarder image[/bold] {tag}")
+    subprocess.run([provider, "build", "-t", tag, str(FORWARDER_DIR)], check=True)
 
 
 def _build_base(
@@ -70,10 +63,11 @@ def _build_base(
         return
     if not profile.dockerfile.exists():
         raise FileNotFoundError(f"no Dockerfile for harness {profile.name}: {profile.dockerfile}")
-    context = profile.dockerfile.parent
+    (_, context), *named = base_contexts(profile)
     console.print(f"[bold]building base image[/bold] {tag}  (context: {context})")
-    cmd = [provider, "build", "-t", tag, "--build-context", f"glovepty={PTY_DIR}",
-           "--build-context", f"gloveentry={ENTRYPOINT_DIR}"]
+    cmd = [provider, "build", "-t", tag, "--build-arg", f"HARNESS_VERSION={profile.version}"]
+    for name, path in named:
+        cmd += ["--build-context", f"{name}={path}"]
     if apt_packages:
         cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:

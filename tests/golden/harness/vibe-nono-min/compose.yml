@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/vibe:0.5.0
+    image: glove/vibe:0.5.0-e3e5dcc731
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "vibe", "--trust", "--yolo", "--workdir", "/work"]
     stdin_open: true
@@ -131,7 +131,7 @@ services:
   # --- forwarder: llm -> host.docker.internal:8080
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/forwarder:0.2.0
+    image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:8080,fork,reuseaddr TCP4:host.docker.internal:8080"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,

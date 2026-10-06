@@ -129,7 +129,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   # ssh: { key: keychain:my-ssh, hosts: [{name: build, to: "build.lan:22", user: me}], known_hosts: local/known_hosts }
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
-tools: { net: block, allow_commands: [cp, mv, rm] }
+tools: { allow_commands: [cp, mv, rm] }   # nono's tool policy: allow_commands, deny_commands (unknown keys are refused)
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
 protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)

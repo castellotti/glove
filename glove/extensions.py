@@ -20,7 +20,6 @@ an export root). No other host path reaches a template.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import ipaddress
 import re
@@ -583,14 +582,10 @@ def required_libs(comp: Composition, a: Active) -> list[Active]:
 def image_tag(a: Active, name: str) -> str:
     """Local tag for an extension-built image: content-addressed by its context."""
     spec = (a.manifest.raw.get("images") or {}).get(name) or {}
+    from .image import content_hash
+
     ctx_dir = a.manifest.path / str(spec.get("build", name))
-    h = hashlib.sha256()
-    if ctx_dir.is_dir():
-        for p in sorted(ctx_dir.rglob("*")):
-            if p.is_file() and "__pycache__" not in p.parts:
-                h.update(str(p.relative_to(ctx_dir)).encode())
-                h.update(p.read_bytes())
-    return f"glove/ext-{a.name}-{name}:{h.hexdigest()[:12]}"
+    return f"glove/ext-{a.name}-{name}:{content_hash('', [(name, ctx_dir)])}"
 
 
 def select(

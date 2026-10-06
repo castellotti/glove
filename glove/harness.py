@@ -10,7 +10,6 @@ harness's code runs.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import sys
 from dataclasses import dataclass, field
@@ -28,9 +27,9 @@ MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
     "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
-    "masked_files", "protected_home",
+    "masked_files", "protected_home", "version", "audited_version",
 })
-REQUIRED_KEYS = ("name", "image", "entry", "config_home", "context_file")
+REQUIRED_KEYS = ("name", "image", "version", "audited_version", "entry", "config_home", "context_file")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
 # in an extension manifest); see glove/extensions.py `_harness_contrib`.
 CONTRIBUTIONS = frozenset({"mcp", "skills"})
@@ -85,6 +84,8 @@ class HarnessProfile:
     # the dirs it loads code from. Ring 0 binds them read-only, so the agent
     # cannot reconfigure the harness or plant code in it for the next start.
     protected_home: tuple[str, ...] = ()
+    # The harness release its image installs (the HARNESS_VERSION build arg).
+    version: str = ""
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
 
@@ -131,6 +132,11 @@ def load_profile(path: Path) -> HarnessProfile:
         raise ConfigError(f"{where}: unknown keys {sorted(unknown)}, missing {missing}, or api is not 1")
     if raw["name"] != path.name:
         raise ConfigError(f"{where}: name {raw['name']!r} must match its directory {path.name!r}")
+    version = str(raw["version"])
+    if str(raw["audited_version"]) != version:
+        raise ConfigError(f"{where}: version {version} has not been audited (audited_version: "
+                          f"{raw['audited_version']}); a new release can add a dir it loads code or config "
+                          "from — re-audit protected_home, trusted_files and masked_files, then set audited_version")
     home = raw["config_home"]
     pip = raw.get("pip") or {}
     resume = raw.get("resume") or {}
@@ -160,8 +166,25 @@ def load_profile(path: Path) -> HarnessProfile:
         pip_bootstrap=_strs(pip.get("bootstrap") or [], f"{where} pip.bootstrap"),
         resume_continue=_strs(resume["continue"], f"{where} resume") if "continue" in resume else None,
         resume_session=_strs(resume["session"], f"{where} resume") if "session" in resume else None,
-        contributions=contrib, path=path, **opt,
+        contributions=contrib, version=version, path=path, **opt,
     )
+
+
+def base_contexts(profile: HarnessProfile) -> list[tuple[str, Path]]:
+    """What the base image is built from: its `image/` context, then the named
+    build contexts every harness Dockerfile uses (glove-pty, the entrypoint)."""
+    from .enforcers.base import ENTRYPOINT_DIR, PTY_DIR
+
+    return [("image", profile.dockerfile.parent), ("glovepty", PTY_DIR), ("gloveentry", ENTRYPOINT_DIR)]
+
+
+def base_image(profile: HarnessProfile) -> str:
+    """The harness's base image tag: its version tag plus a hash of everything
+    the base is built from (its build contexts and the harness release), so a
+    changed base is rebuilt, and every image built on it follows."""
+    from .image import content_hash
+
+    return f"{profile.image}-{content_hash(profile.version, base_contexts(profile))}"
 
 
 def effective_image(
@@ -173,19 +196,20 @@ def effective_image(
     """Image tag for a profile, suffixed with a hash when extra packages or an
     extension-derived layer (``derived``: its content hash, see glove/image.py)
     are requested, so each distinct composition gets its own image. With
-    nothing extra, returns the plain minimal base tag."""
+    nothing extra, returns the base tag."""
     apt_packages = apt_packages or []
     pip_packages = pip_packages or []
+    base = base_image(profile)
     if not apt_packages and not pip_packages and not derived:
-        return profile.image
+        return base
+    from .image import content_hash
+
     payload = (
         "apt:" + ",".join(sorted(apt_packages))
         + "|pip:" + ",".join(sorted(pip_packages))
         + "|derived:" + (derived or "")
     )
-    digest = hashlib.sha1(payload.encode()).hexdigest()[:10]
-    base, sep, tag = profile.image.rpartition(":")
-    return f"{base}:{tag}-{digest}" if sep else f"{profile.image}-{digest}"
+    return f"{base}-{content_hash(payload, [])}"
 
 
 def known_harnesses() -> list[str]:

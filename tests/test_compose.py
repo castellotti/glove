@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 
@@ -141,6 +143,39 @@ def test_docker_compose_config_parses(tmp_path):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def _dollar_session(tmp_path):
+    work = tmp_path / "w$HOME"
+    work.mkdir()
+    extra = tmp_path / "lib$x"
+    extra.mkdir()
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), add_dirs=[AddDir(str(extra), "ro")],
+                   env={"GREETING": "cost $5 ${USER}"})
+    return render(cfg, tmp_path, cwd=str(work))
+
+
+def test_every_dollar_renders_escaped_for_compose(tmp_path):
+    plan, text = _dollar_session(tmp_path)
+    assert "$" not in text.replace("$$", "")
+    harness = yaml.safe_load(text.replace("$$", "$"))["services"][plan.harness_service]
+    assert harness["environment"]["GREETING"] == "cost $5 ${USER}"
+    assert "'safe.directory'='/mnt/lib$x'" in harness["environment"]["GIT_CONFIG_PARAMETERS"]
+
+
+@pytest.mark.skipif(not shutil.which("docker"), reason="docker not installed")
+def test_docker_compose_keeps_dollar_values_literal(tmp_path):
+    plan, text = _dollar_session(tmp_path)
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(text)
+    proc = subprocess.run(["docker", "compose", "-f", str(compose_file), "config", "--format", "json"],
+                          capture_output=True, text=True, env={**os.environ, "USER": "host-user", "x": "host-x"})
+    assert proc.returncode == 0, proc.stderr
+    # `config` prints a compose file again, so literal dollars come back escaped.
+    harness = json.loads(proc.stdout)["services"][plan.harness_service]
+    assert harness["environment"]["GREETING"] == "cost $$5 $${USER}"
+    assert "host-user" not in proc.stdout and "host-x" not in proc.stdout
+    assert any(v.get("source", "").endswith("/w$$HOME") for v in harness["volumes"])
 
 
 def test_the_merged_project_rechecks_the_harness_caps_and_security_opt(tmp_path):

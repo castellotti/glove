@@ -152,6 +152,9 @@ services:
   glove-{{ session }}-{{ s.role }}:
     container_name: glove-{{ session }}-{{ s.role }}
     image: {{ forwarder_image }}
+{% if s.entrypoint %}
+    entrypoint: {{ s.entrypoint | tojson }}
+{% endif %}
     command: {{ s.command | tojson }}
     restart: unless-stopped
 {{ forwarder_hardening() }}

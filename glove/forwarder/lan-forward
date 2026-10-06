@@ -1,0 +1,16 @@
+#!/bin/sh
+# glove-lan-forward <listen-port> <host> <port>: a `via: lan` forwarder whose
+# target is a name. `lan` is a direct route with no tunnel, so the name must
+# resolve to a private IPv4 address (as a literal target must be): resolve it
+# once, refuse anything else, and forward to that address only (a resolver
+# answering differently later cannot redirect the forwarder).
+set -eu
+listen=$1 host=$2 port=$3
+ip=$(getent ahostsv4 "$host" | awk 'NR == 1 { print $1 }')
+case "$ip" in
+  10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+  *) echo "glove: $host resolves to ${ip:-nothing}, not a private IPv4 address; refusing to forward to it" >&2
+     exit 1 ;;
+esac
+echo "glove: $host is $ip" >&2
+exec socat "TCP4-LISTEN:$listen,fork,reuseaddr" "TCP4:$ip:$port"

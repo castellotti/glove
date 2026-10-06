@@ -11,7 +11,6 @@ never writable by the agent.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -63,11 +62,9 @@ def srt_suffix() -> str:
     """The image-tag suffix of the srt overlay, content-addressed so an image
     built from an older overlay (e.g. without glove's apply-seccomp) is never
     reused."""
-    h = hashlib.sha256()
-    for f in sorted(SRT_IMAGE_DIR.iterdir()):
-        if f.is_file():
-            h.update(f.name.encode() + b"\0" + f.read_bytes())
-    return f"-srt-{h.hexdigest()[:10]}"
+    from ..image import content_hash
+
+    return f"-srt-{content_hash('', [('srt', SRT_IMAGE_DIR)])}"
 
 
 

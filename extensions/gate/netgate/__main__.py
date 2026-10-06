@@ -35,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--session", required=True)
     f.add_argument("--tool", default=None)
     f.add_argument("--scope", default="local", choices=SCOPES)
+    f.add_argument("--lan-only", action="store_true",
+                   help="tcp mode: dial the upstream only at a private IPv4 address (a `via: lan` endpoint)")
     f.add_argument("--resolve", default="in-tunnel", choices=RESOLVE_MODES)
     f.add_argument("--ingress-alias", default=None)
     f.add_argument("--events", default=EVENTS_SOCKET)
@@ -103,6 +105,7 @@ async def _run_forward(args) -> None:
         record_headers=args.record_headers,
         exceptions=exceptions,
         direct=direct,
+        lan_only=args.lan_only,
     )
     sink = EventSink(args.events)
     policy = None

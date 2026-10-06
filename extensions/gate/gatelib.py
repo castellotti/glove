@@ -45,6 +45,7 @@ class GateSpec:
     # http-proxy: the egress provider's guard exceptions (corporate's allowlist)
     guard_hosts: tuple[str, ...] = ()
     guard_cidrs: tuple[str, ...] = ()
+    lan_only: bool = False  # tcp: a `via: lan` target, dialled only at a private address
 
     @property
     def upstream(self) -> str:
@@ -134,10 +135,12 @@ def gate_spec(ep: dict[str, Any], egress: dict[str, Any]) -> GateSpec:
         )
     if "route" in raw or "upstream" in raw:
         raise ValueError(f"endpoint {name!r}: observe.route/upstream apply to http-proxy mode only")
-    scope = raw.get("scope") or classify_scope(host, bool(ep.get("host_gateway")))
+    lan = bool(ep.get("lan"))  # a LAN host is local, whatever its name looks like
+    scope = raw.get("scope") or ("local" if lan else classify_scope(host, bool(ep.get("host_gateway"))))
     if scope not in SCOPES:
         raise ValueError(f"endpoint {name!r}: observe.scope must be one of {SCOPES}, got {scope!r}")
-    return GateSpec(service=name, upstream_host=host, upstream_port=port, scope=scope, tool=tool, client=client)
+    return GateSpec(service=name, upstream_host=host, upstream_port=port, scope=scope, tool=tool, client=client,
+                    lan_only=lan)
 
 
 def ingress_alias(container: str) -> str:
@@ -182,6 +185,8 @@ def forward_command(gate: GateSpec, rec: Recording, *, session: str, listen: int
             cmd += ["--guard-allow-cidr", c]
     if gate.scope:
         cmd += ["--scope", gate.scope]
+    if gate.lan_only:
+        cmd.append("--lan-only")
     if gate.tool:
         cmd += ["--tool", gate.tool]
     return cmd

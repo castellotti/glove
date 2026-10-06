@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0
+    image: glove/pi:0.5.0-6ed54a2767
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer"]
     stdin_open: true
@@ -150,7 +150,7 @@ services:
   # --- forwarder: llm -> glove-s-llm-out:443
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/forwarder:0.2.0
+    image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-out:443"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
@@ -179,7 +179,7 @@ services:
   # --- forwarder: llm-out -> api.openai.com:443
   glove-s-llm-out:
     container_name: glove-s-llm-out
-    image: glove/forwarder:0.2.0
+    image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:api.openai.com:443"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,

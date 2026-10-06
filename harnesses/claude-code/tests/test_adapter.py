@@ -249,11 +249,15 @@ def test_stdio_mcp_without_an_enforcer_runs_directly(tmp_path):
     assert server["command"] == "bash" and not any(f.endswith(".argv") for f in files)
 
 
-def test_the_trusted_project_settings_are_protected(tmp_path):
+def test_the_trusted_project_settings_and_the_home_loaders_are_protected(tmp_path):
     _, plan = _plan(tmp_path)
     got = {p.container_path: (p.kind, p.read_only) for p in plan.protect}
+    home = "/home/agent/.claude"
     assert got == {"/work/.claude": ("dir", False), "/work/.claude/settings.json": ("file", True),
-                   "/work/.claude/settings.local.json": ("file", True)}
+                   "/work/.claude/settings.local.json": ("file", True), home: ("dir", False),
+                   **{f"{home}/{f}": ("file", True) for f in ("settings.json", "CLAUDE.md")},
+                   **{f"{home}/{d}": ("dir", True)
+                      for d in ("agents", "commands", "skills", "plugins", "output-styles", "rules")}}
 
 
 def test_system_files_are_rewritten_in_place(tmp_path):

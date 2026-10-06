@@ -14,6 +14,7 @@ from helpers import STUB_LLM, make_cfg, render
 
 from glove.config import ConfigError
 from glove.extensions import IN_TREE_DIR, ExtensionError, compose, discover, select, when_matches
+from glove.harness import base_image
 
 DIGEST = "alpine@sha256:" + "0" * 64
 
@@ -443,7 +444,7 @@ def test_a_harness_join_of_an_extension_network_is_refused_at_validation(tmp_pat
 def test_unselected_extension_contributes_nothing(tmp_path):
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)))
     plan, _ = render(cfg, tmp_path)
-    assert plan.image == "glove/pi:0.5.0"  # the plain base
+    assert plan.image == base_image(plan.profile)  # the plain base
     assert plan.derived_dockerfile is None
     assert [a.name for a in plan.composition.active] == ["llm"]
 
@@ -452,9 +453,10 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     exts = {"media": {}, "direct": {}, "search": {}}
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan, _ = render(cfg, tmp_path)
-    assert plan.image.startswith("glove/pi:0.5.0-") and plan.image != "glove/pi:0.5.0"
+    base = base_image(plan.profile)
+    assert plan.image.startswith(f"{base}-")
     df = plan.derived_dockerfile
-    assert "FROM glove/pi:0.5.0" in df
+    assert f"FROM {base}\n" in df
     assert "ffmpeg" in df and "python3-pil" in df
     assert "COPY search/pi-extension /opt/glove/ext/search/pi-extension" in df
     assert "-e" in plan.command and "/opt/glove/ext/search/pi-extension" in plan.command
@@ -624,10 +626,10 @@ _LANNISH = """\
     """
 
 
-def _lannish(oot, *, harness=False, net="side", address="192.168.1.10:22"):
+def _lannish(oot, *, harness=False, net="side", address="192.168.1.10:22", aliases=()):
     extra = ("networks: { side: { internal: true } }\n"
              f"endpoints: {{ box: {{ harness: {str(harness).lower()}, port: 22, listen_networks: [side], "
-             f"target: {{ address: '{address}', via: lan }} }} }}\n")
+             f"aliases: {list(aliases)}, target: {{ address: '{address}', via: lan }} }} }}\n")
     _svc_ext(oot, "lannish", service=_LANNISH.format(digest=DIGEST, net=net), extra=extra)
 
 
@@ -636,9 +638,22 @@ def test_a_lan_endpoint_serves_a_sidecar_over_the_lan_network_only(tmp_path, gho
     _, doc = _render_with(tmp_path, {"lannish": {}})
     fwd = doc["services"]["glove-s-box"]
     assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-side"}
-    assert "TCP4:192.168.1.10:22" in fwd["command"]
+    assert fwd["entrypoint"] == ["/usr/local/bin/glove-lan-forward"]  # an IP literal is checked too
+    assert fwd["command"] == ["22", "192.168.1.10", "22"]
     assert doc["networks"]["glove-s-lan"].get("internal") is not True
     assert list(doc["services"]["glove-s-harness"]["networks"]) == ["glove-s-net"]
+
+
+@pytest.mark.parametrize("aliases", [(), ("nas.lan",)])
+def test_a_lan_target_is_dialled_by_the_checking_forwarder(tmp_path, ghome, aliases):
+    # aliased to its own name, a second hop dials it: that hop checks it
+    _lannish(_oot(tmp_path, ghome, trusted=True, name="lannish"), address="nas.lan:22", aliases=aliases)
+    _, doc = _render_with(tmp_path, {"lannish": {}})
+    dialer = doc["services"]["glove-s-box-out" if aliases else "glove-s-box"]
+    assert dialer["entrypoint"] == ["/usr/local/bin/glove-lan-forward"]
+    assert dialer["command"] == ["22", "nas.lan", "22"]
+    if aliases:
+        assert "entrypoint" not in doc["services"]["glove-s-box"]
 
 
 def test_lan_rules(tmp_path, ghome):

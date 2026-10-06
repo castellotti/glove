@@ -113,7 +113,7 @@ def widening_warnings(prev: Config, cur: Config) -> list[str]:
             warnings.append(f"extensions: {name} settings changed")
 
     if cur.allow_root and not prev.allow_root:
-        warnings.append("allow_root: false → true (root/sudo now permitted)")
+        warnings.append("allow_root: false → true (the harness runs as uid 0; caps stay dropped, no sudo)")
     if cur.allow_sensitive and not prev.allow_sensitive:
         warnings.append("allow_sensitive: false → true (/ or $HOME mountable)")
 

@@ -225,6 +225,10 @@ class DockerRuntime:
         from ..compose import validate_project
 
         validate_project(yaml.safe_load(compose_yaml), plan, plan.composition)
+        # Compose interpolates `$` in every value (a `$HOME` in an env value or
+        # a path becomes the *host's*); glove never uses interpolation, so every
+        # `$` renders literally.
+        compose_yaml = compose_yaml.replace("$", "$$")
         return RenderedProject(
             session=plan.session,
             project=plan.project,

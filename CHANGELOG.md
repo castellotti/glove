@@ -122,6 +122,30 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Security (round 2):** the harness entrypoint has no fail-open override:
+  `GLOVE_ENFORCER_FAIL_OPEN` (settable from a session's `env:`) is gone, so an
+  invalid policy or an incomplete srt layer always refuses to start. Each
+  harness manifest pins its release (`version`: Pi 0.87.1, Vibe 2.25.8, Claude
+  Code 2.1.288; Vibe's `uv` by digest), passed to its image build as
+  `HARNESS_VERSION`, and names the release its `protected_home`,
+  `trusted_files` and `masked_files` were audited against (`audited_version`):
+  glove refuses a manifest whose two differ. Claude Code's
+  home gets a `protected_home` too: `settings.json`, `CLAUDE.md` and the
+  `agents`, `commands`, `skills`, `plugins`, `output-styles` and `rules` dirs
+  are read-only (`/model`'s "set as default" now reports that it can't save).
+- Image tags hash what an image is built from: a harness base tag is its
+  version plus a hash of its `image/` context, glove-pty, the entrypoint and
+  its release
+  (`glove/pi:0.5.0-<hash>`), and the forwarder (now `glove/forwarder/`), the
+  srt overlay and extension images use the same hash, so a changed base is
+  rebuilt and every image on it follows (before, a base tag was reused
+  whatever it held).
+- `tools:` is checked: only `allow_commands`/`deny_commands`, as lists of
+  command names (`tools.net`, never read since v3, is refused), and only
+  under an enforcer that runs commands in nono (under `srt` it was ignored).
+- The `allow_root` drift warning says what it means: uid 0, caps still
+  dropped, no sudo.
+
 - `enforcer_options` is checked against a schema under every enforcer: an
   unknown section or key (e.g. `nono: {browser: true}`) or a value of the
   wrong type is refused instead of ignored, and `nono.browsers: true` is
@@ -191,6 +215,15 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- A `$` in any value glove renders into the compose project (an env value, a
+  path) is literal: compose interpolated it from the host's environment
+  (`$HOME` became the host's home).
+- A `via: lan` endpoint (e.g. `nas.lan`) is dialled only at a private IPv4
+  address: the socat forwarder resolves it once at start and refuses a public
+  answer; netgate (`observe`) checks each connection
+  (`--lan-only`, a refused flow is `blocked` by rule `lan-only`) and records
+  the flow's scope as `local`, not `direct`.
 
 - `glove down` removes a harness container whose terminal was killed (a
   `compose run` client that dies leaves its container, which kept the

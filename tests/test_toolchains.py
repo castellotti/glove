@@ -14,6 +14,7 @@ from glove import sessiondir as sdm
 from glove import toolchains as tcs
 from glove.config import ConfigError, _coerce
 from glove.enforcers.nono.policies import GLOVE_READ
+from glove.harness import base_image
 from glove.harnessconfig import build_environment_context, render_home
 from glove.image import content_hash, stage_context
 from glove.plan import build_session_plan
@@ -166,7 +167,7 @@ def test_defaults_are_lockfile_strict():
 def test_unset_leaves_plan_and_render_untouched(tmp_path):
     plan = _plan(tmp_path)
     assert plan.toolchains == []
-    assert plan.derived_dockerfile is None and plan.image == plan.profile.image
+    assert plan.derived_dockerfile is None and plan.image == base_image(plan.profile)
     harness = _harness(plan, tmp_path)
     assert not {"VIRTUAL_ENV", "PLAYWRIGHT_BROWSERS_PATH", "PATH"} & set(harness["environment"])
     assert tcs.ROOT not in json.dumps(harness)

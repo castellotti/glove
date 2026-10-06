@@ -15,8 +15,10 @@ RUN gcc -static -O2 -Wall -Wextra -o /src/glove-pty /src/glove-pty.c -lutil && s
 # dependency; npm's install step puts it at bin/claude.exe. Only that file is
 # kept: the final image needs no node.
 FROM node:24-bookworm-slim AS claude
-ARG CLAUDE_CODE_VERSION=2.1.288
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+# The pinned release: harness.yml's `version`, passed by glove as a build arg.
+ARG HARNESS_VERSION
+RUN : "${HARNESS_VERSION:?glove passes harness.yml's version}" \
+    && npm install -g "@anthropic-ai/claude-code@${HARNESS_VERSION}" \
     && cp /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /claude
 
 FROM debian:bookworm-slim

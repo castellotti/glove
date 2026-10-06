@@ -3,6 +3,12 @@ name: claude-code
 summary: Anthropic's Claude Code CLI (native binary), signed in with an API key or a subscription token.
 # 0.2.0: native binary + ring-1 enforcer (nono, glove-pty, glove-cc-prefix) only.
 image: glove/claude-code:0.2.0
+# The harness release the image installs (the Dockerfile's HARNESS_VERSION).
+version: 2.1.288
+# The release protected_home, trusted_files and masked_files were audited
+# against: a new release can add a dir it loads code or config from, so glove
+# refuses a `version` that has not been re-audited.
+audited_version: 2.1.288
 # By path: a `toolchains` block may put other binaries first on PATH.
 entry: [/usr/local/bin/claude]
 config_home: { env: CLAUDE_CONFIG_DIR, path: /home/agent/.claude }
@@ -24,3 +30,17 @@ contributions: [mcp, skills]
 # and commands to processes Claude Code starts itself, outside ring 1: ring 0
 # binds them read-only, so only what the operator brought in is loaded.
 trusted_files: [.claude/settings.json, .claude/settings.local.json]
+# Read-only to the agent (ring 0), relative to the home: the settings and
+# memory file glove renders, and the dirs Claude Code loads agents, commands,
+# skills, plugins, output styles and rules from. It writes .claude.json,
+# backups/, history.jsonl, projects/, sessions/ (and more over time): those
+# stay writable. The managed settings also deny Read/Edit of the whole home.
+protected_home:
+  - .claude/settings.json
+  - .claude/CLAUDE.md
+  - .claude/agents/
+  - .claude/commands/
+  - .claude/skills/
+  - .claude/plugins/
+  - .claude/output-styles/
+  - .claude/rules/

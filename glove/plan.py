@@ -33,7 +33,14 @@ if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
     from .toolchains import Toolchain
 
-FORWARDER_IMAGE = "glove/forwarder:0.2.0"
+FORWARDER_DIR = Path(__file__).parent / "forwarder"
+
+
+def forwarder_image() -> str:
+    """The forwarder's tag, content-addressed like every glove-built image."""
+    from .image import content_hash
+
+    return f"glove/forwarder:0.2.0-{content_hash('', [('forwarder', FORWARDER_DIR)])}"
 # `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
 # already lets the harness and its commands read (nono: GLOVE_READ; srt: the
 # whole rootfs is readable), so trusting it needs no policy change.
@@ -61,7 +68,7 @@ class SessionPlan:
     runtime: str = "docker"
     enforcer: str = "nono"
     enforcer_options: dict = field(default_factory=dict)
-    forwarder_image: str = FORWARDER_IMAGE
+    forwarder_image: str = field(default_factory=forwarder_image)
     tools: dict = field(default_factory=dict)
     # Ring-1 enforcer artifacts (populated by build_session_plan). `command` is
     # the wrapped harness entry; `policies` is filename→contents rendered to the
@@ -373,6 +380,9 @@ def build_session_plan(
     from .enforcers import get_enforcer
 
     enforcer = get_enforcer(cfg.enforcer)
+    if cfg.tools and enforcer.tool_sandbox != "nono":
+        raise ConfigError(f"`tools:` sets nono's tool-profile command lists; enforcer {cfg.enforcer!r} runs "
+                          "commands without nono, so it would be ignored — remove it")
 
     hardening = Hardening(
         user=None if cfg.allow_root else f"{uid}:{gid}",
@@ -408,7 +418,7 @@ def build_session_plan(
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
         enforcer_options=cfg.enforcer_options,
-        tools=dict(cfg.tools or {}),
+        tools=dict(cfg.tools),
         composition=comp,
         model=harness_model(profile, comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,

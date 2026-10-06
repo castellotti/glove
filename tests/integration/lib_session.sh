@@ -33,3 +33,13 @@ stub_llm() {
     LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$2\", model: auto}"
   fi
 }
+
+#   glove_image <harness> [srt]
+#     the harness's base image tag (content-addressed, see glove/harness.py),
+#     with the srt overlay's suffix when asked
+glove_image() {
+  uv run --quiet --project "$ROOT" python -c 'import sys
+from glove.enforcers.base import srt_suffix
+from glove.harness import base_image, get_profile
+print(base_image(get_profile(sys.argv[1])) + (srt_suffix() if sys.argv[2:] == ["srt"] else ""))' "$@"
+}

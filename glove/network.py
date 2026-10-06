@@ -12,6 +12,7 @@ same name, networks and port, a drop-in — and core hardens what it returns.
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -42,9 +43,19 @@ class Sidecar:
     impl: dict[str, Any] | None = None
     facts: dict[str, Any] = field(default_factory=dict)
     impl_aliases: tuple[str, ...] = ()
+    # It dials a `via: lan` target: resolved once at start and refused unless
+    # private (glove/forwarder/lan-forward).
+    lan: bool = False
 
     @property
-    def command(self) -> str:
+    def entrypoint(self) -> list[str] | None:
+        return ["/usr/local/bin/glove-lan-forward"] if self.lan else None
+
+    @property
+    def command(self) -> str | list[str]:
+        if self.lan:
+            host, _, port = self.target.rpartition(":")
+            return [str(self.listen_port), host, port]
         # Force IPv4 on both ends. host-gateway targets (host.docker.internal)
         # get BOTH an A and AAAA record in /etc/hosts; socat's generic `TCP:`
         # prefers the IPv6 address, which has no route on the Docker Desktop VM
@@ -82,8 +93,6 @@ def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
     """Deterministic /27 slices of a session's subnet, one per owned network
     (in the given order), so a session's addresses never depend on what else
     the runtime has allocated."""
-    import ipaddress
-
     slices = list(ipaddress.ip_network(subnet).subnets(new_prefix=SLICE_PREFIX))
     if len(networks) > len(slices):
         raise ConfigError(f"session subnet {subnet} has room for {len(slices)} networks; "
@@ -91,15 +100,18 @@ def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
     return {n: str(s) for n, s in zip(networks, slices, strict=False)}
 
 
-def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target: str) -> dict[str, Any]:
+def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target: str,
+                  lan: bool = False) -> dict[str, Any]:
     """What a `forwarder` hook is told about one endpoint (plain data); `target`
-    is the `host:port` its forwarder dials (a second hop's, when there is one)."""
+    is the `host:port` its forwarder dials (a second hop's, when there is one),
+    and `lan` whether that is a `via: lan` target, dialled only if private."""
     return {
         "name": ep.name, "extension": ep.extension, "port": ep.port,
         "target": target, "target_kind": ep.target.kind,
         "harness": ep.harness, "host_gateway": ep.target.kind == "host", "networks": list(networks),
         "aliases": list(ep.aliases), "observe": ep.observe, "interpose": ep.interpose,
         "container": ep.host(session),
+        "lan": lan,
     }
 
 
@@ -119,6 +131,8 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
             if logical and logical not in ("net", "hostgw") and scoped(session, logical) not in nets:
                 nets.append(scoped(session, logical))
         target = f"{ep.target.host}:{ep.target.port}"
+        # only the container that dials a `via: lan` target checks it
+        lan = ep.target.network == "lan"
         hop = None
         if ep.target.host in ep.aliases:
             # Docker's DNS answers a container's own alias first, so the aliased
@@ -126,15 +140,16 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
             # the harness network (no alias there), dials the real name; a gate
             # in front still records it from the TLS SNI.
             hop = Sidecar(role=f"{ep.name}-out", listen_port=ep.target.port, target=target, harness=False,
-                          networks=tuple(nets))
+                          networks=tuple(nets), lan=lan)
             target = f"{scoped(session, hop.role)}:{ep.target.port}"
-        info = endpoint_info(ep, session, tuple(nets), target)
+        info = endpoint_info(ep, session, tuple(nets), target, lan=lan and hop is None)
         impl = forwarder_service(comp, info)
         sidecars.append(Sidecar(
             role=ep.name, listen_port=ep.port, target=target,
             host_gateway=ep.target.kind == "host", harness=ep.harness, networks=tuple(nets),
             aliases=ep.aliases, impl=impl[0] if impl else None, facts=impl[1] if impl else {},
             impl_aliases=tuple(impl[2]) if impl else (),
+            lan=lan and hop is None,
         ))
         if hop is not None:
             sidecars.append(hop)

@@ -502,3 +502,38 @@ def test_a_client_label_is_a_name_and_never_harness(label):
         assert entry._parser().parse_args([*argv, "ext"]).client == "ext"
         with pytest.raises(SystemExit):
             entry._parser().parse_args([*argv, label])
+
+
+# --- `via: lan` upstreams ------------------------------------------------------
+
+
+def test_a_lan_endpoint_is_local_and_dialled_lan_only():
+    from extensions.gate.gatelib import Recording, forward_command, gate_spec
+
+    gate = gate_spec(_ep(harness=False, target="nas.lan:22", lan=True), {})
+    assert gate.scope == "local" and gate.lan_only
+    assert "--lan-only" in forward_command(gate, Recording(), session="s", listen=22, ingress=None)
+    other = gate_spec(_ep(harness=False, target="api.example.com:443"), {})
+    assert not other.lan_only and other.scope == "direct"
+
+
+def test_a_lan_only_upstream_at_a_public_address_is_blocked_not_dialled(tmp_path, sockdir):
+    # 127.0.0.1 stands in for any address outside the private ranges: the
+    # upstream is listening, but the forwarder never connects to it.
+    async def main():
+        server, uport, seen = await _upstream(b"secret", read_request=5)
+        col = _Running(tmp_path, sockdir / "ev.sock")
+        fwd = Forwarder(_spec(uport, lan_only=True), _sink(str(sockdir / "ev.sock")))
+        await fwd.start()
+        got = await _client(fwd.port, b"hello")
+        await _settle(col.c)
+        await fwd.stop()
+        server.close()
+        col.drain()
+        col.close()
+        return got, seen
+
+    got, seen = run(main())
+    assert got == b"" and seen == []
+    close = read_records(tmp_path)[-1]
+    assert close["verdict"] == "block" and close["rule"] == "lan-only" and close["close_reason"] == "blocked"
