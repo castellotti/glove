@@ -155,9 +155,9 @@ else
   cp -R "$FIX/node-app" "$S3/projects/"
   mkdir -p "$S3/work" && cp -R "$FIX/node-app" "$S3/work/"
   new_session "$S3" pi "enforcer: srt
-  toolchains:
-    - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
-  " || { bad "glove plan (srt) failed"; exit 1; }
+toolchains:
+  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+" || { bad "glove plan (srt) failed"; exit 1; }
   trap cleanup EXIT
   IMAGE="$(build "$S3" | tail -1)"
   [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "srt build failed"

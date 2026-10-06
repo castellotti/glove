@@ -60,13 +60,13 @@ def main(directory: str) -> int:
         rendered = next(p for p in ro if p.kind == "file" and p.host_path
                         and p.container_path.startswith(CONTAINER_HOME + "/"))
         before = Path(rendered.host_path).read_text()
+        state = s.sd.home / ".claude" / ".claude.json"  # CC rewrites it on its first run
+        mark = state.stat().st_mtime if state.exists() else 0
         tool, path_arg, content_arg, extra = s.tools["write"]
         out = s.call(tool, {path_arg: rendered.container_path, content_arg: "{}\n", **extra})
         tail = " ".join(out[out.find("TOOL RESULT"):].split())[:300] if "TOOL RESULT" in out else out[-300:]
         check(f"{tool} cannot overwrite {rendered.container_path}",
               Path(rendered.host_path).read_text() == before, tail)
-        state = s.sd.home / ".claude" / ".claude.json"
-        mark = state.stat().st_mtime if state.exists() else 0
         ans = s.sh("echo tool-ran-$((6*7)); echo key=$(env | grep -c '^FAKE_API_KEY=')")
         check("a tool call runs with the project config planted", "tool-ran-42" in ans, ans[-300:])
         check("still wrapped (no secret-shaped env)", "key=0" in ans, ans[-300:])
@@ -81,7 +81,7 @@ def main(directory: str) -> int:
             tui.wait_drawn(settle=3)
             tui.send(b'CALL bash {"command": "NONO_PROBE=1 echo hi"}', 1)
             tui.send(b"\r")
-            shown = tui.pump_until(r"NONO_\* env overrides are not allowed", 60)
+            shown = tui.pump_until(r"NONO_\*\s+env\s+overrides\s+are\s+not\s+allowed", 60)  # wrapped
             tui.kill()
             check("the hook's denial (NONO_* override) shows in the TUI", tui.waited is not None,
                   " ".join(tui.text(shown).split())[-300:])

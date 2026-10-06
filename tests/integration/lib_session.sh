@@ -47,7 +47,7 @@ stub_session() {
   uv run --quiet --project "$ROOT" glove new minimal "$dir" >/dev/null || return 1
   printf 'glove: 3\ntemplate: minimal\nruntime: %s\nharness: %s\nenforcer: %s\nenv: {FAKE_API_KEY: sk-probe-not-a-secret}\nextensions:\n  llm: %s\n%b' \
     "${RT:-docker}" "$harness" "$enforcer" "$LLM" "$extra" > "$dir/glove-session.yml"
-  for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0; sleep 0.1; done
+  for _ in $(seq 300); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0; sleep 0.1; done
   echo "the llm stub is not listening on :$port ($dir.stub.log)" >&2; return 1
 }
 

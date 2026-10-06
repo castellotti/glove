@@ -258,6 +258,8 @@ All notable changes to glove are documented here.
   answer; netgate (`observe`) checks each connection
   (`--lan-only`, a refused flow is `blocked` by rule `lan-only`) and records
   the flow's scope as `local`, not `direct`.
+- `test_toolchains.sh` session 3 (`enforcer: srt` on Docker) wrote an invalid
+  session file (an indented `toolchains:`) and never ran; it runs again.
 
 - `glove down` removes a harness container whose terminal was killed (a
   `compose run` client that dies leaves its container, which kept the
