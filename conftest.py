@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# CLI output is matched as text: a shell's FORCE_COLOR would make rich colour it
+# (splitting the words a test looks for). Before glove creates its consoles.
+os.environ.pop("FORCE_COLOR", None)
 
 
 @pytest.fixture(autouse=True)

@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 
 # Env var glove passes the LLM API key in (never written to a file).
 LLM_API_KEY_ENV = "GLOVE_LLM_API_KEY"
+# What that variable holds when the inference provider injects the key itself
+# (`api_key_injected`): a public placeholder, so the harness never holds the key.
+INJECTED_KEY = "glove-injected"
 DESCRIPTOR_APIS = ("openai-completions", "anthropic-messages", "mistral-conversations")
 
 
@@ -43,6 +46,9 @@ class ModelDescriptor:
     # How the key authenticates: "api-key", or "oauth" (a subscription token the
     # provider catalog allows only for some harnesses); the adapter picks its env.
     api_key_kind: str = "api-key"
+    # The provider adds the key on the way (`llm`'s llm-auth sidecar): the
+    # harness's variable holds INJECTED_KEY, never the key.
+    api_key_injected: bool = False
     vision: bool = False
     context_window: int = 32768
     max_tokens: int = 8192
@@ -61,6 +67,7 @@ class ModelDescriptor:
             base_url=str(ex["base_url"]), api=str(ex["api"]), model=str(ex["model"]),
             api_key_env=LLM_API_KEY_ENV if ex.get("api_key_secret") else None,
             api_key_kind=str(ex.get("api_key_kind") or "api-key"),
+            api_key_injected=bool(ex.get("api_key_injected")),
             vision=bool(caps.get("vision")), context_window=int(caps.get("context_window") or 32768),
             max_tokens=int(caps.get("max_tokens") or 8192), reasoning=bool(caps.get("reasoning")),
             extra_models=tuple(ex.get("extra_models") or ()),

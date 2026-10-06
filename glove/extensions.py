@@ -1061,7 +1061,8 @@ def compose(
                 for net in nets if isinstance(nets, list) else nets.keys():
                     if net in CORE_NETWORKS and net != "net":
                         comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
-            comp.fragments.append((a, doc))
+            if any(doc.values()):  # a fragment whose `{% if %}` left nothing adds nothing
+                comp.fragments.append((a, doc))
     return comp
 
 

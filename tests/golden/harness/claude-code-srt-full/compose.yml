@@ -38,7 +38,7 @@ services:
       HF_HUB_OFFLINE: "1"
       CLAUDE_OBSIDIAN_VAULT: "/work/data/store/vault"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
-      ANTHROPIC_API_KEY: null  # from glove's environment at run time; never stored here
+      ANTHROPIC_API_KEY: "glove-injected"
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -179,6 +179,44 @@ services:
       source: <GLOVE_HOME>/control/s
       target: /etc/glove/netgate-control
       read_only: true
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-llm-auth:
+    container_name: glove-s-llm-auth
+    image: glove/ext-llm-auth:3c95a17c7f
+    environment:
+      LLM_AUTH_KEY: null
+      LLM_AUTH_UPSTREAM: glove-s-llm-upstream:8080
+      LLM_AUTH_TLS_NAME: ''
+      LLM_AUTH_HOST: 127.0.0.1:8080
+      LLM_AUTH_HEADER: x-api-key
+      LLM_AUTH_SCHEME: ''
+      LLM_AUTH_ALLOW: '[["POST", "/v1/messages"], ["POST", "/v1/messages/count_tokens"],
+        ["HEAD", "/api/hello"], ["GET", "/v1/models"]]'
+      LLM_AUTH_PORT: '8080'
+    tmpfs:
+    - /tmp
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1', 8080), 2)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    networks:
+      glove-s-llmauth: {}
     restart: unless-stopped
     user: '501:20'
     cap_drop:
@@ -345,7 +383,7 @@ services:
     - --listen
     - '8080'
     - --upstream
-    - tcp:host.docker.internal:8080
+    - tcp:glove-s-llm-auth:8080
     - --route
     - tcp
     - --env
@@ -372,6 +410,64 @@ services:
       glove-s-net:
         aliases:
         - glove-s-llm-ingress
+      glove-s-llmauth: {}
+    volumes:
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    - type: bind
+      source: <GLOVE_HOME>/control/s
+      target: /etc/glove/netgate-control
+      read_only: true
+    depends_on:
+      glove-s-netgate:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-llm-upstream:
+    container_name: glove-s-llm-upstream
+    image: glove/ext-gate-netgate:87fb623dc0
+    command:
+    - forward
+    - --service
+    - llm-upstream
+    - --mode
+    - tcp
+    - --listen
+    - '8080'
+    - --upstream
+    - tcp:host.docker.internal:8080
+    - --route
+    - tcp
+    - --env
+    - s
+    - --session
+    - s
+    - --resolve
+    - in-tunnel
+    - --events
+    - /run/glove-netgate/events.sock
+    - --client
+    - llm
+    - --record
+    - metadata
+    - --rules
+    - /etc/glove/netgate-control/rules.json
+    - --scope
+    - local
+    - --tool
+    - llm
+    networks:
+      glove-s-llmauth: {}
       glove-s-hostgw: {}
     volumes:
     - type: volume
@@ -703,6 +799,9 @@ networks:
     internal: true
   glove-s-wan:
     name: glove-s-wan
+  glove-s-llmauth:
+    name: glove-s-llmauth
+    internal: true
   glove-s-browser-net:
     name: glove-s-browser-net
     internal: true
