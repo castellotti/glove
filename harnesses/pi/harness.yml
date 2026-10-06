@@ -18,6 +18,8 @@ audited_version: 0.87.1
 # shebang: a `toolchains` node block puts a pinned node first on PATH.
 entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enforcer]
 config_home: { env: PI_CODING_AGENT_DIR, path: /home/agent/.pi/agent }
+# What the agent is told about this harness under glove (its context file).
+brief: brief.md
 context_file: /home/agent/.pi/agent/AGENTS.md
 # Read-only to the agent (ring 0), relative to the home: the settings, models
 # and trust store glove renders, and the dirs Pi loads code, skills, prompts

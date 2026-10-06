@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Config, ConfigError
+from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
 from .enforcers.base import argv_lines, srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
@@ -55,7 +55,7 @@ class SessionPlan:
     profile: HarnessProfile
     image: str
     working_dir: str  # container path the harness starts in
-    home_dir: str  # host path bind-mounted at /home/agent
+    home_dir: str  # host path bind-mounted at CONTAINER_HOME (`home_mount`)
     mount_plan: MountPlan
     environment: dict[str, str]
     network: NetworkPlan
@@ -128,6 +128,11 @@ class SessionPlan:
     @property
     def allow_root(self) -> bool:
         return self.hardening.allow_root
+
+
+def home_mount(home_dir: str) -> Mount:
+    """The harness home: the session's `.glove/home`, read-write at CONTAINER_HOME."""
+    return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
 
 
 def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
@@ -271,19 +276,12 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
     return out
 
 
-def git_safe_directories(roots: list[str]) -> str:
-    """`GIT_CONFIG_PARAMETERS` trusting the session's own mount roots.
-
-    Through Docker Desktop's file sharing a `.git` the agent just created can
-    read as another uid, and git refuses it ("dubious ownership"). The
-    container has one user, so safe.directory's guard (another user's repo
-    configuring this user's git) has nothing to protect at the mount roots.
-    Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
-    nested deeper (a clone into /work/<repo>) needs an opt-in.
-    """
+def git_config_parameters(pairs: list[tuple[str, str]]) -> str:
+    """`GIT_CONFIG_PARAMETERS`, git's command-line config (`-c`) in the env, so
+    the harness and every command it runs read it. Later pairs win."""
     def q(s: str) -> str:
         return "'" + s.replace("'", "'\\''") + "'"
-    return " ".join(f"{q('safe.directory')}={q(r)}" for r in roots)
+    return " ".join(f"{q(k)}={q(v)}" for k, v in pairs)
 
 
 def build_session_plan(
@@ -337,18 +335,34 @@ def build_session_plan(
     def in_working_dir(files: tuple[str, ...]) -> list[str]:
         return [posixpath.join(mount_plan.working_dir, f) for f in files]
 
-    home = Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
+    home = home_mount(home_dir)
     mount_plan = replace(mount_plan, protect=protected_paths(
         mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
         trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
     ) + protected_home(home, profile.protected_home))
     network = build_network_plan(cfg, session, comp)
 
+    # glove alone sets git's config env vars (GIT_CONFIG_PARAMETERS, below)
+    for source, env in (("the harness profile", profile.default_env), ("the session's `env:`", cfg.env),
+                        ("an extension's env", comp.harness_env)):
+        owned = sorted(k for k in env if GIT_CONFIG_ENV.fullmatch(str(k)))
+        if owned:
+            raise ConfigError(f"{source} sets {owned[0]}: git config goes in the session's `git_config:` "
+                              "(or an extension's `harness.git_config`)")
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
-    # an extension (github: '*') or an explicit `env:` entry replaces it
-    environment.setdefault("GIT_CONFIG_PARAMETERS", git_safe_directories(session_roots))
+    # Through Docker Desktop's file sharing a `.git` the agent just created can
+    # read as another uid, and git refuses it ("dubious ownership"). The
+    # container has one user, so safe.directory's guard (another user's repo
+    # configuring this user's git) has nothing to protect at the mount roots.
+    # Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
+    # nested deeper (a clone into /work/<repo>) needs an opt-in: an extension's
+    # `harness.git_config` (github: '*') or the session's `git_config:`.
+    environment["GIT_CONFIG_PARAMETERS"] = git_config_parameters([
+        *(("safe.directory", r) for r in session_roots), *comp.git_config,
+        *git_config_pairs(cfg.git_config, "git_config"),
+    ])
     toolchains: list[Toolchain] = []
     if cfg.toolchains:
         from . import toolchains as tcs

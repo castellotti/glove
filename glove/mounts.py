@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+# Where the session's work dir mounts (the harness's, and a sidecar's with the
+# `work` privilege), and the harness home.
+WORK_TARGET = "/work"
+CONTAINER_HOME = "/home/agent"
+
 
 class MountError(ValueError):
     """Raised for refused or malformed mount requests."""
@@ -166,7 +171,7 @@ def compute_mounts(
     workdir_real = os.path.realpath(workdir)
     for req in accepted:
         if req.is_workdir:
-            container_path = "/work"
+            container_path = WORK_TARGET
         else:
             base = os.path.basename(req.host_path.rstrip("/")) or "root"
             name = base
@@ -330,7 +335,7 @@ def _resolve_working_dir(
         ):
             best = m
     if best is None:
-        return "/work"
+        return WORK_TARGET
     rel = os.path.relpath(target, best.host_path)
     if rel == ".":
         return best.container_path

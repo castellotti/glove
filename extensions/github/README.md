@@ -27,8 +27,9 @@ The sidecar can do whatever the token allows, within the policy below.
   `git pull` is a relayed `git fetch` followed by a local `git merge FETCH_HEAD`
   (or `git rebase` with `--rebase`).
 - **A brief** (`brief.md`) states the rules.
-- **`GIT_CONFIG_PARAMETERS="'safe.directory'='*'"`** in the harness environment
-  (and `safe.directory=*` in the sidecar). Docker Desktop's file sharing shows a
+- **`safe.directory: '*'`** in the harness's git config (`harness.git_config`,
+  which glove adds to `GIT_CONFIG_PARAMETERS`; also `safe.directory=*` in the
+  sidecar). Docker Desktop's file sharing shows a
   directory that `git init` or `git clone` just made as root's (or 65534 under
   srt), so without it git refuses every fresh checkout as "dubious ownership".
   Everything in `/work` belongs to the agent, so there is no other user's

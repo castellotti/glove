@@ -25,8 +25,8 @@ HOSTS = [{"name": "build", "to": "192.168.1.10:22", "user": "dev"},
 class Req:
     def __init__(self, argv):
         self.argv = argv
-        self.settings = {"hosts": [{**h, "forwarder": {"host": f"glove-s-ssh-{h['name']}", "port": 22}}
-                                   for h in HOSTS]}
+        self.settings = {"hosts": HOSTS, "forwarders": {f"ssh-{h['name']}": {"host": f"glove-s-ssh-{h['name']}",
+                                                                              "port": 22} for h in HOSTS}}
 
 
 def ssh(*args):

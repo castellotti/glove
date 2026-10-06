@@ -502,6 +502,13 @@ def test_a_contribute_hook_env_is_checked_like_a_manifest_env(tree):
                 manifests=discover(tree))
 
 
+def test_git_config_is_contributed_as_pairs(tree):
+    _ext(tree, "e", "api: 1\nname: e\nsummary: x\nharness:\n  git_config: { safe.directory: '*', a.b: [x, y] }\n")
+    comp = compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
+                   manifests=discover(tree))
+    assert comp.git_config == [("safe.directory", "*"), ("a.b", "x"), ("a.b", "y")]
+
+
 def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
     _ext(tree, "e", """\
         api: 1
@@ -557,7 +564,7 @@ _RELAYISH = """\
         image: {digest}
         networks: [egress]
         volumes:
-          - {{ type: bind, source: "{{{{ work }}}}", target: {target}{ro} }}
+          - {{ type: bind, source: "{{{{ work.host }}}}", target: {target}{ro} }}
     """
 
 

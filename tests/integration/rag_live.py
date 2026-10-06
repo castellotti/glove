@@ -58,7 +58,7 @@ def main(directory: str) -> int:
         start_sidecars(plan, sd.compose, provider=rt, env=env)
         comp = plan.composition
         _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
+        render_home(cfg, plan, sd.home)
 
         print("== offline, read-only mounts")
         check("no egress provider; the only endpoint is the llm",

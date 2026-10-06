@@ -41,11 +41,10 @@ harness:
   image:
     "*":
       copy: [[shim/gh, /usr/local/bin/gh], [shim/git, /usr/local/bin/git]]
-  env:
+  git_config:
     # Docker Desktop's file sharing shows a directory `git init`/`clone` just
     # made as root's (65534 under srt's user namespace), so git would call every
     # fresh checkout "dubious". All of /work is the agent's: there is no other
-    # user's repository to guard against. (An env var, not /etc/gitconfig, which
-    # the tool sandbox cannot read; GIT_CONFIG_KEY_* would be stripped as *KEY*.)
-    GIT_CONFIG_PARAMETERS: "'safe.directory'='*'"
+    # user's repository to guard against.
+    safe.directory: "*"
   brief: brief.md

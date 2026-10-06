@@ -8,8 +8,19 @@ All notable changes to glove are documented here.
 
 - Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
   (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
-  through Docker Desktop's file sharing. An extension (`github`: `'*'`) or the
-  session's `env:` replaces it.
+  through Docker Desktop's file sharing. An extension's `harness.git_config`
+  (`github`: `safe.directory: '*'`) and then the session's `git_config:` (key →
+  value or list) add to it; glove alone sets git's config env vars, so `env:`
+  (or an extension's `env`) setting `GIT_CONFIG_*` is refused with a pointer.
+- `glove new` copies a template directory's `local/` (a path or git URL
+  template's private assets) into the session, never over an existing file; a
+  `local/` that is or holds a symlink is refused.
+- `glove up` runs the extensions' own checks (`glove check`'s extension part)
+  first and refuses to start anything when one fails.
+- Harness manifests may carry a `brief:` (a markdown file in the harness dir)
+  added to the agent's context file. Pi's and Vibe's say their settings are
+  read-only (a UI choice is never saved) and that lasting choices go in the
+  session file.
 - Extension manifests: a harness `env` entry may be `{value, when}` (unset
   unless `when:` matches); `when:` takes `renders: <contribution>` (e.g. `mcp`,
   instead of a list of harnesses) and `{set: true|false}`.
@@ -122,6 +133,18 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- The harness runs as `glove-<id>-harness` (`compose run --name`): a second
+  `glove up` while it runs is refused before anything starts, and a
+  stopped one left by a killed client is removed. `compose` runs without
+  Podman's "external compose provider" banner (`Runtime.compose_cli_env`).
+- Extension templates: `work` is now `{host, target}` (`{{ work.host }}` for
+  the host dir, `{{ work.target }}` where the `work` privilege binds it) and
+  `own_endpoints` maps the extension's own endpoints to `{host, port}`. The
+  `ssh` relay gets its forwarders from it (`RELAY_SETTINGS.forwarders`).
+- Internal: `render_home(cfg, plan, home)` and `build_environment_context(plan)`
+  read everything from the session plan; the container mount points
+  (`CONTAINER_HOME`, `WORK_TARGET`) are defined once in `glove/mounts.py` and
+  used by the compose file, the enforcers and the `work` privilege.
 - **Security (round 2):** the harness entrypoint has no fail-open override:
   `GLOVE_ENFORCER_FAIL_OPEN` (settable from a session's `env:`) is gone, so an
   invalid policy or an incomplete srt layer always refuses to start. Each

@@ -14,6 +14,7 @@ from helpers import make_cfg
 
 from glove.config import ConfigError
 from glove.harness import HARNESSES_DIR, get_profile, known_harnesses, load_profile
+from glove.plan import build_session_plan
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,7 +50,7 @@ def test_only_the_selected_adapter_is_imported(harness, tmp_path):
         from glove.plan import build_session_plan
         cfg = make_cfg(harness={harness!r}, name="s", workdir={str(tmp_path)!r}, extensions={exts!r})
         plan = build_session_plan(cfg, home_dir={str(tmp_path / "h")!r}, uid=501, gid=20)
-        render_home(cfg, plan.profile, Path({str(tmp_path / "h")!r}), plan.model, comp=plan.composition)
+        render_home(cfg, plan, Path({str(tmp_path / "h")!r}))
         print(sorted(m for m in sys.modules if m.startswith("glove_harness_")))
     """)
     env = {"GLOVE_HOME": str(tmp_path / "gh"), "PATH": "/usr/bin:/bin"}
@@ -109,6 +110,8 @@ def test_a_minimal_manifest_loads(tmp_path):
     (GOOD + "protected_home: [.h/../x]\n", "h"),       # escapes the home
     (GOOD + "protected_home: [./]\n", "h"),            # the home itself
     (GOOD + "protected_home: [.h//x]\n", "h"),         # empty component
+    (GOOD + "brief: ../x.md\n", "h"),                  # outside the harness dir
+    (GOOD + "brief: missing.md\n", "h"),               # no such file
     (GOOD.replace("version: 1.0.0\n", ""), "h"),      # no release pinned
     (GOOD.replace("audited_version: 1.0.0", "audited_version: 0.9.0"), "h"),  # a release not re-audited
 ])
@@ -120,6 +123,18 @@ def test_bad_manifests_are_refused(tmp_path, body, dirname):
 def test_protected_home_keeps_its_directory_marker(tmp_path):
     p = load_profile(_manifest(tmp_path, "h", GOOD + "protected_home: [.h/settings.json, .h/tools/]\n"))
     assert p.protected_home == (".h/settings.json", ".h/tools/")
+
+
+def test_a_harness_brief_reaches_its_context_file(tmp_path):
+    from glove.harnessconfig import build_environment_context
+
+    d = _manifest(tmp_path, "h", GOOD + "brief: brief.md\n")
+    (d / "brief.md").write_text("## H's settings\n\nRead-only.\n")
+    assert load_profile(d).brief == "## H's settings\n\nRead-only."
+    for name in ("pi", "vibe"):
+        cfg = make_cfg(harness=name, name="s", workdir=str(tmp_path))
+        plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"))
+        assert "never saved" in build_environment_context(plan)
 
 
 def test_unknown_harness_is_refused():

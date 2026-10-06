@@ -97,7 +97,7 @@ def main(directory: str) -> int:
         mode, observed = pws["mode"], comp.by_name("observe") is not None
         check(f"sidecars up + verify passed (mode {mode}, egress {comp.slots['egress'].name})", True)
         _resolve_extensions(plan, rt, secret_env(plan))
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
+        render_home(cfg, plan, sd.home)
         pw_image = image_tag(comp.by_name("playwright"), "pw")
 
         def exec_pw(script: str) -> subprocess.CompletedProcess:

@@ -3,6 +3,7 @@ the derived harness image. Off by default — absent, nothing renders differentl
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -494,11 +495,17 @@ def test_staging_skips_host_artifacts_and_keeps_symlinks_as_links(tmp_path):
 # --- what the agent is told ------------------------------------------------------------------------
 
 
+def _context(tmp_path, toolchains, enforcer="nono+srt", enforcer_options=None) -> str:
+    """The context file for a plan holding `toolchains` (parsed, not resolved)."""
+    plan = _plan(tmp_path, enforcer=enforcer)
+    options = _cfg(tmp_path, enforcer=enforcer, enforcer_options=enforcer_options or {}).enforcer_options
+    return build_environment_context(dataclasses.replace(plan, toolchains=tcs.parse(toolchains),
+                                                         enforcer_options=options))
+
+
 def test_context_file_section_only_when_set(tmp_path):
-    cfg = _cfg(tmp_path)
-    assert "Toolchains" not in build_environment_context(cfg)
-    cfg = _cfg(tmp_path, toolchains=[{**NODE, "project": "app"}, PY])
-    text = build_environment_context(cfg)
+    assert "Toolchains" not in _context(tmp_path, [])
+    text = _context(tmp_path, [{**NODE, "project": "app"}, PY])
     assert "## Toolchains" in text and "Node 22.11.0" in text and "Python 3.12" in text
     assert "ln -s /opt/glove/toolchains/node/project/node_modules node_modules" in text
     assert "cannot start inside a shell command" not in text
@@ -509,9 +516,7 @@ def test_context_file_section_only_when_set(tmp_path):
     ("nono+srt", {"nono": {"browsers": True}}, False), ("nono", {"nono": {"browsers": True}}, False),
 ])
 def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, options, warned):
-    cfg = _cfg(tmp_path, enforcer=enforcer, enforcer_options=options,
-               toolchains=[CHROMIUM])
-    text = build_environment_context(cfg)
+    text = _context(tmp_path, [CHROMIUM], enforcer=enforcer, enforcer_options=options)
     assert "PLAYWRIGHT_BROWSERS_PATH" in text
     assert ("cannot start inside a shell command" in text) is warned
 
@@ -520,13 +525,8 @@ def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, opt
 def test_vibe_hook_always_runs_on_the_image_python(tmp_path, toolchains):
     plan = _plan(tmp_path, harness="vibe", toolchains=toolchains)
     cfg = _cfg(tmp_path, harness="vibe", toolchains=toolchains)
-    render_home(cfg, plan.profile, tmp_path / "home", plan.model, mount_plan=plan.mount_plan,
-                comp=plan.composition, toolchains=plan.toolchains)
+    render_home(cfg, plan, tmp_path / "home")
     hooks = (tmp_path / "home" / ".vibe" / "hooks.toml").read_text()
     assert 'command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks
 
 
-def test_context_file_uses_the_plans_resolved_toolchains(tmp_path):
-    cfg = _cfg(tmp_path, toolchains=[{**NODE, "project": "app"}])  # unresolvable: never re-read from cfg
-    text = build_environment_context(cfg, toolchains=tcs.parse([PY]))
-    assert "Python 3.12" in text and "Node" not in text

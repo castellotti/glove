@@ -73,7 +73,7 @@ def main(directory: str, prompt: str, isolation: bool) -> int:
         sessiondir.write_effective(sd.effective, cfg, {"at": _now(), "model": asdict(m)})
         print(f"   descriptor: model={m.model} base_url={m.base_url} api={m.api} vision={m.vision} "
               f"context_window={m.context_window} key={'yes' if m.api_key_env else 'no'}")
-        render_home(cfg, plan.profile, sd.home, m, mount_plan=plan.mount_plan, comp=plan.composition)
+        render_home(cfg, plan, sd.home)
         if cfg.harness == "pi":
             models = json.loads((sd.home / ".pi/agent/models.json").read_text())["providers"]["glove"]
             print("== models.json (provider glove):")

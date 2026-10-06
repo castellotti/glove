@@ -14,6 +14,8 @@ audited_version: 2.25.8
 # loads): what else Vibe would load from the project is masked below.
 entry: [vibe, --trust, --yolo, --workdir, /work]
 config_home: { env: VIBE_HOME, path: /home/agent/.vibe }
+# What the agent is told about this harness under glove (its context file).
+brief: brief.md
 context_file: /home/agent/.vibe/AGENTS.md
 # Read-only to the agent (ring 0), relative to the home: the config and hooks
 # glove renders (its pre_tool hook wraps every command), `.env` (VIBE_*

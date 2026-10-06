@@ -21,13 +21,11 @@ from typing import TYPE_CHECKING, Any
 
 from .config import Config
 from .harness import HarnessProfile, adapter_call
-from .mounts import MountPlan, compute_mounts
+from .mounts import CONTAINER_HOME
 
 if TYPE_CHECKING:
-    from .extensions import Composition
-    from .toolchains import Toolchain
+    from .plan import SessionPlan
 
-CONTAINER_HOME = "/home/agent"
 
 # Env var glove passes the LLM API key in (never written to a file).
 LLM_API_KEY_ENV = "GLOVE_LLM_API_KEY"
@@ -83,39 +81,20 @@ def mcp_tool_names(tools: str | Sequence[Any]) -> list[str]:
     return [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
 
 
-def _mount_plan_for(cfg: Config) -> MountPlan:
-    """Resolve the same mount plan the runtime renders, for the context file."""
-    return compute_mounts(
-        cfg.workdir,
-        [(a.path, a.mode) for a in cfg.add_dirs],
-        allow_sensitive=cfg.allow_sensitive,
-    )
-
-
-def build_environment_context(
-    cfg: Config, mount_plan: MountPlan | None = None, comp: Composition | None = None,
-    toolchains: Sequence[Toolchain] | None = None,
-) -> str:
+def build_environment_context(plan: SessionPlan) -> str:
     """Generate the "How your environment works" block.
 
     Describes the mounts and their modes, that shell commands have no network,
     the RUN ON HOST relay rule, then each extension's brief in extension order —
-    rendered from the *resolved* ``MountPlan`` (the same one the runtime mounts)
-    so the paths and modes shown to the agent match reality. ``toolchains`` is
-    the plan's resolved list (parsed from `cfg` when omitted).
+    rendered from the plan (the mounts the runtime binds, the resolved
+    toolchains), so what the agent is told matches reality.
     """
-    if mount_plan is None:
-        mount_plan = _mount_plan_for(cfg)
-    if toolchains is None:
-        from .toolchains import parse
-
-        toolchains = parse(cfg.toolchains)
-
+    mount_plan = plan.mount_plan
     lines = ["# How your environment works", ""]
     lines.append(
         "You run inside a defence-in-depth sandbox: a container (namespace, mounts, "
         "network) with a kernel capability sandbox "
-        f"({cfg.enforcer}) wrapping the agent and **every shell command** it runs."
+        f"({plan.enforcer}) wrapping the agent and **every shell command** it runs."
     )
     lines += ["", "## Files", ""]
     lines.append(f"- You start in `{mount_plan.working_dir}` — your working directory.")
@@ -143,11 +122,13 @@ def build_environment_context(
     )
     lines.append("- You cannot read the LLM API key or any secret from a shell (`env` hides them).")
     lines += ["", "## Privileged host commands", "", SUDO_RELAY_BODY]
-    if toolchains:
+    if plan.profile.brief:
+        lines += ["", plan.profile.brief]
+    if plan.toolchains:
         from .toolchains import brief
 
-        lines += ["", brief(toolchains, cfg.enforcer, cfg.enforcer_options)]
-    briefs = comp.rendered_briefs() if comp is not None else []
+        lines += ["", brief(plan.toolchains, plan.enforcer, plan.enforcer_options)]
+    briefs = plan.composition.rendered_briefs()
     if briefs:
         lines += ["", "## Capabilities", ""]
         for _ext, text in briefs:
@@ -167,32 +148,18 @@ privileged **host** command, print it verbatim under a banner and stop:
 then wait for the operator to run it and paste back the output."""
 
 
-def render_home(
-    cfg: Config,
-    profile: HarnessProfile,
-    home_dir: Path,
-    model: ModelDescriptor,
-    *,
-    mount_plan: MountPlan | None = None,
-    comp: Composition | None = None,
-    toolchains: Sequence[Toolchain] | None = None,
-) -> list[Path]:
+def render_home(cfg: Config, plan: SessionPlan, home_dir: Path) -> list[Path]:
     """Write the harness config tree under `home_dir`; return files written.
 
-    `model` is the (launch-resolved) descriptor of the inference slot;
-    `mount_plan` is the runtime's resolved mount plan (recomputed from `cfg`
-    when omitted) so the context file and the adapter see the real mounts and
-    working dir.
+    The adapter and the context file see the plan's mounts, working dir and
+    `model` (the inference slot's descriptor, launch-resolved by `glove up`).
     """
     home_dir.mkdir(parents=True, exist_ok=True)
-    if mount_plan is None:
-        mount_plan = _mount_plan_for(cfg)
-    written: list[Path] = []
-
+    profile = plan.profile
     # the harness's native config (its adapter: harnesses/<name>/adapter.py)
-    written += adapter_call(profile, "render_home", cfg, profile, home_dir, model, comp, mount_plan, default=[])
-
-    written.append(_write_context_file(cfg, profile, home_dir, mount_plan, comp, toolchains))
+    written: list[Path] = adapter_call(profile, "render_home", cfg, profile, home_dir, plan.model,
+                                       plan.composition, plan.mount_plan, default=[])
+    written.append(_write_context_file(cfg, plan, home_dir))
     return written
 
 
@@ -201,18 +168,10 @@ def rel_config_home(profile: HarnessProfile) -> Path:
     return Path(profile.config_home_path).relative_to(CONTAINER_HOME)
 
 
-def _write_context_file(
-    cfg: Config,
-    profile: HarnessProfile,
-    home_dir: Path,
-    mount_plan: MountPlan | None = None,
-    comp: Composition | None = None,
-    toolchains: Sequence[Toolchain] | None = None,
-) -> Path:
-    rel = Path(profile.context_file).relative_to(CONTAINER_HOME)
-    path = home_dir / rel
+def _write_context_file(cfg: Config, plan: SessionPlan, home_dir: Path) -> Path:
+    path = home_dir / Path(plan.profile.context_file).relative_to(CONTAINER_HOME)
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = build_environment_context(cfg, mount_plan, comp, toolchains)
+    body = build_environment_context(plan)
     if cfg.brief:
         body += "\n---\n\n# Session brief\n\n" + cfg.brief.strip() + "\n"
     path.write_text(body)

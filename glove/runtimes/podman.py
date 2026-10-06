@@ -39,7 +39,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from ..enforcers.base import uses_srt
 from .base import Check
@@ -193,6 +193,9 @@ class PodmanRuntime(DockerRuntime):
     # the netgate events tmpfs) runs keep-id. Compose's --parallel and
     # COMPOSE_PARALLEL_LIMIT do not serialise container starts.
     serial_start = True
+    # `podman compose` prints an "executing external compose provider" banner
+    # to stderr on every call.
+    compose_cli_env: ClassVar[dict[str, str]] = {"PODMAN_COMPOSE_WARNING_LOGS": "false"}
 
     # --- doctor ------------------------------------------------------------
 

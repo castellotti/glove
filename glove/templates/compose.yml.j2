@@ -61,7 +61,7 @@ services:
     mem_limit: {{ hardening.limits.memory }}
     cpus: {{ hardening.limits.cpus }}
     environment:
-      HOME: "/home/agent"
+      HOME: {{ home.container_path | tojson }}
 {% for k, v in environment.items() %}
       {{ k }}: {{ v | tojson }}
 {% endfor %}
@@ -73,8 +73,8 @@ services:
 {% endfor %}
     volumes:
       - type: bind
-        source: {{ home_dir | tojson }}
-        target: /home/agent
+        source: {{ home.host_path | tojson }}
+        target: {{ home.container_path }}
 {% if policies_host_dir %}
       # ring-1 enforcer policies (read-only; never inside /work, PLAN §4.1)
       - type: bind
@@ -134,7 +134,7 @@ services:
 {% endfor %}
 {% for t in hardening.tmpfs %}
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
-      # a target nested under /home/agent overlays the bind. mode is forced
+      # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
       # tmpfs mounts 755 root:root and the non-root harness can't write it.
       # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind

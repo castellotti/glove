@@ -12,7 +12,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -141,6 +141,8 @@ class DockerRuntime:
 
     # Start sidecars one `compose up` at a time (podman); docker starts them together.
     serial_start = False
+    # Added to every `compose` process's environment.
+    compose_cli_env: ClassVar[dict[str, str]] = {}
 
     def _jinja(self) -> Environment:
         return Environment(
@@ -184,14 +186,14 @@ class DockerRuntime:
                 "apply a validated built-in default — the container would run "
                 "unpinned. Refusing to render."
             )
-        from ..plan import CORPORATE_CA_PATH
+        from ..plan import CORPORATE_CA_PATH, home_mount
 
         ctx = {
             "session": plan.session,
             "harness": plan.profile,
             "harness_image": plan.image,
             "command": plan.harness_command,
-            "home_dir": plan.home_dir,
+            "home": home_mount(plan.home_dir),
             "working_dir": plan.working_dir,
             "mounts": plan.mounts,
             "protect": plan.protect,

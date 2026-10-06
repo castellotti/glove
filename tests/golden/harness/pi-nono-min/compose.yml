@@ -114,7 +114,7 @@ services:
         target: "/home/agent/.agents"
         read_only: true
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
-      # a target nested under /home/agent overlays the bind. mode is forced
+      # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
       # tmpfs mounts 755 root:root and the non-root harness can't write it.
       # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
@@ -124,7 +124,7 @@ services:
         tmpfs:
           mode: 01777
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
-      # a target nested under /home/agent overlays the bind. mode is forced
+      # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
       # tmpfs mounts 755 root:root and the non-root harness can't write it.
       # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
@@ -134,7 +134,7 @@ services:
         tmpfs:
           mode: 01777
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
-      # a target nested under /home/agent overlays the bind. mode is forced
+      # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
       # tmpfs mounts 755 root:root and the non-root harness can't write it.
       # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind

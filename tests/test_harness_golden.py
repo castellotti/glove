@@ -70,8 +70,7 @@ def _render(case: dict, tmp_path: Path) -> dict[str, str]:
     plan = build_session_plan(cfg, home_dir=str(home), uid=501, gid=20, state_dir=str(tmp_path / "ext"),
                               session_dir=str(tmp_path))
     out: dict[str, str] = {}
-    for p in render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan,
-                         comp=plan.composition, toolchains=plan.toolchains):
+    for p in render_home(cfg, plan, home):
         out[f"home/{p.relative_to(home)}"] = f"-> {p.readlink()}\n" if p.is_symlink() else p.read_text()
     for target, files in plan.system_files.items():
         for name, text in files.items():

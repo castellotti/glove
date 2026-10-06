@@ -32,7 +32,7 @@ services:
 {% endif %}
     volumes:
 {% if settings.downloads == "work" %}
-      - { type: bind, source: "{{ work }}/browser-output", target: /data/output }
+      - { type: bind, source: "{{ work.host }}/browser-output", target: /data/output }
 {% else %}
       - { type: bind, source: "{{ state }}/output", target: /data/output }
 {% endif %}
@@ -45,7 +45,7 @@ services:
       - { type: bind, source: "{{ state }}/profile", target: /data/profile }
 {% endif %}
 {% if settings.uploads == "work" %}
-      - { type: bind, source: "{{ work }}/browser-uploads", target: /data/uploads, read_only: true }
+      - { type: bind, source: "{{ work.host }}/browser-uploads", target: /data/uploads, read_only: true }
 {% endif %}
     # stated here: the base image is an OCI index, which carries no healthcheck
     healthcheck:

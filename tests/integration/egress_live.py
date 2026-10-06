@@ -70,7 +70,7 @@ def main(directory: str, keep: bool) -> int:
         start_sidecars(plan, sd.compose, provider=rt, env=env)
         check("sidecars up + verify passed", True)
         _resolve_extensions(plan, rt, secret_env(plan))
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
+        render_home(cfg, plan, sd.home)
         mcp_harness = cfg.harness != "pi"
 
         print("== topology")

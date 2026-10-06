@@ -55,7 +55,7 @@ def main(directory: str) -> int:
         check("sidecars up + verify passed (incl. example.com refused, probe_url answers)",
               {"proxy-up", "internet-refused", "probe"} <= set(names), ", ".join(names))
         _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+        render_home(cfg, plan, sd.home)
 
         print("== Pi web_fetch through the corporate gate")
 

@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from glove import extensions, sessiondir, toolchains
+from extensions.gate.netgate import guard, sni
+from glove import config, extensions, sessiondir, toolchains
 from glove.extensions import load_module
 from glove.runtimes import docker
 
@@ -23,7 +24,15 @@ VPN = load_module(ROOT / "extensions/vpn/hooks.py", "vpn")
     (docker._ENV_KEY, "PATH"),
     (extensions._NAME, "github"),
     (extensions._ENV_VAR, "GLOVE_X"),
+    (extensions._HOSTNAME, "proxy.internal"),
+    (config._GIT_KEY, "safe.directory"),
     (toolchains._PACKAGE, "requests==2.32.3"),
+    (toolchains._MANAGER_VERSION, "9.15.0"),
+    (toolchains._INSTALL_FLAG, "--frozen"),
+    (toolchains._CONFIG_FILE, ".npmrc"),
+    (guard._HOST_RE, "example.com"),
+    (guard._NUMERICISH, "0x7f.1"),
+    (sni._HOST_RE, "example.com"),
     (SSH.USER, "agent"),
     (SSH.HOST, "lab.lan"),
     (VPN.WG_KEY, "A" * 43 + "="),

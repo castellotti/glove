@@ -51,8 +51,8 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
 # for the v2 keys that v3 replaced.
 FILE_KEYS = frozenset({
-    "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions",
-    "harness_config", "env", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
+    "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_config",
+    "env", "git_config", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
     "protect_ide_files", "allow_root", "allow_sensitive", "host_services", "toolchains",
 })
 V2_KEYS = {
@@ -301,9 +301,12 @@ def _is_git_url(spec: str) -> bool:
     return spec.startswith(("https://", "http://", "ssh://", "git@", "file://")) or spec.endswith(".git")
 
 
-def read_template(spec: str) -> tuple[str, str]:
-    """(template text, canonical source) for an in-tree name, a path to a
-    directory or file, or a git URL (shallow-cloned to a temp dir)."""
+@contextlib.contextmanager
+def _template_file(spec: str):
+    """(the template's session file, canonical source, template dir) for an
+    in-tree name, a path to a directory or file, or a git URL (shallow-cloned to
+    a temp dir, removed on exit). The dir is None for a path to a bare file:
+    whatever sits beside it is not the template's."""
     if _is_git_url(spec):
         with tempfile.TemporaryDirectory(prefix="glove-template-") as tmp:
             r = subprocess.run(["git", "clone", "--depth", "1", "--quiet", "--", spec, tmp],
@@ -313,18 +316,39 @@ def read_template(spec: str) -> tuple[str, str]:
             f = Path(tmp) / SESSION_FILE
             if not f.is_file():
                 raise SessionError(f"template {spec} has no {SESSION_FILE} at its root")
-            return f.read_text(), spec
+            yield f, spec, f.parent
+        return
     p = Path(spec).expanduser()
     if "/" in spec or spec.startswith(".") or p.is_absolute():
         f = p / SESSION_FILE if p.is_dir() else p
         if not f.is_file():
             raise SessionError(f"no template at {spec} (expected a directory with {SESSION_FILE}, or the file)")
-        return f.read_text(), str(f.resolve())
+        yield f, str(f.resolve()), p if p.is_dir() else None
+        return
     f = TEMPLATES_DIR / spec / SESSION_FILE
     if not f.is_file():
         raise SessionError(f"unknown template {spec!r}; bundled: {', '.join(list_templates()) or '(none)'}; "
                            "or pass a path or git URL")
-    return f.read_text(), spec
+    yield f, spec, f.parent
+
+
+def read_template(spec: str) -> tuple[str, str]:
+    """(template text, canonical source): see `_template_file`."""
+    with _template_file(spec) as (f, source, _):
+        return f.read_text(), source
+
+
+def _template_local(tdir: Path | None, spec: str) -> list[Path]:
+    """The entries of a template directory's `local/` (private host assets, e.g.
+    a hook script or a CA certificate), parents first. A symlink (local/ itself,
+    or in it) is refused: it could copy any host file into the session."""
+    local = tdir / "local" if tdir else None
+    if local is None or not (local.is_dir() or local.is_symlink()):
+        return []
+    entries = [] if local.is_symlink() else sorted(local.rglob("*"))
+    if local.is_symlink() or any(p.is_symlink() for p in entries):
+        raise SessionError(f"template {spec}: local/ is or holds a symlink; copy the files themselves")
+    return entries
 
 
 def digest(text: str) -> str:
@@ -332,27 +356,37 @@ def digest(text: str) -> str:
 
 
 def materialize(spec: str, dest: Path) -> tuple[SessionDir, str]:
-    """``glove new``: copy the template's session file, create ``work/`` and
-    ``.glove/`` (with a fresh id). Returns (session dir, id)."""
-    text, source = read_template(spec)
-    try:
-        raw = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        raise SessionError(f"template {spec}: {e}") from e
-    if not isinstance(raw, dict) or raw.get("glove") != SCHEMA_VERSION:
-        raise SessionError(f"template {spec}: not a glove v{SCHEMA_VERSION} session file")
-    dest = dest.expanduser().resolve()
-    sd = SessionDir(dest)
-    if sd.file.exists():
-        raise SessionError(f"{sd.file} already exists; this directory is already a session")
-    if sd.state.exists():
-        raise SessionError(f"{sd.state} already exists; remove it or pick another directory")
-    dest.mkdir(parents=True, exist_ok=True)
-    sd.file.write_text(text)
-    sd.work.mkdir(exist_ok=True)
-    sid, _ = ensure_state(sd)
-    sd.template_record.write_text(yaml.safe_dump({"source": source, "sha256": digest(text)}, sort_keys=False))
-    return sd, sid
+    """``glove new``: copy the template's session file (and its ``local/``),
+    create ``work/`` and ``.glove/`` (with a fresh id). Returns (session dir, id)."""
+    with _template_file(spec) as (f, source, tdir):
+        text = f.read_text()
+        local = _template_local(tdir, spec)
+        try:
+            raw = yaml.safe_load(text)
+        except yaml.YAMLError as e:
+            raise SessionError(f"template {spec}: {e}") from e
+        if not isinstance(raw, dict) or raw.get("glove") != SCHEMA_VERSION:
+            raise SessionError(f"template {spec}: not a glove v{SCHEMA_VERSION} session file")
+        dest = dest.expanduser().resolve()
+        sd = SessionDir(dest)
+        if sd.file.exists():
+            raise SessionError(f"{sd.file} already exists; this directory is already a session")
+        if sd.state.exists():
+            raise SessionError(f"{sd.state} already exists; remove it or pick another directory")
+        dest.mkdir(parents=True, exist_ok=True)
+        sd.file.write_text(text)
+        if local:
+            (dest / "local").mkdir(mode=0o700, exist_ok=True)
+        for entry in local:  # parents first; never over a file already there
+            target = dest / "local" / entry.relative_to(tdir / "local")
+            if entry.is_dir():
+                target.mkdir(exist_ok=True)
+            elif not target.exists():
+                shutil.copy2(entry, target)
+        sd.work.mkdir(exist_ok=True)
+        sid, _ = ensure_state(sd)
+        sd.template_record.write_text(yaml.safe_dump({"source": source, "sha256": digest(text)}, sort_keys=False))
+        return sd, sid
 
 
 def template_drift(sd: SessionDir) -> tuple[str, str] | None:

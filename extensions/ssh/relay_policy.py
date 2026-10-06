@@ -92,12 +92,14 @@ def setup(ctx: dict) -> dict[str, str]:
 
 
 def _hosts(req) -> dict[str, dict]:
-    """RELAY_SETTINGS' `hosts` ({name, to, user, forwarder: {host, port}}; hooks.py
-    validated `to` at plan time) → name → {host, port, user, forwarder}."""
+    """RELAY_SETTINGS' `hosts` ({name, to, user}; hooks.py validated `to` at plan
+    time) and `forwarders` (endpoint `ssh-<name>` → {host, port}) → name →
+    {host, port, user, forwarder}."""
     out = {}
     for h in req.settings.get("hosts") or []:
         host, _, port = str(h["to"]).rpartition(":")
-        out[str(h["name"])] = {"host": host, "port": int(port), "user": str(h["user"]), "forwarder": h["forwarder"]}
+        out[str(h["name"])] = {"host": host, "port": int(port), "user": str(h["user"]),
+                               "forwarder": req.settings["forwarders"][f"ssh-{h['name']}"]}
     return out
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -79,6 +80,9 @@ class Config:
     protect_ide_files: bool = False
     harness_config: dict[str, Any] = field(default_factory=dict)
     env: dict[str, Any] = field(default_factory=dict)
+    # git config for the harness and its commands (key → value or values), after
+    # core's mount-root safe.directory and extensions' (glove/plan.py).
+    git_config: dict[str, Any] = field(default_factory=dict)
     # Free-text session brief appended to the harness context file, e.g.
     # what the agent should work on in /work.
     brief: str | None = None
@@ -114,6 +118,8 @@ class Config:
         # checked and filled once, so every reader sees the same normalized value
         self.enforcer_options = enforcer_options(self.enforcer_options)
         self.tools = _tools(self.tools)
+        self.git_config = self.git_config or {}
+        git_config_pairs(self.git_config, "git_config")
 
     def resolved_name(self) -> str:
         # The session id (glove/sessiondir.py); the CLI always sets it.
@@ -260,6 +266,32 @@ def _tools(raw: Any) -> dict[str, list[str]]:
     for k, v in out.items():
         if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
             raise ConfigError(f"tools.{k} must be a list of command names, got {v!r}")
+    return out
+
+
+# The env vars git reads config from: glove alone sets them (GIT_CONFIG_PARAMETERS).
+GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(?:PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)")
+_GIT_KEY = re.compile(r"[A-Za-z][A-Za-z0-9-]*(?:\.[^\n]+)?\.[A-Za-z][A-Za-z0-9-]*\Z")
+
+
+def git_config_pairs(raw: Any, where: str) -> list[tuple[str, str]]:
+    """A `git_config:` mapping (the session's, or an extension's
+    `harness.git_config`) as (key, value) pairs: each key takes a value or a
+    list of them (a multi-valued key such as safe.directory)."""
+    if not raw:
+        return []
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where} must be a mapping of git config key → value(s), got {raw!r}")
+    out = []
+    for k, v in raw.items():
+        if not isinstance(k, str) or not _GIT_KEY.fullmatch(k):
+            raise ConfigError(f"{where}: {k!r} is not a git config key (section[.subsection].name)")
+        for x in v if isinstance(v, list) else [v]:
+            if isinstance(x, bool):
+                x = str(x).lower()
+            if not isinstance(x, str | int) or any(c in str(x) for c in "\n\0"):
+                raise ConfigError(f"{where}.{k}: want a single-line value, got {x!r}")
+            out.append((k, str(x)))
     return out
 
 

@@ -103,7 +103,7 @@ def main(directory: str) -> int:
         comp = plan.composition
         check("sidecars up + verify passed", True, f"egress {comp.slots['egress'].name}")
         _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
+        render_home(cfg, plan, sd.home)
 
         print("== topology")
         roles = [x.role for x in plan.network.sidecars]

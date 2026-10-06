@@ -1,11 +1,3 @@
-{#- each host with the address of its forwarder (hooks.py's endpoint), the only
-    route the sidecar has to it -#}
-{% set ns = namespace(hosts=[]) %}
-{% for h in settings.hosts %}
-{%   set fwd = endpoint['ssh-' ~ h.name] %}
-{%   set ns.hosts = ns.hosts + [{"name": h.name, "to": h.to, "user": h.user,
-                                 "forwarder": {"host": fwd.host, "port": fwd.port}}] %}
-{% endfor %}
 services:
   # The ssh relay: relayd runs the harness's `ssh <host> <command>` (requests
   # left in the `ssh` channel) under relay_policy.py, with the key in an
@@ -19,7 +11,8 @@ services:
     networks: [sshnet]
     environment:
       RELAY_TIMEOUT: "{{ settings.timeout }}"
-      RELAY_SETTINGS: {{ {"hosts": ns.hosts} | tojson | tojson }}
+      # each host, and its forwarder (hooks.py's `ssh-<name>` endpoint): the only route the sidecar has to it
+      RELAY_SETTINGS: {{ {"hosts": settings.hosts, "forwarders": own_endpoints} | tojson | tojson }}
       RELAY_SSH_KEY:    # from glove's environment at `compose up` (hooks.py); never stored here
     volumes:
       - { type: bind, source: "{{ assets }}/relay_policy.py", target: /opt/glove/ssh/relay_policy.py,

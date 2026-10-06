@@ -263,9 +263,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     sdm.write_effective(sd.effective, cfg, resolved)
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)
-    home_files = render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan,
-                             toolchains=plan.toolchains,
-                             comp=plan.composition) if home else []
+    home_files = render_home(cfg, plan, sd.home) if home else []
     return plan, rendered.compose_yaml, home_files
 
 
@@ -335,6 +333,7 @@ def up(
 
         # Resolve secret references (keychain:/env:) now, in memory, so a
         # missing key fails before anything starts.
+        preflight(sd, cfg, plan)
         secrets = secret_env(plan)
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise _fail(str(e)) from e
@@ -358,6 +357,23 @@ def up(
     _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
 
 
+def preflight(sd, cfg, plan) -> None:
+    """Before `glove up` starts anything: the extensions' own checks (e.g. a
+    host Chrome for playwright's host mode) refuse the launch when one fails,
+    and so does this session's harness still running. (The plan, the render
+    and the secrets were checked on the way here; `glove check` adds the
+    runtime and enforcer probes.)"""
+    from .doctor import extension_checks
+    from .session import clear_stale_harness
+
+    failed = [c for c in extension_checks(cfg.extensions, harness=cfg.harness, comp=plan.composition,
+                                          session_dir=sd.root) if c.status == "fail"]
+    if failed:
+        raise ConfigError("an extension check fails, so nothing was started:\n" +
+                          "\n".join(f"  {c.name}: {c.detail}" for c in failed))
+    clear_stale_harness(cfg.provider, plan.harness_service)
+
+
 def prepare_harness(sd, cfg, plan, secrets: dict[str, str]) -> None:
     """`glove up` once the sidecars are up: launch-time resolution (e.g. llm
     `model: auto`) through a throwaway container on the harness network,
@@ -368,8 +384,7 @@ def prepare_harness(sd, cfg, plan, secrets: dict[str, str]) -> None:
     # keeps what plan time recorded (the extensions' resolutions)
     _, resolved = sdm.read_effective(sd.effective)
     sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
-    render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition,
-                toolchains=plan.toolchains)
+    render_home(cfg, plan, sd.home)
 
 
 def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:

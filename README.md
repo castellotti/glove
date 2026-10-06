@@ -98,7 +98,10 @@ shows how.
 Each has a `README.md` in `templates/<name>/`. A template's private parts
 (Keychain service names, VPN register hooks, local model paths) never live in
 the template: `glove-session.yml` holds `keychain:<service>` references and
-paths you fill in, and hooks go in the session's `local/`.
+paths you fill in, and hooks go in the session's `local/`. A template of your
+own (a directory path or git URL) may carry a `local/`: `glove new` copies it
+into the session, never over a file already there (regular files only, no
+symlinks).
 
 ## Session file (`glove-session.yml`, schema v3)
 
@@ -429,7 +432,9 @@ Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's own mount roots
 git 2.39 has no `dir/*` patterns), so `git init` in `/work` works. A repo
 nested deeper (a clone, or `git init` in `/work/<dir>`) needs an opt-in on
 Docker Desktop (Podman's shares report the right owner): the `github`
-extension sets `'*'`, or set `GIT_CONFIG_PARAMETERS` in the session's `env:`.
+extension adds `'*'`, or the session adds it with `git_config:`
+(`git_config: { safe.directory: "*" }`; a key takes a value or a list). glove
+alone sets git's config env vars: `env:` may not.
 
 ### Claude Code
 

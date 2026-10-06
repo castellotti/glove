@@ -27,7 +27,7 @@ MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
     "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
-    "masked_files", "protected_home", "version", "audited_version",
+    "masked_files", "protected_home", "version", "audited_version", "brief",
 })
 REQUIRED_KEYS = ("name", "image", "version", "audited_version", "entry", "config_home", "context_file")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
@@ -86,6 +86,9 @@ class HarnessProfile:
     protected_home: tuple[str, ...] = ()
     # The harness release its image installs (the HARNESS_VERSION build arg).
     version: str = ""
+    # What the agent should know about this harness under glove (`brief:`, a
+    # markdown file in the harness dir), added to its context file.
+    brief: str = ""
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
 
@@ -157,6 +160,11 @@ def load_profile(path: Path) -> HarnessProfile:
             # a trailing `/` marks a directory; no other empty, `.` or `..` part
             if any(f.startswith("/") or {"", ".", ".."} & set(f.removesuffix("/").split("/")) for f in opt[key]):
                 raise ConfigError(f"{where}: {key} are relative to the {base}, without '.' or '..'")
+    if "brief" in raw:
+        brief = (path / str(raw["brief"])).resolve()
+        if not brief.is_relative_to(path.resolve()) or not brief.is_file():
+            raise ConfigError(f"{where}: brief {raw['brief']!r} must be a file in the harness directory")
+        opt["brief"] = brief.read_text().strip()
     return HarnessProfile(
         name=raw["name"], image=str(raw["image"]), entry=list(_strs(raw["entry"], f"{where} entry")),
         config_home_env=str(home["env"]), config_home_path=str(home["path"]),

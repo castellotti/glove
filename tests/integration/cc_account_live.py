@@ -55,7 +55,7 @@ def main(directory: str) -> int:
         start_sidecars(plan, sd.compose, provider=rt, env=env)
         _resolve_extensions(plan, rt, secrets)
         check("the model probe answered (bearer + OAuth beta, paginated list)", True)
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+        render_home(cfg, plan, sd.home)
         (sd.root / "work" / "sandbox-selftest.sh").write_text(SELFTEST)
 
         def agent(prompt: str) -> str:
