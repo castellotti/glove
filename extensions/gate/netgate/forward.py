@@ -52,6 +52,27 @@ POLICY_POLL = 1.0  # seconds between rules.json checks
 MAX_ERROR_BODY = 4096  # of an upstream proxy's refusal, relayed to the client
 
 
+# What a `via: lan` upstream may be (glove.extensions.LAN_NETWORKS): `lan` is a
+# direct route with no tunnel, so a name a LAN resolver answers with a public
+# address must not be dialled.
+LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+class NotLan(OSError):
+    """A `--lan-only` upstream resolved to an address outside LAN_NETWORKS."""
+
+
+async def lan_address(host: str, port: int) -> str:
+    """The IPv4 address to dial for a `--lan-only` upstream, resolved now (each
+    connection), or NotLan."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, port, family=socket.AF_INET,
+                                                         type=socket.SOCK_STREAM)
+    ip = ipaddress.ip_address(infos[0][4][0])
+    if not any(ip in n for n in LAN_NETWORKS):
+        raise NotLan(f"{host} resolves to {ip}, not a private IPv4 address")
+    return str(ip)
+
+
 class _Blocked(Exception):
     """Raised inside the relay when a rule blocks a flow mid-inspection (SNI)."""
 
@@ -80,6 +101,7 @@ class ForwardSpec:
     # Operator-configured guard exceptions (only ever from the command line).
     exceptions: guard.Exceptions = field(default_factory=guard.Exceptions)
     direct: bool = False  # http-proxy mode: resolve + dial destinations itself (corporate)
+    lan_only: bool = False  # tcp mode: the upstream must be a private IPv4 address (`via: lan`)
 
     @property
     def upstream(self) -> str:
@@ -463,6 +485,10 @@ class Forwarder:
         """Dial the configured upstream; None (with close_reason set) on failure."""
         try:
             conn = await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
+        except NotLan:
+            self._block(flow, "lan-only")
+            flow.close_reason = "blocked"
+            return None
         except TimeoutError:
             flow.close_reason = "timeout"
             return None
@@ -491,9 +517,10 @@ class Forwarder:
     async def _dial_upstream(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         # IPv4 only, like socat's TCP4: host.docker.internal carries an AAAA
         # record with no route on the Docker Desktop VM.
-        return await asyncio.open_connection(
-            self.spec.upstream_host, self.spec.upstream_port, family=socket.AF_INET
-        )
+        host = self.spec.upstream_host
+        if self.spec.lan_only:
+            host = await lan_address(host, self.spec.upstream_port)
+        return await asyncio.open_connection(host, self.spec.upstream_port, family=socket.AF_INET)
 
     # --- tcp mode ----------------------------------------------------------
 

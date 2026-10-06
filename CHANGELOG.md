@@ -8,8 +8,19 @@ All notable changes to glove are documented here.
 
 - Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
   (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
-  through Docker Desktop's file sharing. An extension (`github`: `'*'`) or the
-  session's `env:` replaces it.
+  through Docker Desktop's file sharing. An extension's `harness.git_config`
+  (`github`: `safe.directory: '*'`) and then the session's `git_config:` (key →
+  value or list) add to it; glove alone sets git's config env vars, so `env:`
+  (or an extension's `env`) setting `GIT_CONFIG_*` is refused with a pointer.
+- `glove new` copies a template directory's `local/` (a path or git URL
+  template's private assets) into the session, never over an existing file; a
+  `local/` that is or holds a symlink is refused.
+- `glove up` runs the extensions' own checks (`glove check`'s extension part)
+  first and refuses to start anything when one fails.
+- Harness manifests may carry a `brief:` (a markdown file in the harness dir)
+  added to the agent's context file. Pi's and Vibe's say their settings are
+  read-only (a UI choice is never saved) and that lasting choices go in the
+  session file.
 - Extension manifests: a harness `env` entry may be `{value, when}` (unset
   unless `when:` matches); `when:` takes `renders: <contribution>` (e.g. `mcp`,
   instead of a list of harnesses) and `{set: true|false}`.
@@ -122,6 +133,42 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- The harness runs as `glove-<id>-harness` (`compose run --name`): a second
+  `glove up` while it runs is refused before anything starts, and a
+  stopped one left by a killed client is removed. `compose` runs without
+  Podman's "external compose provider" banner (`Runtime.compose_cli_env`).
+- Extension templates: `work` is now `{host, target}` (`{{ work.host }}` for
+  the host dir, `{{ work.target }}` where the `work` privilege binds it) and
+  `own_endpoints` maps the extension's own endpoints to `{host, port}`. The
+  `ssh` relay gets its forwarders from it (`RELAY_SETTINGS.forwarders`).
+- Internal: `render_home(cfg, plan, home)` and `build_environment_context(plan)`
+  read everything from the session plan; the container mount points
+  (`CONTAINER_HOME`, `WORK_TARGET`) are defined once in `glove/mounts.py` and
+  used by the compose file, the enforcers and the `work` privilege.
+- **Security (round 2):** the harness entrypoint has no fail-open override:
+  `GLOVE_ENFORCER_FAIL_OPEN` (settable from a session's `env:`) is gone, so an
+  invalid policy or an incomplete srt layer always refuses to start. Each
+  harness manifest pins its release (`version`: Pi 0.87.1, Vibe 2.25.8, Claude
+  Code 2.1.288; Vibe's `uv` by digest), passed to its image build as
+  `HARNESS_VERSION`, and names the release its `protected_home`,
+  `trusted_files` and `masked_files` were audited against (`audited_version`):
+  glove refuses a manifest whose two differ. Claude Code's
+  home gets a `protected_home` too: `settings.json`, `CLAUDE.md` and the
+  `agents`, `commands`, `skills`, `plugins`, `output-styles` and `rules` dirs
+  are read-only (`/model`'s "set as default" now reports that it can't save).
+- Image tags hash what an image is built from: a harness base tag is its
+  version plus a hash of its `image/` context, glove-pty, the entrypoint and
+  its release
+  (`glove/pi:0.5.0-<hash>`), and the forwarder (now `glove/forwarder/`), the
+  srt overlay and extension images use the same hash, so a changed base is
+  rebuilt and every image on it follows (before, a base tag was reused
+  whatever it held).
+- `tools:` is checked: only `allow_commands`/`deny_commands`, as lists of
+  command names (`tools.net`, never read since v3, is refused), and only
+  under an enforcer that runs commands in nono (under `srt` it was ignored).
+- The `allow_root` drift warning says what it means: uid 0, caps still
+  dropped, no sudo.
+
 - `enforcer_options` is checked against a schema under every enforcer: an
   unknown section or key (e.g. `nono: {browser: true}`) or a value of the
   wrong type is refused instead of ignored, and `nono.browsers: true` is
@@ -151,6 +198,25 @@ All notable changes to glove are documented here.
   image's tools); `test_toolchains.sh` runs with `RT=podman`; the live drivers
   share `tests/integration/live_common.py`, and `tui_probe.py` drives a
   harness TUI by hand.
+- Live tests: every driver starts its session through `live_common` as
+  `glove up` does (preflight, images, sidecars, resolution, home, the runtime's
+  compose env); a failure is a FAIL with the summary, and `KEEP=1` leaves any
+  of them running (`egress_live.py --keep` is gone). TUI checks wait for what
+  they expect (`Tui.pump_until`) instead of fixed sleeps and print how long it
+  took. Scripts ask glove whether srt runs on `$RT` (`runtime_facts`) instead
+  of naming Podman. New: `test_config_protect.sh` (every read-only bind, the
+  agent's own write tool, planted project config, Vibe's hook denial in the
+  TUI; any harness, enforcer and runtime) and `test_teardown.sh` (git config
+  in the tool, a second `glove up` refused, a killed client's leftover
+  removed, nothing left after `glove down --wipe`).
+- Docs: the README documents the harness manifest's `version`,
+  `audited_version` and `brief`, Claude Code's `protected_home`, `allow_root`
+  and `git_config:` in the session file, and the extension fragment context
+  (`own_endpoints`, `work`); check counts live only in the test-command block
+  (the support matrix names the scripts). SECURITY.md covers the `via: lan`
+  check at the forwarder (the resolver residual is closed), Claude Code's
+  read-only home, the pinned harness releases and the removed fail-open
+  override. `playwright`'s README says how to move its MCP pin.
 
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.
@@ -191,6 +257,17 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- A `$` in any value glove renders into the compose project (an env value, a
+  path) is literal: compose interpolated it from the host's environment
+  (`$HOME` became the host's home).
+- A `via: lan` endpoint (e.g. `nas.lan`) is dialled only at a private IPv4
+  address: the socat forwarder resolves it once at start and refuses a public
+  answer; netgate (`observe`) checks each connection
+  (`--lan-only`, a refused flow is `blocked` by rule `lan-only`) and records
+  the flow's scope as `local`, not `direct`.
+- `test_toolchains.sh` session 3 (`enforcer: srt` on Docker) wrote an invalid
+  session file (an indented `toolchains:`) and never ran; it runs again.
 
 - `glove down` removes a harness container whose terminal was killed (a
   `compose run` client that dies leaves its container, which kept the

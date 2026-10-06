@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from glove.config import Config
+from glove.config import Config, ConfigError, _coerce
 
 
 def test_defaults():
@@ -122,3 +122,37 @@ def test_keychain_set_prompts_so_the_secret_is_never_in_argv(monkeypatch):
     assert calls == [["security", "add-generic-password", "-U", "-a", "me", "-s", "my-llm", "-w"]]  # -w last
     with pytest.raises(ConfigError):
         keychain_set("-s")
+
+
+@pytest.mark.parametrize(("tools", "match"), [
+    ({"net": "block"}, r"unknown tools keys: \['net'\]"),
+    ({"allow_comands": ["cp"]}, "unknown tools keys"),
+    ({"allow_commands": "cp"}, "must be a list of command names"),
+    ({"deny_commands": [""]}, "must be a list of command names"),
+    (["cp"], "must be a mapping"),
+])
+def test_tools_keys_and_values_are_checked(tools, match):
+    with pytest.raises(ConfigError, match=match):
+        _coerce({"harness": "pi", "tools": tools})
+
+
+def test_tools_command_lists_load():
+    assert _coerce({"harness": "pi", "tools": {"allow_commands": ["cp"], "deny_commands": []}}).tools \
+        == {"allow_commands": ["cp"], "deny_commands": []}
+
+
+def test_a_blank_tools_key_or_value_is_unset():
+    assert _coerce({"harness": "pi", "tools": None}).tools == {}
+    assert _coerce({"harness": "pi", "tools": {"allow_commands": None, "deny_commands": ["git"]}}).tools \
+        == {"deny_commands": ["git"]}
+
+
+def test_tools_need_an_enforcer_that_runs_nono(tmp_path):
+    from helpers import make_cfg
+
+    from glove.plan import build_session_plan
+
+    cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), enforcer="srt",
+                   tools={"allow_commands": ["cp"]})
+    with pytest.raises(ConfigError, match="would be ignored"):
+        build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=501, gid=20)

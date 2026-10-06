@@ -75,6 +75,8 @@ RESOLVERS = {"getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr"
 # The only name lookups the gate may perform (see netgate/forward.py):
 ALLOWED = {
     ("forward.py", "_dial_upstream"): {"open_connection"},  # the operator-configured target
+    # a `via: lan` configured target, resolved to check it is private before the dial
+    ("forward.py", "lan_address"): {"getaddrinfo"},
     ("forward.py", "_ingress_addresses"): {"getaddrinfo"},  # glove's own ingress alias
     # M4: the configured in-tunnel resolver's OWN name/address (e.g. gluetun:53,
     # tor:9150) — the destination only ever travels inside the DNS / SOCKS query.

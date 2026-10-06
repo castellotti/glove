@@ -9,10 +9,8 @@ import tomllib
 import pytest
 from helpers import STUB_LLM, make_cfg
 
-from glove.config import AddDir, Config
-from glove.harness import get_profile
+from glove.config import AddDir
 from glove.harnessconfig import LLM_API_KEY_ENV, ModelDescriptor, build_environment_context, render_home
-from glove.mounts import compute_mounts
 from glove.plan import build_session_plan
 
 EXTS = {"direct": {}, "search": {}, "playwright": {}}
@@ -29,7 +27,7 @@ def _home(harness: str, tmp_path, *, llm=None, extensions=EXTS, **kw):
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), uid=1000, gid=1000,
                               state_dir=str(tmp_path / "ext"))
     home = tmp_path / "home"
-    render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+    render_home(cfg, plan, home)
     return cfg, plan, home
 
 
@@ -84,11 +82,10 @@ def test_context_uses_resolved_mounts_on_basename_collision(tmp_path):
     (tmp_path / "b" / "foo").mkdir(parents=True)
     work = tmp_path / "wd"
     work.mkdir()
-    cfg = Config(harness="pi", workdir=str(work), name="pi-sess")
-    cfg.add_dirs = [AddDir(path=str(tmp_path / "a" / "foo"), mode="ro"),
-                    AddDir(path=str(tmp_path / "b" / "foo"), mode="rw")]
-    plan = compute_mounts(cfg.workdir, [(a.path, a.mode) for a in cfg.add_dirs])
-    text = build_environment_context(cfg, plan)
+    cfg = make_cfg(harness="pi", workdir=str(work), name="pi-sess",
+                   add_dirs=[AddDir(path=str(tmp_path / "a" / "foo"), mode="ro"),
+                             AddDir(path=str(tmp_path / "b" / "foo"), mode="rw")])
+    text = build_environment_context(build_session_plan(cfg, home_dir=str(tmp_path / "home")))
     assert "/mnt/foo`" in text
     assert "/mnt/foo-2`" in text
     assert "(ro)" in text and "(rw)" in text
@@ -97,10 +94,9 @@ def test_context_uses_resolved_mounts_on_basename_collision(tmp_path):
 def test_context_reflects_absorbed_workdir(tmp_path):
     parent = tmp_path / "proj"
     (parent / "sub").mkdir(parents=True)
-    cfg = Config(harness="pi", workdir=str(parent / "sub"), name="pi-sess")
-    cfg.add_dirs = [AddDir(path=str(parent), mode="ro")]
-    plan = compute_mounts(cfg.workdir, [(a.path, a.mode) for a in cfg.add_dirs])
-    text = build_environment_context(cfg, plan)
+    cfg = make_cfg(harness="pi", workdir=str(parent / "sub"), name="pi-sess", add_dirs=[AddDir(str(parent), "ro")])
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), cwd=str(parent / "sub"))
+    text = build_environment_context(plan)
     assert plan.working_dir == "/mnt/proj/sub"
     assert "You start in `/mnt/proj/sub`" in text
     assert "/mnt/proj` (rw)" in text
@@ -197,7 +193,7 @@ def test_pi_harness_config_overrides(tmp_path):
         "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"}},
         "model": {"contextWindow": 131072, "maxTokens": 100000},
     }
-    render_home(cfg, get_profile("pi"), home, plan.model, comp=plan.composition)
+    render_home(cfg, plan, home)
     agent = home / ".pi" / "agent"
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"

@@ -39,6 +39,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from ..harnessconfig import LLM_API_KEY_ENV
+from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
 from .base import ENFORCER_DIR, SRT
 
@@ -66,12 +67,11 @@ GLOVE_SRT = f"{SRT_DIR}/glove-srt.mjs"  # srt's library without a network namesp
 NODE = f"{SRT_DIR}/node"
 
 TMP = "/tmp"
-# The harness home bind-mount point. srt's `--ro-bind /` does NOT downgrade a
-# nested docker bind mount, and denying a *subdir* of a bind mount is a no-op —
-# so glove denies the whole home MOUNT POINT (verified against 0.0.75/0.0.77). srt then
-# binds an empty overlay over it, hiding the harness config/extensions/
-# transcripts from tool commands entirely.
-HARNESS_HOME_MOUNT = "/home/agent"
+# The harness home bind-mount point (CONTAINER_HOME). srt's `--ro-bind /` does NOT
+# downgrade a nested docker bind mount, and denying a *subdir* of a bind mount is
+# a no-op — so glove denies the whole home MOUNT POINT (verified against
+# 0.0.75/0.0.77). srt then binds an empty overlay over it, hiding the harness
+# config/extensions/transcripts from tool commands entirely.
 
 
 def _rw_paths(plan: SessionPlan) -> list[str]:
@@ -102,10 +102,10 @@ def render_settings(plan: SessionPlan) -> dict:
             # deny the whole harness home mount to tool commands (extensions,
             # skills, session transcripts, config) — both read and write, since
             # srt cannot restrict a nested bind mount via allowWrite alone.
-            "denyRead": [HARNESS_HOME_MOUNT],
+            "denyRead": [CONTAINER_HOME],
             "allowRead": [],
             "allowWrite": _rw_paths(plan),
-            "denyWrite": [HARNESS_HOME_MOUNT],
+            "denyWrite": [CONTAINER_HOME],
         },
         # Tool commands get no network (only the harness browser tool reaches
         # the web). srt network is allow-only, so empty allowedDomains = blocked.
@@ -185,10 +185,11 @@ class SrtEnforcer:
             [cli, "images", "--filter", "reference=glove/*", "--format", "{{.Repository}}:{{.Tag}}"],
             capture_output=True, text=True,
         )
-        image = next((ln for ln in images.stdout.splitlines() if ln.strip().endswith(srt_suffix())), None)
+        suffix = srt_suffix()
+        image = next((ln for ln in images.stdout.splitlines() if ln.strip().endswith(suffix)), None)
         if not image:
             return Check("srt bwrap smoke", "skip",
-                         f"no local glove/*{srt_suffix()} image — run `glove build <harness> --enforcer srt`")
+                         f"no local glove/*{suffix} image — run `glove build <harness> --enforcer srt`")
         from ..runtimes.seccomp import nested_userns_profile_path
 
         proc = subprocess.run(

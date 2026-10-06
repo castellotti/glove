@@ -184,7 +184,7 @@ def test_home_seeds_onboarding_and_trust_and_keeps_claude_codes_state(tmp_path):
     state = home / ".claude" / ".claude.json"
     state.parent.mkdir(parents=True)
     state.write_text(json.dumps({"numStartups": 7, "projects": {"/work": {"allowedTools": ["x"]}}}))
-    render_home(cfg, plan.profile, home, plan.model, comp=plan.composition)
+    render_home(cfg, plan, home)
     doc = json.loads(state.read_text())
     assert doc["numStartups"] == 7 and doc["hasCompletedOnboarding"] is True
     assert doc["projects"]["/work"] == {"allowedTools": ["x"], "hasTrustDialogAccepted": True}
@@ -203,7 +203,7 @@ def test_trust_follows_the_plans_working_dir_from_a_subdirectory(tmp_path):
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), cwd=str(tmp_path / "work" / "sub"), uid=501, gid=20)
     assert plan.mount_plan.working_dir == "/work/sub"
     home = tmp_path / "h"
-    render_home(cfg, plan.profile, home, plan.model, mount_plan=plan.mount_plan, comp=plan.composition)
+    render_home(cfg, plan, home)
     doc = json.loads((home / ".claude" / ".claude.json").read_text())
     assert list(doc["projects"]) == ["/work/sub"]
 
@@ -219,7 +219,7 @@ def test_skills_are_baked_outside_the_config_home(tmp_path):
     assert lines[-1] == ("RUN mkdir -p /opt/glove/cc/.claude/skills"
                          " && ln -s /opt/glove/skills/rag/rag-parse /opt/glove/cc/.claude/skills/rag-parse"
                          " && ln -s /opt/glove/skills/rag/rag-query /opt/glove/cc/.claude/skills/rag-query")
-    render_home(cfg, plan.profile, tmp_path / "h", plan.model, comp=plan.composition)
+    render_home(cfg, plan, tmp_path / "h")
     assert not (tmp_path / "h" / ".claude" / "skills").exists()
 
 
@@ -249,11 +249,15 @@ def test_stdio_mcp_without_an_enforcer_runs_directly(tmp_path):
     assert server["command"] == "bash" and not any(f.endswith(".argv") for f in files)
 
 
-def test_the_trusted_project_settings_are_protected(tmp_path):
+def test_the_trusted_project_settings_and_the_home_loaders_are_protected(tmp_path):
     _, plan = _plan(tmp_path)
     got = {p.container_path: (p.kind, p.read_only) for p in plan.protect}
+    home = "/home/agent/.claude"
     assert got == {"/work/.claude": ("dir", False), "/work/.claude/settings.json": ("file", True),
-                   "/work/.claude/settings.local.json": ("file", True)}
+                   "/work/.claude/settings.local.json": ("file", True), home: ("dir", False),
+                   **{f"{home}/{f}": ("file", True) for f in ("settings.json", "CLAUDE.md")},
+                   **{f"{home}/{d}": ("dir", True)
+                      for d in ("agents", "commands", "skills", "plugins", "output-styles", "rules")}}
 
 
 def test_system_files_are_rewritten_in_place(tmp_path):

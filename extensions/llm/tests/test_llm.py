@@ -166,7 +166,7 @@ def test_pi_models_json_from_the_descriptor(tmp_path):
 
     plan, _, _ = _plan(tmp_path, capabilities={"vision": True, "context_window": 131072})
     cfg = make_cfg(harness="pi", name="s")
-    render_home(cfg, plan.profile, tmp_path / "home", plan.model, comp=plan.composition)
+    render_home(cfg, plan, tmp_path / "home")
     models = json.loads((tmp_path / "home/.pi/agent/models.json").read_text())["providers"]["glove"]
     assert models["models"][0]["input"] == ["text", "image"]
     assert models["models"][0]["contextWindow"] == 131072

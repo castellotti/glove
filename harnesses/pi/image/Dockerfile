@@ -28,7 +28,10 @@ RUN apt-get update \
        bash ca-certificates git ripgrep curl fd-find \
     && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# The pinned Pi release: harness.yml's `version`, passed by glove as a build arg.
+ARG HARNESS_VERSION
+RUN : "${HARNESS_VERSION:?glove passes harness.yml's version}" \
+    && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${HARNESS_VERSION}"
 
 # Extra packages requested via session config `apt_packages` / `pip_packages`
 # (glove passes them as build-args). The Vibe base already honoured these; Pi did

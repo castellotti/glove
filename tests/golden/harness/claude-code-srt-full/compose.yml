@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-81dbe3ba68-srt-f5b44676c0
+    image: glove/claude-code:0.2.0-00bc6f9a16-e99c90f163-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/claude", "--add-dir", "/opt/glove/cc"]
     stdin_open: true
@@ -55,13 +55,66 @@ services:
       - type: bind
         source: "<TMP>/work/.claude"
         target: "/work/.claude"
+      # ring 0: re-bound so it is a mount point and cannot be renamed away
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude"
+        target: "/home/agent/.claude"
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/settings.json"
+        target: "/home/agent/.claude/settings.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/CLAUDE.md"
+        target: "/home/agent/.claude/CLAUDE.md"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/agents"
+        target: "/home/agent/.claude/agents"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/commands"
+        target: "/home/agent/.claude/commands"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/skills"
+        target: "/home/agent/.claude/skills"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/plugins"
+        target: "/home/agent/.claude/plugins"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/output-styles"
+        target: "/home/agent/.claude/output-styles"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/rules"
+        target: "/home/agent/.claude/rules"
+        read_only: true
       # observe export: the harness writes its transcripts straight into
       # ~/.glove/observe/<id>/transcripts (after the home bind, so it overlays it)
       - type: bind
         source: "<GLOVE_HOME>/observe/s/transcripts"
         target: "/home/agent/.claude/projects"
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
-      # a target nested under /home/agent overlays the bind. mode is forced
+      # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
       # tmpfs mounts 755 root:root and the non-root harness can't write it.
       # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
@@ -76,7 +129,7 @@ services:
   # --- extension sidecars (validated + hardened by glove/compose.py) ---------
   glove-s-direct-proxy:
     container_name: glove-s-direct-proxy
-    image: glove/ext-direct-proxy:fc8a10696e8c
+    image: glove/ext-direct-proxy:111d32dafc
     tmpfs:
     - /tmp
     healthcheck:
@@ -105,7 +158,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - collect
     - --net-dir
@@ -139,7 +192,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:edf3d814e72d
+    image: glove/ext-playwright-pw:78d11488ca
     init: true
     command:
     - glove-pw-start
@@ -248,7 +301,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-mcp:
     container_name: glove-s-searxng-mcp
-    image: glove/ext-search-mcp:883587bb62e8
+    image: glove/ext-search-mcp:1e59a8fb36
     environment:
       SEARXNG_URL: http://glove-s-searxng:8080
       MCP_ALLOWED_HOST: glove-s-search-mcp:8000
@@ -282,7 +335,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service
@@ -346,7 +399,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service
@@ -408,7 +461,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service
@@ -464,7 +517,7 @@ services:
     mem_limit: 512m
   glove-s-search-mcp:
     container_name: glove-s-search-mcp
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service
@@ -526,7 +579,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service
@@ -580,7 +633,7 @@ services:
     mem_limit: 512m
   glove-s-proxy:
     container_name: glove-s-proxy
-    image: glove/ext-gate-netgate:e4d2bf8ba564
+    image: glove/ext-gate-netgate:87fb623dc0
     command:
     - forward
     - --service

@@ -23,42 +23,17 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 import yaml
-
-from glove.cli import _materialize_plan, _open, _resolve_extensions
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
-
-results: list[tuple[str, bool]] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    results.append((name, ok))
-    print(f"  {'PASS' if ok else 'FAIL'} {name}" + (f"  ({detail})" if detail else ""), flush=True)
+from live_common import check, live_session, summary
 
 
 def main(directory: str) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    rt = cfg.provider
-    base = None
-    env = dict(os.environ)
-    try:
-        plan, _, _ = _materialize_plan(sd, sid, cfg)
-        env = {**os.environ, **secret_env(plan)}
-        base = _compose_base(rt, plan.project, sd.compose)
-        t = time.time()
-        ensure_images(cfg, plan, rt)
-        print(f"  (images ready in {time.time() - t:.0f}s: {plan.image})", flush=True)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)
+    with live_session(directory) as live:
+        sd, plan = live.sd, live.plan
         comp = plan.composition
-        _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
 
         print("== offline, read-only mounts")
         check("no egress provider; the only endpoint is the llm",
@@ -70,11 +45,8 @@ def main(directory: str) -> int:
               all(binds.get(t, {}).get("read_only") is True for t in want), ", ".join(want))
 
         def bash(command: str, timeout: int = 900) -> str:
-            cmd = [*plan.harness_command, "-p", f"CALL bash {json.dumps({'command': command})}"]
-            r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
-                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
-            out = (r.stdout.strip() or r.stderr.strip())[-320:]
-            print(f"    $ {command[:90]}\n      {out}", flush=True)
+            out = live.call("bash", {"command": command}, timeout=timeout).strip()
+            print(f"    $ {command[:90]}\n      {out[-320:]}", flush=True)
             return out
 
         print("== glove-ocr (Pi bash tool, nono tool sandbox)")
@@ -103,9 +75,9 @@ def main(directory: str) -> int:
         print("== confinement")
         out = bash("touch /mnt/rag-models/x 2>&1; echo rc=$?")
         check("the model dir is read-only to the agent", "rc=0" not in out, out[-80:])
-        out = bash("python3 -c \"import socket; socket.create_connection(('1.1.1.1', 443), 3)\" 2>&1 | tail -1; "
-                   "echo rc=$?")
-        check("the shell has no network", "Error" in out or "error" in out, out[-90:])
+        out = bash("python3 -c \"import socket; socket.create_connection(('1.1.1.1', 443), 3)\" 2>/dev/null; "
+                   "echo net-rc=$?")
+        check("the shell has no network", "net-rc=1" in out, out[-90:])
 
         print("== skills in Pi's system prompt")
         log = Path(os.environ["STUB_LOG"]).read_text() if os.environ.get("STUB_LOG") else ""
@@ -115,14 +87,7 @@ def main(directory: str) -> int:
               ", ".join(sorted(seen))[:200])
         if "obsidian" in comp.by_name("rag").mounts:
             check("claude-obsidian's wiki-ingest (mounted)", "/mnt/rag-obsidian/skills/wiki-ingest" in seen)
-    except Exception as e:  # report, then tear down
-        check(f"live run ({type(e).__name__})", False, str(e)[-600:])
-    finally:
-        if base is not None and not os.environ.get("KEEP"):
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    failed = [n for n, ok in results if not ok]
-    print(f"== RESULT: {len(results) - len(failed)} passed, {len(failed)} failed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

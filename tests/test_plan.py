@@ -91,10 +91,23 @@ def test_git_trusts_the_session_mount_roots(tmp_path):
     assert plan.environment["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='/work' 'safe.directory'='/mnt/lib'"
 
 
-def test_an_explicit_git_config_replaces_the_default(tmp_path):
-    cfg = _cfg(tmp_path, env={"GIT_CONFIG_PARAMETERS": "'safe.directory'='*'"})
+def test_the_session_git_config_follows_the_defaults(tmp_path):
+    cfg = _cfg(tmp_path, git_config={"safe.directory": ["*"], "core.quotePath": False, "user.name": "O'Brien"})
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"))
-    assert plan.environment["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='*'"
+    assert plan.environment["GIT_CONFIG_PARAMETERS"] == (
+        "'safe.directory'='/work' 'safe.directory'='*' 'core.quotePath'='false' 'user.name'='O'\\''Brien'")
+
+
+@pytest.mark.parametrize("var", ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0"])
+def test_git_config_env_vars_are_refused_with_a_pointer(tmp_path, var):
+    with pytest.raises(ConfigError, match="git_config:"):
+        build_session_plan(_cfg(tmp_path, env={var: "x"}), home_dir=str(tmp_path / "h"))
+
+
+@pytest.mark.parametrize("raw", [["safe.directory"], {"nodot": "x"}, {"a.b": "x\ny"}, {"a.b": {"c": 1}}])
+def test_bad_git_config_is_refused(tmp_path, raw):
+    with pytest.raises(ConfigError):
+        _cfg(tmp_path, git_config=raw)
 
 
 def test_write_in_place_keeps_unchanged_files_and_drops_stale_ones(tmp_path):

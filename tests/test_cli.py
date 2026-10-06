@@ -28,6 +28,13 @@ def _wide_console(monkeypatch):
         monkeypatch.setattr(c, "width", 400)  # no wrapping of long paths in assertions
 
 
+@pytest.fixture(autouse=True)
+def _no_preflight(request, monkeypatch):
+    # `up`'s doctor probes the real runtime; test_up_refuses_a_failing_check covers it
+    if "preflight" not in request.node.name:
+        monkeypatch.setattr("glove.cli.preflight", lambda *a: None)
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     ghome = tmp_path / "ghome"
@@ -307,6 +314,28 @@ def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, 
     assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
     assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)
     assert "sk-x" not in (tmp_path / "compose.yml").read_text()
+    assert calls[-1][0][-4:] == ["-it", "--name", plan.harness_service, plan.harness_service]
+
+
+@pytest.mark.parametrize(("inspect", "removed"), [((1, ""), False), ((0, "false\n"), True), ((0, "true\n"), None)])
+def test_a_stale_harness_is_removed_and_a_running_one_refused(monkeypatch, inspect, removed):
+    from glove import session as session_mod
+    from glove.config import ConfigError
+
+    calls = []
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, inspect[0], stdout=inspect[1])
+
+    monkeypatch.setattr(session_mod.subprocess, "run", run)
+    if removed is None:
+        with pytest.raises(ConfigError, match="already running"):
+            session_mod.clear_stale_harness("docker", "glove-s-harness")
+    else:
+        session_mod.clear_stale_harness("docker", "glove-s-harness")
+    assert calls[0] == ["docker", "container", "inspect", "-f", "{{.State.Running}}", "glove-s-harness"]
+    assert calls[1:] == ([["docker", "rm", "-f", "glove-s-harness"]] if removed else [])
 
 
 def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
@@ -374,6 +403,17 @@ def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail, runs):
                         "--filter", "label=com.docker.compose.oneoff=True"]
     assert calls[1:] == ([["podman", "rm", "-f", "abc123", "def456"]] if runs else []) + [
         ["podman", "compose", "-p", project, "down", "--remove-orphans", *tail]]
+
+
+@pytest.mark.parametrize(("provider", "banner_off"), [("docker", False), ("podman", True)])
+def test_compose_runs_without_podmans_banner(monkeypatch, provider, banner_off):
+    from glove import session
+
+    envs = []
+    monkeypatch.setattr(session.subprocess, "run",
+                        lambda cmd, **k: envs.append(k.get("env")) or subprocess.CompletedProcess(cmd, 0, stdout=""))
+    session.teardown("s-0a0b0c", provider=provider, wipe=False)
+    assert ("PODMAN_COMPOSE_WARNING_LOGS" in envs[-1]) is banner_off
 
 
 def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
@@ -529,3 +569,18 @@ def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, m
     monkeypatch.setattr("glove.extensions.discover", lambda: discover(tmp_path / "exts"))
     cli._mount_extension_clis()
     assert "bad" not in {g.name for g in app.registered_groups}
+
+
+def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypatch):
+    from glove.runtimes.base import Check
+
+    d = make_session(tmp_path / "s")
+    started, inspected = [], []
+    monkeypatch.setattr("glove.session.launch", lambda *a, **k: started.append(1))
+    monkeypatch.setattr("glove.cli.start_host_services", lambda *a: started.append("host"))
+    monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: inspected.append(a))
+    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("chrome", "fail", "absent")])
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 1 and "chrome: absent" in result.output and not started
+    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
+    assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected

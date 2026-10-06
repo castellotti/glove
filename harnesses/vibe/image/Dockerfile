@@ -25,12 +25,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # uv, used to install vibe + Python runtime libs into system locations.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 /uv /usr/local/bin/uv
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python
 
-RUN uv tool install mistral-vibe
+# The pinned Vibe release: harness.yml's `version`, passed by glove as a build arg.
+ARG HARNESS_VERSION
+RUN : "${HARNESS_VERSION:?glove passes harness.yml's version}" \
+    && uv tool install "mistral-vibe==${HARNESS_VERSION}"
 
 # Optional extra packages from glove.yaml (apt_packages / pip_packages),
 # injected as build args so the image stays reproducible per session.

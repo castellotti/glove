@@ -335,7 +335,7 @@ def test_the_harness_gets_the_channel_and_the_shims_but_no_route(tmp_path, harne
     assert list(h["networks"]) == ["glove-s-net"]
     assert not any("TOKEN" in k for k in h["environment"])
     # fresh checkouts read as root-owned through Docker Desktop's file sharing
-    assert h["environment"]["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='*'"
+    assert h["environment"]["GIT_CONFIG_PARAMETERS"] == "'safe.directory'='/work' 'safe.directory'='*'"
     assert "COPY relay/glove-relay /opt/glove/bin/glove-relay" in plan.derived_dockerfile
     assert "COPY github/gh /usr/local/bin/gh" in plan.derived_dockerfile
     assert "COPY github/git /usr/local/bin/git" in plan.derived_dockerfile

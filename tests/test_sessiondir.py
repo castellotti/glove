@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 from helpers import make_session
@@ -70,6 +71,43 @@ def test_every_bundled_template_is_a_valid_v3_file(tmp_path):
         raw = sdm.load_file(sd)
         assert raw["template"] == name
         sdm.to_config(sd, raw, sid)
+
+
+def _template_with_local(tmp_path) -> Path:
+    tpl = tmp_path / "tpl"
+    (tpl / "local" / "hooks").mkdir(parents=True)
+    (tpl / sdm.SESSION_FILE).write_text((sdm.TEMPLATES_DIR / "minimal" / sdm.SESSION_FILE).read_text())
+    (tpl / "local" / "ca.pem").write_text("template")
+    (tpl / "local" / "hooks" / "detect.sh").write_text("#!/bin/sh\n")
+    (tpl / "local" / "hooks" / "detect.sh").chmod(0o755)
+    return tpl
+
+
+def test_new_copies_the_templates_local_dir_without_overwriting(tmp_path):
+    tpl = _template_with_local(tmp_path)
+    dest = tmp_path / "s"
+    (dest / "local").mkdir(parents=True)
+    (dest / "local" / "ca.pem").write_text("mine")
+    sdm.materialize(str(tpl), dest)
+    assert (dest / "local" / "ca.pem").read_text() == "mine"
+    assert (dest / "local" / "hooks" / "detect.sh").stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("linked", ["local/key", "local"])
+def test_new_refuses_a_symlink_in_or_as_the_templates_local_dir(tmp_path, linked):
+    tpl = _template_with_local(tmp_path)
+    if linked == "local":
+        (tpl / "local").rename(tmp_path / "elsewhere")
+    (tpl / linked).symlink_to(tmp_path / "elsewhere" if linked == "local" else Path.home() / ".ssh" / "id_ed25519")
+    with pytest.raises(sdm.SessionError, match="symlink"):
+        sdm.materialize(str(tpl), tmp_path / "s")
+    assert not (tmp_path / "s").exists()
+
+
+def test_new_from_a_template_file_copies_no_local_dir_beside_it(tmp_path):
+    tpl = _template_with_local(tmp_path)
+    sdm.materialize(str(tpl / sdm.SESSION_FILE), tmp_path / "s")
+    assert not (tmp_path / "s" / "local").exists()
 
 
 def test_git_url_detection():

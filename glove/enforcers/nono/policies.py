@@ -63,6 +63,9 @@ SECRET_DENY_VARS = [
 # tool profile re-allows them (startup-only gate — the strong guarantee is the
 # filesystem/network policy, which confines these to /work anyway).
 DEFAULT_ALLOW_COMMANDS = ["cp", "mv", "rm"]
+# The session's `tools:` keys: command lists for this tool profile (only nono
+# reads them; config.py checks their shape at load).
+TOOLS_KEYS = ("allow_commands", "deny_commands")
 
 # What Chromium needs to start inside a shell command (`enforcer_options:
 # {nono: {browsers: true}}`): all of /proc, read-only (it reads /proc/self/maps

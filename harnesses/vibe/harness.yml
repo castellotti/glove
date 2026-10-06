@@ -4,10 +4,18 @@ summary: Mistral Vibe.
 # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,
 # pre_tool hook) only. Optional capabilities are opt-in extensions.
 image: glove/vibe:0.5.0
+# The harness release the image installs (the Dockerfile's HARNESS_VERSION).
+version: 2.25.8
+# The release protected_home, trusted_files and masked_files were audited
+# against: a new release can add a dir it loads code or config from, so glove
+# refuses a `version` that has not been re-audited.
+audited_version: 2.25.8
 # `--trust` trusts /work for this run (no trust dialog; the project's AGENTS.md
 # loads): what else Vibe would load from the project is masked below.
 entry: [vibe, --trust, --yolo, --workdir, /work]
 config_home: { env: VIBE_HOME, path: /home/agent/.vibe }
+# What the agent is told about this harness under glove (its context file).
+brief: brief.md
 context_file: /home/agent/.vibe/AGENTS.md
 # Read-only to the agent (ring 0), relative to the home: the config and hooks
 # glove renders (its pre_tool hook wraps every command), `.env` (VIBE_*

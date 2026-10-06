@@ -18,7 +18,7 @@
     "DISABLE_AUTOUPDATER": "1",
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'"
   },
-  "image": "glove/claude-code:0.2.0",
+  "image": "glove/claude-code:0.2.0-00bc6f9a16",
   "passthrough_env": [
     "CLAUDE_CODE_OAUTH_TOKEN"
   ],

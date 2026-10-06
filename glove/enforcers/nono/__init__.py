@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from ...mounts import CONTAINER_HOME
 from ...runtimes.base import Check
 from . import policies
 from .version import nono_image_ref
@@ -34,7 +35,7 @@ class NonoEnforcer:
     def extra_tmpfs(self, plan: SessionPlan) -> list[str]:
         # The supervisor creates a PTY-proxy Unix socket under its state root
         # ($HOME/.local/state/nono) plus lock/state under $HOME/.nono. On Docker
-        # Desktop (macOS/Windows) the /home/agent bind mount is a virtiofs/
+        # Desktop (macOS/Windows) the home bind mount is a virtiofs/
         # gRPC-FUSE share that cannot host an AF_UNIX socket — bind() fails with
         # EINVAL ("os error 22") and the sandbox never starts. Back both state
         # roots with tmpfs: a native fs that supports sockets, and — since neither
@@ -43,8 +44,8 @@ class NonoEnforcer:
         #
         # Target nono's OWN state root, not the whole ~/.local/state: a broad
         # tmpfs there would shadow every sibling's persisted state (caches,
-        # tokens, resume data) under the /home/agent bind mount each session.
-        return ["/home/agent/.nono", "/home/agent/.local/state/nono"]
+        # tokens, resume data) under the home bind mount each session.
+        return [f"{CONTAINER_HOME}/.nono", f"{CONTAINER_HOME}/.local/state/nono"]
 
     def cap_add(self, plan: SessionPlan) -> list[str]:
         # Phase 2 runs no proxy, so no SYS_PTRACE is needed (verified). The

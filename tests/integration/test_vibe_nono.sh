@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 3 integration checks (PLAN §8) — nono enforcer + hook inside the real
-# Vibe image. Confirms (1) the shipping glove/vibe:0.5.0 image enforces the same
+# Vibe image. Confirms (1) the shipping glove/vibe base image enforces the same
 # ring-1 policies as Pi, and (2) the baked /opt/glove/vibe-hook rewrites bash
 # tool calls through the per-command wrapper (what Vibe's pre_tool hook invokes).
 # The full LLM/TUI path (hook firing live, strict denial in the TUI) is manual.
@@ -10,8 +10,9 @@
 set -u
 RT="${RT:-docker}"   # docker | podman
 
-IMAGE="${GLOVE_VIBE_IMAGE:-glove/vibe:0.5.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$ROOT/tests/integration/lib_session.sh"
+IMAGE="${GLOVE_VIBE_IMAGE:-$(glove_image vibe)}"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
 export GLOVE_HOME
 PASS=0 FAIL=0
@@ -86,6 +87,6 @@ done
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
-echo "Manual (need a live LLM): run 'vibe -p ...'; the pre_tool hook fires and a"
-echo "prompt-injected bash command runs sandboxed; a hook denial shows in the TUI."
+# `vibe -p` through the stub (the pre_tool hook wraps the command) and a hook
+# denial shown in the TUI: test_config_protect.sh vibe.
 [ "$FAIL" -eq 0 ]

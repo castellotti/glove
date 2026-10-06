@@ -24,12 +24,8 @@ import os
 import re
 import sys
 import time
-from pathlib import Path
 
 from live_common import check, live_session, summary
-
-from extensions.observe.netview import read_records
-from glove import registry
 
 PUBLIC_REPO = "https://github.com/octocat/Hello-World.git"
 
@@ -137,7 +133,7 @@ def main(directory: str, repo: str | None) -> int:
         if plan.composition.by_name("observe"):
             print("== observe")
             time.sleep(2)
-            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
+            recs = s.flows()
             gh = [r for r in recs if r.get("service") == "github-egress"]
             hosts = sorted({(r.get("dest") or {}).get("host") for r in gh} - {None})
             check("flows: github-egress → github.com, client github, tool gh",

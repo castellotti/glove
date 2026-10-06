@@ -1,6 +1,6 @@
 """Live egress checks for a session directory, through glove's own launch path.
 
-    uv run python tests/integration/egress_live.py <session-dir> [--keep]
+    uv run python tests/integration/egress_live.py <session-dir>
 
 With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
 (tests/integration/stubs/llm_stub.py), it:
@@ -20,7 +20,7 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
      tools for Vibe and Claude Code), so the real tool path is used — and the
      fetch must refuse this machine and LAN addresses;
   5. with observe: the fetcher's destinations are flows `client: webfetch`;
-  6. tears the project down (unless --keep).
+  6. tears the project down (unless KEEP is set).
 Prints PASS/FAIL per check; exit 0 only if all pass. Secrets are resolved in
 memory exactly as `glove up` does; nothing here prints them.
 """
@@ -33,44 +33,23 @@ import subprocess
 import sys
 from pathlib import Path
 
-from extensions.observe.netview import read_records
-from glove import registry
-from glove.cli import _materialize_plan, _open, _resolve_extensions
+from live_common import check, live_session, summary
+
 from glove.extensions import image_tag
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
 from glove.verify import ECHO_URL, host_public_ip, probe
 
-results: list[tuple[str, bool]] = []
 HERE = Path(__file__).parent
-# the search and fetch tools as each harness names them
-TOOLS = {"pi": ("web_search", "web_fetch"), "vibe": ("searxng_web_search", "webfetch_fetch_url"),
-         "claude-code": ("mcp__searxng__web_search", "WebFetch")}
 
 
-def check(name: str, ok: bool, detail: str = "") -> None:
-    results.append((name, ok))
-    print(f"  {'PASS' if ok else 'FAIL'} {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-
-def main(directory: str, keep: bool) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    plan, _, _ = _materialize_plan(sd, sid, cfg)
-    comp = plan.composition
-    egress = comp.slots["egress"]
-    route = egress.exports["route"]
-    rt = cfg.provider
-    print(f"== session {sid} ({rt}); egress {egress.name} (route {route}); subnet {cfg.subnet}")
-    env = {**os.environ, **secret_env(plan)}
-    base = _compose_base(rt, plan.project, sd.compose)
-    s = f"glove-{plan.session}"
-    try:
-        ensure_images(cfg, plan, rt)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)
+def main(directory: str) -> int:
+    with live_session(directory) as live:
+        cfg, plan, rt = live.cfg, live.plan, live.rt
+        comp = plan.composition
+        egress = comp.slots["egress"]
+        route = egress.exports["route"]
+        print(f"== egress {egress.name} (route {route}); subnet {cfg.subnet}")
+        s = live.prefix
         check("sidecars up + verify passed", True)
-        _resolve_extensions(plan, rt, secret_env(plan))
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
         mcp_harness = cfg.harness != "pi"
 
         print("== topology")
@@ -138,7 +117,7 @@ def main(directory: str, keep: bool) -> int:
                 check("the fetcher has no direct internet", r.returncode != 0,
                       (r.stderr.strip().splitlines() or ["?"])[-1])
 
-        search_tool, fetch_tool = TOOLS[cfg.harness]
+        search_tool, fetch_tool = live.tools["search"], live.tools["fetch"]
         print(f"== {cfg.harness} tool calls (stub-driven, wrapped harness)")
         calls = []
         if comp.by_name("search"):
@@ -156,10 +135,7 @@ def main(directory: str, keep: bool) -> int:
             calls.append((fetch_tool, {"url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F",
                                        **extra}, "Refused a redirect"))
         for tool, args, want in calls:
-            cmd = [*plan.harness_command, "-p", f"CALL {tool} {json.dumps(args)}"]
-            r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
-                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
-            answer = r.stdout.strip() or r.stderr.strip()
+            answer = live.call(tool, args, timeout=240).strip()
             print(f"    {tool}: {answer[-400:]}")
             refusal = want.startswith("Refused")
             label = f"{tool} refuses {args['url']}" if refusal else f"{tool} through the egress"
@@ -170,7 +146,7 @@ def main(directory: str, keep: bool) -> int:
 
         if comp.by_name("observe") and comp.by_name("webfetch") and cfg.harness != "pi":
             print("== observe")
-            recs = read_records(Path(os.path.realpath(registry.observe_dir(sid))) / "net")
+            recs = live.flows()
             # Claude Code's WebFetch goes through the proxy itself; Vibe's fetcher through its own gate
             svc, client = ("proxy", "harness") if cc else ("webfetch-egress", "webfetch")
             fetched = [r for r in recs if r.get("service") == svc
@@ -187,16 +163,8 @@ def main(directory: str, keep: bool) -> int:
                 hop = [r for r in recs if r.get("service") == "webfetch-mcp"]
                 check("flow: the harness → fetcher hop, client harness",
                       bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")
-    except Exception as e:  # report, then tear down
-        check(f"launch ({type(e).__name__})", False, str(e)[-600:])
-    finally:
-        if not keep:
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    failed = [n for n, ok in results if not ok]
-    print(f"== RESULT: {len(results) - len(failed)} passed, {len(failed)} failed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--keep"]
-    sys.exit(main(args[0], "--keep" in sys.argv))
+    sys.exit(main(sys.argv[1]))

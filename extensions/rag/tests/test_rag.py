@@ -69,7 +69,7 @@ def test_skills_reach_pis_settings(tmp_path, models, obsidian):
 
     cfg, plan = _plan(tmp_path, models_dir=str(models), obsidian_dir=str(obsidian))
     cfg.harness_config = {"settings": {"skills": ["/work/my-skill"]}}
-    render_home(cfg, plan.profile, tmp_path / "home", plan.model, comp=plan.composition)
+    render_home(cfg, plan, tmp_path / "home")
     settings = json.loads(next((tmp_path / "home").rglob("settings.json")).read_text())
     assert settings["skills"] == [
         "/opt/glove/skills/rag/rag-parse", "/opt/glove/skills/rag/rag-query",

@@ -1,11 +1,13 @@
 """What the live drivers (`*_live.py`) share: PASS/FAIL checks, a session started
 the way `glove up` does, and its harness TUI on a pty.
 
-    with live_session(directory) as s:   # images, sidecars, resolve, home
+    with live_session(directory) as s:   # preflight, images, sidecars, resolve, home
         check("…", "x" in s.sh("echo x"))
     return summary()
 
-Teardown is `glove down`'s, with the volumes.
+An exception while starting or inside the block is a FAIL (its traceback
+printed); a failed start ends the driver with its summary. Teardown is
+`glove down`'s, with the volumes, unless KEEP is set (see `kept`).
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,13 +25,22 @@ from pathlib import Path
 
 from ptyio import Tui
 
-from glove.cli import _materialize_plan, _open, prepare_harness
+from extensions.observe.netview import read_records
+from glove import registry
+from glove.cli import _materialize_plan, _open, preflight, prepare_harness
 from glove.plan import SessionPlan, secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars, teardown
+from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
 
 RESULTS: list[bool] = []
-# The shell tool's name, where it isn't `bash`.
-BASH_TOOL = {"claude-code": "Bash"}
+# Each harness's own tools, by what they do: shell, file write (name, path
+# argument, content argument, extra arguments), web search and fetch.
+TOOLS = {
+    "pi": {"bash": "bash", "write": ("write", "path", "content", {}), "search": "web_search", "fetch": "web_fetch"},
+    "vibe": {"bash": "bash", "write": ("write_file", "file_path", "content", {"overwrite": True}),
+             "search": "searxng_web_search", "fetch": "webfetch_fetch_url"},
+    "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content", {}),
+                    "search": "mcp__searxng__web_search", "fetch": "WebFetch"},
+}
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -40,6 +53,28 @@ def summary() -> int:
     return 0 if all(RESULTS) else 1
 
 
+def glove(*args: str, cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
+    """The glove CLI, as the operator runs it."""
+    return subprocess.run([sys.executable, "-m", "glove.cli", *args], cwd=cwd, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def inspect(rt: str, name: str) -> dict:
+    """`<rt> inspect <name>`, or {} when there is no such object."""
+    out = subprocess.run([rt, "inspect", name], capture_output=True, text=True).stdout
+    return (json.loads(out) or [{}])[0] if out.strip() else {}
+
+
+def wait_for(fn, timeout: float = 30.0, step: float = 1.0):
+    """`fn()` once it is truthy, or its last value after `timeout` seconds."""
+    end = time.time() + timeout
+    while True:
+        v = fn()
+        if v or time.time() > end:
+            return v
+        time.sleep(step)
+
+
 @dataclass
 class LiveSession:
     sd: object  # glove.sessiondir.SessionDir
@@ -47,7 +82,7 @@ class LiveSession:
     cfg: object  # glove.config.Config
     plan: SessionPlan
     secrets: dict[str, str]
-    env: dict[str, str]  # os.environ plus the secrets compose interpolates
+    env: dict[str, str]  # a compose process's: os.environ, the runtime's, the secrets it interpolates
     base: list[str]  # `<rt> compose -p … -f …`
 
     @property
@@ -55,8 +90,43 @@ class LiveSession:
         return self.cfg.provider
 
     @property
+    def tools(self) -> dict:
+        """This harness's tool names (`TOOLS`)."""
+        return TOOLS[self.cfg.harness]
+
+    @property
     def bash_tool(self) -> str:
-        return BASH_TOOL.get(self.cfg.harness, "bash")
+        return self.tools["bash"]
+
+    @property
+    def prefix(self) -> str:
+        """The session's container and network names start with it."""
+        return f"glove-{self.sid}"
+
+    @property
+    def net(self) -> Path:
+        """The observe dir's net/ (flows, status), symlinks resolved."""
+        return Path(os.path.realpath(registry.observe_dir(self.sid))) / "net"
+
+    def flows(self, phases: tuple[str, ...] | None = None) -> list[dict]:
+        """The flow records so far (only those `phases`, if given)."""
+        return [r for r in read_records(self.net) if phases is None or r.get("phase") in phases]
+
+    def start(self) -> None:
+        """What `glove up` does before it attaches the harness."""
+        preflight(self.sd, self.cfg, self.plan)
+        t = time.time()
+        ensure_images(self.cfg, self.plan, self.rt)
+        print(f"  (images ready in {time.time() - t:.0f}s: {self.plan.image})", flush=True)
+        start_sidecars(self.plan, self.sd.compose, provider=self.rt, env=self.env)
+        prepare_harness(self.sd, self.cfg, self.plan, self.secrets)
+
+    def relaunch(self) -> None:
+        """Re-read the session file and start again, as the next `glove up`
+        would (sidecars recreated where they changed)."""
+        self.sd, self.sid, self.cfg, self.plan, self.secrets = _materialize(self.sd.root)
+        self.env = compose_process_env(self.rt, self.secrets)
+        self.start()
 
     def run(self, *argv: str, entry: str | None = None, extra: tuple[str, ...] = (),
             timeout: int = 300) -> subprocess.CompletedProcess:
@@ -65,10 +135,14 @@ class LiveSession:
                                self.plan.harness_service, *argv], env=self.env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=timeout)
 
-    def call(self, tool: str, args: dict) -> str:
-        """One tool call through the agent (`<harness> -p "CALL …"` to the stub): its output."""
-        r = self.run(*self.plan.harness_command, "-p", f"CALL {tool} {json.dumps(args)}")
+    def ask(self, prompt: str, timeout: int = 300) -> str:
+        """`<harness> -p <prompt>` (wrapped, in the hardened service): its output."""
+        r = self.run(*self.plan.harness_command, "-p", prompt, timeout=timeout)
         return r.stdout + r.stderr
+
+    def call(self, tool: str, args: dict, timeout: int = 300) -> str:
+        """One tool call through the agent (`CALL …` to the stub): its output."""
+        return self.ask(f"CALL {tool} {json.dumps(args)}", timeout)
 
     def sh(self, cmd: str) -> str:
         """One shell command through the agent's own tool: what the model saw."""
@@ -81,27 +155,42 @@ class LiveSession:
                    rows, cols)
 
 
+def kept() -> bool:
+    """KEEP set: the drivers leave the session running."""
+    return bool(os.environ.get("KEEP"))
+
+
+def _materialize(directory: Path) -> tuple:
+    sd, _, sid, cfg = _open(directory)
+    plan, _, _ = _materialize_plan(sd, sid, cfg)
+    return sd, sid, cfg, plan, secret_env(plan)
+
+
 @contextmanager
 def live_session(directory: str, *, logs: str | None = None) -> Iterator[LiveSession]:
     """Start the session in `directory` as `glove up` does, minus the harness;
     on the way out print the last lines of sidecar `glove-<id>-<logs>`, then tear
-    everything down."""
-    sd, _, sid, cfg = _open(Path(directory))
-    plan, _, _ = _materialize_plan(sd, sid, cfg)
-    secrets = secret_env(plan)
-    s = LiveSession(sd, sid, cfg, plan, secrets, {**os.environ, **secrets},
+    everything down (not with KEEP set)."""
+    sd, sid, cfg, plan, secrets = _materialize(Path(directory))
+    s = LiveSession(sd, sid, cfg, plan, secrets, compose_process_env(cfg.provider, secrets),
                     _compose_base(cfg.provider, plan.project, sd.compose))
     print(f"== session {sid} ({cfg.harness}, enforcer {plan.enforcer}, runtime {s.rt})")
+    started = False
     try:
-        t = time.time()
-        ensure_images(cfg, plan, s.rt)
-        print(f"  (images ready in {time.time() - t:.0f}s: {plan.image})", flush=True)
-        start_sidecars(plan, sd.compose, provider=s.rt, env=s.env)
-        prepare_harness(sd, cfg, plan, secrets)
+        s.start()
+        started = True
         yield s
+    except Exception as e:  # a FAIL, then the teardown and the summary
+        traceback.print_exc()
+        check(f"{'live run' if started else 'launch'} ({type(e).__name__})", False, str(e)[-600:])
     finally:
         if logs:
             r = subprocess.run([s.rt, "logs", f"glove-{sid}-{logs}"], capture_output=True, text=True)
             print(f"== glove-{sid}-{logs} log (last lines)\n" + "".join(f"    {ln}\n" for ln in
                                                                      (r.stdout + r.stderr).splitlines()[-25:]))
-        teardown(sid, provider=s.rt, wipe=True)
+        if kept():
+            print(f"== KEEP: {s.plan.project} left running (glove down {sd.root})")
+        else:
+            teardown(sid, provider=s.rt, wipe=True)
+    if not started:  # nothing to run the block against: the driver ends here
+        raise SystemExit(summary())

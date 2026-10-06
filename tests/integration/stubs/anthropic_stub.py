@@ -95,8 +95,8 @@ class H(BaseHTTPRequestHandler):
             else:
                 ev("content_block_start", {"type": "content_block_start", "index": i, "content_block": {
                     "type": "tool_use", "id": b["id"], "name": b["name"], "input": {}}})
-                ev("content_block_delta", {"type": "content_block_delta", "index": i,
-                                           "delta": {"type": "input_json_delta", "partial_json": json.dumps(b["input"])}})
+                delta = {"type": "input_json_delta", "partial_json": json.dumps(b["input"])}
+                ev("content_block_delta", {"type": "content_block_delta", "index": i, "delta": delta})
             ev("content_block_stop", {"type": "content_block_stop", "index": i})
         ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 5}})
         ev("message_stop", {"type": "message_stop"})

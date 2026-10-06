@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 4 integration checks (PLAN §8) — the opt-in srt enforcer inside the real
-# `glove/pi:0.5.0-srt` image. Reproduces the research §5 matrix and runs the
+# `glove/pi` base + srt overlay image. Reproduces the research §5 matrix and runs the
 # tool-command checks: srt wraps tool commands only, under the surgically
 # relaxed nested-userns seccomp. See NOTE in test_pi_nono.sh re: pipefail.
 #
@@ -8,13 +8,11 @@
 # Requires: docker + `glove build pi --enforcer srt` (the -srt-<hash> overlay image).
 set -u
 RT="${RT:-docker}"   # docker | podman
-if [ "$RT" = podman ]; then
-  echo "SKIP: glove refuses enforcer srt on the podman runtime (its relaxed seccomp profile can't be"
-  echo "      applied through podman's compose provider); srt is docker-only for now."; exit 2
-fi
-
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-IMAGE="${GLOVE_PI_SRT_IMAGE:-glove/pi:0.5.0$(uv run --quiet --project "$ROOT" python -c 'from glove.enforcers.base import srt_suffix; print(srt_suffix())')}"
+. "$ROOT/tests/integration/lib_session.sh"
+runtime_facts
+if [ -n "$SRT_REFUSED" ]; then echo "SKIP: $SRT_REFUSED"; exit 2; fi
+IMAGE="${GLOVE_PI_SRT_IMAGE:-$(glove_image pi srt)}"
 SECCOMP="$ROOT/glove/runtimes/seccomp/nested-userns.json"
 WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
 export GLOVE_HOME

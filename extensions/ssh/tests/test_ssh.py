@@ -25,8 +25,8 @@ HOSTS = [{"name": "build", "to": "192.168.1.10:22", "user": "dev"},
 class Req:
     def __init__(self, argv):
         self.argv = argv
-        self.settings = {"hosts": [{**h, "forwarder": {"host": f"glove-s-ssh-{h['name']}", "port": 22}}
-                                   for h in HOSTS]}
+        self.settings = {"hosts": HOSTS, "forwarders": {f"ssh-{h['name']}": {"host": f"glove-s-ssh-{h['name']}",
+                                                                              "port": 22} for h in HOSTS}}
 
 
 def ssh(*args):
@@ -204,7 +204,11 @@ def test_the_relay_sidecar_and_its_forwarders(tmp_path, observe):
     for name, target in (("build", "192.168.1.10:22"), ("nas", "nas.lan:2222")):
         fwd = doc["services"][f"glove-s-ssh-{name}"]
         assert set(fwd["networks"]) == {"glove-s-lan", "glove-s-sshnet"}
-        assert target in json.dumps(fwd["command"])
+        if observe:  # netgate checks each connection
+            assert "--lan-only" in fwd["command"] and target in json.dumps(fwd["command"])
+        else:  # socat's entrypoint checks once, at start
+            assert fwd["entrypoint"] == ["/usr/local/bin/glove-lan-forward"]
+            assert fwd["command"] == ["22", *target.split(":")]
     on_lan = [n for n, s in doc["services"].items() if "glove-s-lan" in (s.get("networks") or {})]
     assert sorted(on_lan) == ["glove-s-ssh-build", "glove-s-ssh-nas"]
     assert doc["networks"]["glove-s-lan"].get("internal") is not True

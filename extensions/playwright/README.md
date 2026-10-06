@@ -90,6 +90,11 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   for every other tool the pinned MCP defines (`all_tools` in
   `extension.yml`), so it never offers them and no prompt can approve one. In
   the sidecar modes it would reach only the sidecar anyway.
+- **Moving the MCP pin:** re-list `all_tools` from the new release, bump the
+  `playwright-core` version in its comment (a unit test holds it to
+  `image/package-lock.json`), then run `test_playwright.sh claude-code`, which
+  compares the list with the built image's tools. The unit test alone passes
+  a bumped comment over a stale list.
 
 ### Watching: `glove playwright view` (`novnc`)
 

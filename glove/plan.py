@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Config, ConfigError
+from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
 from .enforcers.base import argv_lines, srt_suffix, uses_srt
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
@@ -33,7 +33,14 @@ if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
     from .toolchains import Toolchain
 
-FORWARDER_IMAGE = "glove/forwarder:0.2.0"
+FORWARDER_DIR = Path(__file__).parent / "forwarder"
+
+
+def forwarder_image() -> str:
+    """The forwarder's tag, content-addressed like every glove-built image."""
+    from .image import content_hash
+
+    return f"glove/forwarder:0.2.0-{content_hash('', [('forwarder', FORWARDER_DIR)])}"
 # `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
 # already lets the harness and its commands read (nono: GLOVE_READ; srt: the
 # whole rootfs is readable), so trusting it needs no policy change.
@@ -48,7 +55,7 @@ class SessionPlan:
     profile: HarnessProfile
     image: str
     working_dir: str  # container path the harness starts in
-    home_dir: str  # host path bind-mounted at /home/agent
+    home_dir: str  # host path bind-mounted at CONTAINER_HOME (`home_mount`)
     mount_plan: MountPlan
     environment: dict[str, str]
     network: NetworkPlan
@@ -61,7 +68,7 @@ class SessionPlan:
     runtime: str = "docker"
     enforcer: str = "nono"
     enforcer_options: dict = field(default_factory=dict)
-    forwarder_image: str = FORWARDER_IMAGE
+    forwarder_image: str = field(default_factory=forwarder_image)
     tools: dict = field(default_factory=dict)
     # Ring-1 enforcer artifacts (populated by build_session_plan). `command` is
     # the wrapped harness entry; `policies` is filename→contents rendered to the
@@ -121,6 +128,11 @@ class SessionPlan:
     @property
     def allow_root(self) -> bool:
         return self.hardening.allow_root
+
+
+def home_mount(home_dir: str) -> Mount:
+    """The harness home: the session's `.glove/home`, read-write at CONTAINER_HOME."""
+    return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
 
 
 def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
@@ -264,19 +276,12 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
     return out
 
 
-def git_safe_directories(roots: list[str]) -> str:
-    """`GIT_CONFIG_PARAMETERS` trusting the session's own mount roots.
-
-    Through Docker Desktop's file sharing a `.git` the agent just created can
-    read as another uid, and git refuses it ("dubious ownership"). The
-    container has one user, so safe.directory's guard (another user's repo
-    configuring this user's git) has nothing to protect at the mount roots.
-    Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
-    nested deeper (a clone into /work/<repo>) needs an opt-in.
-    """
+def git_config_parameters(pairs: list[tuple[str, str]]) -> str:
+    """`GIT_CONFIG_PARAMETERS`, git's command-line config (`-c`) in the env, so
+    the harness and every command it runs read it. Later pairs win."""
     def q(s: str) -> str:
         return "'" + s.replace("'", "'\\''") + "'"
-    return " ".join(f"{q('safe.directory')}={q(r)}" for r in roots)
+    return " ".join(f"{q(k)}={q(v)}" for k, v in pairs)
 
 
 def build_session_plan(
@@ -330,18 +335,34 @@ def build_session_plan(
     def in_working_dir(files: tuple[str, ...]) -> list[str]:
         return [posixpath.join(mount_plan.working_dir, f) for f in files]
 
-    home = Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
+    home = home_mount(home_dir)
     mount_plan = replace(mount_plan, protect=protected_paths(
         mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
         trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
     ) + protected_home(home, profile.protected_home))
     network = build_network_plan(cfg, session, comp)
 
+    # glove alone sets git's config env vars (GIT_CONFIG_PARAMETERS, below)
+    for source, env in (("the harness profile", profile.default_env), ("the session's `env:`", cfg.env),
+                        ("an extension's env", comp.harness_env)):
+        owned = sorted(k for k in env if GIT_CONFIG_ENV.fullmatch(str(k)))
+        if owned:
+            raise ConfigError(f"{source} sets {owned[0]}: git config goes in the session's `git_config:` "
+                              "(or an extension's `harness.git_config`)")
     environment = _resolve_env(cfg, profile)
     for k, v in comp.harness_env.items():
         environment.setdefault(k, v)  # an explicit `env:` entry wins
-    # an extension (github: '*') or an explicit `env:` entry replaces it
-    environment.setdefault("GIT_CONFIG_PARAMETERS", git_safe_directories(session_roots))
+    # Through Docker Desktop's file sharing a `.git` the agent just created can
+    # read as another uid, and git refuses it ("dubious ownership"). The
+    # container has one user, so safe.directory's guard (another user's repo
+    # configuring this user's git) has nothing to protect at the mount roots.
+    # Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
+    # nested deeper (a clone into /work/<repo>) needs an opt-in: an extension's
+    # `harness.git_config` (github: '*') or the session's `git_config:`.
+    environment["GIT_CONFIG_PARAMETERS"] = git_config_parameters([
+        *(("safe.directory", r) for r in session_roots), *comp.git_config,
+        *git_config_pairs(cfg.git_config, "git_config"),
+    ])
     toolchains: list[Toolchain] = []
     if cfg.toolchains:
         from . import toolchains as tcs
@@ -373,6 +394,9 @@ def build_session_plan(
     from .enforcers import get_enforcer
 
     enforcer = get_enforcer(cfg.enforcer)
+    if cfg.tools and enforcer.tool_sandbox != "nono":
+        raise ConfigError(f"`tools:` sets nono's tool-profile command lists; enforcer {cfg.enforcer!r} runs "
+                          "commands without nono, so it would be ignored — remove it")
 
     hardening = Hardening(
         user=None if cfg.allow_root else f"{uid}:{gid}",
@@ -408,7 +432,7 @@ def build_session_plan(
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
         enforcer_options=cfg.enforcer_options,
-        tools=dict(cfg.tools or {}),
+        tools=dict(cfg.tools),
         composition=comp,
         model=harness_model(profile, comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,

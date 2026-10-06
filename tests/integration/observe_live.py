@@ -28,82 +28,24 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
+import yaml
+from live_common import check, glove, inspect, live_session, summary, wait_for
+
 from glove import registry
-from glove.cli import _materialize_plan, _open, _resolve_extensions
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
-
-results: list[tuple[str, bool]] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    results.append((name, ok))
-    print(f"  {'PASS' if ok else 'FAIL'} {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-
-def inspect(rt: str, name: str) -> dict:
-    out = subprocess.run([rt, "inspect", name], capture_output=True, text=True).stdout
-    return (json.loads(out) or [{}])[0] if out.strip() else {}
-
-
-def flows(net: Path, phases=("close",)) -> list[dict]:
-    recs = []
-    for f in sorted(net.glob("flows*.ndjson")):
-        for line in f.read_text().splitlines():
-            try:
-                recs.append(json.loads(line))
-            except ValueError:
-                pass
-    return [r for r in recs if r.get("type") == "flow" and r.get("phase") in phases]
-
-
-def wait_for(fn, timeout=30.0, step=1.0):
-    end = time.time() + timeout
-    while True:
-        v = fn()
-        if v or time.time() > end:
-            return v
-        time.sleep(step)
-
-
-def launch(sd, sid, cfg):
-    plan, _, _ = _materialize_plan(sd, sid, cfg)
-    env = {**os.environ, **secret_env(plan)}
-    ensure_images(cfg, plan, cfg.provider)
-    start_sidecars(plan, sd.compose, provider=cfg.provider, env=env)  # compose-downs itself on failure
-    return plan, env
-
-
-def pi(plan, base, env, tool, args) -> str:
-    cmd = [*plan.harness_command, "-p", f"CALL {tool} {json.dumps(args)}"]
-    r = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
-                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
-    return (r.stdout.strip() or r.stderr.strip())[-400:]
-
-
-def glove_cli(*args, cwd) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "glove.cli", *args], cwd=cwd, capture_output=True, text=True)
 
 
 def main(directory: str) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    rt = cfg.provider
-    s = f"glove-{sid}"
-    obs, ctl = Path(os.path.realpath(registry.observe_dir(sid))), Path(os.path.realpath(registry.control_dir(sid)))
-    net = obs / "net"
-    base = None
-    env = dict(os.environ)
-    try:
-        plan, env = launch(sd, sid, cfg)
-        base = _compose_base(rt, plan.project, sd.compose)
+    with live_session(directory) as live:
+        sd, sid, plan, rt = live.sd, live.sid, live.plan, live.rt
+        s, net = live.prefix, live.net
+        obs, ctl = net.parent, Path(os.path.realpath(registry.control_dir(sid)))
         comp = plan.composition
         check("sidecars up + verify passed", True, f"egress {comp.slots['egress'].name}")
-        _resolve_extensions(plan, rt, {k: v for k, v in env.items() if k.startswith("GLOVE_")})
-        render_home(cfg, plan.profile, sd.home, plan.model, mount_plan=plan.mount_plan, comp=comp)
+
+        def flows(phases=("close",)) -> list[dict]:
+            return live.flows(phases)
 
         print("== topology")
         roles = [x.role for x in plan.network.sidecars]
@@ -113,6 +55,7 @@ def main(directory: str) -> int:
         col = inspect(rt, f"{s}-netgate")
         check("the collector has no network", col.get("HostConfig", {}).get("NetworkMode") == "none")
         gates = [f"{s}-{r}" for r in roles] + [f"{s}-netgate"]
+
         def ctl_mounts(g):  # by target: podman and docker report the source path differently
             return [m for m in inspect(rt, g).get("Mounts", []) if m.get("Destination") == "/etc/glove/netgate-control"]
 
@@ -126,17 +69,15 @@ def main(directory: str) -> int:
         check("SearXNG cannot reach the egress proxy directly", r.returncode != 0,
               (r.stderr.strip().splitlines() or ["?"])[-1][-80:])
         # the harness runs per call (`compose run --rm`): read its binds from the project
-        import yaml
-
         hv = yaml.safe_load(sd.compose.read_text())["services"][plan.harness_service]["volumes"]
         mounts = [os.path.realpath(v["source"]) for v in hv if v.get("type") == "bind"]
 
         print("== Pi tool calls → flows")
-        ans = pi(plan, base, env, "web_search", {"query": "wikipedia"})
+        ans = live.call("web_search", {"query": "wikipedia"})
         check("Pi web_search through its gates", "TOOL RESULT" in ans, ans[-120:])
-        ans = pi(plan, base, env, "web_fetch", {"url": "https://example.com"})
+        ans = live.call("web_fetch", {"url": "https://example.com"})
         check("Pi web_fetch through its gate", "documentation examples" in ans, ans[-120:])
-        recs = wait_for(lambda: [r for r in flows(net) if r.get("service") == "proxy"
+        recs = wait_for(lambda: [r for r in flows() if r.get("service") == "proxy"
                                  and (r.get("dest") or {}).get("host") == "example.com"], 20)
         f = recs[-1] if recs else {}
         check("flow: proxy → example.com:443, web_fetch, client harness, allow",
@@ -145,12 +86,13 @@ def main(directory: str) -> int:
         # SearXNG pools its connections: they may still be open (no close yet)
         if comp.slot_exports("egress").get("resolver") not in (None, "none"):
             res = (f.get("dest") or {})
-            check("flow: the destination resolved in-tunnel", res.get("resolution") == "in-tunnel" and bool(res.get("ip")),
+            check("flow: the destination resolved in-tunnel",
+                  res.get("resolution") == "in-tunnel" and bool(res.get("ip")),
                   f"{res.get('resolution')} {res.get('ip')}")
-        fx = [r for r in flows(net, ("open", "update", "close")) if r.get("service") == "searxng-egress"]
+        fx = [r for r in flows(("open", "update", "close")) if r.get("service") == "searxng-egress"]
         check("flow: SearXNG's engine requests via its gate, client searxng",
               bool(fx) and all(r.get("client") == "searxng" for r in fx), f"{len(fx)} flows")
-        llm = [r for r in flows(net) if r.get("service") == "llm"]
+        llm = [r for r in flows() if r.get("service") == "llm"]
         check("flow: the model calls, tool llm, client harness",
               bool(llm) and llm[-1].get("tool") == "llm" and llm[-1].get("client") == "harness", f"{len(llm)} flows")
         st = json.loads((net / "status.json").read_text()) if (net / "status.json").exists() else {}
@@ -164,20 +106,20 @@ def main(directory: str) -> int:
         check("the harness mounts no export but transcripts/",
               not any(m.startswith(str(ctl)) or m.startswith(str(net)) or m == str(obs) for m in mounts)
               and str(obs / "transcripts") in mounts)
-        status = glove_cli("observe", "status", cwd=sd.root)
+        status = glove("observe", "status", cwd=sd.root)
         check("`glove observe status`", status.returncode == 0 and "running" in status.stdout,
               (status.stdout.strip().splitlines() or ["?"])[0][:80])
 
         print("== filter: a rule written by the CLI is enforced")
-        out = glove_cli("filter", "block", "example.com", cwd=sd.root)
+        out = glove("filter", "block", "example.com", cwd=sd.root)
         check("`glove filter block example.com`", out.returncode == 0, out.stdout.strip()[-100:] or out.stderr[-200:])
         digest = hashlib.sha256((ctl / "rules.json").read_bytes()).hexdigest()
         seen = wait_for(lambda: (json.loads((net / "status.json").read_text()).get("rules") or {}).get("sha256")
                         == digest, 15)
         check("the gates confirm the file (status.json rules.sha256)", bool(seen))
-        ans = pi(plan, base, env, "web_fetch", {"url": "https://example.com"})
+        ans = live.call("web_fetch", {"url": "https://example.com"})
         check("Pi web_fetch example.com is now refused", "TOOL RESULT" in ans and "network policy" in ans, ans[-140:])
-        blocked = wait_for(lambda: [r for r in flows(net) if r.get("verdict") == "block"
+        blocked = wait_for(lambda: [r for r in flows() if r.get("verdict") == "block"
                                     and (r.get("dest") or {}).get("host") == "example.com"], 15)
         rid = json.loads((ctl / "rules.json").read_text())["rules"][0]["id"]
         check("flow: verdict block with the rule id", bool(blocked) and blocked[-1].get("rule") == rid,
@@ -186,8 +128,7 @@ def main(directory: str) -> int:
         print("== revocation: filter removed from the session file")
         text = sd.file.read_text()
         sd.file.write_text(re.sub(r"(?m)^  filter: \{\}\n", "", text))
-        sd2, _, _, cfg2 = _open(sd.root)
-        plan2, env = launch(sd2, sid, cfg2)
+        live.relaunch()
         check("control/<id>/ removed", not ctl.exists())
         check("rules.json kept as .glove/ext/filter/rules.revoked.json",
               (sd.ext / "filter" / "rules.revoked.json").is_file())
@@ -198,16 +139,9 @@ def main(directory: str) -> int:
               all("--rules" not in c for c in cmds) and not any(ctl_mounts(g) for g in gates))
         gone = wait_for(lambda: "rules" not in json.loads((net / "status.json").read_text()), 20)
         check("status.json carries no `rules` (no gate reads a rules file)", bool(gone))
-        ans = pi(plan2, base, env, "web_fetch", {"url": "https://example.com"})
+        ans = live.call("web_fetch", {"url": "https://example.com"})
         check("web_fetch example.com works again (no rules read)", "documentation examples" in ans, ans[-120:])
-    except Exception as e:  # report, then tear down
-        check(f"live run ({type(e).__name__})", False, str(e)[-600:])
-    finally:
-        if base is not None and not os.environ.get("KEEP"):
-            subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
-    failed = [n for n, ok in results if not ok]
-    print(f"== RESULT: {len(results) - len(failed)} passed, {len(failed)} failed")
-    return 1 if failed else 0
+    return summary()
 
 
 if __name__ == "__main__":

@@ -5,10 +5,11 @@
 With GLOVE_HOME set, it:
   1. renders the session exactly as `glove up` does (`cli._open` +
      `cli._materialize_plan`: .glove/ layout, registry row, subnet);
-  2. does what `glove up` does next — builds images, `compose up -d` every
-     sidecar, runs the extensions' verify checks, runs the launch-time resolution (`model: auto`, `capabilities:
-     auto`) from a throwaway container on the harness network, records it in
-     .glove/effective.yml, and renders the harness home;
+  2. does what `glove up` does next (`live_common.live_session`) — its
+     preflight, builds images, `compose up -d` every sidecar, runs the
+     extensions' verify checks, runs the launch-time resolution (`model: auto`,
+     `capabilities: auto`) from a throwaway container on the harness network,
+     records it in .glove/effective.yml, and renders the harness home;
   3. instead of the interactive TUI, runs the harness once non-interactively
      (`pi -p <prompt>`) inside the same hardened, nono-wrapped container;
   4. with --isolation, runs checks in that container that nothing of the
@@ -22,17 +23,9 @@ does; nothing here prints them.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from dataclasses import asdict
-from pathlib import Path
 
-from glove import sessiondir
-from glove.cli import _materialize_plan, _now, _open, _resolve_extensions
-from glove.harnessconfig import render_home
-from glove.plan import secret_env
-from glove.session import _compose_base, ensure_images, start_sidecars
+from live_common import check, live_session, summary
 
 ISOLATION = r"""
 set -u
@@ -55,45 +48,26 @@ echo "ISOLATION: PASS (no session state visible)"
 
 
 def main(directory: str, prompt: str, isolation: bool) -> int:
-    sd, _, sid, cfg = _open(Path(directory))
-    plan, _, _ = _materialize_plan(sd, sid, cfg)
-    print(f"== session {sid} at {sd.root} (subnet {cfg.subnet}); compose project {plan.project}")
-    secrets = secret_env(plan)
-    env = {**os.environ, **secrets}
-    rt = cfg.provider  # docker | podman (the session file's runtime)
-    base = _compose_base(rt, plan.project, sd.compose)
-    rc = 0
-    try:
-        ensure_images(cfg, plan, rt)
-        start_sidecars(plan, sd.compose, provider=rt, env=env)  # up + verify, as `glove up`
-        print("== sidecars up and verified")
-        print("== launch-time resolution (throwaway container on the harness network)")
-        _resolve_extensions(plan, rt, secrets)
+    with live_session(directory) as s:
+        sd, cfg, plan = s.sd, s.cfg, s.plan
+        print(f"== sidecars up and verified; subnet {cfg.subnet}; compose project {plan.project}")
         m = plan.model
-        sessiondir.write_effective(sd.effective, cfg, {"at": _now(), "model": asdict(m)})
         print(f"   descriptor: model={m.model} base_url={m.base_url} api={m.api} vision={m.vision} "
               f"context_window={m.context_window} key={'yes' if m.api_key_env else 'no'}")
-        render_home(cfg, plan.profile, sd.home, m, mount_plan=plan.mount_plan, comp=plan.composition)
         if cfg.harness == "pi":
             models = json.loads((sd.home / ".pi/agent/models.json").read_text())["providers"]["glove"]
             print("== models.json (provider glove):")
             print(json.dumps(models, indent=2))
         print(f"== harness answer ({cfg.harness} -p, nono-wrapped, hardened container):")
-        cmd = [*plan.harness_command, "-p", prompt]
-        out = subprocess.run([*base, "run", "--rm", "-T", plan.harness_service, *cmd], env=env,
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180)
+        out = s.run(*plan.harness_command, "-p", prompt, timeout=180)
         print(out.stdout.strip() or out.stderr.strip()[-2000:])
-        rc = out.returncode
+        check(f"{cfg.harness} answered", out.returncode == 0, f"exit {out.returncode}")
         if isolation:
             print("== isolation checks (same harness service: its mounts, user and hardening)")
-            iso = subprocess.run([*base, "run", "--rm", "-T", "--entrypoint", "sh", plan.harness_service,
-                                  "-c", ISOLATION], env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                 text=True, timeout=120)
+            iso = s.run("-c", ISOLATION, entry="sh", timeout=120)
             print(iso.stdout.strip() + (("\n" + iso.stderr.strip()[-1000:]) if iso.returncode else ""))
-            rc = rc or iso.returncode
-        return rc
-    finally:
-        subprocess.run([*base, "down", "--volumes"], env=env, capture_output=True)
+            check("no session state visible", iso.returncode == 0, f"exit {iso.returncode}")
+    return summary()
 
 
 if __name__ == "__main__":

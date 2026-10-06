@@ -133,9 +133,9 @@ def materialize(ctx: dict[str, Any]) -> None:
         (state / "profile").mkdir(mode=0o700, exist_ok=True)
     for setting, sub in (("downloads", "browser-output"), ("uploads", "browser-uploads")):
         if s[setting] == "work":
-            if not ctx["work"]:
+            if not ctx["work"]["host"]:
                 raise ValueError(f"playwright.{setting}: work needs the session's work dir")
-            Path(ctx["work"], sub).mkdir(exist_ok=True)
+            Path(ctx["work"]["host"], sub).mkdir(exist_ok=True)
 
 
 def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:

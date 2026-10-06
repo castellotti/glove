@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase 2 integration checks (PLAN §8) — nono enforcer inside the real Pi image.
 #
-# These run against Docker with the shipping `glove/pi:0.5.0` image and the
+# These run against Docker with the shipping `glove/pi` base image and the
 # policies glove renders for a session. They exercise ring 1 (the kernel policy)
 # directly via `nono wrap`/`nono run` — i.e. exactly what the Pi enforcer
 # extension prepends to every shell command — WITHOUT needing an LLM or the TUI.
@@ -16,8 +16,9 @@
 set -u
 RT="${RT:-docker}"   # docker | podman
 
-IMAGE="${GLOVE_PI_IMAGE:-glove/pi:0.5.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+. "$ROOT/tests/integration/lib_session.sh"
+IMAGE="${GLOVE_PI_IMAGE:-$(glove_image pi)}"
 WORKDIR="$(mktemp -d)"
 HOMEDIR="$(mktemp -d)"
 GLOVE_HOME="$(mktemp -d)"
@@ -113,6 +114,6 @@ done
 rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
-echo "Manual (need a live LLM): the harness completes a trivial -p prompt (credential path);"
-echo "browser_navigate via the Pi tool opens the host Chrome; curl to the browser sidecar from a shell fails."
+# A harness turn through the stub (credential path, wrapped tools): test_config_protect.sh,
+# test_nono_srt.sh; the browser MCP from a shell: test_playwright.sh.
 [ "$FAIL" -eq 0 ]

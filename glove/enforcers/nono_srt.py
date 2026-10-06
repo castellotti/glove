@@ -37,10 +37,11 @@ import json
 import os
 from typing import TYPE_CHECKING
 
+from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
 from .base import ENFORCER_DIR, GLOVE_PTY
 from .nono import policies as nono_policies
-from .srt import APPLY_SECCOMP, GLOVE_SRT, HARNESS_HOME_MOUNT, NODE, TMP, SrtEnforcer
+from .srt import APPLY_SECCOMP, GLOVE_SRT, NODE, TMP, SrtEnforcer
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -82,7 +83,7 @@ def render_harness_settings(plan: SessionPlan) -> dict:
         "filesystem": {
             "denyRead": hide,
             "allowRead": [],
-            "allowWrite": [_work(plan), *rw, HARNESS_HOME_MOUNT, TMP, *plan.composition.channel_paths],
+            "allowWrite": [_work(plan), *rw, CONTAINER_HOME, TMP, *plan.composition.channel_paths],
             "denyWrite": protected_paths(plan),
         },
         # No `network` block: srt then creates no network namespace or proxy

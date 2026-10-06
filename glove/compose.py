@@ -36,6 +36,7 @@ from .extensions import base_context as _ctx
 from .extensions import image_tag as _image_tag
 from .extensions import render_value as _render
 from .hardening import SIDECAR_ONLY_SECCOMP
+from .mounts import WORK_TARGET
 from .naming import scoped
 from .runtimes.seccomp import SECCOMP_DIR
 
@@ -162,15 +163,15 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
                     if not work:
                         raise ExtensionError(f"{where}: a sidecar never binds all of /work, only a subdirectory "
                                              "(or with the `work` privilege)")
-                    if v.get("target") != "/work" or v.get("read_only"):
-                        raise ExtensionError(f"{where}: the `work` privilege binds /work read-write at /work")
+                    if v.get("target") != WORK_TARGET or v.get("read_only"):
+                        raise ExtensionError(f"{where}: the `work` privilege binds /work read-write at {WORK_TARGET}")
                 require_trust(a, f"{where}: binding /work or a subdirectory")
                 bind = dict(v)
             else:
                 raise ExtensionError(
                     f"{where}: a sidecar may bind only its state dir ({{{{ state }}}}), read-only its "
                     "assets ({{ assets }}), an export root it owns ({{ exports.<root> }}), or a "
-                    "subdirectory of /work ({{ work }}/<dir>)"
+                    "subdirectory of /work ({{ work.host }}/<dir>)"
                 )
             if label:
                 # SELinux hosts deny containers an unlabelled bind; `z`: shared
@@ -257,7 +258,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
             out["networks"] = nets
     if svc.get("volumes"):
         out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra, work=bool(priv.get("work")))
-    if priv.get("work") and not any(v.get("target") == "/work" for v in out.get("volumes") or []):
+    if priv.get("work") and not any(v.get("target") == WORK_TARGET for v in out.get("volumes") or []):
         raise ExtensionError(f"{where}: holds the `work` privilege but binds no /work")
     for c in comp.channels:
         if c.extension == a.name and short in c.services:

@@ -9,7 +9,7 @@ services:
   gh:
     image: "{{ libs.relay.images.relayd }}"
     command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel.github.path }}",
-              "--policy", "/opt/glove/github/relay_policy.py", "--work", "/work"]
+              "--policy", "/opt/glove/github/relay_policy.py", "--work", "{{ work.target }}"]
 {% if endpoint['github-egress'].interposed %}
     networks: [ghnet]
 {% else %}
@@ -20,9 +20,9 @@ services:
       RELAY_TIMEOUT: "{{ settings.timeout }}"
       RELAY_SETTINGS: {{ {"allow": settings.allow or []} | tojson | tojson }}
       RELAY_GITHUB_TOKEN:    # from glove's environment at `compose up` (hooks.py); never stored here
-    working_dir: /work
+    working_dir: {{ work.target }}
     volumes:
-      - { type: bind, source: "{{ work }}", target: /work }
+      - { type: bind, source: "{{ work.host }}", target: "{{ work.target }}" }
       - { type: bind, source: "{{ assets }}/relay_policy.py", target: /opt/glove/github/relay_policy.py,
           read_only: true }
     tmpfs: ["/tmp"]

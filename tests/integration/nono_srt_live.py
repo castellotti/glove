@@ -87,23 +87,29 @@ curl -sS -m 5 "http://$LLM_HOST:$LLM_PORT/v1/models" >/dev/null 2>&1; echo "T_NE
 
 def drive_tui(tui: Tui) -> dict:
     """With the harness TUI on a 30x100 pty: resize to 40x160, `!` a command
-    that tries to open the terminal, then quit. Returns what was observed."""
+    that tries to open the terminal, then quit. Returns what was observed, and
+    how long each step took to show (`waited`)."""
 
     def widest(b: bytes) -> int:
         return max((len(m) for m in re.findall("[─━]+", b.decode(errors="replace"))), default=0)
 
-    before = widest(tui.pump(20))
+    waited = {}
+    before = widest(tui.wait_drawn(100))
+    waited["startup"] = tui.waited
     tui.resize(40, 160)
-    after = widest(tui.pump(4))
+    after = widest(tui.pump_until("[─━]{160}", 20))
+    waited["resize"] = tui.waited
     # markers built at run time: Pi echoes the command text itself
     shell = tui.send(b"!perl -e 'open(T, \"+<\", \"/dev/tty\") or die \"TTY\".\"-REFUSED: $!\\n\"; "
                      b"print \"TTY\".\"-OPENED\\n\"'", 1)
-    shell += tui.send(b"\r", 10)  # on its own: Claude Code takes one burst as a paste, Enter included
+    tui.send(b"\r")  # on its own: Claude Code takes one burst as a paste, Enter included
+    shell += tui.pump_until("TTY-(REFUSED|OPENED)", 30)
+    waited["shell"] = tui.waited
     if os.environ.get("TUI_DUMP"):
         Path(os.environ["TUI_DUMP"]).write_text(Tui.text(bytes(tui.buf)))
     tui.send(b"\x03\x03", 2)
     tui.kill()
-    return {"before": before, "after": after, "shell": Tui.text(shell)}
+    return {"before": before, "after": after, "shell": Tui.text(shell), "waited": waited}
 
 
 def main(directory: str) -> int:
@@ -217,6 +223,8 @@ def main(directory: str) -> int:
         check("`!` ran and could not open /dev/tty (TIOCSTI into the harness)",
               "TTY-REFUSED: No such device" in o["shell"] and "TTY-OPENED" not in o["shell"],
               o["shell"][-200:].replace("\n", " "))
+        print("  (shown after: " + ", ".join(f"{k} {'-' if v is None else f'{v:.1f}s'}"
+                                             for k, v in o["waited"].items()) + ")")
     return summary()
 
 

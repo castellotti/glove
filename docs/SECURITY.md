@@ -19,6 +19,12 @@ attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
 container's own daemons, denied paths never opened), which is what makes a
 ring-0 escape harder to *deliver*, not merely harder to *exploit*.
 
+Ring 1 has no off switch a session can reach: the harness entrypoint refuses
+to start on an invalid policy or an incomplete srt layer (there is no
+fail-open override). glove alone sets git's config env vars (`GIT_CONFIG_*`;
+`env:` may not), and every `$` it renders into the compose project is literal,
+so no value is interpolated from the host's environment.
+
 ## Enforcers at a glance (ring 1)
 
 | | `nono+srt` | `nono` | `srt` | `none` |
@@ -100,10 +106,13 @@ Every capability (the model, search, the browser, …) is an extension in
   only a private IPv4 address (10/8, 172.16/12, 192.168/16) or a LAN name (one
   label, or under `.lan`, `.local`, `.home.arpa`, `.internal`; never
   `*.docker.internal`, `localhost`, loopback, link-local or a public address).
-  Residual: a name is resolved by the forwarder's resolver when it connects, so
-  a LAN resolver that answers it with a public address is followed (name an IP
-  to rule that out); and a private range also covers the Docker host's own
-  bridge gateways.
+  A name is checked again where it is dialled: the socat forwarder resolves it
+  once at start (`glove-lan-forward`, `getent ahostsv4`), refuses unless the
+  answer is a private IPv4 address and dials that address; under `observe` the
+  netgate checks every connection (`--lan-only`; a refused flow is `blocked`,
+  rule `lan-only`). So a LAN resolver answering with a public address is
+  refused, not followed. Residual: a private range also covers the Docker
+  host's own bridge gateways.
 - **The `work` privilege** (in-tree or trusted only) binds the harness's whole
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
   it. It exists for `github` (below).
@@ -367,7 +376,14 @@ Claude Code from starting (fail closed).
   is an absolute path; Edit rules cover every writing tool). Tool commands
   cannot reach the home at all (ring 1). Contributed skills are therefore
   linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
-  home, so a skill's files are readable by the path Claude Code shows.
+  home, so a skill's files are readable by the path Claude Code shows. Ring 0
+  also binds what Claude Code loads from the home read-only
+  (`protected_home`): `settings.json`, `CLAUDE.md` and the `agents/`,
+  `commands/`, `skills/`, `plugins/`, `output-styles/` and `rules/` dirs, so a
+  deny rule Claude Code fails to apply still leaves them unwritable. What it
+  writes stays writable: `.claude.json`, `backups/`, `history.jsonl`,
+  `projects/`, `sessions/` (measured on 2.1.288).
+  `/model`'s "set as default" reports that it can't save.
 - **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
   every command still runs under ring 1. `WebFetch` is denied unless the
   session has `webfetch` (see "Claude Code's own WebFetch" below). An extension's
@@ -473,8 +489,7 @@ wrapper and the planted hook ran in the harness.
   whatever its protected directories already hold, now read-only: check
   `extensions/`, `tools/`, `plugins/` and the rest before resuming one. Pi reads the project's
   `sessionDir` before it resolves trust, so a planted `.pi/settings.json` can
-  move where sessions are written. Claude Code's own home is guarded by
-  managed deny rules on its file tools, not by ring 0.
+  move where sessions are written. Claude Code's home: see its section above.
 
 ## Tool commands and the terminal (TIOCSTI)
 
@@ -736,5 +751,8 @@ Be precise about what "container root" means here:
   and *what*, not *whether the edit was wise*. `/work` is writable; the agent can
   still break your code inside it. Use version control.
 - **Supply-chain trust of the images/packages** themselves — glove pins the nono
-  and Playwright versions and vendors the seccomp profile, but building images
-  pulls from upstream registries.
+  and Playwright versions, each harness release (`version` in `harness.yml`,
+  which must equal the `audited_version` its protected paths were checked
+  against) and Vibe's `uv` by digest, and vendors the seccomp profile; image
+  tags hash their build contexts, so a changed context always rebuilds. But
+  building images pulls from upstream registries.

@@ -20,7 +20,6 @@ an export root). No other host path reaches a template.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import ipaddress
 import re
@@ -34,10 +33,10 @@ import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from .config import ConfigError, HostService, is_secret_ref
+from .config import ConfigError, HostService, git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
-from .mounts import host_path
+from .mounts import WORK_TARGET, host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
@@ -444,6 +443,7 @@ class Composition:
     state_root: Path
     endpoints: list[Endpoint] = field(default_factory=list)
     harness_env: dict[str, str] = field(default_factory=dict)
+    git_config: list[tuple[str, str]] = field(default_factory=list)  # `harness.git_config` pairs
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
     # Neutral contributions, collected only when the harness renders them
     # (harness.yml `contributions`): skills as (ext, src dir baked into the image
@@ -465,7 +465,7 @@ class Composition:
     # The session directory (hooks only — never a template) and its /24.
     session_dir: Path | None = None
     # The harness's /work on the host: trusted extensions may bind a named
-    # subdirectory of it into a sidecar (`{{ work }}/<dir>`), never all of it.
+    # subdirectory of it into a sidecar (`{{ work.host }}/<dir>`), never all of it.
     work_dir: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
@@ -561,9 +561,13 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
                      "aliases": list(e.aliases), "interposed": e.interposed}
             for e in comp.endpoints
         },
+        # the endpoints this extension declared, e.g. for a sidecar dialling its own forwarders
+        "own_endpoints": {e.name: {"host": e.host(comp.session), "port": e.port}
+                          for e in comp.endpoints if e.extension == a.name},
         "state": str(comp.state_dir(a.name)),
         "mount": dict(a.mounts),
-        "work": str(comp.work_dir or ""),
+        # /work on the host, and where the `work` privilege binds it in a sidecar
+        "work": {"host": str(comp.work_dir or ""), "target": WORK_TARGET},
         "assets": str(a.manifest.path),
         "images": {k: image_tag(a, k) for k in (a.manifest.raw.get("images") or {})},
         "libs": {lib.name: {"images": {k: image_tag(lib, k) for k in (lib.manifest.raw.get("images") or {})}}
@@ -583,14 +587,10 @@ def required_libs(comp: Composition, a: Active) -> list[Active]:
 def image_tag(a: Active, name: str) -> str:
     """Local tag for an extension-built image: content-addressed by its context."""
     spec = (a.manifest.raw.get("images") or {}).get(name) or {}
+    from .image import content_hash
+
     ctx_dir = a.manifest.path / str(spec.get("build", name))
-    h = hashlib.sha256()
-    if ctx_dir.is_dir():
-        for p in sorted(ctx_dir.rglob("*")):
-            if p.is_file() and "__pycache__" not in p.parts:
-                h.update(str(p.relative_to(ctx_dir)).encode())
-                h.update(p.read_bytes())
-    return f"glove/ext-{a.name}-{name}:{h.hexdigest()[:12]}"
+    return f"glove/ext-{a.name}-{name}:{content_hash('', [(name, ctx_dir)])}"
 
 
 def select(
@@ -842,7 +842,7 @@ def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
 
 # `harness:` keys every extension may use; a harness's own name keys a section
 # only its adapter reads (e.g. `pi: {extensions: [...]}`).
-HARNESS_KEYS = frozenset({"image", "env", "brief"}) | CONTRIBUTIONS
+HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief"}) | CONTRIBUTIONS
 
 
 def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
@@ -873,6 +873,7 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
         if v is None:
             raise ExtensionError(f"{where}: env {k!r} has no value (use `when:` to leave it unset)")
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
+    comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
             spec = render_value(item if isinstance(item, dict) else {"src": item}, ctx, where)

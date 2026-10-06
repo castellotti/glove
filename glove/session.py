@@ -18,12 +18,12 @@ from typing import TYPE_CHECKING
 import yaml
 from rich.console import Console
 
-from .config import Config
-from .enforcers.base import ENTRYPOINT_DIR, PTY_DIR, SRT_IMAGE_DIR, srt_suffix, uses_srt
-from .harness import HarnessProfile, effective_image
+from .config import Config, ConfigError
+from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
+from .harness import HarnessProfile, base_contexts, effective_image
 from .naming import project_name, scoped
-from .plan import FORWARDER_IMAGE
-from .runtimes.docker import TEMPLATES_DIR
+from .plan import FORWARDER_DIR, forwarder_image
+from .runtimes import get_runtime
 
 if TYPE_CHECKING:
     from .plan import SessionPlan
@@ -43,17 +43,11 @@ def _image_exists(provider: str, tag: str) -> bool:
 
 
 def build_forwarder(provider: str, *, force: bool = False) -> None:
-    if not force and _image_exists(provider, FORWARDER_IMAGE):
+    tag = forwarder_image()
+    if not force and _image_exists(provider, tag):
         return
-    console.print(f"[bold]building forwarder image[/bold] {FORWARDER_IMAGE}")
-    subprocess.run(
-        [
-            provider, "build", "-t", FORWARDER_IMAGE,
-            "-f", str(TEMPLATES_DIR / "forwarder.Dockerfile"),
-            str(TEMPLATES_DIR),
-        ],
-        check=True,
-    )
+    console.print(f"[bold]building forwarder image[/bold] {tag}")
+    subprocess.run([provider, "build", "-t", tag, str(FORWARDER_DIR)], check=True)
 
 
 def _build_base(
@@ -70,10 +64,11 @@ def _build_base(
         return
     if not profile.dockerfile.exists():
         raise FileNotFoundError(f"no Dockerfile for harness {profile.name}: {profile.dockerfile}")
-    context = profile.dockerfile.parent
+    (_, context), *named = base_contexts(profile)
     console.print(f"[bold]building base image[/bold] {tag}  (context: {context})")
-    cmd = [provider, "build", "-t", tag, "--build-context", f"glovepty={PTY_DIR}",
-           "--build-context", f"gloveentry={ENTRYPOINT_DIR}"]
+    cmd = [provider, "build", "-t", tag, "--build-arg", f"HARNESS_VERSION={profile.version}"]
+    for name, path in named:
+        cmd += ["--build-context", f"{name}={path}"]
     if apt_packages:
         cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:
@@ -166,6 +161,12 @@ def ensure_images(cfg: Config, plan: SessionPlan, provider: str, *, rebuild: boo
     )
 
 
+def compose_process_env(provider: str, secrets: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment of a `compose` process: glove's, the runtime's own
+    (Podman's banner off) and the session's secrets (never in a file)."""
+    return {**os.environ, **get_runtime(provider).compose_cli_env, **(secrets or {})}
+
+
 def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
     # Both docker and podman expose a `compose` subcommand in this environment.
     return [provider, "compose", "-p", project, "-f", str(compose_file)]
@@ -197,8 +198,6 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
         return
     with_secrets = [n for n in sidecars if services[n].get("secrets")]
     console.print("[bold]starting sidecars…[/bold] " + ", ".join(sidecars))
-    from .runtimes import get_runtime
-
     # podman: one container at a time (see PodmanRuntime.serial_start)
     batches = [[n] for n in sidecars] if get_runtime(provider).serial_start else [sidecars]
     try:
@@ -244,19 +243,35 @@ def launch(
     only in this process environment, never written to a file."""
     base = _compose_base(provider, plan.project, compose_file)
     ensure_images(cfg, plan, provider, rebuild=rebuild)
-    env = {**os.environ, **secrets}
+    env = compose_process_env(provider, secrets)
     start_sidecars(plan, compose_file, provider=provider, env=env)
     if prepare is not None:
         prepare()
 
     console.print("[bold]launching harness (Ctrl-D to exit)…[/bold]")
     try:
-        subprocess.run([*base, "run", "--rm", "-it", plan.harness_service], check=False, env=env)
+        subprocess.run([*base, "run", "--rm", "-it", "--name", plan.harness_service, plan.harness_service],
+                       check=False, env=env)
     finally:
         console.print(
             "[dim]harness exited; sidecars still up. Run `glove down` in the session "
             "directory to tear down.[/dim]"
         )
+
+
+def clear_stale_harness(provider: str, name: str) -> None:
+    """The harness runs under one name per session, so a second `glove up`
+    can't start beside it. A running one is refused (`glove up` checks before
+    it starts a host service or recreates a sidecar under it); a stopped one,
+    left when its client was killed, is removed."""
+    state = subprocess.run([provider, "container", "inspect", "-f", "{{.State.Running}}", name],
+                           capture_output=True, text=True, check=False)
+    if state.returncode != 0:
+        return
+    if state.stdout.strip() == "true":
+        raise ConfigError(f"this session's harness is already running ({name}); "
+                          "use that terminal, or `glove down` first")
+    subprocess.run([provider, "rm", "-f", name], stdout=subprocess.DEVNULL, check=False)
 
 
 # curl exit codes that mean "nothing answers yet", and fail fast: 6 (the name
@@ -328,4 +343,4 @@ def teardown(session: str, *, provider: str, wipe: bool) -> None:
     cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]  # services since removed
     if wipe:
         cmd.append("--volumes")
-    subprocess.run(cmd, check=False)
+    subprocess.run(cmd, check=False, env=compose_process_env(provider))

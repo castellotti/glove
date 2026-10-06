@@ -4,6 +4,12 @@ summary: Pi coding agent (earendil-works/pi-coding-agent).
 # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,
 # enforcer extension) only. Optional capabilities are opt-in extensions.
 image: glove/pi:0.5.0
+# The harness release the image installs (the Dockerfile's HARNESS_VERSION).
+version: 0.87.1
+# The release protected_home, trusted_files and masked_files were audited
+# against: a new release can add a dir it loads code or config from, so glove
+# refuses a `version` that has not been re-audited.
+audited_version: 0.87.1
 # Load only the always-on ring-1 `enforcer` extension (deps are node builtins)
 # from a system path; the user's own extensions still load from the config home.
 # Capability extensions (search, browser) are added to this entry by the adapter
@@ -12,6 +18,8 @@ image: glove/pi:0.5.0
 # shebang: a `toolchains` node block puts a pinned node first on PATH.
 entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enforcer]
 config_home: { env: PI_CODING_AGENT_DIR, path: /home/agent/.pi/agent }
+# What the agent is told about this harness under glove (its context file).
+brief: brief.md
 context_file: /home/agent/.pi/agent/AGENTS.md
 # Read-only to the agent (ring 0), relative to the home: the settings, models
 # and trust store glove renders, and the dirs Pi loads code, skills, prompts
