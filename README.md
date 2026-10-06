@@ -275,7 +275,7 @@ toolchains:                       # a list; order is install and PATH order; one
   {browsers: true}}` opts in (refused unless a block bakes `browsers`): the tool profile reads all of `/proc`, and
   Chromium starts with `chromiumSandbox: false`. Other processes' `environ`,
   memory and fd links stay closed (Landlock refuses access to processes outside
-  the command's own sandbox, so the harness's LLM key stays hidden); their
+  the command's own sandbox, so the harness's env stays hidden); their
   command lines and `/proc/net` become readable. Verified live under
   `nono+srt` (Docker) and plain `nono` (Podman's default; there the harness's
   Landlock domain is each command's parent). The agent is
@@ -364,11 +364,15 @@ prompt-injected instructions) will run with the wider reach.
 > `env:<VAR>`; a literal key is refused. glove resolves it in memory when the
 > session launches (never during `glove plan` or `glove check`, which only checks
 > that the Keychain item exists), and the effective config records
-> only the reference. The compose file declares `GLOVE_LLM_API_KEY` without a value, glove supplies it in
-> the environment of `compose` when it starts the session, and Pi's `models.json`
-> refers to it as `"$GLOVE_LLM_API_KEY"`. Inside the sandbox only the harness
-> process sees it; ring 1 strips it from every shell command. Store a key with
-> `glove keychain set <service>` (it prompts; the key is never in argv).
+> only the reference. **The harness never holds an API key:** glove hands it
+> only to the `llm` extension's `llm-auth` sidecar (through `compose`'s
+> environment at launch), which adds it to model requests and refuses anything
+> but the model API's paths ([extensions/llm/README.md](extensions/llm/README.md)).
+> The harness's variable (`GLOVE_LLM_API_KEY`; Claude Code's
+> `ANTHROPIC_API_KEY`) holds the public placeholder `glove-injected`. The one
+> exception is a Claude Code subscription token (`auth: oauth`, below): it
+> stays in the harness env, and ring 1 strips it from every shell command. Store a key with `glove keychain set <service>` (it
+> prompts; the key is never in argv).
 
 ## Harnesses
 
@@ -464,7 +468,7 @@ extensions:
     model: claude-sonnet-5-5
     auth: oauth                       # a subscription token from `claude setup-token`
     api_key: keychain:claude-code-me  # `glove keychain set claude-code-me`, then paste the token
-    # auth: api-key + an API key works too (Claude Code asks once whether to use it)
+    # auth: api-key + an API key works too (injected by llm-auth; Claude Code never holds it)
 ```
 
 - **Image** `glove/claude-code:0.2.0`: the native Claude Code binary (pinned,
@@ -499,10 +503,13 @@ extensions:
     have (`all_tools`) a deny rule, so Claude Code never offers it (Playwright's
     `browser_run_code_unsafe` and `browser_evaluate` included);
   - non-essential traffic, telemetry, error reporting and auto-update off.
-- **Key:** the subscription token travels only as `CLAUDE_CODE_OAUTH_TOKEN`
-  (an API key as `ANTHROPIC_API_KEY`). The `anthropic` provider allows `auth:
-  oauth` for `claude-code` only. With a token Claude Code dials only
-  `api.anthropic.com`, through the session's `llm` forwarder.
+- **Key:** an API key never enters the harness: `llm-auth` injects it, and
+  `ANTHROPIC_API_KEY` holds the placeholder (pre-approved in `.claude.json`, so
+  Claude Code doesn't ask about it). A subscription token is the exception (see
+  [docs/SECURITY.md](docs/SECURITY.md) for why): it stays in the harness env as
+  `CLAUDE_CODE_OAUTH_TOKEN` (ring 1 strips it from tool commands), and Claude
+  Code dials only `api.anthropic.com` through the `llm` forwarder. The
+  `anthropic` provider allows `auth: oauth` for `claude-code` only.
 - **Home:** `settings.json` (model, no co-author trailer, `harness_config.settings`),
   `.claude.json` onboarding and `/work` trust merged into whatever Claude Code
   keeps there, `CLAUDE.md` (environment + brief). Contributed skills are linked
@@ -543,7 +550,7 @@ Core validates all of it:
   user chose, a named subdirectory of `work/` (all of it only with the `work`
   privilege: `github`'s sidecar, which pushes the agent's checkout). A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
-  refuses), so it gets one as the harness gets its LLM key: a `launch_env` hook
+  refuses), so it gets one as `llm-auth` gets the LLM key: a `launch_env` hook
   fills an `environment:` key declared without a value, at `compose up`.
 - **Channels** (`channels: {name: {services: [...]}}`, in-tree or trusted only)
   are a directory shared by the harness and some of the extension's sidecars: a
@@ -603,8 +610,10 @@ Core validates all of it:
 names a catalog entry (`extensions/llm/providers/*.yml`). `location:` routes it:
 `host` → a forwarder to this Mac; `lan` → a forwarder that dials exactly the
 configured `host:port`; `internet` → a forwarder to the provider's HTTPS host,
-aliased so TLS runs end to end. The harness never gets LAN or internet reach
-itself. `model: auto` and `capabilities: auto` are resolved at launch from a
+aliased so TLS runs end to end. With an API key the harness's forwarder leads
+to the `llm-auth` sidecar instead, which holds the key
+([extensions/llm/README.md](extensions/llm/README.md)). The harness never gets
+LAN or internet reach itself. `model: auto` and `capabilities: auto` are resolved at launch from a
 throwaway container on the harness network (the host never contacts the
 server), and the harness's adapter renders the result into its own config
 (Pi `models.json`, Vibe `config.toml`; vision → `input: ["text","image"]`).
@@ -961,7 +970,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi, Vibe and Claude Code (`test_nono_srt.sh`, `test_config_protect.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi verified (`test_pi_srt.sh`: env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
-| Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested** |
+| Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested**. Key injection (`llm-auth`) verified live against the stubs: Pi, Vibe and Claude Code on Docker, Pi on Podman (`test_llm_inject.sh`); through a real LAN server or a cloud provider (TLS by name): **untested** |
 | Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh`: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code`; `test_config_protect.sh claude-code`: the protected home read-only, `.claude.json` still written) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct`), `playwright` headless with observe (`test_playwright.sh claude-code`: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
@@ -1041,7 +1050,8 @@ bash tests/integration/test_github.sh         # the github relay vs a stub, nono
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))
 SSH_TEST_HOST=… SSH_TEST_USER=… SSH_KEYCHAIN=… bash tests/integration/test_ssh.sh  # the ssh relay vs a LAN
                                               # host you name, nono + nono+srt (22 checks each; OBSERVE=1: 23)
-bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (25/26 checks)
+bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (28 checks with direct)
+bash tests/integration/test_llm_inject.sh pi  # the LLM key only in llm-auth (also: vibe, claude-code) (15 checks)
 bash tests/integration/test_corporate.sh      # corporate egress, a public host as stand-in (11 checks)
 bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarder records (9 checks)
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)

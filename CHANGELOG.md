@@ -6,6 +6,17 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **The LLM key leaves the harness.** With an API key, the `llm` extension's
+  new `llm-auth` sidecar holds the key and injects it into model requests,
+  letting only the model API's paths through; the harness's variable holds the
+  public placeholder `glove-injected` (pre-approved for Claude Code), and
+  glove's launch probe holds no key. A Claude Code subscription token (`auth:
+  oauth`) is not injected and stays in the harness env. Keyless sessions render
+  as before. Mechanics: `extensions/llm/README.md`; residuals:
+  `docs/SECURITY.md`.
+- `tests/integration/test_llm_inject.sh` (pi, vibe, claude-code) checks where
+  the key is and isn't. The integration stubs answer only requests carrying
+  the session's real (fake) key, so every stub-based driver checks the swap.
 - Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
   (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
   through Docker Desktop's file sharing. An extension's `harness.git_config`
@@ -133,6 +144,10 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- Extension compose fragments: an empty `services:` fragment adds nothing.
+  srt lists the harness-env secret gap only when the env holds one.
+- The test suite ignores a shell's `FORCE_COLOR` (rich coloured CLI output
+  split the words tests match).
 - The harness runs as `glove-<id>-harness` (`compose run --name`): a second
   `glove up` while it runs is refused before anything starts, and a
   stopped one left by a killed client is removed. `compose` runs without

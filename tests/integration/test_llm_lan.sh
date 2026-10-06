@@ -10,7 +10,8 @@
 # and `capabilities: auto` resolve through the forwarder from a throwaway
 # container (the host never contacts the server itself), models.json is
 # rendered, and Pi answers one prompt. The key is read from the Keychain in
-# memory and passed only in the compose environment; it is never printed.
+# memory and handed only to the llm-auth sidecar (the harness gets a
+# placeholder); it is never printed.
 # PASS requires models.json `input` to contain "image" (vision reported).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

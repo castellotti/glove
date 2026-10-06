@@ -209,8 +209,8 @@ def _remove(path: Path) -> None:
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
-    """Secret env for `compose up`/`run` only: the harness's LLM key (from the
-    inference provider's secret setting), every extension compose secret, and
+    """Secret env for `compose up`/`run` only: the harness's LLM key or token
+    unless the provider injects it, every extension compose secret, and
     what extensions' `launch_env` hooks return (e.g. a freshly registered VPN
     key). A `keychain:`/`env:` reference is resolved here, in memory, so no file
     holds a secret."""

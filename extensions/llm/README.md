@@ -4,7 +4,7 @@ Fills the required `inference` slot. Pick a provider the way gluetun picks a VPN
 provider: one `provider:` name from the catalog (`providers/<name>.yml`, data
 only) plus a few settings. Everything provider-specific stays here; core only
 sees the resulting *model descriptor* (base URL, wire API, model id,
-capabilities, whether a key is passed).
+capabilities, whether the key is injected).
 
 ```yaml
 extensions:
@@ -21,16 +21,23 @@ extensions:
 
 ## Auth
 
-`api_key` is a reference (`keychain:<service>` or `env:<VAR>`), resolved at
-launch and handed to the harness only in its environment. The harness's adapter
-names the variable (Pi/Vibe: `GLOVE_LLM_API_KEY`; Claude Code:
-`ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` with `auth: oauth`).
+`api_key` is a reference (`keychain:<service>` or `env:<VAR>`), resolved in
+memory at launch. With an API key the harness never holds it: the key goes
+only to the `llm-auth` sidecar (below), and the harness's variable holds the
+public placeholder `glove-injected` (Pi/Vibe: `GLOVE_LLM_API_KEY`; Claude Code:
+`ANTHROPIC_API_KEY`, which the adapter pre-approves in `.claude.json` so Claude
+Code doesn't ask about it). glove's launch-time probe sends no key either: it
+goes through `llm-auth` too.
 
 `auth: oauth` takes a subscription token instead of an API key, where the
 provider's catalog entry allows it: `anthropic` allows it for `claude-code`
-only (a token from `claude setup-token`). The launch-time probe then sends it as
-a bearer token with the catalog's OAuth headers. A catalog entry's `headers`
-(e.g. `anthropic-version`) go on every probe.
+only (a token from `claude setup-token`). **The token is not injected** (why:
+`docs/SECURITY.md`, "Inference: the key in `llm-auth`"): it stays in the
+harness env as `CLAUDE_CODE_OAUTH_TOKEN` (ring 1 strips it from every tool
+command), and Claude Code dials `api.anthropic.com` itself, through a TLS
+pass-through forwarder. The launch-time probe sends it as a bearer token with
+the catalog's OAuth headers. A catalog
+entry's `headers` (e.g. `anthropic-version`) go on every probe.
 
 Anthropic's model list is paginated and names dated snapshots; the probe follows
 every page (`models_cursor`) and accepts an alias such as `claude-haiku-4-5` for
@@ -38,25 +45,57 @@ its snapshot `claude-haiku-4-5-20251001` (`dated_aliases`).
 
 ## Routing
 
-Each location renders exactly one forwarder, `glove-<id>-llm`, the only thing
-the harness can reach for inference:
+The harness reaches inference only through `glove-<id>-llm`. Where that leads
+depends on the key.
 
-| `location` | forwarder dials | over |
+**With an API key** (the key is injected):
+
+```
+harness ─▶ llm (forwarder) ─▶ llm-auth (holds the key) ─▶ llm-upstream (forwarder) ─▶ server
+```
+
+- `llm-auth` (`image/llm_auth.py`, Python stdlib only) runs as the session uid
+  with no capabilities, `no-new-privileges` and a read-only rootfs, on the
+  internal `glove-<id>-llmauth` network only. Its peers are the two forwarders;
+  the harness can reach neither `llm-auth` nor `llm-upstream`.
+- For each request (a kept-alive connection's included) it checks the method
+  and path against an allowlist: the paths the harnesses send for the
+  provider's API (measured per harness release, `API_PATHS` in `hooks.py`),
+  the model list and the catalog's capability probe. Anything else is a 403,
+  and the connection closes. A chunked request body is refused (411).
+- It drops the client's credentials (`Authorization`, `x-api-key`, `api-key`)
+  and hop-by-hop headers, sets `Host` to the server's, adds the key in the
+  catalog's auth header, and streams the answer back unbuffered.
+- For a cloud provider it does the TLS itself, to the provider's name
+  (certificate verified against the image's CA store); `llm-upstream` only
+  relays TCP. The harness's hop to `llm-auth` is plain HTTP on an internal
+  network.
+- Its log names the method, path and status of each request, never a header
+  value.
+
+`llm-upstream` dials:
+
+| `location` | `llm-upstream` dials | over |
 |---|---|---|
 | `host` | `host.docker.internal:<port>` (endpoint must be `127.0.0.1:<port>`) | `glove-<id>-hostgw` |
 | `lan` | exactly the configured `host:port` | `glove-<id>-llm` (a normal bridge; Docker Desktop routes it to your LAN) |
 | `internet` | the provider's HTTPS host on 443 | `glove-<id>-llm` |
 
-For `internet` the provider hostname (e.g. `api.openai.com`) is an alias of the
-forwarder on the harness network, so the harness speaks TLS to the real name
-(correct SNI and certificate) and still reaches nothing else. Docker's DNS would
-answer that alias to the forwarder itself, so it dials a second hop,
-`glove-<id>-llm-out`, which is not on the harness network and dials the real
-host. `route: egress`
-(cloud inference through the session's VPN/Tor) is not implemented yet.
+**Without a key** (a local server) **or with `auth: oauth`**, `glove-<id>-llm`
+dials the table's target itself. For `internet` the provider hostname (e.g.
+`api.anthropic.com`) is then an alias of the forwarder on the harness
+network, so the harness speaks TLS to the real name (correct SNI and
+certificate) and still reaches nothing else. Docker's DNS would answer that
+alias to the forwarder itself, so it dials a second hop, `glove-<id>-llm-out`,
+which is not on the harness network and dials the real host.
 
-With `observe`, the forwarder records flows as `tool: llm`, `scope:
-local | lan | cloud`.
+`route: egress` (cloud inference through the session's VPN/Tor) is not
+implemented yet.
+
+With `observe`, the forwarders record flows as `tool: llm`, `scope: local |
+lan | cloud`. With an injected key each model call is two flows: `llm`
+(client `harness`, plain HTTP) and `llm-upstream` (client `llm`; for a cloud
+provider it carries the TLS SNI). `glove filter` rules apply at both.
 
 ## `model: auto` and `capabilities: auto`
 
