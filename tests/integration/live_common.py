@@ -108,6 +108,11 @@ class LiveSession:
         """The observe dir's net/ (flows, status), symlinks resolved."""
         return Path(os.path.realpath(registry.observe_dir(self.sid))) / "net"
 
+    def containers(self) -> list[str]:
+        """The names of the session's running containers."""
+        return subprocess.run([self.rt, "ps", "--format", "{{.Names}}", "--filter", f"name={self.prefix}-"],
+                              capture_output=True, text=True).stdout.split()
+
     def flows(self, phases: tuple[str, ...] | None = None) -> list[dict]:
         """The flow records so far (only those `phases`, if given)."""
         return [r for r in read_records(self.net) if phases is None or r.get("phase") in phases]

@@ -4,7 +4,10 @@
 "TOOL RESULT: <first 400 chars>". A request without tools (Claude Code's
 WebFetch summariser, title generation) → "ECHO: <the user text, from the
 first `---`>". Everything else → a fixed sentence. Logs each
-request path, the auth header names present (never values) and tool names.
+request path, the auth header names present and which key arrived (never
+values: `key=`, see llm_stub.key_kind) and tool names. With GLOVE_TEST_LLM_KEY
+set, a request without that key (`x-api-key`, or `Authorization: Bearer`) gets
+a 401, as Anthropic's API would.
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ import re
 import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from llm_stub import KEY, key_kind, refused
 
 REPLY = "hello from the glove anthropic stub"
 
@@ -30,7 +35,13 @@ class H(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         names = [h for h in ("x-api-key", "authorization", "anthropic-beta") if self.headers.get(h)]
-        print(f"stub: {self.command} {self.path} headers={names}", flush=True)
+        print(f"stub: {self.command} {self.path} headers={names} key={self._key()}", flush=True)
+
+    def _key(self) -> str:
+        return key_kind(self.headers.get("x-api-key") or self.headers.get("authorization"), KEY)
+
+    def _refused(self) -> bool:
+        return refused(self, self._key(), b'{"type": "error", "error": {"type": "authentication_error"}}')
 
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode()
@@ -41,6 +52,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self._refused():
+            return None
         if self.path.startswith("/v1/models"):
             return self._json({"data": [{"id": "claude-stub", "type": "model", "display_name": "stub"}]})
         self._json({}, 404)
@@ -48,6 +61,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)
         req = json.loads(self.rfile.read(n) or b"{}")
+        if self._refused():
+            return None
         if "count_tokens" in self.path:
             return self._json({"input_tokens": 10})
         if not self.path.startswith("/v1/messages"):

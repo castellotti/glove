@@ -37,6 +37,21 @@ def test_an_api_key_is_injected_and_claude_code_reads_a_placeholder(tmp_path):
     assert plan.environment["ANTHROPIC_API_KEY"] == "glove-injected"
 
 
+def test_the_placeholder_is_pre_approved_and_earlier_answers_kept(tmp_path):
+    cfg, plan = _plan(tmp_path)
+    state = tmp_path / "h" / ".claude" / ".claude.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"customApiKeyResponses": {"approved": ["abc"], "rejected": ["def"]}}))
+    render_home(cfg, plan, tmp_path / "h")
+    render_home(cfg, plan, tmp_path / "h")  # once only
+    assert json.loads(state.read_text())["customApiKeyResponses"] == {"approved": ["abc", "glove-injected"],
+                                                                      "rejected": ["def"]}
+    (tmp_path / "o").mkdir()
+    cfg, plan = _plan(tmp_path / "o", OAUTH)
+    render_home(cfg, plan, tmp_path / "o" / "h")
+    assert "customApiKeyResponses" not in json.loads((tmp_path / "o" / "h" / ".claude" / ".claude.json").read_text())
+
+
 def test_a_subscription_token_travels_in_the_env_claude_code_reads(tmp_path):
     # not injected: Claude Code's account API (a fixed host) needs the real token
     _, plan = _plan(tmp_path, OAUTH)
