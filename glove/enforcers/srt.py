@@ -12,12 +12,13 @@ Pi's own `sandbox` extension). Unlike nono, srt:
   when `enforcer: srt`). `srt.nested: strong` additionally needs
   `systempaths=unconfined` (masked /proc exposed to the container).
 - strips secrets from tool commands only by **exact name**: every harness
-  secret env var (`plan.passthrough_env`, always including the LLM key) is
+  secret env var (`plan.passthrough_env`) and the LLM key's name is
   rendered as a `credentials.envVars` entry with `mode: deny`, which srt turns
   into bwrap `--unsetenv`. srt has no glob form, unlike nono's `deny_vars`.
   srt's credential *masking* (sentinel + proxy-side substitution) exists but
-  requires TLS termination, so glove does not use it; the key stays in the
-  harness env.
+  requires TLS termination, so glove does not use it. An LLM API key never
+  reaches the harness (`llm`'s llm-auth injects it); a Claude Code
+  subscription token stays in the harness env.
 
 Verified against sandbox-runtime 0.0.77: weak mode enforces under the surgical
 profile (allowWrite honored, everything else read-only, empty allowedDomains =
@@ -150,7 +151,8 @@ class SrtEnforcer:
         """Documented weaknesses vs nono (printed by `glove policy show`)."""
         g = [
             "harness PROCESS is unwrapped (ring-0 only) — srt wraps tool commands only",
-            "LLM key stays in the harness env (tool commands get it unset by exact name only)",
+            *(["a secret (e.g. a subscription token) stays in the harness env (tool commands get it unset "
+               "by exact name only)"] if plan.passthrough_env else []),
             "runs under the relaxed nested-userns seccomp (unprivileged userns enabled; "
             "re-tightened for everything srt wraps)",
             "srt cannot restrict a nested docker bind mount via allowWrite; the "

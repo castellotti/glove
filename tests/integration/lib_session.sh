@@ -22,15 +22,19 @@ new_session() {
 #   stub_llm <harness> <port>
 #     sets STUB_PY (the stub under stubs/ to start on <port>) and LLM (the
 #     session's llm entry for it): Claude Code speaks the Anthropic Messages API,
-#     so it gets the anthropic stub and a fake key; every other harness llama.cpp.
+#     so it gets the anthropic stub, every other harness llama.cpp. Each has a
+#     fake key (GLOVE_TEST_LLM_KEY, exported: glove resolves `env:` from it and
+#     the stub, started after this, answers only requests carrying it), so
+#     glove's llm-auth holds it and the harness a placeholder.
 stub_llm() {
+  export GLOVE_TEST_LLM_KEY=sk-test-llm-inject-1
+  local key='api_key: "env:GLOVE_TEST_LLM_KEY"'
   if [ "$1" = claude-code ]; then
     STUB_PY=anthropic_stub.py
-    LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, api_key: \"env:GLOVE_TEST_ANTHROPIC_KEY\"}"
-    export GLOVE_TEST_ANTHROPIC_KEY=sk-ant-test-not-a-secret
+    LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, $key}"
   else
     STUB_PY=llm_stub.py
-    LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$2\", model: auto}"
+    LLM="{provider: llama.cpp, location: host, endpoint: \"127.0.0.1:$2\", model: auto, $key}"
   fi
 }
 

@@ -56,7 +56,8 @@ def main(directory: str) -> int:
 
         print(f"== one harness per session ({name})")
         first = glove_up(s.sd.root)
-        check("`glove up` runs the harness under its name", bool(wait_for(lambda: harness()[0], 300)),
+        first.wait_drawn(timeout=300)  # read as it draws: a full pty would block `glove up` before the harness
+        check("`glove up` runs the harness under its name", bool(wait_for(lambda: harness()[0], 30)),
               " ".join(Tui.text(bytes(first.buf)).split())[-300:])
         first_id = harness()[1]
         second = glove("up", str(s.sd.root))
@@ -71,7 +72,8 @@ def main(directory: str) -> int:
         subprocess.run([rt, "stop", "-t", "2", name], capture_output=True)  # it exits; no client removes it
         print(f"  (stopped: {'left behind' if harness()[1] else 'removed by the runtime'})")
         third = glove_up(s.sd.root)
-        new = wait_for(lambda: (h := harness())[0] and h[1] != first_id, 300)
+        third.wait_drawn(timeout=300)
+        new = wait_for(lambda: (h := harness())[0] and h[1] != first_id, 30)
         check("the next `glove up` removes the leftover and starts a new harness", bool(new),
               " ".join(Tui.text(bytes(third.buf)).split())[-300:])
         third.kill()  # its harness still running, for `glove down`

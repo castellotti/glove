@@ -1,0 +1,26 @@
+services:
+{% if slot.inference.inject %}
+{% set inject = slot.inference.inject %}
+  # The session's LLM key, injected into the harness's requests (image/llm_auth.py).
+  # Reached only through the harness's `llm` forwarder; it dials the server only
+  # through `llm-upstream`. Both are on llmauth, an internal network.
+  llm-auth:
+    image: "{{ images.auth }}"
+    networks: [llmauth]
+    environment:
+      LLM_AUTH_KEY: null  # from glove's launch_env at `compose up`; never stored here
+      LLM_AUTH_UPSTREAM: "{{ inject.upstream }}"
+      LLM_AUTH_TLS_NAME: "{{ inject.tls_name }}"
+      LLM_AUTH_HOST: "{{ inject.host }}"
+      LLM_AUTH_HEADER: "{{ slot.inference.auth_header }}"
+      LLM_AUTH_SCHEME: "{{ slot.inference.auth_scheme }}"
+      LLM_AUTH_ALLOW: {{ inject.allow | tojson }}
+      LLM_AUTH_PORT: "{{ inject.port }}"
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', {{ inject.port }}), 2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+{% endif %}

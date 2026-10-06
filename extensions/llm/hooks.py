@@ -13,6 +13,14 @@ For `internet` the forwarder carries the provider's hostname as an alias on the
 harness network, so the harness speaks TLS to the real name (correct SNI and
 certificate) while it can still reach nothing else.
 
+With an API key the harness never holds it (`injected()`): its `llm`
+forwarder leads to the `llm-auth` sidecar, which checks each request against
+the API's paths (`allowed_paths()`), injects the key and dials the same
+target through a second forwarder, `llm-upstream` (doing the TLS itself for
+`internet`). The harness gets a dummy key. A Claude Code subscription token
+(`auth: oauth`) is not injected: Claude Code also calls Anthropic's account
+API at a fixed host that a base URL can't redirect.
+
 `resolve()` runs at launch, after the forwarders are up. It resolves
 `model: auto` (the single model `/v1/models` lists) and `capabilities: auto` (the
 catalog's probes) through a throwaway container on the harness network — the
@@ -38,6 +46,15 @@ HEADER_NAME = re.compile(r"[A-Za-z0-9-]+")
 HEADER_VALUE = re.compile(r"[\x20-\x7e]*")
 CAPABILITY_KEYS = ("vision", "context_window", "max_tokens", "reasoning")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+# What a harness sends to its model, per API, under the endpoint's base path
+# (measured: Claude Code 2.1.288, Pi 0.87.1, Vibe 2.25.8). The model list and the
+# catalog's probe are added per provider (glove's resolve goes through llm-auth).
+API_PATHS = {
+    "anthropic-messages": [("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("HEAD", "/api/hello")],
+    "openai-completions": [("POST", "/chat/completions")],
+    "mistral-conversations": [("POST", "/chat/completions"), ("POST", "/conversations")],
+}
+AUTH_PORT = 8080  # llm-auth's listener, and the harness's `llm` port for a cloud provider
 
 
 class LlmError(ValueError):
@@ -136,6 +153,36 @@ def route(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
             "base_path": base_path, "alias": None, "scope": "local" if location == "host" else "lan"}
 
 
+def injected(settings: dict[str, Any]) -> bool:
+    """The key goes to `llm-auth`, not the harness (the manifest's `when:` on
+    the sidecar says the same: `api_key` set, `auth: api-key`)."""
+    return bool(settings.get("api_key")) and settings.get("auth", "api-key") == "api-key"
+
+
+def allowed_paths(cat: dict[str, Any], base_path: str) -> list[list[str]]:
+    """[method, path] pairs llm-auth lets through: the API's paths under
+    `base_path`, the model list and the capability probe under the server's
+    root (`base_path` minus the catalog's own)."""
+    root = _server_root(base_path, cat)
+    paths = [(m, base_path + p) for m, p in API_PATHS[cat["api"]]]
+    paths.append(("GET", root + cat.get("models_endpoint", "/v1/models").split("?", 1)[0]))
+    probe = (cat.get("probes") or {}).get("capabilities")
+    if probe:
+        paths.append((probe.get("method", "GET").upper(), root + probe["path"]))
+    return [list(p) for p in dict.fromkeys(paths)]
+
+
+def _server_root(base: str, cat: dict[str, Any]) -> str:
+    """`base` (a base URL or path) without the catalog's base path: where the
+    model list and the probe live (`resolve` and llm-auth's allowlist agree)."""
+    return base.removesuffix(cat.get("base_path") or "")
+
+
+def _hostport(host: str, port: int, scheme: str) -> str:
+    """`host`, with `:port` unless it is the scheme's default."""
+    return host if port == {"https": 443, "http": 80}.get(scheme) else f"{host}:{port}"
+
+
 def _capabilities(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
     caps = dict(cat.get("defaults") or {})
     explicit = settings.get("capabilities")
@@ -155,20 +202,34 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         raise LlmError(f"llm: provider {cat['name']!r} needs `api_key: keychain:<service>`")
     r = route(s, cat)
     session = ctx["session"]["id"]
-    if r["location"] == "internet":
-        target = {"address": f"{r['host']}:{r['port']}", "via": "llm"}
-        base = f"{r['scheme']}://{r['alias']}{'' if r['port'] in (80, 443) else ':' + str(r['port'])}"
-    elif r["location"] == "lan":
-        target = {"address": f"{r['host']}:{r['port']}", "via": "llm"}
-        base = f"http://glove-{session}-llm:{r['listen_port']}"
+    if r["location"] == "host":
+        target: dict[str, Any] = {"host_port": r["port"]}
     else:
-        target = {"host_port": r["port"]}
-        base = f"http://glove-{session}-llm:{r['listen_port']}"
-    endpoint = {
-        "port": r["listen_port"], "harness": True, "target": target,
-        "aliases": [r["alias"]] if r["alias"] else [],
-        "observe": {"tool": "llm", "scope": r["scope"]},
-    }
+        target = {"address": f"{r['host']}:{r['port']}", "via": "llm"}
+    observe = {"tool": "llm", "scope": r["scope"]}
+    inject = None
+    if injected(s):
+        # harness → llm (forwarder) → llm-auth → llm-upstream (forwarder) → target
+        port = AUTH_PORT if r["location"] == "internet" else r["listen_port"]
+        endpoints = {
+            "llm": {"port": port, "harness": True, "observe": observe,
+                    "target": {"service": "llm-auth", "network": "llmauth", "port": AUTH_PORT}},
+            "llm-upstream": {"port": r["port"], "harness": False, "target": target,
+                             "listen_networks": ["llmauth"], "observe": observe},
+        }
+        base = f"http://glove-{session}-llm:{port}"
+        inject = {
+            "upstream": f"glove-{session}-llm-upstream:{r['port']}",
+            "tls_name": r["host"] if r["scheme"] == "https" else "",
+            "host": _hostport(r["host"], r["port"], r["scheme"]),
+            "allow": json.dumps(allowed_paths(cat, r["base_path"])),
+            "port": AUTH_PORT,
+        }
+    else:
+        base = (f"{r['scheme']}://{_hostport(r['alias'], r['port'], r['scheme'])}" if r["alias"]
+                else f"http://glove-{session}-llm:{r['listen_port']}")
+        endpoints = {"llm": {"port": r["listen_port"], "harness": True, "target": target,
+                             "aliases": [r["alias"]] if r["alias"] else [], "observe": observe}}
     exports = {
         "base_url": base + r["base_path"],
         "api": cat["api"],
@@ -177,6 +238,8 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         "auth_header": auth.get("header", "Authorization"),
         "auth_scheme": auth.get("scheme", "Bearer"),
         "api_key_kind": s["auth"],
+        "api_key_injected": inject is not None,
+        "inject": inject,
         "probe_headers": headers,
         "capabilities": _capabilities(s, cat),
         "capabilities_auto": s.get("capabilities") == "auto",
@@ -185,7 +248,18 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         "location": r["location"],
         "provider": cat["name"],
     }
-    return {"endpoints": {"llm": endpoint}, "exports": exports}
+    return {"endpoints": endpoints, "exports": exports}
+
+
+def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
+    """The key, resolved in memory at `glove up`, for llm-auth only."""
+    s = ctx["settings"]
+    if not injected(s):
+        return {}
+    key = resolve_secret(s["api_key"]).strip()
+    if not key:
+        raise LlmError("llm.api_key resolves to an empty value")
+    return {"env": {"LLM_AUTH_KEY": key}}
 
 
 # --- launch-time resolution ---------------------------------------------------
@@ -251,8 +325,9 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
     """Resolve `model: auto` / `capabilities: auto`. Returns (exports, notes).
     `probe(url, method=, body=, auth=)` → (status, text) via a throwaway container."""
     cat = load_provider(ctx["settings"]["provider"])
-    root = exports["base_url"].removesuffix(cat.get("base_path", "") or "")
-    auth = bool(exports.get("api_key_secret"))
+    root = _server_root(exports["base_url"], cat)
+    # injected: llm-auth adds the key, and glove's probe holds none
+    auth = bool(exports.get("api_key_secret")) and not exports.get("api_key_injected")
     notes: list[str] = []
     out = dict(exports)
     ids = _model_ids(cat, root, probe, auth)

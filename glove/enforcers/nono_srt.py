@@ -88,8 +88,9 @@ def render_harness_settings(plan: SessionPlan) -> dict:
         },
         # No `network` block: srt then creates no network namespace or proxy
         # (the harness stays on ring 0's internal network). No `credentials`:
-        # the harness keeps its env (it needs the LLM key); tool commands lose
-        # every secret-shaped name to nono's deny_vars.
+        # the harness keeps its env (a Claude Code subscription token, when there
+        # is one: an API key is injected by `llm`); tool commands lose every
+        # secret-shaped name to nono's deny_vars.
         "enableWeakerNestedSandbox": not plan.hardening.systempaths_unconfined,
         "seccomp": {"applyPath": APPLY_SECCOMP},
     }

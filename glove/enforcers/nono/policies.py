@@ -125,8 +125,7 @@ def render_harness_profile(plan: SessionPlan) -> dict:
             "read": _read_paths(plan),
         },
         # Ring 0 already limits routable hosts to the sidecars; the harness needs
-        # network to reach them. (Proxy-allowlist + credential injection is a
-        # follow-up.)
+        # network to reach them. (The LLM key is injected by llm-auth, not nono.)
         "network": {"block": False},
         "security": {"signal_mode": "allow_same_sandbox"},
     }

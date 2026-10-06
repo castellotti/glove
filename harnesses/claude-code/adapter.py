@@ -19,7 +19,9 @@ stops Claude Code from starting. They carry:
   (`HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`).
 
 `render_home` writes the user-scope `settings.json` (cosmetic, model) and merges
-the onboarding/trust state into `.claude.json`, which Claude Code also writes.
+the onboarding/trust state into `.claude.json`, which Claude Code also writes;
+with the key injected it also approves the public placeholder Claude Code
+reads, which it would otherwise ask about once.
 Contributed skills are linked from /opt/glove/cc/.claude/skills (baked, loaded
 with `--add-dir`), not the config home, whose deny rules would hide their files.
 """
@@ -36,7 +38,7 @@ from urllib.parse import urlsplit
 from glove.config import ConfigError
 from glove.enforcers.base import argv_lines
 from glove.extensions import ExtensionError, render_value
-from glove.harnessconfig import mcp_tool_names, rel_config_home
+from glove.harnessconfig import INJECTED_KEY, mcp_tool_names, rel_config_home
 from glove.naming import scoped
 
 MANAGED_DIR = "/etc/claude-code"
@@ -260,9 +262,24 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
 
     work = mount_plan.working_dir
     p_state = cfg_dir / ".claude.json"
-    _merge_json(p_state, {"hasCompletedOnboarding": True,
-                          "projects": {work: {"hasTrustDialogAccepted": True}}})
+    state: dict[str, Any] = {"hasCompletedOnboarding": True, "projects": {work: {"hasTrustDialogAccepted": True}}}
+    if model.api_key_injected:  # Claude Code keeps an approved key's last 20 chars
+        tail = INJECTED_KEY[-20:]
+        approved = _approved_keys(p_state)
+        state["customApiKeyResponses"] = {"approved": approved + [tail] * (tail not in approved)}
+    _merge_json(p_state, state)
     return [p_settings, p_state]
+
+
+def _approved_keys(path: Path) -> list:
+    """The key tails Claude Code's state already approves (a list `_merge_json`
+    would replace, not extend)."""
+    try:
+        doc = json.loads(path.read_text()) if path.is_file() else {}
+        approved = doc["customApiKeyResponses"]["approved"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    return approved if isinstance(approved, list) else []
 
 
 def describe(comp) -> list[str]:

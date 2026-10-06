@@ -9,7 +9,8 @@ It checks, against real containers:
      no network; with filter, every gate and the collector mount control/ read-only;
   2. SearXNG is off the egress network and reaches it only through its gate;
   3. Pi's web_search / web_fetch (stub-driven tool calls) are recorded as flows
-     with the right service, tool, client and route; transcripts are exported;
+     with the right service, tool, client and route, and each model call as two
+     flows (`llm` client harness, `llm-upstream` client llm); transcripts are exported;
      the harness sees no export but its transcripts;
   4. filter: `glove filter block example.com` is enforced within seconds (the
      gates report the file's sha256), and the next web_fetch is refused and
@@ -92,9 +93,12 @@ def main(directory: str) -> int:
         fx = [r for r in flows(("open", "update", "close")) if r.get("service") == "searxng-egress"]
         check("flow: SearXNG's engine requests via its gate, client searxng",
               bool(fx) and all(r.get("client") == "searxng" for r in fx), f"{len(fx)} flows")
-        llm = [r for r in flows() if r.get("service") == "llm"]
-        check("flow: the model calls, tool llm, client harness",
-              bool(llm) and llm[-1].get("tool") == "llm" and llm[-1].get("client") == "harness", f"{len(llm)} flows")
+        # each model call is two flows: the harness → llm-auth hop, and llm-auth's (with the key) onward
+        recs = flows()
+        for svc, client in (("llm", "harness"), ("llm-upstream", "llm")):
+            llm = [r for r in recs if r.get("service") == svc]
+            check(f"flow: the model calls via {svc}, tool llm, client {client}",
+                  bool(llm) and llm[-1].get("tool") == "llm" and llm[-1].get("client") == client, f"{len(llm)} flows")
         st = json.loads((net / "status.json").read_text()) if (net / "status.json").exists() else {}
         check("status.json: gates running, rules loaded", bool(st) and (st.get("rules") or {}).get("ok") is True,
               f"rules={json.dumps(st.get('rules', {}))[:80]}")

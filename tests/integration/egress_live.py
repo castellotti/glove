@@ -58,8 +58,7 @@ def main(directory: str) -> int:
         on_wan = sorted(c["Name"] if "Name" in c else c.get("name", "")
                         for c in (doc.get("Containers") or doc.get("containers") or {}).values())
         if not on_wan:  # podman's inspect lists no containers: ask each container instead
-            names = subprocess.run([rt, "ps", "--format", "{{.Names}}", "--filter", f"name={s}-"],
-                                   capture_output=True, text=True).stdout.split()
+            names = live.containers()
             on_wan = sorted(n for n in names if f"{s}-wan" in subprocess.run(
                 [rt, "inspect", "--format", "{{json .NetworkSettings.Networks}}", n],
                 capture_output=True, text=True).stdout)

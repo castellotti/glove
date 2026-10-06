@@ -53,7 +53,8 @@ remaining gaps for a session.
 |---|---|---|---|
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
-| LLM API key | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so the key is never in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. Proxy credential injection, which would keep the key out of the *harness* env too, is deferred. |
+| LLM API key | the harness process (a loader bug, a plugin, a prompt-injected agent) | ring 0 | only the `llm-auth` sidecar holds it; the harness's variable holds the public placeholder `glove-injected` (see "Inference: the key in `llm-auth`" below). A Claude Code subscription token (`auth: oauth`) is the exception: next row |
+| LLM subscription token, and any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the token's variable plus every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so no secret is in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
@@ -89,10 +90,11 @@ Every capability (the model, search, the browser, …) is an extension in
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
   setting is refused. A read-only sidecar cannot take an environment-sourced
-  compose secret (Docker refuses), so such a sidecar gets its secret the way the
-  harness gets its LLM key: a `launch_env` hook fills an `environment:` key
-  declared without a value, for that `compose up` only (it is in the container's
-  config, like the harness's key; never in a glove file).
+  compose secret (Docker refuses), so such a sidecar (`llm-auth`, relayd, the
+  ssh relay) gets its secret from a `launch_env` hook, which fills an
+  `environment:` key declared without a value, for that `compose up` only (it
+  is in that container's config, which `docker inspect` shows; never in a glove
+  file).
 - **Channels** (`channels:`, in-tree or trusted only) are the one non-network
   edge into the harness: a session tmpfs volume at `/run/glove/<name>` shared
   with named sidecars of the same extension, writable by the harness and its
@@ -142,6 +144,47 @@ Every capability (the model, search, the browser, …) is an extension in
 The inference server is reached the same way: one `glove-<id>-llm` forwarder
 that dials exactly the configured host (or the host gateway, or a cloud API on
 443). The harness never gets a LAN or internet route of its own.
+
+### Inference: the key in `llm-auth`
+
+With an API key (`api_key:` set, `auth: api-key`), the key never enters the
+harness. The harness's `llm` forwarder leads to the `llm-auth` sidecar
+(`extensions/llm/image/llm_auth.py`, Python stdlib only), which holds the key
+and dials the server through a second forwarder, `llm-upstream`.
+
+- **Where the key is.** Resolved in memory at `glove up` and handed to
+  `llm-auth`'s environment for that `compose up` (a `launch_env` hook). It is in
+  no file glove writes, in no other container's config, not in the harness's
+  env or `/proc/1/environ` (the placeholder `glove-injected` is), not in a tool
+  command's env, and not in glove's launch-time probe container (the probe goes
+  through `llm-auth` too). Verified live by `tests/integration/test_llm_inject.sh`
+  (Pi, Vibe and Claude Code on Docker, Pi on Podman).
+- **What it lets through, and its reach.** Only the model API's methods and
+  paths (anything else is a 403); it has the sidecar hardening and is on the
+  internal `glove-<id>-llmauth` network only, which the harness can't reach.
+  The request rules, TLS and logging are in `extensions/llm/README.md`
+  ("Routing").
+- **Residual risks:**
+  - **The key is in `llm-auth`'s container config.** `docker inspect` (or
+    `podman inspect`) on the host shows it while the session runs, as it shows
+    relayd's token. Anyone with access to the operator's container engine has
+    it.
+  - **The harness can still use the key** for anything on the allowlist: a
+    prompt-injected agent can make model calls (cost, another model the server
+    lists), just not read the key or call the provider's other APIs (files,
+    batches, keys, billing).
+  - **The harness → `llm-auth` hop is plain HTTP** on internal networks that
+    only the harness, the forwarders and `llm-auth` join. It carries the
+    prompts and answers, never the key.
+- **The exception: a Claude Code subscription token** (`auth: oauth`) is not
+  injected. With a token, Claude Code calls Anthropic's account API (managed
+  settings, policy limits, profile, usage) at a fixed `https://api.anthropic.com`
+  that `ANTHROPIC_BASE_URL` doesn't move; through `llm-auth` those calls would
+  have no route (measured: an 18 s start waiting for remote settings, and no
+  org policy applied). So the token stays in the harness env, as before: ring 1
+  strips it from every tool command, and Claude Code reaches only
+  `api.anthropic.com` through a TLS pass-through forwarder. A loader bug or a
+  plugin in the harness process could read it.
 
 ### Egress (`vpn`, `tor`, `direct`, `corporate`)
 
@@ -263,7 +306,7 @@ runs the real command. What that adds, and what bounds it:
 
 - **The token never enters the harness.** It is resolved from the Keychain in
   memory at `glove up` and reaches relayd's environment for that `compose up`
-  (as the harness's LLM key reaches the harness). relayd passes it only to gh
+  (as the LLM key reaches `llm-auth`). relayd passes it only to gh
   and git. The live test finds it in neither the harness's environment, its
   pid 1, nor any file under `/run`, `/tmp` or the home, and a wrapped command's
   `env` has no `GH_TOKEN`.
@@ -421,10 +464,11 @@ Claude Code from starting (fail closed).
     model call (as any tool result does), and Claude Code's request headers
     identify it, so behind `tor`/`vpn` its fetches are distinguishable from a
     browser's.
-- **Key:** `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) in the harness
-  env only; nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list strip it
-  from every tool command. glove never writes key material: with an API key,
-  Claude Code itself asks once whether to use it and records the answer.
+- **Key:** an API key never enters the harness (`llm-auth` injects it;
+  `ANTHROPIC_API_KEY` holds the pre-approved placeholder). A subscription token
+  is in the harness env as `CLAUDE_CODE_OAUTH_TOKEN` (see "Inference: the key in
+  `llm-auth`" for why); nono's `*TOKEN*`/`*KEY*` globs and srt's exact-name list
+  strip it from every tool command. glove never writes key material.
 - **Gaps:** a glove MCP stdio server has the harness's rights (config home,
   network to the session's forwarders), as under Pi and Vibe. Project settings
   are protected in the working dir Claude Code starts in (its project root);
@@ -446,7 +490,7 @@ the agent's file tools (Pi's `write`/`edit`, Vibe's `write_file` and
 `search_replace`) run in that process, outside the tool wrapper. Both also load
 config and code from the project in `/work`. Without protection, the agent
 could set up code to run inside the harness at the next start, with the
-harness's rights (its env, including the LLM key; the home; the session's
+harness's rights (its env, its home, the session's
 forwarders), and could switch off the wrapper itself. Verified live before the
 fix: a `/work/.vibe/hooks.toml` defining a `pre_tool` hook named
 `glove-enforcer` loads before glove's (project hook files come first, and
@@ -557,7 +601,8 @@ Landlock cannot grant).
   sandbox) gives srt a fresh pty and forwards resizes; `glove-pty ctty` (inside)
   makes it the harness's terminal. The sandbox never holds an fd to your real
   terminal.
-- **The harness env.** The harness keeps its env (it needs the LLM key); nono's
+- **The harness env.** The harness keeps its env (which, with `auth: oauth`,
+  holds Claude Code's token); nono's
   `deny_vars` strip secret-shaped names from every command, and Landlock hides
   `/proc` from them. srt alone would not: an srt-only command can read the
   harness's `/proc/<pid>/environ` (same sandbox, same uid).

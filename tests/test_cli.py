@@ -261,7 +261,9 @@ def test_the_llm_key_is_written_nowhere(home, tmp_path, monkeypatch, harness):
     assert secret not in result.output
     for root in (home, d):
         assert [p for p in root.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()] == []
-    assert "GLOVE_LLM_API_KEY: null" in (d / ".glove" / "compose.yml").read_text()
+    compose = (d / ".glove" / "compose.yml").read_text()
+    # the harness holds a placeholder; the key reaches only llm-auth, at `compose up`
+    assert 'GLOVE_LLM_API_KEY: "glove-injected"' in compose and "LLM_AUTH_KEY: null" in compose
     assert "api_key: env:MY_LLM_KEY" in (d / ".glove" / "effective.yml").read_text()
     if harness == "pi":
         models = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())
@@ -306,12 +308,15 @@ def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, 
 
     calls = []
     monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
-    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k)))
+    monkeypatch.setattr(session_mod.subprocess, "run",
+                        lambda cmd, **k: calls.append((cmd, k)) or subprocess.CompletedProcess(cmd, 0, "healthy\n", ""))
     monkeypatch.setenv("MY_LLM_KEY", "sk-x")
     cfg, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
     session_mod.launch(cfg, plan, tmp_path / "compose.yml", provider="docker", rebuild=False,
                        secrets=secret_env(plan))
-    assert calls and all(k["env"]["GLOVE_LLM_API_KEY"] == "sk-x" for _, k in calls)
+    # for llm-auth's `environment:`; the harness's variable is a placeholder in the compose file
+    composes = [k["env"] for _, k in calls if "env" in k]  # the verify's inspects run without one
+    assert composes and all(e["LLM_AUTH_KEY"] == "sk-x" and "GLOVE_LLM_API_KEY" not in e for e in composes)
     assert all("sk-x" not in " ".join(cmd) for cmd, _ in calls)
     assert "sk-x" not in (tmp_path / "compose.yml").read_text()
     assert calls[-1][0][-4:] == ["-it", "--name", plan.harness_service, plan.harness_service]
@@ -343,7 +348,7 @@ def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
 
     monkeypatch.setenv("MY_LLM_KEY", "sk-env")
     _, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
-    assert secret_env(plan) == {"GLOVE_LLM_API_KEY": "sk-env"}
+    assert secret_env(plan) == {"LLM_AUTH_KEY": "sk-env"}
 
 
 def test_check_reports_secrets_without_reading_them(home, tmp_path, monkeypatch):

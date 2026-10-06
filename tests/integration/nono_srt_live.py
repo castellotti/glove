@@ -120,14 +120,6 @@ def main(directory: str) -> int:
               plan.harness_command[1] == "relay" and plan.harness_command[4].endswith("glove-srt.mjs")
               and plan.harness_command[8] == "ctty", " ".join(plan.harness_command[:10]))
         check("srt makes no network namespace for the harness (no `network` block)", "network" not in settings)
-        if cfg.harness == "claude-code":
-            # Claude Code asks once whether to use an ANTHROPIC_API_KEY and keeps
-            # the answer (its last 20 chars); glove never writes key material, so
-            # the test pre-approves its fake key the way the operator's "Yes" would.
-            state = sd.home / ".claude" / ".claude.json"
-            doc = json.loads(state.read_text())
-            doc["customApiKeyResponses"] = {"approved": [env["GLOVE_TEST_ANTHROPIC_KEY"][-20:]], "rejected": []}
-            state.write_text(json.dumps(doc))
         port = plan.model.base_url.split(":")[2].split("/")[0]
         probe_env = {"LLM_HOST": f"glove-{sid}-llm", "LLM_PORT": port,
                      "LLM_MATCH": LLM_MATCH.get(cfg.harness, "stub-qwen")}

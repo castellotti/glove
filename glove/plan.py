@@ -23,7 +23,7 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile
-from .harnessconfig import CONTAINER_HOME
+from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
 from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_home, protected_paths
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
@@ -148,8 +148,10 @@ def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
 
 def secret_env_names(plan: SessionPlan) -> list[str]:
     """The harness's secret env var names (``SessionPlan.passthrough_env``).
-    Planning needs only the names, so it never resolves a secret reference."""
-    return [plan.model.api_key_env] if plan.model is not None and plan.model.api_key_env else []
+    Planning needs only the names, so it never resolves a secret reference.
+    An injected key is not the harness's (its variable holds a placeholder)."""
+    m = plan.model
+    return [m.api_key_env] if m is not None and m.api_key_env and not m.api_key_injected else []
 
 
 def validate_system_files(plan: SessionPlan) -> None:
@@ -207,8 +209,8 @@ def _remove(path: Path) -> None:
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
-    """Secret env for `compose up`/`run` only: the harness's LLM key (from the
-    inference provider's secret setting), every extension compose secret, and
+    """Secret env for `compose up`/`run` only: the harness's LLM key or token
+    unless the provider injects it, every extension compose secret, and
     what extensions' `launch_env` hooks return (e.g. a freshly registered VPN
     key). A `keychain:`/`env:` reference is resolved here, in memory, so no file
     holds a secret."""
@@ -219,8 +221,8 @@ def secret_env(plan: SessionPlan) -> dict[str, str]:
     comp = plan.composition
     inference = comp.slots.get("inference")
     setting = inference.exports.get("api_key_secret") if inference else None
-    if setting and plan.model is not None and plan.model.api_key_env:
-        env[plan.model.api_key_env] = resolve_secret(inference.settings[setting])
+    for name in secret_env_names(plan):  # the harness's key, unless the provider injects it
+        env[name] = resolve_secret(inference.settings[setting])
     hooked = launch_env(comp)
     env.update(hooked)
     env.update(resolve_secrets(comp, provided=hooked))
@@ -441,6 +443,8 @@ def build_session_plan(
         toolchains=toolchains,
     )
     plan.passthrough_env = secret_env_names(plan)
+    if plan.model is not None and plan.model.api_key_injected and plan.model.api_key_env:
+        plan.environment[plan.model.api_key_env] = INJECTED_KEY
     if transcripts_wanted(comp) and profile.transcript_subdir:
         plan.transcripts_host_dir = str(comp.export_dirs["observe"] / "transcripts")
         plan.transcripts_container_dir = f"{profile.config_home_path}/{profile.transcript_subdir}"

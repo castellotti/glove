@@ -2,8 +2,11 @@
 
 Serves /v1/models (one model), /props (llama.cpp's capability fields) and a
 streaming /v1/chat/completions that answers with a fixed sentence. Logs every
-request line (and whether an Authorization header was present, never its
-value) and the names of the tools offered to stdout.
+request line (and which key arrived, never its value: `key=`, see
+`key_kind`) and the names of the tools offered to stdout. With
+GLOVE_TEST_LLM_KEY set it is `llama-server --api-key`: a request without
+`Authorization: Bearer <that key>` gets a 401 (glove's llm-auth must have
+swapped the harness's placeholder for it).
 
 Tool driving (egress tests): when the last user message contains
 `CALL <tool> <json-args>` the stub answers with that tool call; when the last
@@ -15,6 +18,7 @@ The skill directories Pi lists in its system prompt are logged as `skills=`.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,12 +30,40 @@ PROPS = {
     "chat_template_caps": {"supports_preserve_reasoning": False},
 }
 REPLY = "hello from the glove llm stub"
+KEY = os.environ.get("GLOVE_TEST_LLM_KEY", "")
+
+
+def key_kind(value: str | None, key: str) -> str:
+    """What credential a request carried, never its value: none, real (the
+    expected key), placeholder (glove's `glove-injected`) or other."""
+    if not value:
+        return "none"
+    token = value.removeprefix("Bearer ")
+    return "real" if key and token == key else "placeholder" if token == "glove-injected" else "other"
+
+
+def refused(handler, kind: str, body: bytes) -> bool:
+    """With KEY set, a request not carrying it (`kind` is not real) gets a
+    JSON 401 with `body`: True."""
+    if not KEY or kind == "real":
+        return False
+    handler.send_response(401)
+    handler.send_header("content-type", "application/json")
+    handler.send_header("content-length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+    return True
 
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        auth = "auth=yes" if self.headers.get("Authorization") else "auth=no"
-        print(f"stub: {self.command} {self.path} {auth}", flush=True)
+        print(f"stub: {self.command} {self.path} key={self._key()}", flush=True)
+
+    def _key(self) -> str:
+        return key_kind(self.headers.get("Authorization"), KEY)
+
+    def _refused(self) -> bool:
+        return refused(self, self._key(), b'{"error": "invalid api key"}')
 
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode()
@@ -42,6 +74,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self._refused():
+            return None
         if self.path == "/v1/models":
             return self._json({"object": "list", "data": [{"id": MODEL, "object": "model"}]})
         if self.path == "/props":
@@ -51,6 +85,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)
         req = json.loads(self.rfile.read(n) or b"{}")
+        if self._refused():
+            return None
         if self.path != "/v1/chat/completions":
             return self._json({"error": "not found"}, 404)
         tools = [t.get("function", {}).get("name") for t in req.get("tools") or []]

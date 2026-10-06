@@ -51,10 +51,10 @@ server can't be probed.
 
 `extensions.llm.api_key` must be a reference: `keychain:<service>` or
 `env:<VAR>`. A literal key is refused. glove resolves it in memory at launch
-and passes it to the harness as `GLOVE_LLM_API_KEY`; Pi's `models.json` refers
-to `"$GLOVE_LLM_API_KEY"` and never contains the key. The sandboxed shell
-**cannot** read it: ring 1 hides the config home and strips secret-shaped env
-vars from every command. Store the key once with
+and hands it only to the `llm` extension's `llm-auth` sidecar, which adds it to
+Pi's model requests. Pi never holds it: `GLOVE_LLM_API_KEY` (which `models.json`
+refers to as `"$GLOVE_LLM_API_KEY"`) holds the placeholder `glove-injected`, so
+neither Pi nor a shell command can read the key. Store the key once with
 `security add-generic-password -U -a "$USER" -s <service> -w` (it prompts; the
 key never appears in argv).
 

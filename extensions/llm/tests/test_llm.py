@@ -71,6 +71,7 @@ def _normalise(text: str, tmp_path: Path) -> str:
     return text.replace(str(tmp_path), "<tmp>").replace(str(SECCOMP_DIR), "<seccomp>")
 
 
+ANTHROPIC = {"provider": "anthropic", "location": "internet", "endpoint": None, "api_key": "keychain:test-cc"}
 SCENARIOS = {
     "host": {"location": "host", "endpoint": "127.0.0.1:8080"},
     "lan": {"location": "lan", "endpoint": "192.168.1.50:8080"},
@@ -115,18 +116,91 @@ def test_lan_never_gives_the_harness_a_lan_route(tmp_path):
         assert "extra_hosts" not in h
 
 
-def test_internet_location_aliases_the_provider_host_onto_the_forwarder(tmp_path):
-    plan, doc, _ = _plan(tmp_path, **SCENARIOS["internet"])
+def test_internet_without_a_key_aliases_the_provider_host_onto_the_forwarder(tmp_path):
+    plan, doc, _ = _plan(tmp_path, provider="openai-compatible", location="internet",
+                         endpoint="https://llm.example.com/v1")
     llm = doc["services"]["glove-s-llm"]
-    assert llm["networks"]["glove-s-net"]["aliases"] == ["api.openai.com"]
+    assert llm["networks"]["glove-s-net"]["aliases"] == ["llm.example.com"]
     # the aliased forwarder would resolve its own alias: it dials a hop off the
     # harness network, which dials the real name
     assert llm["command"].endswith("TCP4:glove-s-llm-out:443")
     out = doc["services"]["glove-s-llm-out"]
-    assert out["command"].endswith("TCP4:api.openai.com:443")
+    assert out["command"].endswith("TCP4:llm.example.com:443")
     assert set(out["networks"]) == {"glove-s-llm"}
-    assert plan.model.base_url == "https://api.openai.com/v1"  # TLS end to end, real SNI
-    assert plan.passthrough_env == ["GLOVE_LLM_API_KEY"]
+    assert plan.model.base_url == "https://llm.example.com/v1"  # TLS end to end, real SNI
+    assert plan.passthrough_env == [] and "glove-s-llm-auth" not in doc["services"]
+
+
+def test_a_subscription_token_keeps_the_alias_and_reaches_the_harness(tmp_path):
+    plan, doc, _ = _plan(tmp_path, harness="claude-code", **ANTHROPIC, auth="oauth")
+    assert doc["services"]["glove-s-llm"]["networks"]["glove-s-net"]["aliases"] == ["api.anthropic.com"]
+    assert plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"] and "glove-s-llm-auth" not in doc["services"]
+
+
+def test_internet_with_a_key_goes_through_llm_auth(tmp_path):
+    plan, doc, _ = _plan(tmp_path, **SCENARIOS["internet"])
+    svc = doc["services"]
+    # harness → llm → llm-auth → llm-upstream → the provider; no alias, no -out hop
+    assert svc["glove-s-llm"]["command"].endswith("TCP4:glove-s-llm-auth:8080")
+    assert "aliases" not in str(svc["glove-s-llm"]["networks"]) and "glove-s-llm-out" not in svc
+    assert set(svc["glove-s-llm"]["networks"]) == {"glove-s-net", "glove-s-llmauth"}
+    assert svc["glove-s-llm-auth"]["networks"] == {"glove-s-llmauth": {}}
+    up = svc["glove-s-llm-upstream"]
+    assert up["command"].endswith("TCP4:api.openai.com:443") and set(up["networks"]) == {"glove-s-llmauth",
+                                                                                        "glove-s-llm"}
+    env = svc["glove-s-llm-auth"]["environment"]
+    assert env["LLM_AUTH_KEY"] is None  # filled at `compose up`
+    assert (env["LLM_AUTH_UPSTREAM"], env["LLM_AUTH_TLS_NAME"], env["LLM_AUTH_HOST"]) == \
+        ("glove-s-llm-upstream:443", "api.openai.com", "api.openai.com")
+    assert (env["LLM_AUTH_HEADER"], env["LLM_AUTH_SCHEME"]) == ("Authorization", "Bearer")
+    assert json.loads(env["LLM_AUTH_ALLOW"]) == [["POST", "/v1/chat/completions"], ["GET", "/v1/models"]]
+    assert plan.model.base_url == "http://glove-s-llm:8080/v1"
+    assert plan.passthrough_env == [] and plan.environment["GLOVE_LLM_API_KEY"] == "glove-injected"
+    assert doc["networks"]["glove-s-llmauth"]["internal"] is True
+
+
+@pytest.mark.parametrize(("harness", "settings"), [
+    ("pi", {}), ("pi", {"api_key": "env:K"}),
+    ("claude-code", {**ANTHROPIC, "auth": "api-key"}), ("claude-code", {**ANTHROPIC, "auth": "oauth"}),
+])
+def test_the_manifest_and_the_hooks_agree_on_injection(tmp_path, harness, settings):
+    # extension.yml's `when:` (network, image, sidecar, verify) and hooks.injected()
+    plan, doc, _ = _plan(tmp_path, harness=harness, **{**SCENARIOS["lan"], **settings})
+    from glove.extensions import when_context, when_matches
+
+    a = plan.composition.slots["inference"]
+    want = hooks.injected(a.settings)
+    assert plan.model.api_key_injected is want
+    assert ("glove-s-llm-auth" in doc["services"]) is want and ("glove-s-llmauth" in doc["networks"]) is want
+    assert when_matches(a.manifest.raw["images"]["auth"].get("when"), when_context(a.settings, harness)) is want
+    assert any(v["name"] == "llm-auth-up" for _, v in plan.composition.verify) is want
+
+
+def test_the_key_reaches_llm_auth_only_at_launch(tmp_path, monkeypatch):
+    from glove.plan import secret_env
+
+    monkeypatch.setenv("MY_KEY", "sk-real")
+    plan, _, _ = _plan(tmp_path, **{**SCENARIOS["lan"], "api_key": "env:MY_KEY"})
+    assert secret_env(plan) == {"LLM_AUTH_KEY": "sk-real"}
+    with pytest.raises(hooks.LlmError, match="empty"):
+        hooks.launch_env({"settings": {"api_key": "env:E", "auth": "api-key"}}, lambda ref: " ")
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "want"), [
+    ("anthropic", None, [["POST", "/v1/messages"], ["POST", "/v1/messages/count_tokens"], ["HEAD", "/api/hello"],
+                         ["GET", "/v1/models"]]),
+    ("openrouter", None, [["POST", "/api/v1/chat/completions"], ["GET", "/api/v1/models"]]),
+    ("mistral", None, [["POST", "/v1/chat/completions"], ["POST", "/v1/conversations"], ["GET", "/v1/models"]]),
+    ("llama.cpp", "127.0.0.1:8080", [["POST", "/v1/chat/completions"], ["GET", "/v1/models"], ["GET", "/props"]]),
+    # a server under a path: the API's paths under it, the model list under its root
+    ("openai-compatible", "https://gw.example.com/team/v1", [["POST", "/team/v1/chat/completions"],
+                                                             ["GET", "/team/v1/models"]]),
+])
+def test_allowed_paths_per_provider(provider, endpoint, want):
+    cat = hooks.load_provider(provider)
+    settings = {"provider": provider, "location": "host" if endpoint and "://" not in endpoint else "internet",
+                "endpoint": endpoint}
+    assert hooks.allowed_paths(cat, hooks.route(settings, cat)["base_path"]) == want
 
 
 def test_observe_labels_the_llm_forwarder(tmp_path):
@@ -242,10 +316,16 @@ def test_explicit_vision_wins_over_probe_with_a_warning(tmp_path):
     assert any("warning" in n and "vision" in n for n in notes)
 
 
-def test_probe_auth_flag_follows_the_key(tmp_path):
+def test_the_probe_never_holds_an_injected_key(tmp_path):
     server = FakeServer(["m"], PROPS)
-    _resolve(tmp_path, server, model="auto", api_key="env:X")
-    assert all(auth for _, _, auth in server.calls)
+    _resolve(tmp_path, server, model="auto", api_key="env:X")  # llm-auth adds it on the way
+    assert server.calls and not any(auth for _, _, auth in server.calls)
+
+
+def test_the_probe_sends_a_subscription_token(tmp_path):
+    server = PagedServer(["claude-x"])
+    _resolve(tmp_path, server, harness="claude-code", **ANTHROPIC, auth="oauth", model="claude-x")
+    assert server.auth == [True]
 
 
 def test_json_path():
@@ -300,7 +380,6 @@ def test_generic_provider_without_max_model_len_keeps_the_default(tmp_path):
 
 # --- auth: oauth and paginated model lists ----------------------------------------------------
 
-ANTHROPIC = {"provider": "anthropic", "location": "internet", "endpoint": None, "api_key": "keychain:test-cc"}
 
 
 def test_oauth_is_for_the_harnesses_the_catalog_names(tmp_path):
@@ -333,10 +412,11 @@ class PagedServer:
     """Anthropic's `/v1/models`: pages of two, `has_more` + `last_id`, `after_id` cursor."""
 
     def __init__(self, models):
-        self.models, self.calls = models, []
+        self.models, self.calls, self.auth = models, [], []
 
     def __call__(self, url, method="GET", body=None, auth=False):
         self.calls.append(url)
+        self.auth.append(auth)
         after = url.partition("after_id=")[2]
         start = self.models.index(after) + 1 if after else 0
         page = self.models[start:start + 2]
@@ -348,9 +428,9 @@ def test_a_paginated_model_list_is_followed_to_the_end(tmp_path):
     server = PagedServer(["a", "b", "c", "d", "claude-x"])
     ex, _ = _resolve(tmp_path, server, **ANTHROPIC, model="claude-x")
     assert ex["model"] == "claude-x"
-    assert server.calls == ["https://api.anthropic.com/v1/models?limit=1000",
-                            "https://api.anthropic.com/v1/models?limit=1000&after_id=b",
-                            "https://api.anthropic.com/v1/models?limit=1000&after_id=d"]
+    assert server.calls == ["http://glove-s-llm:8080/v1/models?limit=1000",  # through llm-auth
+                            "http://glove-s-llm:8080/v1/models?limit=1000&after_id=b",
+                            "http://glove-s-llm:8080/v1/models?limit=1000&after_id=d"]
 
 
 def test_a_model_on_no_page_is_not_served(tmp_path):

@@ -72,7 +72,7 @@ def test_harness_wiring(tmp_path):
     fwd = next(s for s in plan.network.sidecars if s.role == "browser")
     assert fwd.target == f"host.docker.internal:{_ports(cfg)[0]}" and fwd.host_gateway
     assert "/opt/glove/ext/playwright/pi-extension" in plan.command
-    assert not plan.composition.fragments[0][1].get("services")  # no sidecar
+    assert not any(doc.get("services") for _, doc in plan.composition.fragments)  # no sidecar
     assert "REAL Chrome on the operator's own desktop" in dict(plan.composition.rendered_briefs())["playwright"]
 
 

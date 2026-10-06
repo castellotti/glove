@@ -4,5 +4,10 @@
     "/work": {
       "hasTrustDialogAccepted": true
     }
+  },
+  "customApiKeyResponses": {
+    "approved": [
+      "glove-injected"
+    ]
   }
 }

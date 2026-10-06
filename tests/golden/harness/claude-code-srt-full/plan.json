@@ -16,6 +16,7 @@
   ],
   "enforcer_env": {},
   "environment": {
+    "ANTHROPIC_API_KEY": "glove-injected",
     "BROWSER_MCP_TOOLS": "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog",
     "BROWSER_MCP_URL": "http://glove-s-browser:8931/mcp",
     "BROWSER_MODE": "headless",
@@ -30,9 +31,7 @@
     "KSTORE_QUERY_STORES": "both"
   },
   "image": "glove/claude-code:0.2.0-00bc6f9a16-e99c90f163-srt-46f57ff955",
-  "passthrough_env": [
-    "ANTHROPIC_API_KEY"
-  ],
+  "passthrough_env": [],
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.claude/projects"

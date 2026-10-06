@@ -95,5 +95,5 @@ rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 echo "Documented gaps (see 'glove policy show'): harness process is unwrapped (ring 0 only);"
-echo "LLM key stays in the harness env; runs under the relaxed nested-userns seccomp."
+echo "runs under the relaxed nested-userns seccomp."
 [ "$FAIL" -eq 0 ]

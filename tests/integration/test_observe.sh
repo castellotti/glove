@@ -5,7 +5,8 @@
 #   RT=podman bash tests/integration/test_observe.sh direct      # Podman
 #   VPN_SETTINGS='{…}' [VPN_LOCAL=<dir>] bash … vpn             # as test_egress.sh vpn
 #
-# A throwaway session dir (llm → the tool-driving stub on the host; egress +
+# A throwaway session dir (llm → the tool-driving stub on the host, its key in
+# llm-auth; egress +
 # search + webfetch + observe + filter) runs tests/integration/observe_live.py:
 # every forwarder a netgate, SearXNG reaching egress only through its gate, Pi's
 # tool calls recorded as flows, transcripts exported, a `glove filter block`
@@ -18,7 +19,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18083}"
 TMPROOT="$(mktemp -d)"; S="$TMPROOT/observe-$ROUTE"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
-python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
+. "$ROOT/tests/integration/lib_session.sh"
+stub_llm pi "$PORT"
+python3 "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
 STUB=$!; disown "$STUB"
 trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 sleep 1
@@ -29,8 +32,8 @@ case "$ROUTE" in
 esac
 mkdir -p "$S/work"
 if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
-printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:%s", model: auto}\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
-  "$RT" "$PORT" "$EG" > "$S/glove-session.yml"
+printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: pi\nextensions:\n  llm: %s\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
+  "$RT" "$LLM" "$EG" > "$S/glove-session.yml"
 echo "== runtime $RT, route $ROUTE"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )
 RC=$?

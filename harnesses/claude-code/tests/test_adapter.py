@@ -15,6 +15,7 @@ from glove.harnessconfig import render_home
 from glove.plan import build_session_plan, write_system_files
 
 ANTHROPIC = {"provider": "anthropic", "model": "claude-x", "api_key": "keychain:test-cc"}
+OAUTH = {**ANTHROPIC, "auth": "oauth"}
 LOCAL = {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080", "model": "m"}
 
 
@@ -30,11 +31,32 @@ def _managed(plan) -> dict:
     return json.loads(plan.system_files["/etc/claude-code"]["managed-settings.json"])
 
 
-@pytest.mark.parametrize("auth,env", [("api-key", "ANTHROPIC_API_KEY"), ("oauth", "CLAUDE_CODE_OAUTH_TOKEN")])
-def test_the_key_travels_in_the_env_claude_code_reads(tmp_path, auth, env):
-    _, plan = _plan(tmp_path, {**ANTHROPIC, "auth": auth})
-    assert plan.passthrough_env == [env]
-    assert plan.model.api_key_env == env
+def test_an_api_key_is_injected_and_claude_code_reads_a_placeholder(tmp_path):
+    _, plan = _plan(tmp_path)
+    assert plan.passthrough_env == [] and plan.model.api_key_env == "ANTHROPIC_API_KEY"
+    assert plan.environment["ANTHROPIC_API_KEY"] == "glove-injected"
+
+
+def test_the_placeholder_is_pre_approved_and_earlier_answers_kept(tmp_path):
+    cfg, plan = _plan(tmp_path)
+    state = tmp_path / "h" / ".claude" / ".claude.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"customApiKeyResponses": {"approved": ["abc"], "rejected": ["def"]}}))
+    render_home(cfg, plan, tmp_path / "h")
+    render_home(cfg, plan, tmp_path / "h")  # once only
+    assert json.loads(state.read_text())["customApiKeyResponses"] == {"approved": ["abc", "glove-injected"],
+                                                                      "rejected": ["def"]}
+    (tmp_path / "o").mkdir()
+    cfg, plan = _plan(tmp_path / "o", OAUTH)
+    render_home(cfg, plan, tmp_path / "o" / "h")
+    assert "customApiKeyResponses" not in json.loads((tmp_path / "o" / "h" / ".claude" / ".claude.json").read_text())
+
+
+def test_a_subscription_token_travels_in_the_env_claude_code_reads(tmp_path):
+    # not injected: Claude Code's account API (a fixed host) needs the real token
+    _, plan = _plan(tmp_path, OAUTH)
+    assert plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"] and plan.model.api_key_env == "CLAUDE_CODE_OAUTH_TOKEN"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in plan.environment
 
 
 def test_no_key_no_passthrough(tmp_path):
@@ -78,9 +100,10 @@ def test_managed_settings_lock_hooks_rules_mcp_and_the_config_home(tmp_path):
 
 
 def test_base_url_only_off_the_default_host(tmp_path):
-    assert "ANTHROPIC_BASE_URL" not in _managed(_plan(tmp_path)[1])["env"]
-    (tmp_path / "b").mkdir()
-    assert _managed(_plan(tmp_path / "b", LOCAL)[1])["env"]["ANTHROPIC_BASE_URL"] == "http://glove-s-llm:8080"
+    assert "ANTHROPIC_BASE_URL" not in _managed(_plan(tmp_path, OAUTH)[1])["env"]
+    for sub, llm in (("b", LOCAL), ("c", ANTHROPIC)):  # a gateway, and llm-auth for an API key
+        (tmp_path / sub).mkdir()
+        assert _managed(_plan(tmp_path / sub, llm)[1])["env"]["ANTHROPIC_BASE_URL"] == "http://glove-s-llm:8080"
 
 
 def test_harness_config_permissions(tmp_path):
@@ -149,8 +172,11 @@ def test_search_is_an_http_mcp_server_and_webfetch_is_claude_codes_own_through_t
 
 
 def test_the_cloud_alias_stays_off_the_proxy(tmp_path):
-    _, plan = _plan(tmp_path, extensions={"direct": {}, "webfetch": {}})
+    _, plan = _plan(tmp_path, OAUTH, extensions={"direct": {}, "webfetch": {}})
     assert "api.anthropic.com" in _managed(plan)["env"]["NO_PROXY"].split(",")
+    (tmp_path / "k").mkdir()
+    _, plan = _plan(tmp_path / "k", extensions={"direct": {}, "webfetch": {}})
+    assert "glove-s-llm" in _managed(plan)["env"]["NO_PROXY"].split(",")
 
 
 def test_without_webfetch_webfetch_is_denied_and_no_proxy_is_set(tmp_path):

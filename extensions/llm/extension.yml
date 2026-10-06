@@ -14,5 +14,15 @@ settings:
   extra_models: { type: list, default: [] }
   route:        { type: enum, values: [direct, egress], default: direct }   # cloud providers only
 hooks: hooks.py
+# With an API key (not a Claude Code subscription token), the key lives only in
+# the llm-auth sidecar: the harness's `llm` forwarder leads to it, and it dials
+# the server through `llm-upstream` (hooks.py builds both endpoints).
+networks:
+  llmauth: { internal: true, when: { api_key: { set: true }, auth: api-key } }
+images:
+  auth: { build: image, when: { api_key: { set: true }, auth: api-key } }
+services: compose/services.yml.j2
+verify:
+  - { name: llm-auth-up, kind: container-healthy, service: llm-auth, when: { api_key: { set: true }, auth: api-key } }
 harness:
   brief: brief.md
