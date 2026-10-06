@@ -209,6 +209,14 @@ All notable changes to glove are documented here.
   TUI; any harness, enforcer and runtime) and `test_teardown.sh` (git config
   in the tool, a second `glove up` refused, a killed client's leftover
   removed, nothing left after `glove down --wipe`).
+- Docs: the README documents the harness manifest's `version`,
+  `audited_version` and `brief`, Claude Code's `protected_home`, `allow_root`
+  and `git_config:` in the session file, and the extension fragment context
+  (`own_endpoints`, `work`); check counts live only in the test-command block
+  (the support matrix names the scripts). SECURITY.md covers the `via: lan`
+  check at the forwarder (the resolver residual is closed), Claude Code's
+  read-only home, the pinned harness releases and the removed fail-open
+  override. `playwright`'s README says how to move its MCP pin.
 
 - `privileges` no longer records empty `cap_add`/`devices` lists for a service
   that asks for neither.

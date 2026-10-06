@@ -51,11 +51,13 @@ merges once left #20–#24 off `main`). A round's plan lives in `docs/planning/`
 
 1. Implement the phase; ruff clean and pytest green.
 2. `/code-review` the uncommitted diff and fix what it finds, then `/simplify`.
+   Findings are fixed **in the phase**; one goes to `docs/planning/TODO.md`
+   only when it needs a spike, a user decision, or work outside the phase.
 3. Ask, then commit the phase.
 4. Update the planning documents: results go into the completed plan, and what
-   future plans need goes into theirs. Add every skipped finding, suggestion,
-   untested check and missing test to `docs/planning/TODO.md`, and prune the
-   items the phase implemented.
+   future plans need goes into theirs. Won't-do items go in the round's
+   results, never in TODO.md. Add every deferred finding, untested check and
+   missing test to TODO.md, and prune the items the phase implemented.
 5. The operator runs `/compact` before the next phase starts.
 
 Live verification runs once at the end of the round, then (after asking) push
