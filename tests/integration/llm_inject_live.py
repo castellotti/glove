@@ -19,8 +19,9 @@ stub log), a stand-in for the provider itself (`stand_in`). Started the way
 With `auth: oauth` also:
   6. llm-auth serves TLS by the provider's name, verified with the session CA
      (the harness's NODE_EXTRA_CA_CERTS, in the read-only `llm-ca` channel): an
-     account path is allowed, another is a 403; no key file is left in
-     llm-auth; a tool command can't write the channel;
+     account path and WebFetch's domain preflight are allowed, another account
+     path is a 403; no key file is left in llm-auth; a tool command can't
+     write the channel;
   7. the TUI draws within TUI_START seconds; the session has observe on, and
      both hops of a model call are flows to the provider's name (their SNI).
 test_observe.sh checks the two flows each model call makes (`llm`, client
@@ -163,6 +164,8 @@ def main(directory: str, stub_log: str | None) -> int:
                 out = status("GET", "/api/oauth/profile")
                 check("by the provider's name, verified with the session CA: an account path answers",
                       out == "200", out[-200:])
+                out = status("GET", "/api/web/domain_info?domain=example.com")
+                check("WebFetch's domain preflight answers", out == "200", out[-200:])
                 out = status("GET", "/api/oauth/account/settings")
                 check("an account path off the allowlist is a 403", out == "403", out[-200:])
                 out = in_probe(WRITE_CA)

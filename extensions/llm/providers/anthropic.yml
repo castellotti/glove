@@ -7,8 +7,8 @@ locations: [internet]
 # for Claude Code only; it authenticates as a bearer token with the OAuth beta.
 # `paths`: the account calls llm-auth lets through besides inference (GET only;
 # measured, Claude Code 2.1.288: settings and policy limits at start, profile
-# and usage for /status and /usage). Feedback, transcript sharing and account
-# writes stay refused.
+# and usage for /status and /usage, WebFetch's domain preflight before each new
+# domain). Feedback, transcript sharing and account writes stay refused.
 auth:
   header: x-api-key
   scheme: ""
@@ -23,6 +23,7 @@ auth:
       - [GET, /api/claude_code/policy_limits]
       - [GET, /api/oauth/profile]
       - [GET, /api/oauth/usage]
+      - [GET, /api/web/domain_info]
 headers: { anthropic-version: "2023-06-01" }
 # paginated: ask for a large page and follow `has_more` with `after_id=<last_id>`
 models_endpoint: /v1/models?limit=1000

@@ -206,7 +206,8 @@ services:
       LLM_AUTH_SCHEME: Bearer
       LLM_AUTH_ALLOW: '[["POST", "/v1/messages"], ["POST", "/v1/messages/count_tokens"],
         ["HEAD", "/api/hello"], ["GET", "/api/claude_code/settings"], ["GET", "/api/claude_code/policy_limits"],
-        ["GET", "/api/oauth/profile"], ["GET", "/api/oauth/usage"], ["GET", "/v1/models"]]'
+        ["GET", "/api/oauth/profile"], ["GET", "/api/oauth/usage"], ["GET", "/api/web/domain_info"],
+        ["GET", "/v1/models"]]'
       LLM_AUTH_PORT: '8080'
       LLM_AUTH_SERVE_TLS: '1'
       LLM_AUTH_CA_DIR: /run/glove/llm-ca

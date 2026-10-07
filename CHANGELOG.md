@@ -10,12 +10,25 @@ All notable changes to glove are documented here.
   new `llm-auth` sidecar holds the key and injects it into model requests,
   letting only the model API's paths through; the harness's variable holds the
   public placeholder `glove-injected` (pre-approved for Claude Code), and
-  glove's launch probe holds no key. A Claude Code subscription token (`auth:
-  oauth`) is not injected and stays in the harness env. Keyless sessions render
-  as before. Mechanics: `extensions/llm/README.md`; residuals:
-  `docs/SECURITY.md`.
-- `tests/integration/test_llm_inject.sh` (pi, vibe, claude-code) checks where
-  the key is and isn't. The integration stubs answer only requests carrying
+  glove's launch probe holds no key. Keyless sessions render as before.
+  Mechanics: `extensions/llm/README.md`; residuals: `docs/SECURITY.md`.
+- **A Claude Code subscription token leaves the harness too** (`auth: oauth`):
+  `llm-auth` holds it and serves TLS as `api.anthropic.com` with a
+  per-session, name-constrained CA whose key it deletes at once, so Claude
+  Code keeps its default host and its account calls and WebFetch's domain
+  preflight work (TUI start 0.7 s); `CLAUDE_CODE_OAUTH_TOKEN` holds the
+  placeholder. `corporate_ca` together with a token is refused for now.
+  Mechanics: `extensions/llm/README.md`; residuals: `docs/SECURITY.md`.
+- Extension channels: `read_only: true` (its services write, the harness and
+  its commands only read) and `trust: <file>` (a CA the harness and glove's
+  launch probe trust).
+- `glove up` re-allocates and retries (3 attempts) when another network takes
+  the session's subnet between the check and `compose up`.
+- `tests/integration/test_llm_inject.sh` (pi, vibe, claude-code,
+  claude-code-oauth: a stand-in for `api.anthropic.com` serving TLS on the
+  session's `llm` network) checks where the key is and isn't;
+  `test_subnet_race.sh` takes the planned subnet at `compose up` and checks the
+  retry. The integration stubs answer only requests carrying
   the session's real (fake) key, so every stub-based driver checks the swap.
 - Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's mount roots
   (`/work`, add-dirs) as git `safe.directory`, so `git init` in `/work` works
@@ -273,6 +286,11 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- Podman: glove read other networks' subnets in Docker's format
+  (`.IPAM.Config`), so it saw none and could allocate a subnet already in use;
+  it now reads Podman's `.Subnets`.
+- Rootless Podman: the launch probe runs in the session's user namespace
+  (keep-id), as the harness does, so it can read a session channel.
 - A `$` in any value glove renders into the compose project (an env value, a
   path) is literal: compose interpolated it from the host's environment
   (`$HOME` became the host's home).
