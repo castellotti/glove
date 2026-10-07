@@ -34,19 +34,35 @@ from glove.session import _compose_base, compose_process_env, ensure_images, sta
 
 RESULTS: list[bool] = []
 # Each harness's own tools, by what they do: shell, file write (name, path
-# argument, content argument, extra arguments), web search and fetch.
+# argument, content argument), web search and fetch; and its CLI.
 TOOLS = {
-    "pi": {"bash": "bash", "write": ("write", "path", "content", {}), "search": "web_search", "fetch": "web_fetch"},
-    "vibe": {"bash": "bash", "write": ("write_file", "file_path", "content", {"overwrite": True}),
-             "search": "searxng_web_search", "fetch": "webfetch_fetch_url"},
-    "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content", {}),
-                    "search": "mcp__searxng__web_search", "fetch": "WebFetch"},
+    "pi": {"bash": "bash", "write": ("write", "path", "content"), "search": "web_search", "fetch": "web_fetch",
+           "cli": "/usr/local/bin/pi"},
+    "vibe": {"bash": "bash", "write": ("write_file", "path", "content"),
+             "search": "searxng_web_search", "fetch": "webfetch_fetch_url", "cli": "vibe"},
+    "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content"),
+                    "search": "mcp__searxng__web_search", "fetch": "WebFetch", "cli": "/usr/local/bin/claude"},
 }
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append(ok)
     print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f"  [{detail}]" if detail and not ok else ""), flush=True)
+
+
+def check_version(s: LiveSession) -> None:
+    """The image runs the harness version its harness.yml pins (and was audited at)."""
+    want = s.plan.profile.version
+    r = s.run("--version", entry=s.tools["cli"])
+    out = r.stdout + r.stderr
+    check(f"the image runs {s.cfg.harness} {want}", want in out.split(), out[-200:])
+
+
+def tool_result(out: str, n: int | None = None) -> str:
+    """The tool result the model saw (the stub's `TOOL RESULT`, its first `n`
+    characters), else the run's tail."""
+    i = out.find("TOOL RESULT")
+    return " ".join(out[i:].split())[:n] if i >= 0 else out[-(n or 600):]
 
 
 def summary() -> int:
@@ -172,7 +188,7 @@ class LiveSession:
     def sh(self, cmd: str) -> str:
         """One shell command through the agent's own tool: what the model saw."""
         out = self.call(self.bash_tool, {"command": cmd})
-        return " ".join(out[out.find("TOOL RESULT"):].split()) if "TOOL RESULT" in out else out[-600:]
+        return tool_result(out)
 
     def tui(self, rows: int, cols: int) -> Tui:
         """The harness as `glove up` attaches it, on a pty."""

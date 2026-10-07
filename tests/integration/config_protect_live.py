@@ -23,7 +23,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from live_common import check, live_session, summary
+from live_common import check, live_session, summary, tool_result
 from nono_srt_live import PLANTED, PLANTS, lines
 
 from glove.mounts import CONTAINER_HOME
@@ -62,9 +62,8 @@ def main(directory: str) -> int:
         before = Path(rendered.host_path).read_text()
         state = s.sd.home / ".claude" / ".claude.json"  # CC rewrites it on its first run
         mark = state.stat().st_mtime if state.exists() else 0
-        tool, path_arg, content_arg, extra = s.tools["write"]
-        out = s.call(tool, {path_arg: rendered.container_path, content_arg: "{}\n", **extra})
-        tail = " ".join(out[out.find("TOOL RESULT"):].split())[:300] if "TOOL RESULT" in out else out[-300:]
+        tool, path_arg, content_arg = s.tools["write"]
+        tail = tool_result(s.call(tool, {path_arg: rendered.container_path, content_arg: "{}\n"}), 300)
         check(f"{tool} cannot overwrite {rendered.container_path}",
               Path(rendered.host_path).read_text() == before, tail)
         ans = s.sh("echo tool-ran-$((6*7)); echo key=$(env | grep -c '^FAKE_API_KEY=')")
