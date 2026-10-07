@@ -11,10 +11,10 @@ Pi's own `sandbox` extension). Unlike nono, srt:
   relaxed seccomp profile (`nested-userns.json`, selected in `plan._seccomp_for`
   when `enforcer: srt`). `srt.nested: strong` additionally needs
   `systempaths=unconfined` (masked /proc exposed to the container).
-- strips secrets from tool commands only by **exact name**: every harness
-  secret env var (`plan.passthrough_env`) and the LLM key's name is
-  rendered as a `credentials.envVars` entry with `mode: deny`, which srt turns
-  into bwrap `--unsetenv`. srt has no glob form, unlike nono's `deny_vars`.
+- strips secrets from tool commands only by **exact name**: the LLM key's
+  name is rendered as a `credentials.envVars` entry with `mode: deny`, which
+  srt turns into bwrap `--unsetenv` (a guard: the harness holds only a
+  placeholder). srt has no glob form, unlike nono's `deny_vars`.
   srt's credential *masking* (sentinel + proxy-side substitution) exists but
   requires TLS termination, so glove does not use it. An LLM API key or
   subscription token never reaches the harness (`llm`'s llm-auth injects it).
@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, SRT
+from .base import ENFORCER_DIR, SRT, write_roots
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -66,27 +66,6 @@ OPTIONS = {
 GLOVE_SRT = f"{SRT_DIR}/glove-srt.mjs"  # srt's library without a network namespace (nono+srt)
 NODE = f"{SRT_DIR}/node"
 
-TMP = "/tmp"
-# The harness home bind-mount point (CONTAINER_HOME). srt's `--ro-bind /` does NOT
-# downgrade a nested docker bind mount, and denying a *subdir* of a bind mount is
-# a no-op — so glove denies the whole home MOUNT POINT (verified against
-# 0.0.75/0.0.77). srt then binds an empty overlay over it, hiding the harness
-# config/extensions/transcripts from tool commands entirely.
-
-
-def _rw_paths(plan: SessionPlan) -> list[str]:
-    work = next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
-    rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
-    return [work, *rw, TMP, *plan.composition.channel_paths]
-
-
-def denied_env_vars(plan: SessionPlan) -> list[str]:
-    """Exact env var names srt must unset for tool commands: the LLM key always
-    (it may reach the harness env even when unset in config) plus every secret
-    the harness receives by passthrough."""
-    return list(dict.fromkeys([LLM_API_KEY_ENV, *plan.passthrough_env]))
-
-
 def render_settings(plan: SessionPlan) -> dict:
     """Render the single srt tool-command settings file.
 
@@ -99,18 +78,20 @@ def render_settings(plan: SessionPlan) -> dict:
     weak = not plan.hardening.systempaths_unconfined
     return {
         "filesystem": {
-            # deny the whole harness home mount to tool commands (extensions,
-            # skills, session transcripts, config) — both read and write, since
-            # srt cannot restrict a nested bind mount via allowWrite alone.
+            # deny the whole harness home MOUNT POINT to tool commands (extensions,
+            # skills, session transcripts, config), read and write: srt's
+            # `--ro-bind /` keeps a nested bind mount writable, and denying a
+            # subdir of one is a no-op (verified against 0.0.75/0.0.77).
             "denyRead": [CONTAINER_HOME],
             "allowRead": [],
-            "allowWrite": _rw_paths(plan),
+            "allowWrite": write_roots(plan),
             "denyWrite": [CONTAINER_HOME],
         },
         # Tool commands get no network (only the harness browser tool reaches
         # the web). srt network is allow-only, so empty allowedDomains = blocked.
         "network": {"allowedDomains": [], "deniedDomains": []},
-        "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in denied_env_vars(plan)]},
+        # unset by exact name, a guard: no secret reaches the harness env (llm-auth injects the key)
+        "credentials": {"envVars": [{"name": LLM_API_KEY_ENV, "mode": "deny"}]},
         "enableWeakerNestedSandbox": weak,
         "seccomp": {"applyPath": APPLY_SECCOMP},
     }
@@ -150,8 +131,6 @@ class SrtEnforcer:
         """Documented weaknesses vs nono (printed by `glove policy show`)."""
         g = [
             "harness PROCESS is unwrapped (ring-0 only) — srt wraps tool commands only",
-            *(["a secret stays in the harness env (tool commands get it unset "
-               "by exact name only)"] if plan.passthrough_env else []),
             "runs under the relaxed nested-userns seccomp (unprivileged userns enabled; "
             "re-tightened for everything srt wraps)",
             "srt cannot restrict a nested docker bind mount via allowWrite; the "
@@ -177,9 +156,9 @@ class SrtEnforcer:
         a locally-built `*-srt-<hash>` harness image (which has bubblewrap baked) so the
         probe never needs network or root to install it; skips if none exists.
         """
-        cli = getattr(runtime, "cli", "docker")
-        if not shutil.which(cli):
-            return Check("srt bwrap smoke", "skip", f"{cli} not available")
+        cli = getattr(runtime, "cli", None)  # None: a stub runtime, which runs no container
+        if not cli or not shutil.which(cli):
+            return Check("srt bwrap smoke", "skip", f"{cli or runtime.name} not available")
         from .base import srt_suffix
 
         images = subprocess.run(
@@ -194,15 +173,9 @@ class SrtEnforcer:
         from ..runtimes.seccomp import nested_userns_profile_path
 
         proc = subprocess.run(
-            [
-                cli, "run", "--rm",
-                "--security-opt", f"seccomp={nested_userns_profile_path()}",
-                "--security-opt", "no-new-privileges:true",
-                "--cap-drop", "ALL", "--user", "1000:1000",
-                image, "bwrap",
-                "--unshare-user", "--unshare-net", "--ro-bind", "/", "/",
-                "--bind", "/proc", "/proc", "--dev", "/dev", "echo", "OK",
-            ],
+            runtime.throwaway_argv(image, ["--unshare-user", "--unshare-net", "--ro-bind", "/", "/",
+                                           "--bind", "/proc", "/proc", "--dev", "/dev", "echo", "OK"],
+                                   user="1000:1000", entrypoint="bwrap", seccomp=nested_userns_profile_path()),
             capture_output=True, text=True, timeout=120,
         )
         out = (proc.stdout + proc.stderr).strip()

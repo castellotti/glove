@@ -4,6 +4,7 @@
 
 Starts the session the way `glove up` does (host anthropic stub as the model),
 then in the harness service:
+  0. the image runs the version harness.yml pins;
   1. glove-cc-prefix fails closed: no wrapper file, or not exactly one argument;
   2. /etc/claude-code (the managed settings) is read-only to the harness;
   3. `claude -p "CALL <tool> …"` through the stub: the Bash tool runs under the
@@ -25,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from live_common import check, live_session, summary
+from live_common import check, check_version, live_session, summary
 
 # What Claude Code may ask its inference host for (anything else is a leak).
 STUB_PATHS = re.compile(r"^(POST /v1/messages(/count_tokens)?|GET /v1/models|HEAD /api/hello|HEAD /)(\?.*)?$")
@@ -34,6 +35,7 @@ STUB_PATHS = re.compile(r"^(POST /v1/messages(/count_tokens)?|GET /v1/models|HEA
 def main(directory: str, stub_log: str) -> int:
     with live_session(directory) as s:
         sd, plan, run = s.sd, s.plan, s.run
+        check_version(s)
         managed = json.loads((sd.state / "harness" / "claude-code" / "managed-settings.json").read_text())
         check("managed settings set the shell prefix", managed["env"].get("CLAUDE_CODE_SHELL_PREFIX")
               == "/opt/glove/bin/glove-cc-prefix")

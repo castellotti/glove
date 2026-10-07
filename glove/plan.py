@@ -8,6 +8,7 @@ Built from a resolved ``Config`` plus the mount and network plans.
 
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
-from .enforcers.base import argv_lines, srt_suffix, uses_srt
+from .enforcers.base import WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
@@ -76,10 +77,6 @@ class SessionPlan:
     command: list[str] = field(default_factory=list)
     policies: dict[str, str] = field(default_factory=dict)
     enforcer_env: dict[str, str] = field(default_factory=dict)
-    # Harness env vars the compose file declares *without a value*: compose takes
-    # them from the environment of the `compose` process, which session.launch
-    # fills from secret_env(cfg). So a secret is never written to disk by glove.
-    passthrough_env: list[str] = field(default_factory=list)
     policies_host_dir: str | None = None
     policies_container_dir: str = "/etc/glove/enforcer"
     # The adapter's read-only system config (`system_files(plan)`): container
@@ -149,14 +146,6 @@ def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
     return merged
 
 
-def secret_env_names(plan: SessionPlan) -> list[str]:
-    """The harness's secret env var names (``SessionPlan.passthrough_env``).
-    Planning needs only the names, so it never resolves a secret reference.
-    An injected key is not the harness's (its variable holds a placeholder)."""
-    m = plan.model
-    return [m.api_key_env] if m is not None and m.api_key_env and not m.api_key_injected else []
-
-
 def validate_system_files(plan: SessionPlan) -> None:
     """Only a dir of its own under /etc qualifies for `plan.system_files`: never
     /etc itself, glove's enforcer dir, or a path the agent writes."""
@@ -212,45 +201,26 @@ def _remove(path: Path) -> None:
 
 
 def secret_env(plan: SessionPlan) -> dict[str, str]:
-    """Secret env for `compose up`/`run` only: the harness's LLM key or token
-    unless the provider injects it, every extension compose secret, and
+    """Secret env for `compose up`/`run` only: every extension compose secret
+    (the LLM key or token goes to llm-auth this way, never the harness), and
     what extensions' `launch_env` hooks return (e.g. a freshly registered VPN
     key). A `keychain:`/`env:` reference is resolved here, in memory, so no file
     holds a secret."""
-    from .config import resolve_secret
     from .extensions import launch_env, resolve_secrets
 
-    env: dict[str, str] = {}
     comp = plan.composition
-    inference = comp.slots.get("inference")
-    setting = inference.exports.get("api_key_secret") if inference else None
-    for name in secret_env_names(plan):  # the harness's key, unless the provider injects it
-        env[name] = resolve_secret(inference.settings[setting])
     hooked = launch_env(comp)
-    env.update(hooked)
-    env.update(resolve_secrets(comp, provided=hooked))
-    return env
+    return {**hooked, **resolve_secrets(comp, provided=hooked)}
 
 
 def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     """(label, reference) of every secret the session will resolve at launch,
     for `glove check` (which verifies they exist without reading them)."""
-    comp = plan.composition
-    out: list[tuple[str, str]] = []
-    inference = comp.slots.get("inference")
-    setting = inference.exports.get("api_key_secret") if inference else None
-    if setting and inference.settings.get(setting):
-        out.append((f"{inference.name}.{setting}", str(inference.settings[setting])))
-    # every secret-type setting that is set (compose secrets, and ones only a
-    # launch hook reads, e.g. vpn.register_user)
-    for a in comp.active:
-        for name, spec in a.manifest.settings_schema.items():
-            value = a.settings.get(name)
-            label = f"{a.name}.{name}"
-            if spec.get("type") == "secret" and value not in (None, "", "generate") and \
-                    all(lbl != label for lbl, _ in out):
-                out.append((label, str(value)))
-    return out
+    # every secret-type setting that is set (the LLM key, compose secrets, and
+    # ones only a launch hook reads, e.g. vpn.register_user)
+    return [(f"{a.name}.{name}", str(value)) for a in plan.composition.active
+            for name, spec in a.manifest.settings_schema.items()
+            if spec.get("type") == "secret" and (value := a.settings.get(name)) not in (None, "", "generate")]
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
@@ -452,8 +422,12 @@ def build_session_plan(
         trusted_cas=trusted_cas,
         toolchains=toolchains,
     )
-    plan.passthrough_env = secret_env_names(plan)
-    if plan.model is not None and plan.model.api_key_injected and plan.model.api_key_env:
+    if plan.model is not None and plan.model.api_key_env:
+        # The harness never holds a key: its variable gets a placeholder and the
+        # provider adds the key on the way (`llm`'s llm-auth).
+        if not plan.model.api_key_injected:
+            raise ConfigError(f"inference provider {comp.slots['inference'].name!r} exports a key it does not "
+                              "inject; glove passes no secret into the harness")
         plan.environment[plan.model.api_key_env] = INJECTED_KEY
     if transcripts_wanted(comp) and profile.transcript_subdir:
         plan.transcripts_host_dir = str(comp.export_dirs["observe"] / "transcripts")
@@ -468,6 +442,7 @@ def build_session_plan(
     if resume or session_id is not None:
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
+    plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)

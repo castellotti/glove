@@ -129,7 +129,23 @@ def test_internet_without_a_key_aliases_the_provider_host_onto_the_forwarder(tmp
     assert out["command"].endswith("TCP4:llm.example.com:443")
     assert set(out["networks"]) == {"glove-s-llm"}
     assert plan.model.base_url == "https://llm.example.com/v1"  # TLS end to end, real SNI
-    assert plan.passthrough_env == [] and "glove-s-llm-auth" not in doc["services"]
+    assert "glove-s-llm-auth" not in doc["services"]
+    # keyless: no key variable at all in the harness, not even a placeholder
+    assert plan.model.api_key_env is None
+    assert "GLOVE_LLM_API_KEY" not in doc["services"]["glove-s-harness"]["environment"]
+
+
+def test_a_key_the_provider_does_not_inject_is_refused(tmp_path, monkeypatch):
+    # glove passes no secret into the harness: an inference provider exporting
+    # a key it doesn't inject (no llm-auth) fails the plan, never leaks the key
+    from dataclasses import replace
+
+    import glove.harnessconfig as hc
+
+    real = hc.harness_model
+    monkeypatch.setattr(hc, "harness_model", lambda *a: replace(real(*a), api_key_injected=False))
+    with pytest.raises(ConfigError, match="does not inject"):
+        _plan(tmp_path, **ANTHROPIC)
 
 
 def test_a_subscription_token_goes_to_llm_auth_which_serves_the_providers_name(tmp_path):
@@ -140,7 +156,7 @@ def test_a_subscription_token_goes_to_llm_auth_which_serves_the_providers_name(t
     assert svc["glove-s-llm"]["command"] == "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-auth:8080"
     assert svc["glove-s-llm-upstream"]["command"].endswith("TCP4:api.anthropic.com:443")
     assert plan.model.base_url == "https://api.anthropic.com" and plan.model.api_key_injected
-    assert plan.passthrough_env == [] and plan.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "glove-injected"
+    assert plan.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "glove-injected"
     env = svc["glove-s-llm-auth"]["environment"]
     assert (env["LLM_AUTH_SERVE_TLS"], env["LLM_AUTH_TLS_NAME"], env["LLM_AUTH_CA_DIR"]) == \
         ("1", "api.anthropic.com", "/run/glove/llm-ca")
@@ -200,7 +216,7 @@ def test_internet_with_a_key_goes_through_llm_auth(tmp_path):
     assert (env["LLM_AUTH_HEADER"], env["LLM_AUTH_SCHEME"]) == ("Authorization", "Bearer")
     assert json.loads(env["LLM_AUTH_ALLOW"]) == [["POST", "/v1/chat/completions"], ["GET", "/v1/models"]]
     assert plan.model.base_url == "http://glove-s-llm:8080/v1"
-    assert plan.passthrough_env == [] and plan.environment["GLOVE_LLM_API_KEY"] == "glove-injected"
+    assert plan.environment["GLOVE_LLM_API_KEY"] == "glove-injected"
     assert doc["networks"]["glove-s-llmauth"]["internal"] is True
 
 

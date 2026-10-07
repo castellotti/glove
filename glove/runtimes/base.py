@@ -87,3 +87,7 @@ class Runtime(Protocol):
     # compatibility gate calls it directly, and a runtime that omits it is a
     # type error rather than a combo silently reported as OK. None == supported.
     def unsupported_enforcer_reason(self, enforcer: str) -> str | None: ...
+
+    # The `run` argv of a hardened throwaway container (probes, checks); a
+    # runtime that can't run one raises NotImplementedError.
+    def throwaway_argv(self, image: str, argv: list[str], **kw) -> list[str]: ...

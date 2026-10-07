@@ -33,7 +33,7 @@ def _managed(plan) -> dict:
 
 def test_an_api_key_is_injected_and_claude_code_reads_a_placeholder(tmp_path):
     _, plan = _plan(tmp_path)
-    assert plan.passthrough_env == [] and plan.model.api_key_env == "ANTHROPIC_API_KEY"
+    assert plan.model.api_key_env == "ANTHROPIC_API_KEY"
     assert plan.environment["ANTHROPIC_API_KEY"] == "glove-injected"
 
 
@@ -55,14 +55,14 @@ def test_the_placeholder_is_pre_approved_and_earlier_answers_kept(tmp_path):
 def test_a_subscription_token_is_injected_and_claude_code_reads_a_placeholder(tmp_path):
     # llm-auth serves api.anthropic.com itself, so the account API works too
     _, plan = _plan(tmp_path, OAUTH)
-    assert plan.passthrough_env == [] and plan.model.api_key_env == "CLAUDE_CODE_OAUTH_TOKEN"
+    assert plan.model.api_key_env == "CLAUDE_CODE_OAUTH_TOKEN"
     assert plan.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "glove-injected"
     assert "ANTHROPIC_BASE_URL" not in _managed(plan)["env"]  # the default host, by its name
 
 
-def test_no_key_no_passthrough(tmp_path):
+def test_no_key_no_key_variable(tmp_path):
     _, plan = _plan(tmp_path, LOCAL)
-    assert plan.passthrough_env == []
+    assert plan.model.api_key_env is None and "ANTHROPIC_API_KEY" not in plan.environment
 
 
 def test_only_the_anthropic_messages_api(tmp_path):

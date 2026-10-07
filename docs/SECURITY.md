@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; native web-fetch tools |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; native web-fetch tools |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -54,7 +54,7 @@ remaining gaps for a session.
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | ring 1 | harness home is writable to the harness process, **denied to tool commands** (Landlock omit / srt deny of the home mount) |
 | LLM API key or subscription token | the harness process (a loader bug, a plugin, a prompt-injected agent) | ring 0 | only the `llm-auth` sidecar holds it; the harness's variable holds the public placeholder `glove-injected` (see "Inference: the key in `llm-auth`" below) |
-| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: every passthrough secret, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so no secret is in a tool's env. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
+| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key's variable, a guard, applied as bwrap `--unsetenv`) remove secrets from wrapped commands, so no secret is in a tool's env. glove passes no secret into the harness itself: a key an inference provider doesn't inject is refused at plan time. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
@@ -436,7 +436,8 @@ Claude Code from starting (fail closed).
   `commands/`, `skills/`, `plugins/`, `output-styles/` and `rules/` dirs, so a
   deny rule Claude Code fails to apply still leaves them unwritable. What it
   writes stays writable: `.claude.json`, `backups/`, `history.jsonl`,
-  `projects/`, `sessions/` (measured on 2.1.288).
+  `projects/`, `sessions/` (measured on 2.1.288), and since 2.1.292
+  `session-env/` and `shell-snapshots/`.
   `/model`'s "set as default" reports that it can't save.
 - **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
   every command still runs under ring 1. `WebFetch` is denied unless the
@@ -473,6 +474,13 @@ Claude Code from starting (fail closed).
     to the account, as the conversation already is).
     `skipWebFetchPreflight` is left unset: the blocklist is Claude Code's
     default safety check;
+  - **`downloads.claude.ai`**: Claude Code also fetches from it (its model
+    catalog and plugin index) through the egress proxy, with or without a
+    WebFetch call; `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` does not stop it
+    (measured on 2.1.288 and 2.1.292). Behind `tor`/`vpn` it leaves through the
+    tunnel like any other fetch; `corporate` refuses it unless allowlisted.
+    Without `webfetch` the harness has no proxy and no route out, so it can't
+    be sent;
   - **page content goes to the inference provider**, summarised by a second
     model call (as any tool result does), and Claude Code's request headers
     identify it, so behind `tor`/`vpn` its fetches are distinguishable from a
@@ -536,16 +544,62 @@ wrapper and the planted hook ran in the harness.
   and checks that the next agent turn's command is still wrapped and nothing
   planted ran. With the mask removed (Vibe) or `defaultProjectTrust: always`
   (Pi), the same checks fail.
-- **Pi's `SYSTEM.md` and `APPEND_SYSTEM.md`** replace and extend its system
-  prompt. An empty placeholder would blank the prompt, so they are not bound;
-  glove renders neither and removes them from the agent dir at each start.
-- **Gaps:** Pi's `auth.json` (credentials for other providers) and
-  `keybindings.json` stay writable; context files (`AGENTS.md`) are prompts,
-  re-rendered at each start. A session home from before this protection keeps
-  whatever its protected directories already hold, now read-only: check
-  `extensions/`, `tools/`, `plugins/` and the rest before resuming one. Pi reads the project's
+- **Pi 1.x's agent-dir loaders** are rendered empty and bound read-only:
+  `SYSTEM.md` (replaces the system prompt), `APPEND_SYSTEM.md`, `mcp.json` and
+  `keybindings.json` (Pi ignores an empty one, measured on 1.0.4). glove's
+  brief is `AGENTS.override.md`, also read-only: an override there replaces
+  `AGENTS.md`/`CLAUDE.md` in the agent dir, even an empty one, so the agent
+  can neither plant one nor blank the brief.
+- **The file tools are held to the write roots** (ring 2). Pi's `write`/`edit`
+  and Vibe's `write_file`/`search_replace` run in the harness process, which
+  may write its home. Pi's enforcer extension and Vibe's `pre_tool` hook
+  resolve the path as the harness and the kernel would (Pi: `@`, `~`,
+  `file://`, symlinks, dangling ones too) and refuse it unless it is under
+  `/work`, a rw mount, `/tmp` or a writable extension channel
+  (`write-roots.json`, the same list the nono and srt policies allow); Pi
+  then runs the call on the checked path. Paths with odd Unicode spaces or
+  edge whitespace are refused. Nested calls are held the
+  same way: Pi's codemode `tools.write`, Vibe's `run_typescript`
+  `tools.file_system.write_file`. Measured before: Vibe's `write_file`
+  overwrote a read-only (0444) blob in its plugin store (below).
+- **Vibe 2.26 names tools by group** (`file_system.bash`, `process.start`,
+  `file_system.write_file`): glove's hook knows those names, wraps
+  `process.start` like `bash`, refuses a shell call's own `env` and a `cwd`
+  outside the write roots, and denies a shell tool without a command string.
+  `test_tool_confine.sh` pins every name by its effect, so a rename upstream
+  fails a check instead of silently unwrapping a tool.
+- **Pi's built-in MCP is off** (`extensions: ["-builtin:mcp"]` in the rendered,
+  read-only settings): Pi 1.x starts stdio MCP servers from the harness
+  process, outside ring 1, with the harness's rights (its home, the session's
+  forwarders). Measured on by default: a server in `mcp.json` ran on a plain
+  turn. The project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`
+  even with MCP on. A session's own `harness_config.settings.extensions` are
+  added after glove's entry, and any naming `builtin:mcp` is dropped: there is
+  no opt-in until glove extensions contribute Pi MCP servers.
+- **Pi's codemode** (model-written JavaScript in QuickJS calling Pi's tools)
+  is off as Pi ships it; `harness_config.settings.defaultTools: ["+codemode"]`
+  turns it on. Its nested calls are wrapped and held like direct ones
+  (above; checked live).
+- **Gaps:** Pi's `auth.json` (credentials for other providers) stays
+  writable; context files (`AGENTS.md`) are prompts, re-rendered at each start.
+  A session home from before this protection keeps whatever its protected
+  directories already hold, now read-only: check `extensions/`, `tools/`,
+  `plugins/` and the rest before resuming one. Pi reads the project's
   `sessionDir` before it resolves trust, so a planted `.pi/settings.json` can
   move where sessions are written. Claude Code's home: see its section above.
+- **Vibe's plugin store** (`~/.vibe/logs/session/plugins/`, sha256-named blobs
+  shared by every session) is read without verifying the hashes: an edited
+  blob changed the next session's system prompt (measured on 2.25.8 and
+  2.26.0), and plugins can carry hooks, MCP servers and code. The agent's file
+  tools can no longer write it (above), and tool commands never reach the
+  home, but other code in the harness process (a stdio MCP server) still could.
+  A tmpfs over it broke `--continue`, and a launch-time check could be fooled
+  by a consistent forgery (the manifests' digests aren't recomputable).
+- **Check-then-write race:** the hooks check the path, then the harness
+  writes it. A sandboxed process running at the same time (a Vibe background
+  process, a Pi bash child) could swap a directory under `/work` for a symlink
+  into the home between the two. Only a no-follow write in the harness itself
+  (`openat2` with `RESOLVE_BENEATH`) would close it.
 
 ## Tool commands and the terminal (TIOCSTI)
 
@@ -613,7 +667,7 @@ Landlock cannot grant).
   sandbox) gives srt a fresh pty and forwards resizes; `glove-pty ctty` (inside)
   makes it the harness's terminal. The sandbox never holds an fd to your real
   terminal.
-- **The harness env.** The harness keeps its env (passthrough secrets); nono's
+- **The harness env.** glove passes no secret into it (any other env is the operator's own); nono's
   `deny_vars` strip secret-shaped names from every command, and Landlock hides
   `/proc` from them. srt alone would not: an srt-only command can read the
   harness's `/proc/<pid>/environ` (same sandbox, same uid).
@@ -809,6 +863,10 @@ Be precise about what "container root" means here:
 - **Supply-chain trust of the images/packages** themselves — glove pins the nono
   and Playwright versions, each harness release (`version` in `harness.yml`,
   which must equal the `audited_version` its protected paths were checked
-  against) and Vibe's `uv` by digest, and vendors the seccomp profile; image
-  tags hash their build contexts, so a changed context always rebuilds. But
-  building images pulls from upstream registries.
+  against) and Vibe's `uv` by digest, and vendors the seccomp profile. Each
+  harness's dependency tree is pinned too: Pi installs from a committed
+  `package-lock.json` (`npm ci --ignore-scripts`; Pi 1.x ships no shrinkwrap),
+  Vibe from a committed uv constraints file, and Claude Code is one native
+  binary. Image tags hash their build contexts, so a changed context (a lock
+  file included) always rebuilds. But building images pulls from upstream
+  registries.

@@ -45,18 +45,14 @@ def test_weak_mode_default(tmp_path):
 
 
 def test_llm_key_denied_to_tool_commands(tmp_path):
-    # srt has no glob form: every harness secret is unset by exact name, and
-    # the LLM key is always on the list even when no key is configured.
-    assert render_settings(_plan(tmp_path))["credentials"]["envVars"] == [
-        {"name": "GLOVE_LLM_API_KEY", "mode": "deny"},
-    ]
+    # srt has no glob form: the LLM key's name is unset by exact name, a guard
+    # (the harness holds a placeholder), with or without a key configured.
     from helpers import STUB_LLM
 
-    plan = _plan(tmp_path, extensions={"llm": {**STUB_LLM, "api_key": "env:SOME_VAR"}})
-    plan.passthrough_env = [*plan.passthrough_env, "OTHER_SECRET"]
-    names = [v["name"] for v in render_settings(plan)["credentials"]["envVars"]]
-    assert names == ["GLOVE_LLM_API_KEY", "OTHER_SECRET"]
-    assert {v["mode"] for v in render_settings(plan)["credentials"]["envVars"]} == {"deny"}
+    for kw in ({}, {"extensions": {"llm": {**STUB_LLM, "api_key": "env:SOME_VAR"}}}):
+        assert render_settings(_plan(tmp_path, **kw))["credentials"]["envVars"] == [
+            {"name": "GLOVE_LLM_API_KEY", "mode": "deny"},
+        ]
 
 
 def test_no_top_level_allow_unix_sockets(tmp_path):
@@ -108,6 +104,3 @@ def test_gaps_documented(tmp_path):
     gaps = get_enforcer("srt").gaps(_plan(tmp_path))
     assert any("unwrapped" in g for g in gaps)
     assert not any("stays in the harness env" in g for g in gaps)  # no secret in the harness env
-    plan = _plan(tmp_path)
-    plan.passthrough_env = ["SOME_TOKEN"]
-    assert any("stays in the harness env" in g for g in get_enforcer("srt").gaps(plan))

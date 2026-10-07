@@ -33,9 +33,28 @@ GLOVE_PTY = "/opt/glove/bin/glove-pty"
 NONO = "/usr/bin/nono"  # every harness base image
 SRT = "/usr/local/bin/srt"  # the -srt overlay (srt_image)
 
+TMP = "/tmp"
+# The harness hooks hold the harness's own file tools (Pi's write/edit, Vibe's
+# write_file/edit: they run in the harness process, outside ring 1) to these
+# roots, as every enforcer holds a tool command (`write_roots`).
+WRITE_ROOTS_FILE = "write-roots.json"
+
 # Enforcers that run srt (bubblewrap) in the harness container: the `-srt`
 # image overlay and the relaxed nested-userns seccomp profile.
 SRT_ENFORCERS = frozenset({"srt", "nono+srt"})
+
+
+def workdir(plan: SessionPlan) -> str:
+    """The working dir's container path."""
+    return next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
+
+
+def write_roots(plan: SessionPlan) -> list[str]:
+    """Where a tool command may write under every enforcer: the working dir,
+    the rw mounts, /tmp and the writable channels. The harness also writes its
+    home."""
+    rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
+    return [workdir(plan), *rw, TMP, *plan.composition.channel_paths]
 
 
 def argv_lines(argv: list[str]) -> str:

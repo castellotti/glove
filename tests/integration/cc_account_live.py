@@ -3,8 +3,8 @@ subscription token from the Keychain (driven by test_cc_account.sh).
 
     GLOVE_CC_TOKEN_SERVICE=<keychain service> uv run python tests/integration/cc_account_live.py <session-dir>
 
-The token (`claude setup-token`) is resolved by glove in memory and reaches the
-harness only as CLAUDE_CODE_OAUTH_TOKEN. Checks: the launch-time model probe
+The token (`claude setup-token`) is resolved by glove in memory and handed to
+llm-auth only; the harness's CLAUDE_CODE_OAUTH_TOKEN holds a placeholder. Checks: the launch-time model probe
 (bearer + OAuth beta, following the paginated model list), a one-line answer,
 the operator's sandbox self-test run by the agent through its Bash tool, and the
 transcript. Uses a small model and two short prompts.
@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 from live_common import check, live_session, summary
+
+from glove.harnessconfig import INJECTED_KEY
 
 # Written by the operator: prints only yes/no, never a value.
 SELFTEST = """#!/bin/bash
@@ -30,8 +32,9 @@ echo "network-reachable=$( (exec 3<>/dev/tcp/api.anthropic.com/443) 2>/dev/null 
 def main(directory: str) -> int:
     with live_session(directory) as s:
         sd, plan, secrets = s.sd, s.plan, s.secrets
-        check("the token travels only as CLAUDE_CODE_OAUTH_TOKEN", list(secrets) == ["CLAUDE_CODE_OAUTH_TOKEN"]
-              and plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"], str(plan.passthrough_env))
+        check("the token goes to llm-auth; the harness gets a placeholder",
+              "CLAUDE_CODE_OAUTH_TOKEN" not in secrets and plan.model.api_key_injected
+              and plan.environment.get("CLAUDE_CODE_OAUTH_TOKEN") == INJECTED_KEY, str(list(secrets)))
         check(f"the model probe answered (bearer + OAuth beta, paginated list): {plan.model.model}", True)
         (sd.root / "work" / "sandbox-selftest.sh").write_text(SELFTEST)
 

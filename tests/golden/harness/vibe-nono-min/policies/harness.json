@@ -9,8 +9,8 @@
   "filesystem": {
     "allow": [
       "/work",
-      "/home/agent/.vibe",
-      "/tmp"
+      "/tmp",
+      "/home/agent/.vibe"
     ],
     "read": [
       "/etc/glove",

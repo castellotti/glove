@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-00bc6f9a16
+    image: glove/claude-code:0.2.0-dee1521c33
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/claude"]
     stdin_open: true

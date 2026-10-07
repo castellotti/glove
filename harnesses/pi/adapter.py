@@ -21,6 +21,11 @@ NO_KEY_PLACEHOLDER = "glove-no-key"
 SECTION_KEYS = frozenset({"extensions"})
 
 
+def _merged(first: list, extra: list | None) -> list:
+    """`first`, then what `extra` adds to it."""
+    return [*first, *(e for e in extra or [] if e not in first)]
+
+
 def extensions(comp) -> list[tuple[str, Path]]:
     """(extension, source dir) of every Pi extension the session's extensions contribute."""
     out: list[tuple[str, Path]] = []
@@ -109,6 +114,10 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         # skip the project's `.pi/` and `.agents/skills` without asking (the
         # empty trust store below holds no saved decision to override it)
         "defaultProjectTrust": "never",
+        # Pi's built-in MCP starts stdio servers from the harness process, outside
+        # ring 1; no glove extension contributes Pi MCP, so it's off, and stays off
+        # when a session lists extensions of its own (appended below).
+        "extensions": ["-builtin:mcp"],
     }
     # Endpoint URLs (e.g. SEARXNG_URL) reach Pi as container env from the
     # extensions' `harness.env`, which the Pi extensions read directly.
@@ -120,9 +129,12 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     extra_env = extra_settings.pop("env", None)
     # extensions' skills first, then any the session file lists itself
     skills = [dest for _, _, dest in (comp.skills if comp else [])]
+    # the session's own extensions after glove's, minus any naming the built-in MCP
+    extra_ext = [e for e in extra_settings.pop("extensions", None) or [] if not e.endswith("builtin:mcp")]
     settings_json.update(extra_settings)
+    settings_json["extensions"] = _merged(settings_json["extensions"], extra_ext)
     if skills:
-        settings_json["skills"] = [*skills, *(s for s in extra_settings.get("skills") or [] if s not in skills)]
+        settings_json["skills"] = _merged(skills, extra_settings.get("skills"))
     if extra_env:
         settings_json.setdefault("env", {}).update(extra_env)
     model_overrides = cfg.harness_config.get("model", {})
@@ -139,11 +151,15 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         p.write_text(json.dumps(data, indent=2) + "\n")
         written.append(p)
 
-    # Pi loads these in place of (and after) its own system prompt. glove renders
-    # neither, and an empty one would blank the prompt, so they are not
-    # protected: one there was written in an earlier run, and goes at each start.
-    for stale in ("SYSTEM.md", "APPEND_SYSTEM.md"):
-        (cfg_dir / stale).unlink(missing_ok=True)
+    # Files Pi loads that glove has nothing for: its system prompt (in place of,
+    # or after, its own), MCP servers and keybindings. glove renders them empty
+    # (Pi 1.x ignores an empty one) and protected_home binds them read-only, so
+    # whatever an earlier run left there (before they were protected) goes. Not
+    # deleted: a bind source must exist, or the runtime makes it a directory.
+    for name in ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json"):
+        (cfg_dir / name).write_text("")
+    # glove's brief from before it moved to AGENTS.override.md
+    (cfg_dir / "AGENTS.md").unlink(missing_ok=True)
 
     # glove's always-on enforcer extension (and any selected extensions' Pi
     # extensions) are baked into the image and loaded via `pi -e`; nothing to

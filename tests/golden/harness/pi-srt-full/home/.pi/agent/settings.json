@@ -4,6 +4,9 @@
   "defaultThinkingLevel": "medium",
   "theme": "dark",
   "defaultProjectTrust": "never",
+  "extensions": [
+    "-builtin:mcp"
+  ],
   "skills": [
     "/opt/glove/skills/rag/rag-parse",
     "/opt/glove/skills/rag/rag-query"

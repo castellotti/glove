@@ -69,7 +69,7 @@ def test_vibe_context_file_has_sudo_relay_brief_and_extension_briefs(tmp_path):
 
 def test_context_file_environment_block(tmp_path):
     _, _, home = _home("pi", tmp_path)
-    text = (home / ".pi" / "agent" / "AGENTS.md").read_text()
+    text = (home / ".pi" / "agent" / "AGENTS.override.md").read_text()
     assert "How your environment works" in text
     assert "/work" in text
     assert "Shell commands have no network" in text
@@ -130,15 +130,20 @@ def test_pi_config(tmp_path):
     # the project's .pi/ never loads: no prompt, and no saved decision to override it
     assert settings["defaultProjectTrust"] == "never"
     assert json.loads((agent / "trust.json").read_text()) == {}
+    assert settings["extensions"] == ["-builtin:mcp"]  # Pi's MCP would start servers outside ring 1
 
 
-def test_pi_drops_a_system_prompt_left_in_its_home(tmp_path):
+def test_pi_empties_the_loaders_left_in_its_home(tmp_path):
     agent = tmp_path / "home" / ".pi" / "agent"
     agent.mkdir(parents=True)
-    for name in ("SYSTEM.md", "APPEND_SYSTEM.md"):
+    names = ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json")
+    for name in (*names, "AGENTS.md"):
         (agent / name).write_text("planted")
     _home("pi", tmp_path)
-    assert not (agent / "SYSTEM.md").exists() and not (agent / "APPEND_SYSTEM.md").exists()
+    # rendered empty, not removed: each is a read-only bind source, which must stay a file
+    assert all((agent / n).is_file() and (agent / n).read_text() == "" for n in names)
+    assert not (agent / "AGENTS.md").exists()
+    assert "planted" not in (agent / "AGENTS.override.md").read_text()  # glove's brief, rendered
 
 
 @pytest.mark.parametrize("vision,expected", [(True, ["text", "image"]), (False, ["text"])])
@@ -166,7 +171,7 @@ def test_key_reference_renders_env_var_name_never_the_key(tmp_path, monkeypatch)
     prov = json.loads((home / ".pi" / "agent" / "models.json").read_text())["providers"]["glove"]
     assert prov["apiKey"] == f"${LLM_API_KEY_ENV}"
     # injected: the harness's variable holds a placeholder, never the key
-    assert plan.passthrough_env == [] and plan.environment[LLM_API_KEY_ENV] == INJECTED_KEY
+    assert plan.environment[LLM_API_KEY_ENV] == INJECTED_KEY
     for f in home.rglob("*"):
         if f.is_file():
             assert "sk-NEVER-ON-DISK" not in f.read_text()
@@ -191,7 +196,8 @@ def test_descriptor_refuses_unknown_api():
 def test_pi_harness_config_overrides(tmp_path):
     cfg, plan, home = _home("pi", tmp_path)
     cfg.harness_config = {
-        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"}},
+        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"},
+                     "extensions": ["npm:x", "+builtin:mcp", "builtin:mcp"]},
         "model": {"contextWindow": 131072, "maxTokens": 100000},
     }
     render_home(cfg, plan, home)
@@ -199,6 +205,8 @@ def test_pi_harness_config_overrides(tmp_path):
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"
     assert settings["env"]["FOO"] == "bar"
+    # a session's own extensions are added; none turns Pi's MCP back on
+    assert settings["extensions"] == ["-builtin:mcp", "npm:x"]
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000

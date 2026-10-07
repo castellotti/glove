@@ -110,8 +110,7 @@ def main(directory: str, stub_log: str | None) -> int:
         check("the key is injected (the model descriptor says so)", plan.model.api_key_injected)
         check(f"the harness env has the placeholder in {plan.model.api_key_env}",
               plan.environment.get(plan.model.api_key_env) == INJECTED_KEY, str(plan.model.api_key_env))
-        check("nothing passes the key into the harness", plan.model.api_key_env not in plan.passthrough_env
-              and KEY not in plan.environment.values(), str(plan.passthrough_env))
+        check("nothing passes the key into the harness", KEY not in plan.environment.values())
         if oauth:
             check("the harness keeps the provider's name and trusts the session CA",
                   root == "https://api.anthropic.com"

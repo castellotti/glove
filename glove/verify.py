@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from .config import ConfigError
 from .naming import scoped
+from .runtimes import get_runtime
 
 if TYPE_CHECKING:
     from .plan import SessionPlan
@@ -54,11 +55,8 @@ def probe(provider: str, plan: SessionPlan, network: str, script: str, env: dict
           *, timeout: int = 60) -> tuple[int, str]:
     """Run `sh -c script` in a hardened throwaway curl container on `network`.
     Values travel as env vars, never interpolated into the script."""
-    cmd = [provider, "run", "--rm", "--network", scoped(plan.session, network),
-           "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL",
-           "--security-opt", "no-new-privileges:true", "--read-only", "--pids-limit", "64",
-           "--memory", "128m", *[a for k in env for a in ("-e", k)],
-           "--entrypoint", "sh", PROBE_IMAGE, "-c", script]
+    cmd = get_runtime(provider).throwaway_argv(PROBE_IMAGE, ["-c", script], plan=plan,
+                                               network=scoped(plan.session, network), env=env, entrypoint="sh")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False,
                            env={**os.environ, **env})

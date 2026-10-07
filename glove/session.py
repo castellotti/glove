@@ -314,13 +314,12 @@ CONNECT_RETRIES = (1, 2, 3, 4)  # seconds between attempts
 
 def probe_http(
     provider: str, plan: SessionPlan, url: str, *, method: str = "GET", body: dict | None = None,
-    auth_env: dict[str, str] | None = None, auth_header: str = "Authorization", auth_scheme: str = "Bearer",
     headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     """HTTP request from a throwaway, hardened container on the harness network,
-    so the host never resolves or contacts the endpoint itself. A key travels
-    only as an env var of that container (never in any argv); `headers` are
-    public request headers (e.g. an API version).
+    so the host never resolves or contacts the endpoint itself. It holds no
+    key (llm-auth adds the provider's on the way); `headers` are public
+    request headers (e.g. an API version).
 
     A fast failure to reach the endpoint (see `FAST_FAILURES`: a sidecar or
     forwarder still starting) is retried inside the one container after each
@@ -332,24 +331,20 @@ def probe_http(
     # Trust what the harness trusts: the image's roots plus its extra CAs
     # (`plan.trusted_cas`: a read-only channel's file, corporate_ca), bound
     # read-only here too.
-    trust: list[str] = []
+    trust: list[tuple[str, str]] = []
     prelude = ""
     if plan.trusted_cas:
         prelude = (f"cat /etc/ssl/certs/ca-certificates.crt {' '.join(map(shlex.quote, plan.trusted_cas))} "
                    "> /tmp/ca.pem 2>/dev/null; ")
-        trust = [x for c in plan.composition.channels if c.trust
-                 for x in ("-v", f"{c.volume(plan.session)}:{c.path}:ro")]
+        trust = [(c.volume(plan.session), c.path) for c in plan.composition.channels if c.trust]
         if plan.corporate_ca_host_path:
-            trust += ["-v", f"{plan.corporate_ca_host_path}:{CORPORATE_CA_PATH}:ro"]
+            trust.append((plan.corporate_ca_host_path, CORPORATE_CA_PATH))
     cacert = "--cacert /tmp/ca.pem " if prelude else ""
     curl = f'curl {cacert}-sS -m 20 -o /tmp/b -w "%{{http_code}}" -X "$M" "$U"'
     for k, v in (headers or {}).items():
         curl += " -H " + shlex.quote(f"{k}: {v}")
     if body is not None:
         curl += ' -H "content-type: application/json" --data "$B"'
-    if auth_env:
-        prefix = f"{auth_scheme} " if auth_scheme else ""
-        curl += f' -H "{auth_header}: {prefix}$GLOVE_LLM_API_KEY"'
     waits = " ".join(str(w) for w in CONNECT_RETRIES)
     fast = "|".join(str(c) for c in sorted(FAST_FAILURES))
     # "<http code> <curl exit code>", then the body
@@ -358,15 +353,10 @@ def probe_http(
               'echo "$code $rc"; cat /tmp/b 2>/dev/null')
     # in the session's user namespace, as the harness it stands in for (rootless
     # Podman's keep-id: what it mounts is owned by the session uid as seen there)
-    userns = get_runtime(provider).compose_extra(plan)["userns_mode"]
-    cmd = [
-        provider, "run", "--rm", "--network", plan.network.internal_network, *(["--userns", userns] if userns else []),
-        "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-        "--read-only", "--tmpfs", "/tmp", "-e", "M", "-e", "U", "-e", "B", *trust,
-        *(["-e", "GLOVE_LLM_API_KEY"] if auth_env else []),
-        "--entrypoint", "sh", plan.image, "-c", script,
-    ]
-    env = {**os.environ, "M": method, "U": url, "B": _json.dumps(body or {}), **(auth_env or {})}
+    cmd = get_runtime(provider).throwaway_argv(
+        plan.image, ["-c", script], plan=plan, network=plan.network.internal_network, env=("M", "U", "B"),
+        mounts=trust, entrypoint="sh")
+    env = {**os.environ, "M": method, "U": url, "B": _json.dumps(body or {})}
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
     head, _, rest = r.stdout.partition("\n")
     try:

@@ -39,12 +39,11 @@ import json
 from typing import TYPE_CHECKING
 
 from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR, GLOVE_PTY, NONO
+from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, write_roots
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
 
-TMP = "/tmp"
 GLOVE_READ = ["/etc/glove", "/opt/glove"]
 
 # Env vars a shell command must never see (the LLM key and any secret-shaped
@@ -82,19 +81,8 @@ BROWSER_READ = ["/proc"]
 OPTIONS = {"browsers": {"type": "bool", "default": False}}
 
 
-def _rw_mounts(plan: SessionPlan) -> list[str]:
-    return [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
-
-
 def _ro_mounts(plan: SessionPlan) -> list[str]:
     return [m.container_path for m in plan.mounts if m.mode == "ro"]
-
-
-def _workdir(plan: SessionPlan) -> str:
-    for m in plan.mounts:
-        if m.is_workdir:
-            return m.container_path
-    return "/work"
 
 
 def _read_paths(plan: SessionPlan) -> list[str]:
@@ -112,14 +100,13 @@ def _read_paths(plan: SessionPlan) -> list[str]:
 
 
 def render_harness_profile(plan: SessionPlan) -> dict:
-    work = _workdir(plan)
     config_home = plan.profile.config_home_path
     return {
         "meta": {"name": "glove-harness"},
         "extends": "default",
         "workdir": {"access": "readwrite"},
         "filesystem": {
-            "allow": [work, *_rw_mounts(plan), config_home, TMP, *plan.composition.channel_paths],
+            "allow": [*write_roots(plan), config_home],
             # The harness's interpreter/runtime (its venv or node prefix) must be
             # readable or `nono run` cannot exec the TUI (exit 127 under Landlock).
             "read": _read_paths(plan),
@@ -132,7 +119,6 @@ def render_harness_profile(plan: SessionPlan) -> dict:
 
 
 def render_tool_profile(plan: SessionPlan) -> dict:
-    work = _workdir(plan)
     tools = plan.tools or {}
     allow_commands = list(tools.get("allow_commands", DEFAULT_ALLOW_COMMANDS))
     deny_commands = list(tools.get("deny_commands", []))
@@ -146,7 +132,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
             # Interpreter/runtime paths ARE readable (see _read_paths) so a tool
             # command can exec node/python; read-only, and the widened read
             # surface is bounded by network.block + deny_vars (module docstring).
-            "allow": [work, *_rw_mounts(plan), TMP, *plan.composition.channel_paths],
+            "allow": write_roots(plan),
             "read": read,
         },
         "network": {"block": True},

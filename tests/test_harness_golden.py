@@ -81,7 +81,7 @@ def _render(case: dict, tmp_path: Path) -> dict[str, str]:
     out["Dockerfile.derived"] = plan.derived_dockerfile or ""
     out["plan.json"] = json.dumps({
         "image": plan.image, "command": plan.command, "environment": plan.environment,
-        "enforcer_env": plan.enforcer_env, "passthrough_env": plan.passthrough_env,
+        "enforcer_env": plan.enforcer_env,
         "transcripts": [plan.transcripts_host_dir, plan.transcripts_container_dir],
     }, indent=2, sort_keys=True) + "\n"
     repo = str(Path(__file__).resolve().parent.parent)

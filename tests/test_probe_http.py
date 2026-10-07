@@ -47,9 +47,9 @@ def test_a_failed_probe_container_is_status_0(plan, monkeypatch):
 
 def test_one_container_retries_only_fast_failures_after_every_flag(plan, monkeypatch):
     calls = _run(monkeypatch, "200 0\n")
-    session.probe_http("docker", plan, "http://x/", body={"a": 1}, auth_env={"GLOVE_LLM_API_KEY": "k"},
-                       headers={"anthropic-version": "2023-06-01"})
+    session.probe_http("docker", plan, "http://x/", body={"a": 1}, headers={"anthropic-version": "2023-06-01"})
     assert len(calls) == 1
+    assert not any("GLOVE_LLM_API_KEY" in a for a in calls[0])  # a probe holds no key
     script = calls[0][-1]
     assert "for w in 1 2 3 4 0;" in script and "case $rc in 6|7|52|56)" in script
     assert script.index("); rc=$?") > max(script.index("--data"), script.rindex("-H "))

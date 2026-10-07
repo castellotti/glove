@@ -7,8 +7,8 @@
     "allowRead": [],
     "allowWrite": [
       "/work",
-      "/home/agent",
-      "/tmp"
+      "/tmp",
+      "/home/agent"
     ],
     "denyWrite": []
   },

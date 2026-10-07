@@ -10,14 +10,15 @@
     "allow": [
       "/work",
       "/mnt/out",
-      "/home/agent/.pi/agent",
-      "/tmp"
+      "/tmp",
+      "/home/agent/.pi/agent"
     ],
     "read": [
       "/mnt/lib",
       "/etc/glove",
       "/opt/glove",
-      "/usr/local"
+      "/usr/local",
+      "/opt/pi"
     ]
   },
   "network": {
