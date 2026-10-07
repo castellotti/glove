@@ -14,15 +14,19 @@ settings:
   extra_models: { type: list, default: [] }
   route:        { type: enum, values: [direct, egress], default: direct }   # cloud providers only
 hooks: hooks.py
-# With an API key (not a Claude Code subscription token), the key lives only in
-# the llm-auth sidecar: the harness's `llm` forwarder leads to it, and it dials
-# the server through `llm-upstream` (hooks.py builds both endpoints).
+# With an API key or a subscription token, the key lives only in the llm-auth
+# sidecar: the harness's `llm` forwarder leads to it, and it dials the server
+# through `llm-upstream` (hooks.py builds both endpoints). For a subscription
+# (`auth: oauth`) llm-auth serves TLS by the provider's name with a session CA,
+# published in the read-only `llm-ca` channel, which the harness trusts.
 networks:
-  llmauth: { internal: true, when: { api_key: { set: true }, auth: api-key } }
+  llmauth: { internal: true, when: { api_key: { set: true } } }
 images:
-  auth: { build: image, when: { api_key: { set: true }, auth: api-key } }
+  auth: { build: image, when: { api_key: { set: true } } }
 services: compose/services.yml.j2
+channels:
+  llm-ca: { services: [llm-auth], read_only: true, trust: ca.pem, when: { auth: oauth } }
 verify:
-  - { name: llm-auth-up, kind: container-healthy, service: llm-auth, when: { api_key: { set: true }, auth: api-key } }
+  - { name: llm-auth-up, kind: container-healthy, service: llm-auth, when: { api_key: { set: true } } }
 harness:
   brief: brief.md

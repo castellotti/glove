@@ -16,10 +16,18 @@ Each request is parsed by the server, keep-alive included, so a second request
 on one connection is checked like the first. A chunked request body is refused
 (411). Logs name the method, path and status, never a header value.
 
+With `LLM_AUTH_SERVE_TLS=1` (a Claude Code subscription, which must reach the
+provider by its real name) it also serves TLS as `LLM_AUTH_TLS_NAME`: at start
+it makes a session CA that may sign only that name (name constraints), signs a
+leaf with it and deletes the CA key at once, then the leaf key once loaded
+(both on its tmpfs). The CA certificate goes to `LLM_AUTH_CA_DIR/ca.pem` (a
+read-only channel for the harness, which trusts it) before it listens.
+
 Settings (env): LLM_AUTH_KEY (from glove at `compose up`, in memory),
 LLM_AUTH_UPSTREAM (host:port), LLM_AUTH_TLS_NAME, LLM_AUTH_HOST,
 LLM_AUTH_HEADER, LLM_AUTH_SCHEME, LLM_AUTH_ALLOW (JSON [[method, path], …];
-`{model}` matches a model id, which may hold `/`: `publisher/model`), LLM_AUTH_PORT.
+`{model}` matches a model id, which may hold `/`: `publisher/model`), LLM_AUTH_PORT,
+LLM_AUTH_SERVE_TLS, LLM_AUTH_CA_DIR.
 """
 
 from __future__ import annotations
@@ -30,7 +38,9 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -67,6 +77,11 @@ class Config:
         self.value = f"{scheme} {self.key}" if scheme else self.key
         self.allow = [(m.upper(), _pattern(p)) for m, p in json.loads(env["LLM_AUTH_ALLOW"])]
         self.port = int(env.get("LLM_AUTH_PORT", "8080"))
+        # serves TLS as the provider's own name (LLM_AUTH_TLS_NAME)
+        self.serve_tls = self.tls_name if env.get("LLM_AUTH_SERVE_TLS") else None
+        self.ca_dir = env.get("LLM_AUTH_CA_DIR", "")
+        if env.get("LLM_AUTH_SERVE_TLS") and not (self.tls_name and self.ca_dir):
+            raise SystemExit("llm-auth: LLM_AUTH_SERVE_TLS needs LLM_AUTH_TLS_NAME and LLM_AUTH_CA_DIR")
 
     def allowed(self, method: str, path: str) -> bool:
         return any(m == method and p.fullmatch(path) for m, p in self.allow)
@@ -74,6 +89,43 @@ class Config:
 
 def _pattern(path: str) -> re.Pattern[str]:
     return re.compile("[^?#]+".join(re.escape(part) for part in path.split("{model}")))
+
+
+CA_DAYS = 365  # its key is gone once the leaf is signed: nothing can mint more
+EC = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"]
+
+
+def _openssl(cwd: str, *args: str) -> None:
+    r = subprocess.run(["openssl", *args], cwd=cwd, capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"llm-auth: openssl {args[0]} failed: {r.stderr.strip()[-300:]}")
+
+
+def server_tls(name: str, ca_dir: str) -> ssl.SSLContext:
+    """A TLS context serving `name` with a leaf from a fresh session CA that
+    may sign `name` only; publishes the CA certificate to `ca_dir/ca.pem`.
+    Both keys exist only on this container's tmpfs, and only until loaded."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    with tempfile.TemporaryDirectory(prefix="llm-auth-") as d:
+        _openssl(d, "req", "-x509", *EC, "-keyout", "ca.key", "-out", "ca.pem", "-days", str(CA_DAYS),
+                 "-subj", "/CN=glove session CA", "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
+                 "-addext", "keyUsage=critical,keyCertSign",
+                 "-addext", f"nameConstraints=critical,permitted;DNS:{name}")
+        _openssl(d, "req", "-x509", *EC, "-keyout", "leaf.key", "-out", "leaf.pem", "-days", str(CA_DAYS),
+                 "-subj", f"/CN={name}", "-CA", "ca.pem", "-CAkey", "ca.key",
+                 "-addext", f"subjectAltName=DNS:{name}", "-addext", "extendedKeyUsage=serverAuth",
+                 "-addext", "basicConstraints=critical,CA:FALSE")
+        os.remove(os.path.join(d, "ca.key"))  # the leaf is signed: the CA can sign nothing more
+        ctx.load_cert_chain(os.path.join(d, "leaf.pem"), os.path.join(d, "leaf.key"))
+        with open(os.path.join(d, "ca.pem"), "rb") as f:
+            pem = f.read()
+    tmp = os.path.join(ca_dir, ".ca.pem")
+    with open(tmp, "wb") as f:
+        f.write(pem)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, os.path.join(ca_dir, "ca.pem"))  # a reader never sees half a file
+    return ctx
 
 
 class _TLSConnection(http.client.HTTPConnection):
@@ -103,6 +155,12 @@ def make_handler(cfg: Config, gate: threading.BoundedSemaphore) -> type[BaseHTTP
 
         def handle(self) -> None:
             with contextlib.suppress(ConnectionResetError, BrokenPipeError):  # the client went away
+                if isinstance(self.connection, ssl.SSLSocket):
+                    try:  # here, in the connection's thread, under its timeout
+                        self.connection.do_handshake()
+                    except (ssl.SSLError, OSError) as e:
+                        print(f"llm-auth: tls handshake failed ({type(e).__name__})", flush=True)
+                        return
                 super().handle()
 
         def _log(self, status: int, note: str = "") -> None:
@@ -193,6 +251,10 @@ def make_handler(cfg: Config, gate: threading.BoundedSemaphore) -> type[BaseHTTP
 def serve(cfg: Config, host: str = "0.0.0.0") -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, cfg.port), make_handler(cfg, threading.BoundedSemaphore(MAX_CONCURRENT)))
     server.daemon_threads = True
+    if cfg.serve_tls:
+        ctx = server_tls(cfg.serve_tls, cfg.ca_dir)
+        # the handshake runs in each connection's thread (`handle`), not in accept()
+        server.socket = ctx.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
     return server
 
 
@@ -200,7 +262,8 @@ def main() -> None:
     cfg = Config(dict(os.environ))
     server = serve(cfg)
     via = f"tls {cfg.tls_name}" if cfg.tls_name else "http"
-    print(f"llm-auth: :{cfg.port} → {cfg.upstream[0]}:{cfg.upstream[1]} ({via}), "
+    listen = f"tls {cfg.serve_tls}" if cfg.serve_tls else "http"
+    print(f"llm-auth: :{cfg.port} ({listen}) → {cfg.upstream[0]}:{cfg.upstream[1]} ({via}), "
           f"{len(cfg.allow)} allowed paths", flush=True)
     try:
         server.serve_forever()

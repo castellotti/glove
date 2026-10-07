@@ -14,14 +14,14 @@
   },
   "environment": {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_OAUTH_TOKEN": "glove-injected",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
     "DISABLE_AUTOUPDATER": "1",
-    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'"
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
+    "NODE_EXTRA_CA_CERTS": "/run/glove/llm-ca/ca.pem"
   },
   "image": "glove/claude-code:0.2.0-00bc6f9a16",
-  "passthrough_env": [
-    "CLAUDE_CODE_OAUTH_TOKEN"
-  ],
+  "passthrough_env": [],
   "transcripts": [
     null,
     null

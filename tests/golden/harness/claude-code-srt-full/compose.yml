@@ -192,7 +192,7 @@ services:
     mem_limit: 512m
   glove-s-llm-auth:
     container_name: glove-s-llm-auth
-    image: glove/ext-llm-auth:3c95a17c7f
+    image: glove/ext-llm-auth:f339aaed58
     environment:
       LLM_AUTH_KEY: null
       LLM_AUTH_UPSTREAM: glove-s-llm-upstream:8080

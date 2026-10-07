@@ -20,8 +20,9 @@ stops Claude Code from starting. They carry:
 
 `render_home` writes the user-scope `settings.json` (cosmetic, model) and merges
 the onboarding/trust state into `.claude.json`, which Claude Code also writes;
-with the key injected it also approves the public placeholder Claude Code
-reads, which it would otherwise ask about once.
+with an API key injected it also approves the public placeholder Claude Code
+reads, which it would otherwise ask about once (a subscription token's is
+never asked about).
 Contributed skills are linked from /opt/glove/cc/.claude/skills (baked, loaded
 with `--add-dir`), not the config home, whose deny rules would hide their files.
 """
@@ -263,7 +264,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     work = mount_plan.working_dir
     p_state = cfg_dir / ".claude.json"
     state: dict[str, Any] = {"hasCompletedOnboarding": True, "projects": {work: {"hasTrustDialogAccepted": True}}}
-    if model.api_key_injected:  # Claude Code keeps an approved key's last 20 chars
+    if model.api_key_injected and model.api_key_kind == "api-key":  # an approved key's last 20 chars
         tail = INJECTED_KEY[-20:]
         approved = _approved_keys(p_state)
         state["customApiKeyResponses"] = {"approved": approved + [tail] * (tail not in approved)}

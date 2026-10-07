@@ -102,6 +102,9 @@ class SessionPlan:
     # `corporate_ca`: the validated host PEM, bound read-only at
     # CORPORATE_CA_PATH (None: unset, nothing rendered).
     corporate_ca_host_path: str | None = None
+    # Container paths of the extra CAs the harness trusts (corporate_ca's, a
+    # channel's `trust`): its NODE_EXTRA_CA_CERTS, and the launch probe's trust.
+    trusted_cas: list[str] = field(default_factory=list)
     # `toolchains`: the validated blocks baked into the derived image ([]: unset).
     toolchains: list[Toolchain] = field(default_factory=list)
 
@@ -380,15 +383,21 @@ def build_session_plan(
         raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "
                           "`toolchains` block bakes `browsers:`; drop the option or add the browsers")
     corporate_ca = None
+    trusted_cas = list(comp.trusted_cas)
     if cfg.corporate_ca:
         from .cafile import resolve_ca_file
 
         # checked at plan time, so `glove check` fails early
         corporate_ca = str(resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path))
+        trusted_cas.append(CORPORATE_CA_PATH)
+    if len(trusted_cas) > 1:  # Node takes one extra bundle (TODO: one built at harness start)
+        raise ConfigError(f"the harness would trust {len(trusted_cas)} extra CAs ({', '.join(trusted_cas)}; "
+                          "e.g. corporate_ca and llm `auth: oauth`'s session CA): not supported together yet")
+    if trusted_cas:
         # Node *adds* these to its built-in roots: trust is widened, never
         # replaced, and verification is never turned off. Non-Node tools
         # (curl, python) keep the image's store (README: corporate_ca).
-        environment.setdefault("NODE_EXTRA_CA_CERTS", CORPORATE_CA_PATH)
+        environment.setdefault("NODE_EXTRA_CA_CERTS", trusted_cas[0])
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -440,6 +449,7 @@ def build_session_plan(
         derived_dockerfile=derived_df,
         derived_staged=staged,
         corporate_ca_host_path=corporate_ca,
+        trusted_cas=trusted_cas,
         toolchains=toolchains,
     )
     plan.passthrough_env = secret_env_names(plan)

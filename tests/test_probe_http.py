@@ -53,3 +53,21 @@ def test_one_container_retries_only_fast_failures_after_every_flag(plan, monkeyp
     script = calls[0][-1]
     assert "for w in 1 2 3 4 0;" in script and "case $rc in 6|7|52|56)" in script
     assert script.index("); rc=$?") > max(script.index("--data"), script.rindex("-H "))
+
+
+def test_it_trusts_what_the_harness_trusts(plan, monkeypatch):
+    from glove.extensions import Channel
+
+    calls = _run(monkeypatch, "200 0\n")
+    session.probe_http("docker", plan, "https://x/")
+    assert "--cacert" not in calls[0][-1] and not any(":ro" in a for a in calls[0])  # the image's roots only
+    plan.composition.channels += [Channel("c", "e", ("svc",), read_only=True, trust="ca.pem"),
+                                  Channel("r", "e", ("svc",), read_only=True), Channel("w", "e", ("svc",))]
+    plan.trusted_cas = plan.composition.trusted_cas
+    session.probe_http("docker", plan, "https://x/")
+    cmd = calls[1]
+    assert cmd[cmd.index("glove-s-chan-c:/run/glove/c:ro") - 1] == "-v"
+    assert not any("chan-r" in a or "chan-w" in a for a in cmd)  # only a channel holding a CA
+    script = cmd[-1]
+    assert script.startswith("cat /etc/ssl/certs/ca-certificates.crt /run/glove/c/ca.pem > /tmp/ca.pem")
+    assert "curl --cacert /tmp/ca.pem -sS " in script

@@ -520,6 +520,43 @@ def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_
     assert "172.31.2.0/27" in (d / ".glove" / "compose.yml").read_text()
 
 
+def test_up_retries_on_a_subnet_another_session_took_meanwhile(home, tmp_path, monkeypatch):
+    from glove.runtimes.docker import DockerRuntime
+    from glove.session import SubnetTaken
+
+    taken: dict[str, list[str]] = {}
+    monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: taken)
+    d = make_session(tmp_path / "s")
+    subnets = []
+
+    def launch(cfg, plan, *a, **k):  # the other session's networks appear during compose up
+        subnets.append(cfg.subnet)
+        if len(subnets) == 1:
+            taken["glove-other-net"] = [cfg.subnet]
+            raise SubnetTaken(f"another network took this session's subnet meanwhile: {cfg.subnet}")
+
+    monkeypatch.setattr("glove.session.launch", launch)
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 0 and "re-allocating and retrying" in result.output
+    assert subnets[0] != subnets[1] == reg.find(_sid(d)).subnet
+
+
+def test_up_gives_up_after_three_taken_subnets(home, tmp_path, monkeypatch):
+    from glove.session import SubnetTaken
+
+    d = make_session(tmp_path / "s")
+    rebuilds = []
+
+    def always(cfg, plan, *a, rebuild, **k):
+        rebuilds.append(rebuild)
+        raise SubnetTaken("taken")
+
+    monkeypatch.setattr("glove.session.launch", always)
+    result = runner.invoke(app, ["up", str(d), "--rebuild"])
+    assert result.exit_code == 1 and "gave up after 3 attempts" in result.output
+    assert rebuilds == [True, False, False]  # the images are built once
+
+
 def test_an_unsupported_runtime_enforcer_pair_is_a_clean_error(home, tmp_path):
     d = make_session(tmp_path / "s", "runtime: podman\nenforcer: srt\n")
     result = runner.invoke(app, ["plan", str(d)])

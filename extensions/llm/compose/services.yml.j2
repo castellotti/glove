@@ -3,7 +3,9 @@ services:
 {% set inject = slot.inference.inject %}
   # The session's LLM key, injected into the harness's requests (image/llm_auth.py).
   # Reached only through the harness's `llm` forwarder; it dials the server only
-  # through `llm-upstream`. Both are on llmauth, an internal network.
+  # through `llm-upstream`. Both are on llmauth, an internal network. With a
+  # subscription token it serves TLS by the provider's name (its session CA in
+  # the `llm-ca` channel).
   llm-auth:
     image: "{{ images.auth }}"
     networks: [llmauth]
@@ -16,9 +18,24 @@ services:
       LLM_AUTH_SCHEME: "{{ slot.inference.auth_scheme }}"
       LLM_AUTH_ALLOW: {{ inject.allow | tojson }}
       LLM_AUTH_PORT: "{{ inject.port }}"
+{% if inject.serve_tls %}
+      LLM_AUTH_SERVE_TLS: "1"
+      LLM_AUTH_CA_DIR: "{{ channel['llm-ca'].path }}"
+{% endif %}
     tmpfs: ["/tmp"]
+{% if inject.serve_tls %}
+    # Never restarted on its own: a new start makes a new CA (the old key is
+    # gone), which the running harness, having read its trust at start, would
+    # refuse. If it dies, the model is unreachable until the next `glove up`.
+    restart: "no"
+{% endif %}
     healthcheck:
+{% if inject.serve_tls %}
+      # healthy = the CA is published and a handshake by the provider's name verifies with it
+      test: ["CMD", "python3", "-c", "import socket, ssl; ssl.create_default_context(cafile='{{ channel['llm-ca'].path }}/ca.pem').wrap_socket(socket.create_connection(('127.0.0.1', {{ inject.port }}), 2), server_hostname='{{ inject.tls_name }}').close()"]
+{% else %}
       test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', {{ inject.port }}), 2)"]
+{% endif %}
       interval: 3s
       timeout: 3s
       retries: 20

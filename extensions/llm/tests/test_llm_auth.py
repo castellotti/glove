@@ -4,6 +4,7 @@ name, and logs without values."""
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import importlib.util
 import json
@@ -11,6 +12,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -199,36 +201,24 @@ def test_an_empty_key_refuses_to_start():
                          "LLM_AUTH_HEADER": "a", "LLM_AUTH_ALLOW": "[]"})
 
 
-@pytest.fixture(scope="module")
-def certs(tmp_path_factory):
-    """A throwaway CA and a certificate for `api.example.com` it signed."""
+def _need_openssl():
     if not shutil.which("openssl"):
         pytest.skip("openssl not installed")
-    d = tmp_path_factory.mktemp("certs")
-    ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"]
-
-    def run(*a):
-        subprocess.run(["openssl", *a], cwd=d, check=True, capture_output=True)
-
-    run("req", "-x509", *ec, "-keyout", "ca.key", "-out", "ca.pem", "-days", "1", "-subj", "/CN=glove test CA",
-        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
-    run("req", *ec, "-keyout", "srv.key", "-out", "srv.csr", "-subj", "/CN=api.example.com")
-    (d / "ext.cnf").write_text("subjectAltName=DNS:api.example.com\n")
-    run("x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "srv.pem",
-        "-days", "1", "-extfile", "ext.cnf")
-    return d
 
 
 @pytest.fixture
-def tls_upstream(certs):
-    """An HTTPS upstream with that certificate; returns (port, CA path)."""
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(certs / "srv.pem", certs / "srv.key")
+def tls_upstream(tmp_path):
+    """An HTTPS upstream for `api.example.com`, its certificate from llm-auth's
+    own session CA recipe; returns (port, CA path)."""
+    _need_openssl()
+    d = tmp_path / "upstream-ca"
+    d.mkdir()
+    ctx = llm_auth.server_tls("api.example.com", str(d))
     Upstream.seen = []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     _serve(srv)
-    yield srv.server_address[1], certs / "ca.pem"
+    yield srv.server_address[1], d / "ca.pem"
     srv.shutdown()
 
 
@@ -243,3 +233,63 @@ def test_tls_checks_the_providers_name(proxy, tls_upstream, name, status):
         first = cfg.tls_session
         assert first is not None and _request(port, "GET", "/v1/models")[0] == 200
         assert cfg.tls_session.id == first.id
+
+
+@pytest.fixture
+def tls_proxy(proxy, tls_upstream, tmp_path, monkeypatch):
+    """llm-auth serving TLS as api.example.com (and dialing it over TLS, as in
+    a session); returns (port, CA dir, key dir)."""
+    up, up_ca = tls_upstream
+    keys, ca_dir = tmp_path / "tmpfs", tmp_path / "chan"
+    keys.mkdir()
+    ca_dir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(keys))  # where its keys live while it starts
+    port, cfg = proxy(LLM_AUTH_UPSTREAM=f"127.0.0.1:{up}", LLM_AUTH_SERVE_TLS="1",
+                      LLM_AUTH_TLS_NAME="api.example.com", LLM_AUTH_CA_DIR=str(ca_dir))
+    cfg.tls.load_verify_locations(up_ca)
+    return port, ca_dir, keys
+
+
+def _tls_get(port, ca, name="api.example.com"):
+    ctx = ssl.create_default_context(cafile=str(ca))  # that CA only
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.sock = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=10), server_hostname=name)
+    c.request("GET", "/v1/models", headers={"Authorization": "Bearer glove-injected"})
+    r = c.getresponse()
+    return r.status, r.read()
+
+
+def test_it_serves_tls_as_the_providers_name_with_a_session_ca(tls_proxy):
+    port, ca_dir, keys = tls_proxy
+    assert sorted(p.name for p in ca_dir.iterdir()) == ["ca.pem"]
+    assert oct((ca_dir / "ca.pem").stat().st_mode & 0o777) == "0o644"
+    assert _tls_get(port, ca_dir / "ca.pem")[0] == 200
+    assert Upstream.seen[-1][2]["authorization"] == f"Bearer {KEY}"
+    assert list(keys.iterdir()) == []  # the CA key and the leaf key are gone
+
+
+def test_the_session_ca_signs_only_that_name(tls_proxy):
+    port, ca_dir, _ = tls_proxy
+    text = subprocess.run(["openssl", "x509", "-noout", "-text", "-in", str(ca_dir / "ca.pem")],
+                          capture_output=True, text=True, check=True).stdout
+    assert "Name Constraints" in text and "DNS:api.example.com" in text and "pathlen:0" in text
+    with pytest.raises(ssl.SSLCertVerificationError):
+        _tls_get(port, ca_dir / "ca.pem", name="other.example.com")
+
+
+def test_a_failed_handshake_is_logged_and_dropped(tls_proxy, capsys):
+    port, _, _ = tls_proxy
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r\n")  # plain HTTP to the TLS port
+        with contextlib.suppress(ConnectionResetError):
+            assert s.recv(65536) == b""  # closed, or reset: never an answer
+    deadline = time.time() + 5
+    while "tls handshake failed" not in (out := capsys.readouterr().out) and time.time() < deadline:
+        time.sleep(0.05)
+    assert "tls handshake failed" in out and Upstream.seen == []
+
+
+def test_serving_tls_needs_a_name_and_a_ca_dir():
+    with pytest.raises(SystemExit, match="LLM_AUTH_TLS_NAME and LLM_AUTH_CA_DIR"):
+        llm_auth.Config({"LLM_AUTH_KEY": "k", "LLM_AUTH_UPSTREAM": "x:1", "LLM_AUTH_HOST": "x",
+                         "LLM_AUTH_HEADER": "a", "LLM_AUTH_ALLOW": "[]", "LLM_AUTH_SERVE_TLS": "1"})

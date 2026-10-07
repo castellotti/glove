@@ -11,6 +11,7 @@ import pytest
 import yaml
 from helpers import STUB_LLM, make_cfg, render
 
+from glove.config import ConfigError
 from glove.extensions import IN_TREE_DIR, ExtensionError, load_module
 
 HERE = Path(__file__).resolve().parent
@@ -131,10 +132,54 @@ def test_internet_without_a_key_aliases_the_provider_host_onto_the_forwarder(tmp
     assert plan.passthrough_env == [] and "glove-s-llm-auth" not in doc["services"]
 
 
-def test_a_subscription_token_keeps_the_alias_and_reaches_the_harness(tmp_path):
+def test_a_subscription_token_goes_to_llm_auth_which_serves_the_providers_name(tmp_path):
     plan, doc, _ = _plan(tmp_path, harness="claude-code", **ANTHROPIC, auth="oauth")
-    assert doc["services"]["glove-s-llm"]["networks"]["glove-s-net"]["aliases"] == ["api.anthropic.com"]
-    assert plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"] and "glove-s-llm-auth" not in doc["services"]
+    svc = doc["services"]
+    # harness → api.anthropic.com:443 (the llm forwarder's alias) → llm-auth, serving TLS as that name
+    assert svc["glove-s-llm"]["networks"]["glove-s-net"]["aliases"] == ["api.anthropic.com"]
+    assert svc["glove-s-llm"]["command"] == "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-auth:8080"
+    assert svc["glove-s-llm-upstream"]["command"].endswith("TCP4:api.anthropic.com:443")
+    assert plan.model.base_url == "https://api.anthropic.com" and plan.model.api_key_injected
+    assert plan.passthrough_env == [] and plan.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "glove-injected"
+    env = svc["glove-s-llm-auth"]["environment"]
+    assert (env["LLM_AUTH_SERVE_TLS"], env["LLM_AUTH_TLS_NAME"], env["LLM_AUTH_CA_DIR"]) == \
+        ("1", "api.anthropic.com", "/run/glove/llm-ca")
+    assert (env["LLM_AUTH_HEADER"], env["LLM_AUTH_SCHEME"]) == ("Authorization", "Bearer")
+    allow = json.loads(env["LLM_AUTH_ALLOW"])
+    assert ["POST", "/v1/messages"] in allow
+    assert all(p in allow for p in hooks.load_provider("anthropic")["auth"]["oauth"]["paths"])
+    # the CA certificate: written by llm-auth, read-only for the harness, trusted by it
+    vols = {v["target"]: v for v in svc["glove-s-harness"]["volumes"] if v.get("type") == "volume"}
+    assert vols["/run/glove/llm-ca"]["read_only"] is True
+    assert {"target": "/run/glove/llm-ca", "type": "volume", "source": "glove-s-chan-llm-ca"} in \
+        svc["glove-s-llm-auth"]["volumes"]
+    assert plan.trusted_cas == ["/run/glove/llm-ca/ca.pem"] == [plan.environment["NODE_EXTRA_CA_CERTS"]]
+    assert "/run/glove/llm-ca" not in plan.composition.channel_paths  # never writable by the harness
+    assert svc["glove-s-llm-auth"]["restart"] == "no"  # a restart's new CA would be untrusted
+
+
+def test_an_api_key_session_has_no_ca(tmp_path):
+    plan, doc, _ = _plan(tmp_path, harness="claude-code", **ANTHROPIC, auth="api-key")
+    assert "NODE_EXTRA_CA_CERTS" not in plan.environment and not plan.composition.channels
+    assert "LLM_AUTH_SERVE_TLS" not in doc["services"]["glove-s-llm-auth"]["environment"]
+    assert doc["services"]["glove-s-llm-auth"]["restart"] == "unless-stopped"
+
+
+def test_a_subscription_needs_https(tmp_path):
+    with pytest.raises(ExtensionError, match="needs the provider over https"):
+        _plan(tmp_path, harness="claude-code", **{**ANTHROPIC, "endpoint": "http://gw.example.com:8080"},
+              auth="oauth")
+
+
+def test_corporate_ca_and_the_session_ca_are_refused_together(tmp_path):
+    pem = tmp_path / "corp.pem"
+    pem.write_text("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = make_cfg(harness="claude-code", name="s", workdir=str(work), corporate_ca=str(pem))
+    cfg.extensions = _llm(**ANTHROPIC, auth="oauth")
+    with pytest.raises(ConfigError, match="would trust 2 extra CAs"):
+        render(cfg, tmp_path)
 
 
 def test_internet_with_a_key_goes_through_llm_auth(tmp_path):
@@ -201,6 +246,20 @@ def test_allowed_paths_per_provider(provider, endpoint, want):
     settings = {"provider": provider, "location": "host" if endpoint and "://" not in endpoint else "internet",
                 "endpoint": endpoint}
     assert hooks.allowed_paths(cat, hooks.route(settings, cat)["base_path"]) == want
+
+
+def test_oauth_paths_join_the_allowlist_under_the_server_root():
+    cat = hooks.load_provider("anthropic")
+    got = hooks.allowed_paths(cat, "", cat["auth"]["oauth"]["paths"])
+    assert ["GET", "/api/oauth/profile"] in got and got.index(["POST", "/v1/messages"]) == 0
+
+
+def test_a_bad_oauth_path_is_refused(tmp_path, monkeypatch):
+    (tmp_path / "x.yml").write_text("name: x\napi: anthropic-messages\nlocations: [internet]\n"
+                                    "auth: {oauth: {paths: [[GET, api/no-slash]]}}\n")
+    monkeypatch.setattr(hooks, "PROVIDERS", tmp_path)
+    with pytest.raises(hooks.LlmError, match="bad oauth path"):
+        hooks.load_provider("x")
 
 
 def test_observe_labels_the_llm_forwarder(tmp_path):
@@ -322,10 +381,10 @@ def test_the_probe_never_holds_an_injected_key(tmp_path):
     assert server.calls and not any(auth for _, _, auth in server.calls)
 
 
-def test_the_probe_sends_a_subscription_token(tmp_path):
+def test_the_probe_never_holds_a_subscription_token(tmp_path):
     server = PagedServer(["claude-x"])
     _resolve(tmp_path, server, harness="claude-code", **ANTHROPIC, auth="oauth", model="claude-x")
-    assert server.auth == [True]
+    assert server.auth == [False]  # llm-auth adds it on the way
 
 
 def test_json_path():

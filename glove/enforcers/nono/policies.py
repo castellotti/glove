@@ -100,7 +100,7 @@ def _workdir(plan: SessionPlan) -> str:
 def _read_paths(plan: SessionPlan) -> list[str]:
     """Read-only grants shared by both profiles.
 
-    ro mounts + glove's read-only dirs + the harness's interpreter/runtime paths
+    ro mounts + glove's read-only dirs + read-only channels + the harness's interpreter/runtime paths
     (venv/node prefix). The runtime paths must be readable in *both* profiles or
     an exec of that interpreter is denied by Landlock (exit 127) — for the
     harness that kills the TUI, for a tool command it kills the shell command.
@@ -108,7 +108,7 @@ def _read_paths(plan: SessionPlan) -> list[str]:
     read surface is a documented defense-in-depth tradeoff bounded by
     ``network.block`` + secret-var stripping — see the module docstring.
     """
-    return [*_ro_mounts(plan), *GLOVE_READ, *plan.profile.runtime_paths]
+    return [*_ro_mounts(plan), *GLOVE_READ, *plan.composition.read_channel_paths, *plan.profile.runtime_paths]
 
 
 def render_harness_profile(plan: SessionPlan) -> dict:
