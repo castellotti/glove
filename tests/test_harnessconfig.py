@@ -196,7 +196,8 @@ def test_descriptor_refuses_unknown_api():
 def test_pi_harness_config_overrides(tmp_path):
     cfg, plan, home = _home("pi", tmp_path)
     cfg.harness_config = {
-        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"}},
+        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"},
+                     "extensions": ["npm:x", "+builtin:mcp", "builtin:mcp"]},
         "model": {"contextWindow": 131072, "maxTokens": 100000},
     }
     render_home(cfg, plan, home)
@@ -204,6 +205,8 @@ def test_pi_harness_config_overrides(tmp_path):
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"
     assert settings["env"]["FOO"] == "bar"
+    # a session's own extensions are added; none turns Pi's MCP back on
+    assert settings["extensions"] == ["-builtin:mcp", "npm:x"]
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000

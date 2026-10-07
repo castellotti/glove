@@ -50,7 +50,7 @@ HEADER_VALUE = re.compile(r"[\x20-\x7e]*")
 CAPABILITY_KEYS = ("vision", "context_window", "max_tokens", "reasoning")
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 # What a harness sends to its model, per API, under the endpoint's base path
-# (measured: Claude Code 2.1.288, Pi 0.87.1, Vibe 2.25.8). The model list and the
+# (measured: Claude Code 2.1.292, Pi 1.0.4, Vibe 2.26.0). The model list and the
 # catalog's probe are added per provider (glove's resolve goes through llm-auth).
 API_PATHS = {
     "anthropic-messages": [("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("HEAD", "/api/hello")],

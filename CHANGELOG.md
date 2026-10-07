@@ -6,6 +6,41 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Harness upgrades:** Pi 1.0.4, Vibe 2.26.0, Claude Code 2.1.292, each
+  re-audited (`audited_version`). Claude Code's own fetches from
+  `downloads.claude.ai` through the egress proxy (2.1.288 already made them)
+  are documented as a residual in `docs/SECURITY.md`. Each dependency tree is now pinned: Pi
+  installs from a committed `package-lock.json` (`npm ci --ignore-scripts`;
+  1.x ships no shrinkwrap), Vibe from a committed uv constraints file.
+- **Pi 1.x, held to glove's rules:** built-in MCP is off (`-builtin:mcp` in the
+  rendered settings, which a session's own extensions can't undo: it starts
+  stdio servers from the harness process, outside ring 1; on by default
+  upstream); codemode stays off as Pi ships it, and its
+  nested tool calls go through the enforcer when a session turns it on. The
+  new agent-dir loaders `SYSTEM.md`, `APPEND_SYSTEM.md`, `mcp.json` and
+  `keybindings.json` are rendered empty and read-only, and glove's brief is
+  `AGENTS.override.md` (an override there replaces `AGENTS.md`, even an empty
+  one), read-only too.
+- **Vibe 2.26** names its tools by group (`file_system.bash`, `process.start`,
+  `file_system.write_file`), which the old hook would have passed through
+  unwrapped: glove's `pre_tool` hook wraps them, `process.start` included, and
+  refuses a shell call's own `env` and a `cwd` outside the write roots.
+- **The file-write tools are held to the write roots.** Pi's enforcer
+  extension and Vibe's `pre_tool` hook refuse a `write`/`edit`
+  (`write_file`/`search_replace`) outside `/work`, rw mounts, `/tmp` and the
+  writable channels,
+  nested calls included, with the path resolved as the harness and the kernel
+  would (`~`, Pi's `@` and `file://`, symlinks, dangling ones too; odd spaces
+  and edge whitespace refused). The agent's own file tool had overwritten a
+  read-only blob in Vibe's plugin store, which every later session reads
+  without checking its hashes. Core renders the roots as `write-roots.json`,
+  from the same list as the nono and srt policies. Residuals in
+  `docs/SECURITY.md`: a race between the check and the write, and other code in
+  Vibe's process editing its plugin store.
+- `tests/integration/test_tool_confine.sh pi|vibe` pins the hooks' tool names
+  by their effect (every shell path wrapped, the write tool held to the roots,
+  Pi's MCP off), so an upstream rename fails a check; `live_common.check_version`
+  checks the image runs the pinned release.
 - **The LLM key leaves the harness.** With an API key, the `llm` extension's
   new `llm-auth` sidecar holds the key and injects it into model requests,
   letting only the model API's paths through; the harness's variable holds the
@@ -158,7 +193,18 @@ All notable changes to glove are documented here.
 ### Changed
 
 - Extension compose fragments: an empty `services:` fragment adds nothing.
-  srt lists the harness-env secret gap only when the env holds one.
+- The harness gets no passthrough secret env any more (`passthrough_env` is
+  gone: every LLM key or token is injected by `llm-auth`). An inference
+  provider that exports a key without injecting it is refused at plan time,
+  and glove's launch probe holds no key. srt still unsets the key's variable by
+  name, as a guard.
+- One hardened throwaway container (`Runtime.throwaway_argv`) for glove's
+  probes and checks: `--rm`, `cap-drop ALL`, `no-new-privileges`, glove's
+  seccomp, read-only rootfs, pids/memory limits, no network unless named,
+  non-root (the harness's uid/gid and user namespace with a plan), and never a
+  relabelled host bind. The launch probe gains limits and seccomp; the
+  Landlock doctor probe no longer runs as root on the default network; the srt
+  bwrap smoke runs without network.
 - The test suite ignores a shell's `FORCE_COLOR` (rich coloured CLI output
   split the words tests match).
 - The harness runs as `glove-<id>-harness` (`compose run --name`): a second
