@@ -9,13 +9,14 @@
   "filesystem": {
     "allow": [
       "/work",
-      "/home/agent/.pi/agent",
-      "/tmp"
+      "/tmp",
+      "/home/agent/.pi/agent"
     ],
     "read": [
       "/etc/glove",
       "/opt/glove",
-      "/usr/local"
+      "/usr/local",
+      "/opt/pi"
     ]
   },
   "network": {

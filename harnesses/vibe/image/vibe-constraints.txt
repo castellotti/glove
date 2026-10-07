@@ -1,0 +1,389 @@
+agent-client-protocol==0.11.0
+    # via mistral-vibe
+annotated-types==0.7.0
+    # via
+    #   mistral-vibe
+    #   pydantic
+anyio==4.15.1
+    # via
+    #   httpx
+    #   mcp
+    #   mistral-vibe
+    #   sse-starlette
+    #   starlette
+    #   watchfiles
+attrs==26.1.0
+    # via
+    #   jsonschema
+    #   mistral-vibe
+    #   referencing
+beautifulsoup4==4.14.3
+    # via
+    #   markdownify
+    #   mistral-vibe
+cachetools==7.0.6
+    # via mistral-vibe
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   mistral-vibe
+    #   requests
+    #   sentry-sdk
+cffi==2.0.0 ; platform_machine != 'aarch64' or platform_python_implementation != 'PyPy' or sys_platform != 'linux'
+    # via
+    #   cryptography
+    #   miniaudio
+    #   mistral-vibe
+charset-normalizer==3.4.7
+    # via
+    #   mistral-vibe
+    #   requests
+click==8.3.3 ; sys_platform != 'emscripten'
+    # via
+    #   mistral-vibe
+    #   uvicorn
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via
+    #   click
+    #   mistral-vibe
+croniter==6.2.4
+    # via mistral-vibe
+cryptography==50.0.0
+    # via
+    #   google-auth
+    #   mistral-vibe
+    #   pyjwt
+    #   secretstorage
+eval-type-backport==0.3.1
+    # via
+    #   mistral-vibe
+    #   mistralai
+gitdb==4.0.12
+    # via
+    #   gitpython
+    #   mistral-vibe
+gitpython==3.1.62
+    # via mistral-vibe
+giturlparse==0.15.0
+    # via mistral-vibe
+google-auth==2.49.2
+    # via mistral-vibe
+googleapis-common-protos==1.74.0
+    # via
+    #   mistral-vibe
+    #   opentelemetry-exporter-otlp-proto-http
+h11==0.16.0
+    # via
+    #   httpcore
+    #   mistral-vibe
+    #   uvicorn
+httpcore==1.0.9
+    # via
+    #   httpx
+    #   mistral-vibe
+httpx==0.28.1
+    # via
+    #   mcp
+    #   mistral-vibe
+    #   mistralai
+httpx-sse==0.4.3
+    # via
+    #   mcp
+    #   mistral-vibe
+humanize==4.16.0
+    # via mistral-vibe
+idna==3.18
+    # via
+    #   anyio
+    #   httpx
+    #   mistral-vibe
+    #   requests
+importlib-metadata==8.7.1
+    # via
+    #   mistral-vibe
+    #   opentelemetry-api
+jaraco-classes==3.4.0
+    # via
+    #   keyring
+    #   mistral-vibe
+jaraco-context==6.1.2
+    # via
+    #   keyring
+    #   mistral-vibe
+jaraco-functools==4.4.0
+    # via
+    #   keyring
+    #   mistral-vibe
+jeepney==0.9.0 ; sys_platform == 'linux'
+    # via
+    #   keyring
+    #   mistral-vibe
+    #   secretstorage
+jsonpatch==1.33
+    # via mistral-vibe
+jsonpath-python==1.1.5
+    # via
+    #   mistral-vibe
+    #   mistralai
+jsonpointer==3.1.1
+    # via
+    #   jsonpatch
+    #   mistral-vibe
+jsonschema==4.26.0
+    # via
+    #   mcp
+    #   mistral-vibe
+jsonschema-specifications==2025.9.1
+    # via
+    #   jsonschema
+    #   mistral-vibe
+keyring==25.7.0
+    # via mistral-vibe
+linkify-it-py==2.1.0
+    # via
+    #   markdown-it-py
+    #   mistral-vibe
+markdown-it-py==4.0.0
+    # via
+    #   mdit-py-plugins
+    #   mistral-vibe
+    #   rich
+    #   textual
+markdownify==1.2.3
+    # via mistral-vibe
+mcp==1.28.1
+    # via mistral-vibe
+mdit-py-plugins==0.5.0
+    # via
+    #   mistral-vibe
+    #   textual
+mdurl==0.1.2
+    # via
+    #   markdown-it-py
+    #   mistral-vibe
+miniaudio==1.71 ; platform_machine != 'aarch64' or sys_platform != 'linux'
+    # via mistral-vibe
+mistral-vibe==2.26.0
+mistralai==2.6.0
+    # via mistral-vibe
+more-itertools==11.0.2
+    # via
+    #   jaraco-classes
+    #   jaraco-functools
+    #   mistral-vibe
+opentelemetry-api==1.39.1
+    # via
+    #   mistral-vibe
+    #   mistralai
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+opentelemetry-exporter-otlp-proto-common==1.39.1
+    # via
+    #   mistral-vibe
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-http==1.39.1
+    # via mistral-vibe
+opentelemetry-proto==1.39.1
+    # via
+    #   mistral-vibe
+    #   opentelemetry-exporter-otlp-proto-common
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-sdk==1.39.1
+    # via
+    #   mistral-vibe
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-semantic-conventions==0.60b1
+    # via
+    #   mistral-vibe
+    #   mistralai
+    #   opentelemetry-sdk
+packaging==26.2
+    # via mistral-vibe
+pexpect==4.9.0
+    # via mistral-vibe
+platformdirs==4.9.6
+    # via
+    #   mistral-vibe
+    #   textual
+protobuf==6.33.6
+    # via
+    #   googleapis-common-protos
+    #   mistral-vibe
+    #   opentelemetry-proto
+ptyprocess==0.7.0
+    # via
+    #   mistral-vibe
+    #   pexpect
+pyasn1==0.6.4
+    # via
+    #   mistral-vibe
+    #   pyasn1-modules
+pyasn1-modules==0.4.2
+    # via
+    #   google-auth
+    #   mistral-vibe
+pycparser==3.0 ; (implementation_name != 'PyPy' and platform_machine != 'aarch64') or (implementation_name != 'PyPy' and platform_python_implementation != 'PyPy') or (implementation_name != 'PyPy' and sys_platform != 'linux')
+    # via
+    #   cffi
+    #   mistral-vibe
+pydantic==2.13.4
+    # via
+    #   agent-client-protocol
+    #   mcp
+    #   mistral-vibe
+    #   mistralai
+    #   pydantic-settings
+pydantic-core==2.46.4
+    # via
+    #   mistral-vibe
+    #   pydantic
+pydantic-settings==2.14.2
+    # via
+    #   mcp
+    #   mistral-vibe
+pygments==2.20.0
+    # via
+    #   mistral-vibe
+    #   rich
+    #   textual
+pyjwt==2.15.1
+    # via
+    #   mcp
+    #   mistral-vibe
+pyperclip==1.11.0
+    # via mistral-vibe
+python-dateutil==2.9.0.post0
+    # via
+    #   croniter
+    #   mistral-vibe
+    #   mistralai
+python-dotenv==1.2.2
+    # via
+    #   mistral-vibe
+    #   pydantic-settings
+python-multipart==0.0.32
+    # via
+    #   mcp
+    #   mistral-vibe
+pywin32==311 ; sys_platform == 'win32'
+    # via
+    #   mcp
+    #   mistral-vibe
+pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
+    # via
+    #   keyring
+    #   mistral-vibe
+pywinpty==3.0.5 ; sys_platform == 'win32'
+    # via mistral-vibe
+pyyaml==6.0.3
+    # via mistral-vibe
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
+    #   mistral-vibe
+requests==2.34.2
+    # via
+    #   mistral-vibe
+    #   opentelemetry-exporter-otlp-proto-http
+rfc8785==0.1.4
+    # via mistral-vibe
+rich==15.0.0
+    # via
+    #   mistral-vibe
+    #   textual
+rpds-py==0.30.0
+    # via
+    #   jsonschema
+    #   mistral-vibe
+    #   referencing
+secretstorage==3.5.0 ; sys_platform == 'linux'
+    # via
+    #   keyring
+    #   mistral-vibe
+sentry-sdk==2.64.0
+    # via mistral-vibe
+setproctitle==1.3.7
+    # via mistral-vibe
+six==1.17.0
+    # via
+    #   markdownify
+    #   mistral-vibe
+    #   python-dateutil
+smmap==5.0.3
+    # via
+    #   gitdb
+    #   mistral-vibe
+soupsieve==2.9.2
+    # via
+    #   beautifulsoup4
+    #   mistral-vibe
+sse-starlette==3.4.1
+    # via
+    #   mcp
+    #   mistral-vibe
+starlette==1.3.1
+    # via
+    #   mcp
+    #   mistral-vibe
+    #   sse-starlette
+textual==8.2.8
+    # via mistral-vibe
+textual-speedups==0.2.1
+    # via mistral-vibe
+tomli-w==1.2.0
+    # via mistral-vibe
+tree-sitter==0.26.0
+    # via mistral-vibe
+tree-sitter-bash==0.25.1
+    # via mistral-vibe
+truststore==0.10.4
+    # via mistral-vibe
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   beautifulsoup4
+    #   mcp
+    #   mistral-vibe
+    #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+    #   pydantic
+    #   pydantic-core
+    #   referencing
+    #   starlette
+    #   textual
+    #   typing-inspection
+typing-inspection==0.4.2
+    # via
+    #   mcp
+    #   mistral-vibe
+    #   mistralai
+    #   pydantic
+    #   pydantic-settings
+uc-micro-py==2.0.0
+    # via
+    #   linkify-it-py
+    #   mistral-vibe
+urllib3==2.8.0
+    # via
+    #   mistral-vibe
+    #   requests
+    #   sentry-sdk
+uvicorn==0.46.0 ; sys_platform != 'emscripten'
+    # via
+    #   mcp
+    #   mistral-vibe
+watchfiles==1.2.0
+    # via mistral-vibe
+websockets==16.0
+    # via mistral-vibe
+zipp==3.23.1
+    # via
+    #   importlib-metadata
+    #   mistral-vibe
+zstandard==0.25.0
+    # via mistral-vibe

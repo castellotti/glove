@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, SRT
+from .base import ENFORCER_DIR, SRT, write_roots
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -66,20 +66,6 @@ OPTIONS = {
 GLOVE_SRT = f"{SRT_DIR}/glove-srt.mjs"  # srt's library without a network namespace (nono+srt)
 NODE = f"{SRT_DIR}/node"
 
-TMP = "/tmp"
-# The harness home bind-mount point (CONTAINER_HOME). srt's `--ro-bind /` does NOT
-# downgrade a nested docker bind mount, and denying a *subdir* of a bind mount is
-# a no-op — so glove denies the whole home MOUNT POINT (verified against
-# 0.0.75/0.0.77). srt then binds an empty overlay over it, hiding the harness
-# config/extensions/transcripts from tool commands entirely.
-
-
-def _rw_paths(plan: SessionPlan) -> list[str]:
-    work = next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
-    rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
-    return [work, *rw, TMP, *plan.composition.channel_paths]
-
-
 def denied_env_vars(plan: SessionPlan) -> list[str]:
     """Exact env var names srt must unset for tool commands: the LLM key always
     (it may reach the harness env even when unset in config) plus every secret
@@ -99,12 +85,13 @@ def render_settings(plan: SessionPlan) -> dict:
     weak = not plan.hardening.systempaths_unconfined
     return {
         "filesystem": {
-            # deny the whole harness home mount to tool commands (extensions,
-            # skills, session transcripts, config) — both read and write, since
-            # srt cannot restrict a nested bind mount via allowWrite alone.
+            # deny the whole harness home MOUNT POINT to tool commands (extensions,
+            # skills, session transcripts, config), read and write: srt's
+            # `--ro-bind /` keeps a nested bind mount writable, and denying a
+            # subdir of one is a no-op (verified against 0.0.75/0.0.77).
             "denyRead": [CONTAINER_HOME],
             "allowRead": [],
-            "allowWrite": _rw_paths(plan),
+            "allowWrite": write_roots(plan),
             "denyWrite": [CONTAINER_HOME],
         },
         # Tool commands get no network (only the harness browser tool reaches

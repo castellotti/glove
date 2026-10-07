@@ -8,6 +8,7 @@ Built from a resolved ``Config`` plus the mount and network plans.
 
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
-from .enforcers.base import argv_lines, srt_suffix, uses_srt
+from .enforcers.base import WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
@@ -468,6 +469,7 @@ def build_session_plan(
     if resume or session_id is not None:
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
+    plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)

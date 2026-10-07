@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-6ed54a2767
+    image: glove/pi:0.5.0-420dab327b
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer"]
     stdin_open: true
@@ -65,6 +65,36 @@ services:
       - type: bind
         source: "<tmp>/home/.pi/agent/trust.json"
         target: "/home/agent/.pi/agent/trust.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/AGENTS.override.md"
+        target: "/home/agent/.pi/agent/AGENTS.override.md"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/SYSTEM.md"
+        target: "/home/agent/.pi/agent/SYSTEM.md"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/APPEND_SYSTEM.md"
+        target: "/home/agent/.pi/agent/APPEND_SYSTEM.md"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/mcp.json"
+        target: "/home/agent/.pi/agent/mcp.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/keybindings.json"
+        target: "/home/agent/.pi/agent/keybindings.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
       # (after the rw bind it sits in, so it overlays it)

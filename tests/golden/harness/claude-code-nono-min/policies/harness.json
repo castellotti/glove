@@ -9,8 +9,8 @@
   "filesystem": {
     "allow": [
       "/work",
-      "/home/agent/.claude",
-      "/tmp"
+      "/tmp",
+      "/home/agent/.claude"
     ],
     "read": [
       "/etc/glove",

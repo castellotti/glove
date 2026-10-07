@@ -31,9 +31,15 @@ ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python
 
 # The pinned Vibe release: harness.yml's `version`, passed by glove as a build arg.
+# Its dependencies are pinned by vibe-constraints.txt (mistral-vibe itself only
+# gives ranges). To bump, regenerate it with the new version:
+#   echo mistral-vibe==<v> | uv pip compile --universal --python-version 3.12 --no-header - -o vibe-constraints.txt
 ARG HARNESS_VERSION
+COPY vibe-constraints.txt /tmp/vibe-constraints.txt
 RUN : "${HARNESS_VERSION:?glove passes harness.yml's version}" \
-    && uv tool install "mistral-vibe==${HARNESS_VERSION}"
+    && grep -qx "mistral-vibe==${HARNESS_VERSION}" /tmp/vibe-constraints.txt \
+    && uv tool install --python 3.12 --no-cache --constraints /tmp/vibe-constraints.txt "mistral-vibe==${HARNESS_VERSION}" \
+    && rm /tmp/vibe-constraints.txt
 
 # Optional extra packages from glove.yaml (apt_packages / pip_packages),
 # injected as build args so the image stays reproducible per session.

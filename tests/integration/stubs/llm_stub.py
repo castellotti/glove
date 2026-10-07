@@ -10,7 +10,8 @@ swapped the harness's placeholder for it).
 
 Tool driving (egress tests): when the last user message contains
 `CALL <tool> <json-args>` the stub answers with that tool call; when the last
-message is a tool result it answers `TOOL RESULT: <first 300 chars>`. So a
+message is a tool result it answers `TOOL RESULT: <first 1500 chars>` (Vibe 2.26 puts the
+wrapped command and stderr before stdout). So a
 `pi -p "CALL web_fetch {...}"` exercises the real tool path end to end.
 The skill directories Pi lists in its system prompt are logged as `skills=`.
 """
@@ -101,7 +102,7 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         text = _text(last.get("content"))
         if last.get("role") == "tool":
-            reply = "TOOL RESULT: " + " ".join(text.split())[:300]
+            reply = "TOOL RESULT: " + " ".join(text.split())[:1500]
         elif last.get("role") == "user" and (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
             call = {"index": 0, "id": "call_1", "type": "function",
                     "function": {"name": m.group(1), "arguments": m.group(2)}}

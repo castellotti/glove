@@ -6,7 +6,13 @@
  *   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c <cmd>
  * ), so a prompt-injected command can only touch /work + rw mounts + /tmp, has no
  * network, and cannot read the harness home (extensions, skills, session
- * transcripts) or the LLM key.
+ * transcripts). The LLM key is not in the harness at all (glove's llm-auth holds it).
+ *
+ * Pi's own `write` and `edit` tools run in this process, outside that sandbox, so
+ * they are held to the same write roots (/etc/glove/enforcer/write-roots.json):
+ * the path is resolved the way Pi and the kernel would (`@`, `~`, `file://`,
+ * symlinks), checked, and the call is rewritten to that checked absolute path.
+ * Nested calls (codemode) pass through `tool_call` too.
  *
  * The wrapper argv is read from /etc/glove/enforcer/tool-wrapper.json, rendered by
  * glove's enforcer — so this extension is enforcer-agnostic (nono today, srt
@@ -19,8 +25,16 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WRAPPER_FILE = "/etc/glove/enforcer/tool-wrapper.json";
+const ROOTS_FILE = "/etc/glove/enforcer/write-roots.json";
+const FILE_WRITE_TOOLS = new Set(["write", "edit"]);
+// What Pi's path normalization turns into a plain space: refused, so the path
+// checked is the path written.
+const ODD_SPACE = /[\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]/;
 
 function loadWrapper(): string[] | null {
   try {
@@ -32,6 +46,65 @@ function loadWrapper(): string[] | null {
     // fall through — treated as "no wrapper", fail closed below
   }
   return null;
+}
+
+function loadRoots(): string[] | null {
+  try {
+    const roots = JSON.parse(fs.readFileSync(ROOTS_FILE, "utf-8")).roots;
+    if (Array.isArray(roots) && roots.length > 0 && roots.every((r: unknown) => typeof r === "string" && r.startsWith("/"))) {
+      const real = roots.map((r: string) => realpathLoose(r));
+      return real.every((r) => r !== null) ? (real as string[]) : null;
+    }
+  } catch {
+    // fall through — no roots, file writes fail closed below
+  }
+  return null;
+}
+
+/** `p` resolved component by component as the kernel would: each symlink
+ * followed (a dangling one too: a write creates its target), `..` after it;
+ * missing components kept as given. null on a symlink loop. */
+export function realpathLoose(p: string): string | null {
+  const todo = p.split("/").filter((s) => s !== "" && s !== ".").reverse();
+  let cur = "/";
+  for (let links = 0; todo.length > 0; ) {
+    const part = todo.pop() as string;
+    if (part === "..") {
+      cur = path.dirname(cur);
+      continue;
+    }
+    const next = path.join(cur, part);
+    let target: string | null = null;
+    try {
+      if (fs.lstatSync(next).isSymbolicLink()) target = fs.readlinkSync(next);
+    } catch {
+      // missing: kept as given
+    }
+    if (target === null) {
+      cur = next;
+      continue;
+    }
+    if (++links > 40) return null;
+    todo.push(...target.split("/").filter((s) => s !== "" && s !== ".").reverse());
+    if (target.startsWith("/")) cur = "/";
+  }
+  return cur;
+}
+
+/** The absolute path Pi would write for a tool's `path` (its normalization:
+ * `@` prefix, `~`, `file://`), resolved; null when it can't be checked. */
+export function resolveWritePath(raw: string, cwd: string): string | null {
+  if (ODD_SPACE.test(raw) || raw !== raw.trim()) return null;
+  let p = raw.startsWith("@") ? raw.slice(1) : raw;
+  if (p === "~") p = os.homedir();
+  else if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
+  else if (p.startsWith("file://")) p = fileURLToPath(p);
+  const real = realpathLoose(path.isAbsolute(p) ? p : `${cwd}/${p}`);
+  return real === null || ODD_SPACE.test(real) ? null : real;
+}
+
+export function insideRoots(real: string, roots: string[]): boolean {
+  return roots.some((r) => real === r || real.startsWith(r.endsWith("/") ? r : `${r}/`));
 }
 
 /** POSIX single-quote a string so it survives as one argument to `bash -c`. */
@@ -53,12 +126,30 @@ const NONO_OVERRIDE = /(^|[;&|(\s])NONO_[A-Z0-9_]*=/;
 
 export default async function (pi: ExtensionAPI) {
   const argv = loadWrapper();
+  const roots = loadRoots();
+
+  // Pi's own file tools: only under the write roots, at the path checked.
+  pi.on("tool_call", (event, ctx) => {
+    if (!FILE_WRITE_TOOLS.has(event.toolName)) return;
+    const input = event.input as { path?: unknown };
+    const real = roots && typeof input.path === "string" ? resolveWritePath(input.path, ctx?.cwd ?? process.cwd()) : null;
+    if (!roots || !real) {
+      return { block: true, reason: `glove enforcer: ${event.toolName} needs a plain path and the write roots (fail closed)` };
+    }
+    if (!insideRoots(real, roots)) {
+      return { block: true, reason: `glove enforcer: ${event.toolName} may write only under ${roots.join(", ")}, not ${real}` };
+    }
+    input.path = real;
+    return;
+  });
 
   // Model-issued `bash` tool: mutate the command in place (PLAN §5.2).
   pi.on("tool_call", (event) => {
     if (event.toolName !== "bash") return;
     const input = event.input as { command?: string };
-    if (typeof input.command !== "string") return;
+    if (typeof input.command !== "string") {
+      return { block: true, reason: "glove enforcer: bash without a command string (fail closed)" };
+    }
     if (!argv) {
       return { block: true, reason: "glove enforcer: tool wrapper missing — shell blocked (fail closed)" };
     }

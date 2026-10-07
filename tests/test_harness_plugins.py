@@ -3,6 +3,7 @@ adapter, validates manifests, and keeps the names external monitors rely on."""
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -123,6 +124,21 @@ def test_bad_manifests_are_refused(tmp_path, body, dirname):
 def test_protected_home_keeps_its_directory_marker(tmp_path):
     p = load_profile(_manifest(tmp_path, "h", GOOD + "protected_home: [.h/settings.json, .h/tools/]\n"))
     assert p.protected_home == (".h/settings.json", ".h/tools/")
+
+
+def test_pinned_dependency_trees_match_the_harness_version():
+    import yaml
+
+    pi = get_profile("pi").path / "image" / "pi-lock"
+    lock = json.loads((pi / "package-lock.json").read_text())
+    want = get_profile("pi").version
+    assert json.loads((pi / "package.json").read_text())["dependencies"]["@earendil-works/pi-coding-agent"] == want
+    assert lock["packages"]["node_modules/@earendil-works/pi-coding-agent"]["version"] == want
+    assert lock["packages"][""]["dependencies"]["@earendil-works/pi-coding-agent"] == want
+    vibe = get_profile("vibe")
+    pins = (vibe.path / "image" / "vibe-constraints.txt").read_text().split()
+    assert f"mistral-vibe=={vibe.version}" in pins
+    assert yaml.safe_load((vibe.path / "harness.yml").read_text())["version"] == vibe.version
 
 
 def test_a_harness_brief_reaches_its_context_file(tmp_path):

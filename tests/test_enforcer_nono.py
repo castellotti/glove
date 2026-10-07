@@ -8,6 +8,7 @@ tests/integration/test_pi_nono.sh for the enforcement checks.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,8 @@ def _plan(tmp_path, **kw):
 
 def _assert_matches_golden(plan, scenario):
     for fname, content in plan.policies.items():
+        if os.environ.get("GLOVE_REGEN_GOLDEN") == "1":
+            (GOLDEN / scenario / fname).write_text(content)
         golden = (GOLDEN / scenario / fname).read_text()
         assert content == golden, f"{scenario}/{fname} drifted from golden"
 

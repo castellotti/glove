@@ -4,11 +4,11 @@ summary: Anthropic's Claude Code CLI (native binary), signed in with an API key 
 # 0.2.0: native binary + ring-1 enforcer (nono, glove-pty, glove-cc-prefix) only.
 image: glove/claude-code:0.2.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 2.1.288
+version: 2.1.292
 # The release protected_home, trusted_files and masked_files were audited
 # against: a new release can add a dir it loads code or config from, so glove
 # refuses a `version` that has not been re-audited.
-audited_version: 2.1.288
+audited_version: 2.1.292
 # By path: a `toolchains` block may put other binaries first on PATH.
 entry: [/usr/local/bin/claude]
 config_home: { env: CLAUDE_CONFIG_DIR, path: /home/agent/.claude }

@@ -39,9 +39,9 @@ from typing import TYPE_CHECKING
 
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, GLOVE_PTY
+from .base import ENFORCER_DIR, GLOVE_PTY, workdir, write_roots
 from .nono import policies as nono_policies
-from .srt import APPLY_SECCOMP, GLOVE_SRT, NODE, TMP, SrtEnforcer
+from .srt import APPLY_SECCOMP, GLOVE_SRT, NODE, SrtEnforcer
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -61,10 +61,6 @@ PROTECTED = (
 HIDDEN = ("**/.env", "**/.env.*")
 
 
-def _work(plan: SessionPlan) -> str:
-    return next((m.container_path for m in plan.mounts if m.is_workdir), "/work")
-
-
 def _work_host(plan: SessionPlan) -> str | None:
     return next((m.host_path for m in plan.mounts if m.is_workdir), None)
 
@@ -72,18 +68,17 @@ def _work_host(plan: SessionPlan) -> str | None:
 def protected_paths(plan: SessionPlan) -> list[str]:
     from pathlib import Path
 
-    work, host = _work(plan), _work_host(plan)
+    work, host = workdir(plan), _work_host(plan)
     return [f"{work}/{p}" for p in PROTECTED if host and os.path.lexists(Path(host) / p)]
 
 
 def render_harness_settings(plan: SessionPlan) -> dict:
-    hide = [f"{_work(plan)}/{g}" for g in HIDDEN] if plan.enforcer_options["srt"]["hide_env"] else []
-    rw = [m.container_path for m in plan.mounts if not m.is_workdir and m.mode == "rw"]
+    hide = [f"{workdir(plan)}/{g}" for g in HIDDEN] if plan.enforcer_options["srt"]["hide_env"] else []
     return {
         "filesystem": {
             "denyRead": hide,
             "allowRead": [],
-            "allowWrite": [_work(plan), *rw, CONTAINER_HOME, TMP, *plan.composition.channel_paths],
+            "allowWrite": [*write_roots(plan), CONTAINER_HOME],
             "denyWrite": protected_paths(plan),
         },
         # No `network` block: srt then creates no network namespace or proxy

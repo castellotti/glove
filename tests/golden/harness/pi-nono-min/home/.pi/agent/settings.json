@@ -3,5 +3,8 @@
   "defaultModel": "test-model",
   "defaultThinkingLevel": "low",
   "theme": "dark",
-  "defaultProjectTrust": "never"
+  "defaultProjectTrust": "never",
+  "extensions": [
+    "-builtin:mcp"
+  ]
 }

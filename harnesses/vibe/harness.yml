@@ -5,11 +5,11 @@ summary: Mistral Vibe.
 # pre_tool hook) only. Optional capabilities are opt-in extensions.
 image: glove/vibe:0.5.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 2.25.8
+version: 2.26.0
 # The release protected_home, trusted_files and masked_files were audited
 # against: a new release can add a dir it loads code or config from, so glove
 # refuses a `version` that has not been re-audited.
-audited_version: 2.25.8
+audited_version: 2.26.0
 # `--trust` trusts /work for this run (no trust dialog; the project's AGENTS.md
 # loads): what else Vibe would load from the project is masked below.
 entry: [vibe, --trust, --yolo, --workdir, /work]

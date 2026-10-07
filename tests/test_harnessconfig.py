@@ -69,7 +69,7 @@ def test_vibe_context_file_has_sudo_relay_brief_and_extension_briefs(tmp_path):
 
 def test_context_file_environment_block(tmp_path):
     _, _, home = _home("pi", tmp_path)
-    text = (home / ".pi" / "agent" / "AGENTS.md").read_text()
+    text = (home / ".pi" / "agent" / "AGENTS.override.md").read_text()
     assert "How your environment works" in text
     assert "/work" in text
     assert "Shell commands have no network" in text
@@ -130,15 +130,20 @@ def test_pi_config(tmp_path):
     # the project's .pi/ never loads: no prompt, and no saved decision to override it
     assert settings["defaultProjectTrust"] == "never"
     assert json.loads((agent / "trust.json").read_text()) == {}
+    assert settings["extensions"] == ["-builtin:mcp"]  # Pi's MCP would start servers outside ring 1
 
 
-def test_pi_drops_a_system_prompt_left_in_its_home(tmp_path):
+def test_pi_empties_the_loaders_left_in_its_home(tmp_path):
     agent = tmp_path / "home" / ".pi" / "agent"
     agent.mkdir(parents=True)
-    for name in ("SYSTEM.md", "APPEND_SYSTEM.md"):
+    names = ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json")
+    for name in (*names, "AGENTS.md"):
         (agent / name).write_text("planted")
     _home("pi", tmp_path)
-    assert not (agent / "SYSTEM.md").exists() and not (agent / "APPEND_SYSTEM.md").exists()
+    # rendered empty, not removed: each is a read-only bind source, which must stay a file
+    assert all((agent / n).is_file() and (agent / n).read_text() == "" for n in names)
+    assert not (agent / "AGENTS.md").exists()
+    assert "planted" not in (agent / "AGENTS.override.md").read_text()  # glove's brief, rendered
 
 
 @pytest.mark.parametrize("vision,expected", [(True, ["text", "image"]), (False, ["text"])])

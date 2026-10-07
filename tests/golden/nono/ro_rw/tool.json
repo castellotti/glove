@@ -16,7 +16,8 @@
       "/mnt/lib",
       "/etc/glove",
       "/opt/glove",
-      "/usr/local"
+      "/usr/local",
+      "/opt/pi"
     ]
   },
   "network": {

@@ -58,7 +58,7 @@ def test_harness_settings(tmp_path):
     assert s["seccomp"] == {"applyPath": APPLY_SECCOMP}
     assert s["enableWeakerNestedSandbox"] is True
     fs = s["filesystem"]
-    assert fs["allowWrite"] == ["/work", "/home/agent", "/tmp"]
+    assert fs["allowWrite"] == ["/work", "/tmp", "/home/agent"]  # the write roots, then the home
     assert fs["denyWrite"] == []  # nothing exists yet: no placeholder is ever created on the host
     assert fs["denyRead"] == ["/work/**/.env", "/work/**/.env.*"]
     assert "credentials" not in s  # the harness keeps its env; nono strips tools'

@@ -29,9 +29,18 @@ RUN apt-get update \
     && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 # The pinned Pi release: harness.yml's `version`, passed by glove as a build arg.
+# Its whole dependency tree is pinned (with integrity hashes) by pi-lock/: Pi 1.x
+# ships no npm-shrinkwrap.json, so a plain `npm install` would resolve whatever
+# its ranges allow on the day. To bump: set the version in pi-lock/package.json
+# and harness.yml, then in pi-lock/ run
+#   docker run --rm -v "$PWD:/w" -w /w node:24-bookworm-slim npm install --package-lock-only --ignore-scripts
 ARG HARNESS_VERSION
+COPY pi-lock/package.json pi-lock/package-lock.json /opt/pi/
 RUN : "${HARNESS_VERSION:?glove passes harness.yml's version}" \
-    && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${HARNESS_VERSION}"
+    && cd /opt/pi && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && test "$(node -p 'require("/opt/pi/node_modules/@earendil-works/pi-coding-agent/package.json").version')" = "$HARNESS_VERSION" \
+    && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi \
+    && npm cache clean --force
 
 # Extra packages requested via session config `apt_packages` / `pip_packages`
 # (glove passes them as build-args). The Vibe base already honoured these; Pi did

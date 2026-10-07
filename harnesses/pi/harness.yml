@@ -5,11 +5,11 @@ summary: Pi coding agent (earendil-works/pi-coding-agent).
 # enforcer extension) only. Optional capabilities are opt-in extensions.
 image: glove/pi:0.5.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 0.87.1
+version: 1.0.4
 # The release protected_home, trusted_files and masked_files were audited
 # against: a new release can add a dir it loads code or config from, so glove
 # refuses a `version` that has not been re-audited.
-audited_version: 0.87.1
+audited_version: 1.0.4
 # Load only the always-on ring-1 `enforcer` extension (deps are node builtins)
 # from a system path; the user's own extensions still load from the config home.
 # Capability extensions (search, browser) are added to this entry by the adapter
@@ -20,16 +20,27 @@ entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enf
 config_home: { env: PI_CODING_AGENT_DIR, path: /home/agent/.pi/agent }
 # What the agent is told about this harness under glove (its context file).
 brief: brief.md
-context_file: /home/agent/.pi/agent/AGENTS.md
-# Read-only to the agent (ring 0), relative to the home: the settings, models
-# and trust store glove renders, and the dirs Pi loads code, skills, prompts
-# and themes from (`bin/` also comes first on a tool command's PATH). The
-# rendered `defaultProjectTrust: never` and empty trust store keep the
-# project's `.pi/` and `.agents/skills` from loading.
+# AGENTS.override.md, not AGENTS.md: Pi 1.x lets an override in the agent dir
+# replace AGENTS.md/CLAUDE.md there (even an empty one), so glove's brief takes
+# that name and is read-only (below).
+context_file: /home/agent/.pi/agent/AGENTS.override.md
+# Read-only to the agent (ring 0), relative to the home: the settings, models,
+# trust store and brief glove renders; the files Pi 1.x loads prompts, MCP
+# servers and keybindings from (an empty one is ignored: created at launch);
+# and the dirs Pi loads code, skills, prompts and themes from (`bin/` also
+# comes first on a tool command's PATH). The rendered `defaultProjectTrust:
+# never` and empty trust store keep the project's `.pi/` (its `mcp.json`
+# included) and `.agents/skills` from loading. Pi writes auth.json,
+# models-store.json and sessions/ itself.
 protected_home:
   - .pi/agent/settings.json
   - .pi/agent/models.json
   - .pi/agent/trust.json
+  - .pi/agent/AGENTS.override.md
+  - .pi/agent/SYSTEM.md
+  - .pi/agent/APPEND_SYSTEM.md
+  - .pi/agent/mcp.json
+  - .pi/agent/keybindings.json
   - .pi/agent/extensions/
   - .pi/agent/skills/
   - .pi/agent/prompts/
@@ -43,7 +54,8 @@ protected_home:
 env: { PI_CODING_AGENT_DIR: /home/agent/.pi/agent, PI_OFFLINE: "1" }
 sessions_subdir: sessions
 transcript_subdir: sessions
-runtime_paths: [/usr/local]
+# Pi and its pinned dependency tree live in /opt/pi (linked from /usr/local/bin).
+runtime_paths: [/usr/local, /opt/pi]
 # Debian bookworm's python3 (3.11): pip needs --break-system-packages (PEP 668)
 pip: { install: [pip3, install, --no-cache-dir, --break-system-packages], bootstrap: [python3, python3-pip] }
 # `pi --continue` reopens the last session; `--session <id>` accepts a path or partial UUID.
