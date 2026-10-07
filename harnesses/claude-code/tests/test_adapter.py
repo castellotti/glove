@@ -52,11 +52,12 @@ def test_the_placeholder_is_pre_approved_and_earlier_answers_kept(tmp_path):
     assert "customApiKeyResponses" not in json.loads((tmp_path / "o" / "h" / ".claude" / ".claude.json").read_text())
 
 
-def test_a_subscription_token_travels_in_the_env_claude_code_reads(tmp_path):
-    # not injected: Claude Code's account API (a fixed host) needs the real token
+def test_a_subscription_token_is_injected_and_claude_code_reads_a_placeholder(tmp_path):
+    # llm-auth serves api.anthropic.com itself, so the account API works too
     _, plan = _plan(tmp_path, OAUTH)
-    assert plan.passthrough_env == ["CLAUDE_CODE_OAUTH_TOKEN"] and plan.model.api_key_env == "CLAUDE_CODE_OAUTH_TOKEN"
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in plan.environment
+    assert plan.passthrough_env == [] and plan.model.api_key_env == "CLAUDE_CODE_OAUTH_TOKEN"
+    assert plan.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "glove-injected"
+    assert "ANTHROPIC_BASE_URL" not in _managed(plan)["env"]  # the default host, by its name
 
 
 def test_no_key_no_passthrough(tmp_path):

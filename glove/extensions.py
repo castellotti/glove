@@ -65,6 +65,7 @@ MANIFEST_KEYS = frozenset({
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
+_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")  # one path component, never `..`
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*\Z")
 
 
@@ -404,11 +405,16 @@ class Channel:
     an extension's sidecars: a session tmpfs volume at /run/glove/<name> in
     both, writable by the session uid. It carries no network: a relay's client
     leaves requests there (files and FIFOs, which every enforcer allows, unlike
-    a Unix socket) and the sidecar answers them."""
+    a Unix socket) and the sidecar answers them. A `read_only` channel is
+    written by its sidecars only: the harness and its commands just read it.
+    `trust` names a file in it holding a CA the harness trusts (e.g. llm-auth's
+    session CA; core wires the trust, see `Composition.trusted_cas`)."""
 
     name: str
     extension: str
     services: tuple[str, ...]
+    read_only: bool = False
+    trust: str | None = None
 
     @property
     def path(self) -> str:
@@ -482,9 +488,19 @@ class Composition:
 
     @property
     def channel_paths(self) -> list[str]:
-        """The channels' directories in the harness: writable under every
-        enforcer and profile (they carry no network)."""
-        return [c.path for c in self.channels]
+        """The writable channels' directories in the harness: writable under
+        every enforcer and profile (they carry no network)."""
+        return [c.path for c in self.channels if not c.read_only]
+
+    @property
+    def read_channel_paths(self) -> list[str]:
+        """The read-only channels' directories: readable under every enforcer."""
+        return [c.path for c in self.channels if c.read_only]
+
+    @property
+    def trusted_cas(self) -> list[str]:
+        """CA certificates the harness trusts, published in read-only channels."""
+        return [f"{c.path}/{c.trust}" for c in self.channels if c.trust]
 
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
@@ -936,13 +952,18 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
 
 
 def _channels(comp: Composition, a: Active, ctx: dict) -> None:
-    """`channels: {<name>: {services: [<its service>, …], when: …}}` — a
-    directory shared by the harness and those sidecars (`Channel`). A new edge
-    into the harness, so a privilege: in-tree or trusted extensions only."""
+    """`channels: {<name>: {services: [<its service>, …], read_only: <bool>,
+    trust: <file>, when: …}}` — a directory shared by the harness and those
+    sidecars (`Channel`). A new edge into the harness, so a privilege: in-tree
+    or trusted extensions only."""
     for name, spec in (a.manifest.raw.get("channels") or {}).items():
         where = f"extension {a.name!r} channel {name!r}"
-        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
-            raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
+        if (not _NAME.fullmatch(str(name)) or not isinstance(spec, dict)
+                or set(spec) - {"services", "read_only", "trust", "when"}
+                or not isinstance(spec.get("read_only", False), bool)
+                or ("trust" in spec and not (spec.get("read_only") and _FILE_NAME.fullmatch(str(spec["trust"]))))):
+            raise ExtensionError(f"{where}: want {{services: [<service>, …], read_only: <bool>, "
+                                 "trust: <a file name, in a read_only channel>, when: …}}")
         if not when_matches(spec.get("when"), ctx):
             continue
         services = spec.get("services") or []
@@ -951,7 +972,8 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
         require_trust(a, f"{where}: a directory shared with the harness")
         if any(c.name == name for c in comp.channels):
             raise ExtensionError(f"{where}: channel {name!r} is declared twice")
-        comp.channels.append(Channel(name=str(name), extension=a.name, services=tuple(services)))
+        comp.channels.append(Channel(name=str(name), extension=a.name, services=tuple(services),
+                                     read_only=spec.get("read_only", False), trust=spec.get("trust")))
 
 
 def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:

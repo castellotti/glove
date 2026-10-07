@@ -241,6 +241,9 @@ class DockerRuntime:
 
     # --- lifecycle inspection ---------------------------------------------
 
+    # `network inspect -f`: a network's name, then its subnets
+    network_subnets_format: ClassVar[str] = "{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}"
+
     def network_subnets(self) -> dict[str, list[str]]:
         """Every existing network's IPv4 subnets, by name (empty when the
         runtime is unavailable) — for subnet allocation that avoids them."""
@@ -249,9 +252,8 @@ class DockerRuntime:
         ids = subprocess.run([self.cli, "network", "ls", "-q"], capture_output=True, text=True, check=False)
         if ids.returncode != 0 or not ids.stdout.split():
             return {}
-        out = subprocess.run(
-            [self.cli, "network", "inspect", "-f", "{{.Name}}{{range .IPAM.Config}} {{.Subnet}}{{end}}",
-             *ids.stdout.split()], capture_output=True, text=True, check=False)
+        out = subprocess.run([self.cli, "network", "inspect", "-f", self.network_subnets_format, *ids.stdout.split()],
+                             capture_output=True, text=True, check=False)
         nets: dict[str, list[str]] = {}
         for line in out.stdout.splitlines():
             name, *subnets = line.split()

@@ -131,6 +131,9 @@ services:
       - type: volume
         source: {{ c.volume(session) }}
         target: {{ c.path }}
+{% if c.read_only %}
+        read_only: true  # its sidecar(s) write it; the harness only reads
+{% endif %}
 {% endfor %}
 {% for t in hardening.tmpfs %}
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so

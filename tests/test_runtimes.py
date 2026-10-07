@@ -12,6 +12,8 @@ from glove.runtimes import get_runtime, known_runtimes
 from glove.runtimes.docker import DockerRuntime
 from glove.runtimes.stubs import AppleContainerRuntime
 
+NETWORK_SUBNETS = DockerRuntime.network_subnets  # the real one (conftest stubs it per test)
+
 
 def _plan(tmp_path, **kw):
     work = tmp_path / "work"
@@ -311,3 +313,24 @@ def test_podman_keep_id_only_where_a_container_writes_a_host_bind(tmp_path):
     for name in ("glove-s-llm", "glove-s-search", "glove-s-searxng", "glove-s-valkey", "glove-s-direct-proxy"):
         assert "userns_mode" not in svcs[name], name
         assert svcs[name]["user"] == "501:20", name
+
+
+@pytest.mark.parametrize(("runtime", "field"), [("docker", ".IPAM.Config"), ("podman", ".Subnets")])
+def test_network_subnets_reads_each_runtimes_inspect_fields(monkeypatch, runtime, field):
+    """Podman's `network inspect` has no IPAM block: its subnets are `.Subnets`
+    (live: a foreign network went unseen on Podman, so its subnet was reused)."""
+    import subprocess
+
+    import glove.runtimes.docker as mod
+
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        out = "a\nb\n" if cmd[2] == "ls" else "a 10.0.0.0/24 fd00::/64\nb\n"
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+    monkeypatch.setattr(DockerRuntime, "network_subnets", NETWORK_SUBNETS)
+    monkeypatch.setattr(mod.shutil, "which", lambda _c: "/usr/bin/x")
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    assert get_runtime(runtime).network_subnets() == {"a": ["10.0.0.0/24"], "b": []}
+    assert f"range {field}" in calls[1][4]

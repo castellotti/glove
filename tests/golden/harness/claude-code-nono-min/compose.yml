@@ -30,8 +30,9 @@ services:
       DISABLE_AUTOUPDATER: "1"
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
+      NODE_EXTRA_CA_CERTS: "/run/glove/llm-ca/ca.pem"
+      CLAUDE_CODE_OAUTH_TOKEN: "glove-injected"
       NONO_NO_PROXY: "localhost,127.0.0.1"
-      CLAUDE_CODE_OAUTH_TOKEN: null  # from glove's environment at run time; never stored here
     volumes:
       - type: bind
         source: "<TMP>/home"
@@ -97,6 +98,12 @@ services:
         source: "<TMP>/home/.claude/rules"
         target: "/home/agent/.claude/rules"
         read_only: true
+      # channel llm-ca (llm): a directory shared with its
+      # sidecar(s) llm-auth (session tmpfs; no network)
+      - type: volume
+        source: glove-s-chan-llm-ca
+        target: /run/glove/llm-ca
+        read_only: true  # its sidecar(s) write it; the harness only reads
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under the home overlays the bind. mode is forced
       # explicitly: over a mountpoint that already exists on the bind, a bare
@@ -130,11 +137,11 @@ services:
     networks:
       - glove-s-net
 
-  # --- forwarder: llm -> glove-s-llm-out:443
+  # --- forwarder: llm -> glove-s-llm-auth:8080
   glove-s-llm:
     container_name: glove-s-llm
     image: glove/forwarder:0.2.0-cdcce0aed5
-    command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-out:443"
+    command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:glove-s-llm-auth:8080"
     restart: unless-stopped
     # sidecar hardening (every forwarder): non-root, no caps, no privilege gain,
     # read-only rootfs, pids/memory limits. Never NET_ADMIN, never the harness's
@@ -157,11 +164,11 @@ services:
       glove-s-net:
         aliases:
           - api.anthropic.com
-      glove-s-llm: {}
+      glove-s-llmauth: {}
 
-  # --- forwarder: llm-out -> api.anthropic.com:443
-  glove-s-llm-out:
-    container_name: glove-s-llm-out
+  # --- forwarder: llm-upstream -> api.anthropic.com:443
+  glove-s-llm-upstream:
+    container_name: glove-s-llm-upstream
     image: glove/forwarder:0.2.0-cdcce0aed5
     command: "TCP4-LISTEN:443,fork,reuseaddr TCP4:api.anthropic.com:443"
     restart: unless-stopped
@@ -184,10 +191,72 @@ services:
       net.ipv4.ip_unprivileged_port_start: 0
     networks:
       glove-s-llm: {}
+      glove-s-llmauth: {}
+
+  # --- extension sidecars (validated + hardened by glove/compose.py) ---------
+  glove-s-llm-auth:
+    container_name: glove-s-llm-auth
+    image: glove/ext-llm-auth:f339aaed58
+    environment:
+      LLM_AUTH_KEY: null
+      LLM_AUTH_UPSTREAM: glove-s-llm-upstream:443
+      LLM_AUTH_TLS_NAME: api.anthropic.com
+      LLM_AUTH_HOST: api.anthropic.com
+      LLM_AUTH_HEADER: Authorization
+      LLM_AUTH_SCHEME: Bearer
+      LLM_AUTH_ALLOW: '[["POST", "/v1/messages"], ["POST", "/v1/messages/count_tokens"],
+        ["HEAD", "/api/hello"], ["GET", "/api/claude_code/settings"], ["GET", "/api/claude_code/policy_limits"],
+        ["GET", "/api/oauth/profile"], ["GET", "/api/oauth/usage"], ["GET", "/api/web/domain_info"],
+        ["GET", "/v1/models"]]'
+      LLM_AUTH_PORT: '8080'
+      LLM_AUTH_SERVE_TLS: '1'
+      LLM_AUTH_CA_DIR: /run/glove/llm-ca
+    tmpfs:
+    - /tmp
+    restart: 'no'
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket, ssl; ssl.create_default_context(cafile='/run/glove/llm-ca/ca.pem').wrap_socket(socket.create_connection(('127.0.0.1',
+        8080), 2), server_hostname='api.anthropic.com').close()
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    networks:
+      glove-s-llmauth: {}
+    volumes:
+    - type: volume
+      source: glove-s-chan-llm-ca
+      target: /run/glove/llm-ca
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
 
 networks:
   glove-s-net:
     name: glove-s-net
     internal: true
+  glove-s-llmauth:
+    name: glove-s-llmauth
+    internal: true
   glove-s-llm:
     name: glove-s-llm
+
+volumes:
+  glove-s-chan-llm-ca:
+    name: glove-s-chan-llm-ca
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4m,mode=0700,uid=501,gid=20

@@ -173,6 +173,12 @@ def remove(session_ids: set[str]) -> int:
         return len(entries) - len(kept)
 
 
+def overlapping(subnets, others) -> str | None:
+    """The first of ``subnets`` that overlaps any of ``others``."""
+    nets = [ipaddress.ip_network(o, strict=False) for o in others]
+    return next((x for x in subnets if any(ipaddress.ip_network(x, strict=False).overlaps(n) for n in nets)), None)
+
+
 def allocate_subnet(pool: str, taken: set[str], prefix: int = 24) -> str:
     """The first /``prefix`` of ``pool`` overlapping none of ``taken`` (other
     sessions' subnets and the runtime's existing networks)."""

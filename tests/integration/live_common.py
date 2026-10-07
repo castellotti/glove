@@ -18,11 +18,12 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
 from ptyio import Tui
 
 from extensions.observe.netview import read_records
@@ -57,6 +58,25 @@ def glove(*args: str, cwd: Path | None = None, timeout: int = 300) -> subprocess
     """The glove CLI, as the operator runs it."""
     return subprocess.run([sys.executable, "-m", "glove.cli", *args], cwd=cwd, stdin=subprocess.DEVNULL,
                           capture_output=True, text=True, timeout=timeout)
+
+
+def glove_up(directory, env: dict[str, str] | None = None) -> Tui:
+    """`glove up` as an operator runs it, on a terminal of its own."""
+    return Tui([sys.executable, "-m", "glove.cli", "up", str(directory)], env or dict(os.environ), 30, 100)
+
+
+def leftovers(rt: str, prefix: str) -> dict[str, list[str]]:
+    """The containers, networks and volumes named `prefix…` still there."""
+    return {kind: subprocess.run([rt, *cmd, "-q", "--filter", f"name={prefix}"], capture_output=True,
+                                 text=True).stdout.split()
+            for kind, cmd in (("containers", ["ps", "-a"]), ("networks", ["network", "ls"]),
+                              ("volumes", ["volume", "ls"]))}
+
+
+def container_log(rt: str, container: str) -> str:
+    """A container's log, stdout and stderr."""
+    r = subprocess.run([rt, "logs", container], capture_output=True, text=True)
+    return r.stdout + r.stderr
 
 
 def inspect(rt: str, name: str) -> dict:
@@ -172,16 +192,22 @@ def _materialize(directory: Path) -> tuple:
 
 
 @contextmanager
-def live_session(directory: str, *, logs: str | None = None) -> Iterator[LiveSession]:
+def live_session(directory: str, *, logs: str | None = None,
+                 patch: Callable[[LiveSession, dict], None] | None = None) -> Iterator[LiveSession]:
     """Start the session in `directory` as `glove up` does, minus the harness;
     on the way out print the last lines of sidecar `glove-<id>-<logs>`, then tear
-    everything down (not with KEEP set)."""
+    everything down (not with KEEP set). `patch(s, compose)` edits the rendered
+    compose project before it starts (a driver's stand-ins; never glove's)."""
     sd, sid, cfg, plan, secrets = _materialize(Path(directory))
     s = LiveSession(sd, sid, cfg, plan, secrets, compose_process_env(cfg.provider, secrets),
                     _compose_base(cfg.provider, plan.project, sd.compose))
     print(f"== session {sid} ({cfg.harness}, enforcer {plan.enforcer}, runtime {s.rt})")
     started = False
     try:
+        if patch:
+            doc = yaml.safe_load(sd.compose.read_text())
+            patch(s, doc)
+            sd.compose.write_text(yaml.safe_dump(doc, sort_keys=False))
         s.start()
         started = True
         yield s
@@ -190,9 +216,8 @@ def live_session(directory: str, *, logs: str | None = None) -> Iterator[LiveSes
         check(f"{'live run' if started else 'launch'} ({type(e).__name__})", False, str(e)[-600:])
     finally:
         if logs:
-            r = subprocess.run([s.rt, "logs", f"glove-{sid}-{logs}"], capture_output=True, text=True)
-            print(f"== glove-{sid}-{logs} log (last lines)\n" + "".join(f"    {ln}\n" for ln in
-                                                                     (r.stdout + r.stderr).splitlines()[-25:]))
+            print(f"== glove-{sid}-{logs} log (last lines)\n" + "".join(
+                f"    {ln}\n" for ln in container_log(s.rt, f"glove-{sid}-{logs}").splitlines()[-25:]))
         if kept():
             print(f"== KEEP: {s.plan.project} left running (glove down {sd.root})")
         else:

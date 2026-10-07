@@ -26,10 +26,15 @@ new_session() {
 #     fake key (GLOVE_TEST_LLM_KEY, exported: glove resolves `env:` from it and
 #     the stub, started after this, answers only requests carrying it), so
 #     glove's llm-auth holds it and the harness a placeholder.
+#     claude-code-oauth: Claude Code with a subscription token for the
+#     provider itself (no STUB_PY: the driver stands in for it).
 stub_llm() {
   export GLOVE_TEST_LLM_KEY=sk-test-llm-inject-1
   local key='api_key: "env:GLOVE_TEST_LLM_KEY"'
-  if [ "$1" = claude-code ]; then
+  STUB_PY=
+  if [ "$1" = claude-code-oauth ]; then
+    LLM="{provider: anthropic, auth: oauth, model: claude-stub, $key}"
+  elif [ "$1" = claude-code ]; then
     STUB_PY=anthropic_stub.py
     LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, $key}"
   else
@@ -38,19 +43,23 @@ stub_llm() {
   fi
 }
 
-#   stub_session <dir> <harness> <enforcer> [extra top-level yaml]
+#   stub_session <dir> <harness> <enforcer> [extra yaml: top-level, or indented for more extensions]
 #     a session at <dir> (`glove new minimal`, runtime $RT) whose llm is the
 #     tool-driving host stub on $STUB_PORT (default 18080), started in the
 #     background (STUB: its pid, for the caller's trap; its log <dir>.stub.log),
-#     with a secret-shaped FAKE_API_KEY in its env
+#     with a secret-shaped FAKE_API_KEY in its env (claude-code-oauth: no stub,
+#     see stub_llm)
 stub_session() {
   local dir="$1" harness="$2" enforcer="$3" extra="${4:-}" port="${STUB_PORT:-18080}"
   stub_llm "$harness" "$port"
-  uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$port" > "$dir.stub.log" 2>&1 &
-  STUB=$!
+  if [ -n "$STUB_PY" ]; then
+    uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$port" > "$dir.stub.log" 2>&1 &
+    STUB=$!
+  fi
   uv run --quiet --project "$ROOT" glove new minimal "$dir" >/dev/null || return 1
   printf 'glove: 3\ntemplate: minimal\nruntime: %s\nharness: %s\nenforcer: %s\nenv: {FAKE_API_KEY: sk-probe-not-a-secret}\nextensions:\n  llm: %s\n%b' \
-    "${RT:-docker}" "$harness" "$enforcer" "$LLM" "$extra" > "$dir/glove-session.yml"
+    "${RT:-docker}" "${harness%-oauth}" "$enforcer" "$LLM" "$extra" > "$dir/glove-session.yml"
+  [ -z "$STUB_PY" ] && return 0
   for _ in $(seq 300); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0; sleep 0.1; done
   echo "the llm stub is not listening on :$port ($dir.stub.log)" >&2; return 1
 }

@@ -568,9 +568,9 @@ _RELAYISH = """\
     """
 
 
-def _relayish(oot, *, work=True, target="/work", ro="", channel="ch", services="[worker]"):
+def _relayish(oot, *, work=True, target="/work", ro="", channel="ch", services="[worker]", chan_extra=""):
     body = _RELAYISH.format(digest=DIGEST, target=target, ro=ro)
-    extra = (f"channels: {{ {channel}: {{ services: {services} }} }}\n"
+    extra = (f"channels: {{ {channel}: {{ services: {services}{chan_extra} }} }}\n"
              + ("privileges: { worker: { work: true } }\n" if work else ""))
     _svc_ext(oot, "relayish", service=body, extra=extra)
 
@@ -595,6 +595,17 @@ def test_a_channel_is_shared_by_the_harness_and_its_services(tmp_path, ghome):
     assert "/run/glove/ch" in tool["filesystem"]["allow"] and tool["network"] == {"block": True}
 
 
+def test_a_read_only_channel_is_written_by_its_services_and_read_by_the_harness(tmp_path, ghome):
+    _relayish(_oot(tmp_path, ghome, trusted=True), chan_extra=", read_only: true")
+    plan, doc = _render_with(tmp_path, {"direct": {}, "relayish": {}})
+    mount = {"type": "volume", "source": "glove-s-chan-ch", "target": "/run/glove/ch"}
+    assert {**mount, "read_only": True} in doc["services"]["glove-s-harness"]["volumes"]
+    assert mount in doc["services"]["glove-s-worker"]["volumes"]
+    for profile in ("tool.json", "harness.json"):
+        fs = json.loads(plan.policies[profile])["filesystem"]
+        assert "/run/glove/ch" in fs["read"] and "/run/glove/ch" not in fs["allow"]
+
+
 def test_an_untrusted_extension_gets_no_channel_and_no_work(tmp_path, ghome):
     _relayish(_oot(tmp_path, ghome, trusted=False), work=False)
     with pytest.raises(ExtensionError, match="shared with the harness is a privilege"):
@@ -607,6 +618,9 @@ def test_an_untrusted_extension_gets_no_channel_and_no_work(tmp_path, ghome):
     ({"ro": ", read_only: true"}, "read-write at /work"),
     ({"services": "[nope]"}, r"no service\(s\) \['nope'\]"),
     ({"channel": "Bad_Name"}, "want"),
+    ({"chan_extra": ", read_only: 'yes'"}, "want"),
+    ({"chan_extra": ", trust: ca.pem"}, "want"),  # only in a read-only channel
+    ({"chan_extra": ", read_only: true, trust: ../x"}, "want"),
 ])
 def test_channel_and_work_rules(tmp_path, ghome, kw, why):
     _relayish(_oot(tmp_path, ghome, trusted=True), **kw)

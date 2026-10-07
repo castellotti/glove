@@ -22,7 +22,7 @@ from .config import Config, ConfigError
 from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, base_contexts, effective_image
 from .naming import project_name, scoped
-from .plan import FORWARDER_DIR, forwarder_image
+from .plan import CORPORATE_CA_PATH, FORWARDER_DIR, forwarder_image
 from .runtimes import get_runtime
 
 if TYPE_CHECKING:
@@ -181,6 +181,34 @@ def redact_log(text: str) -> str:
     return "\n".join(line for line in text.strip().splitlines() if not _SENSITIVE.search(line))
 
 
+class SubnetTaken(Exception):
+    """Another session's network took this session's subnet between glove's
+    check and compose creating the networks (two `glove up`s racing, each
+    with its own registry): re-allocate and retry."""
+
+
+def foreign_networks(provider: str, session: str) -> dict[str, list[str]]:
+    """The runtime's existing networks that are not this session's, with their
+    IPv4 subnets (none when the runtime can't be asked)."""
+    try:
+        nets = get_runtime(provider).network_subnets()
+    except (ValueError, AttributeError, OSError):
+        return {}
+    own = scoped(session, "")
+    return {name: subnets for name, subnets in nets.items() if not name.startswith(own)}
+
+
+def _subnet_taken(provider: str, plan: SessionPlan) -> str | None:
+    """The foreign network that now overlaps one of this session's subnets."""
+    from .registry import overlapping
+
+    for name, subnets in foreign_networks(provider, plan.session).items():
+        hit = overlapping(subnets, plan.network.subnets.values())
+        if hit:
+            return f"{hit} ({name})"
+    return None
+
+
 def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env: dict[str, str]) -> None:
     """`compose up -d` every sidecar, then run the extensions' verify checks.
 
@@ -209,6 +237,9 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
         # never leave a half-started egress stack behind (fail closed)
         console.print("[bold red]starting the sidecars failed — stopping the session's sidecars.[/bold red]")
         subprocess.run([*base, "down"], env=env, capture_output=True)
+        taken = _subnet_taken(provider, plan)
+        if taken:
+            raise SubnetTaken(f"another network took this session's subnet meanwhile: {taken}") from None
         raise
     if not plan.composition.verify:
         return
@@ -298,7 +329,20 @@ def probe_http(
     import json as _json
     import shlex
 
-    curl = 'curl -sS -m 20 -o /tmp/b -w "%{http_code}" -X "$M" "$U"'
+    # Trust what the harness trusts: the image's roots plus its extra CAs
+    # (`plan.trusted_cas`: a read-only channel's file, corporate_ca), bound
+    # read-only here too.
+    trust: list[str] = []
+    prelude = ""
+    if plan.trusted_cas:
+        prelude = (f"cat /etc/ssl/certs/ca-certificates.crt {' '.join(map(shlex.quote, plan.trusted_cas))} "
+                   "> /tmp/ca.pem 2>/dev/null; ")
+        trust = [x for c in plan.composition.channels if c.trust
+                 for x in ("-v", f"{c.volume(plan.session)}:{c.path}:ro")]
+        if plan.corporate_ca_host_path:
+            trust += ["-v", f"{plan.corporate_ca_host_path}:{CORPORATE_CA_PATH}:ro"]
+    cacert = "--cacert /tmp/ca.pem " if prelude else ""
+    curl = f'curl {cacert}-sS -m 20 -o /tmp/b -w "%{{http_code}}" -X "$M" "$U"'
     for k, v in (headers or {}).items():
         curl += " -H " + shlex.quote(f"{k}: {v}")
     if body is not None:
@@ -309,13 +353,16 @@ def probe_http(
     waits = " ".join(str(w) for w in CONNECT_RETRIES)
     fast = "|".join(str(c) for c in sorted(FAST_FAILURES))
     # "<http code> <curl exit code>", then the body
-    script = (f'for w in {waits} 0; do code=$({curl}); rc=$?; '
+    script = (f'{prelude}for w in {waits} 0; do code=$({curl}); rc=$?; '
               f'case $rc in {fast}) [ "$w" -gt 0 ] && sleep "$w" && continue;; esac; break; done; '
               'echo "$code $rc"; cat /tmp/b 2>/dev/null')
+    # in the session's user namespace, as the harness it stands in for (rootless
+    # Podman's keep-id: what it mounts is owned by the session uid as seen there)
+    userns = get_runtime(provider).compose_extra(plan)["userns_mode"]
     cmd = [
-        provider, "run", "--rm", "--network", plan.network.internal_network,
+        provider, "run", "--rm", "--network", plan.network.internal_network, *(["--userns", userns] if userns else []),
         "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-        "--read-only", "--tmpfs", "/tmp", "-e", "M", "-e", "U", "-e", "B",
+        "--read-only", "--tmpfs", "/tmp", "-e", "M", "-e", "U", "-e", "B", *trust,
         *(["-e", "GLOVE_LLM_API_KEY"] if auth_env else []),
         "--entrypoint", "sh", plan.image, "-c", script,
     ]

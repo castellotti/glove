@@ -15,6 +15,7 @@
     "read": [
       "/etc/glove",
       "/opt/glove",
+      "/run/glove/llm-ca",
       "/usr/local",
       "/etc/claude-code"
     ]

@@ -70,17 +70,20 @@ def _print_checks(title: str, checks: list) -> None:
     raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
 
 
+# `glove up` tries this many subnets when other sessions' networks keep taking
+# the one it picked (see session.SubnetTaken).
+SUBNET_ATTEMPTS = 3
+
+
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _foreign_subnets(raw: dict, sid: str) -> set[str]:
     """Subnets of the runtime's existing networks that are not this session's."""
-    try:
-        nets = get_runtime(raw.get("runtime") or "docker").network_subnets()
-    except (ValueError, AttributeError, OSError):
-        return set()
-    return {x for name, subnets in nets.items() if not name.startswith(scoped(sid, "")) for x in subnets}
+    from .session import foreign_networks
+
+    return {x for subnets in foreign_networks(raw.get("runtime") or "docker", sid).values() for x in subnets}
 
 
 def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = False) -> reg.SessionEntry:
@@ -92,7 +95,6 @@ def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool =
     A directory copied with its ``.glove/`` carries the original's id; two live
     directories with one id would share compose projects and exports, so that
     is refused rather than guessed at."""
-    import ipaddress
 
     from .userconfig import load_user_config
 
@@ -118,8 +120,7 @@ def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool =
         row.template = raw.get("template")
         if foreign is None:
             foreign = set() if row.subnet else _foreign_subnets(raw, sid)
-        if row.subnet and any(ipaddress.ip_network(row.subnet).overlaps(ipaddress.ip_network(f, strict=False))
-                              for f in foreign):
+        if row.subnet and reg.overlapping([row.subnet], foreign):
             err.print(f"[yellow]⚠[/yellow] subnet {row.subnet} is now used by another network; re-allocating")
             row.subnet = None
         if not row.subnet:
@@ -318,7 +319,48 @@ def up(
     iknow: list[str] = _IKNOW,
 ) -> None:
     """Build, start the sidecars, resolve launch-time settings, attach the harness."""
+    import subprocess
+    from functools import partial
+
+    from .plan import secret_env
+    from .session import SubnetTaken, launch
+
     _one_resume(resume, session)
+    secrets: dict[str, str] | None = None
+    for attempt in range(1, SUBNET_ATTEMPTS + 1):
+        # (again after SubnetTaken: _sync_registry re-allocates a subnet a foreign network took)
+        sd, sid, cfg, plan = _plan_up(directory, resume, session, iknow)
+        if secrets is None:  # the checks and the secrets don't depend on the subnet: once
+            try:
+                preflight(sd, cfg, plan)
+                # Resolve secret references (keychain:/env:) now, in memory, so a
+                # missing key fails before anything starts.
+                secrets = secret_env(plan)
+            except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
+                raise _fail(str(e)) from e
+            start_host_services(cfg, sid, sd.state)
+        # Only transcripts written at/after launch belong to this run (see the hint).
+        launched_at = time.time()
+        try:
+            launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild and attempt == 1, secrets=secrets,
+                   prepare=partial(prepare_harness, sd, cfg, plan, secrets))
+        except SubnetTaken as e:
+            if attempt == SUBNET_ATTEMPTS:
+                raise _fail(f"{e} — gave up after {attempt} attempts") from e
+            err.print(f"[yellow]⚠[/yellow] {e}; re-allocating and retrying")
+            continue
+        except ConfigError as e:
+            raise _fail(str(e)) from e
+        except subprocess.CalledProcessError as e:
+            raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
+                        "`glove down` removes what did start.") from e
+        _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
+        return
+
+
+def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
+    """(session dir, id, Config, plan) for `glove up`, the harness home left for
+    prepare_harness (it needs the resolved model)."""
     try:
         sd, _, sid, cfg = _open(directory, check_runtime=True)
         todo = sdm.placeholders_left(sdm.load_file(sd))
@@ -326,35 +368,11 @@ def up(
             raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {sdm.PLACEHOLDER})")
         if cfg.runtime not in ("docker", "podman"):
             raise ConfigError(f"runtime {cfg.runtime!r} is not implemented yet; use docker or podman")
-        # the harness home is rendered in prepare(), once the model is resolved
         plan, _, _ = _materialize_plan(sd, sid, cfg, resume=resume, session=session, home=False,
                                        overrides=frozenset(iknow))
-        from .plan import secret_env
-
-        # Resolve secret references (keychain:/env:) now, in memory, so a
-        # missing key fails before anything starts.
-        preflight(sd, cfg, plan)
-        secrets = secret_env(plan)
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise _fail(str(e)) from e
-
-    start_host_services(cfg, sid, sd.state)
-    from .session import launch
-
-    # Only transcripts written at/after launch belong to this run (see the hint).
-    launched_at = time.time()
-
-    import subprocess
-
-    try:
-        launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild, secrets=secrets,
-               prepare=lambda: prepare_harness(sd, cfg, plan, secrets))
-    except ConfigError as e:
-        raise _fail(str(e)) from e
-    except subprocess.CalledProcessError as e:
-        raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
-                    "`glove down` removes what did start.") from e
-    _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
+    return sd, sid, cfg, plan
 
 
 def preflight(sd, cfg, plan) -> None:

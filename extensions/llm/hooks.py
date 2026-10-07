@@ -13,13 +13,16 @@ For `internet` the forwarder carries the provider's hostname as an alias on the
 harness network, so the harness speaks TLS to the real name (correct SNI and
 certificate) while it can still reach nothing else.
 
-With an API key the harness never holds it (`injected()`): its `llm`
-forwarder leads to the `llm-auth` sidecar, which checks each request against
-the API's paths (`allowed_paths()`), injects the key and dials the same
-target through a second forwarder, `llm-upstream` (doing the TLS itself for
-`internet`). The harness gets a dummy key. A Claude Code subscription token
-(`auth: oauth`) is not injected: Claude Code also calls Anthropic's account
-API at a fixed host that a base URL can't redirect.
+With a key the harness never holds it (`injected()`): its `llm` forwarder
+leads to the `llm-auth` sidecar, which checks each request against the API's
+paths (`allowed_paths()`), injects the key and dials the same target through
+a second forwarder, `llm-upstream` (doing the TLS itself for `internet`). The
+harness gets a dummy key. A Claude Code subscription token (`auth: oauth`)
+also reaches Anthropic's account API at a fixed host a base URL can't
+redirect, so for it the harness keeps the provider's real name and https:
+llm-auth serves TLS as that name with a session CA the harness trusts
+(`NODE_EXTRA_CA_CERTS`, from the read-only `llm-ca` channel), and the
+catalog's `oauth.paths` (the account calls) join the allowlist.
 
 `resolve()` runs at launch, after the forwarders are up. It resolves
 `model: auto` (the single model `/v1/models` lists) and `capabilities: auto` (the
@@ -73,6 +76,9 @@ def load_provider(name: str) -> dict[str, Any]:
     for k, v in [*_headers(cat).items(), *_headers((cat.get("auth") or {}).get("oauth")).items()]:
         if not HEADER_NAME.fullmatch(k) or not HEADER_VALUE.fullmatch(v):
             raise LlmError(f"llm: provider {name!r} has a bad header {k!r}")
+    for p in ((cat.get("auth") or {}).get("oauth") or {}).get("paths") or []:
+        if not (isinstance(p, list) and len(p) == 2 and str(p[1]).startswith("/")):
+            raise LlmError(f"llm: provider {name!r} has a bad oauth path {p!r} (want [METHOD, /path])")
     return cat
 
 
@@ -154,17 +160,18 @@ def route(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
 
 
 def injected(settings: dict[str, Any]) -> bool:
-    """The key goes to `llm-auth`, not the harness (the manifest's `when:` on
-    the sidecar says the same: `api_key` set, `auth: api-key`)."""
-    return bool(settings.get("api_key")) and settings.get("auth", "api-key") == "api-key"
+    """The key goes to `llm-auth`, not the harness (as the manifest's `when:`)."""
+    return bool(settings.get("api_key"))
 
 
-def allowed_paths(cat: dict[str, Any], base_path: str) -> list[list[str]]:
+def allowed_paths(cat: dict[str, Any], base_path: str, extra: list | None = None) -> list[list[str]]:
     """[method, path] pairs llm-auth lets through: the API's paths under
     `base_path`, the model list and the capability probe under the server's
-    root (`base_path` minus the catalog's own)."""
+    root (`base_path` minus the catalog's own), and `extra` (the catalog's
+    `oauth.paths`, under the root)."""
     root = _server_root(base_path, cat)
     paths = [(m, base_path + p) for m, p in API_PATHS[cat["api"]]]
+    paths += [(str(m).upper(), root + str(p)) for m, p in extra or []]
     paths.append(("GET", root + cat.get("models_endpoint", "/v1/models").split("?", 1)[0]))
     probe = (cat.get("probes") or {}).get("capabilities")
     if probe:
@@ -207,29 +214,31 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     else:
         target = {"address": f"{r['host']}:{r['port']}", "via": "llm"}
     observe = {"tool": "llm", "scope": r["scope"]}
+    # The harness's side: the provider's name and https (an alias) for a cloud
+    # provider, else the forwarder's own name.
+    serve_tls = injected(s) and s["auth"] == "oauth"  # a subscription keeps the provider's name
+    if serve_tls and r["scheme"] != "https":
+        raise LlmError("llm: `auth: oauth` needs the provider over https (location internet)")
+    alias = r["alias"] if not injected(s) or serve_tls else None
+    port = AUTH_PORT if injected(s) and not alias and r["location"] == "internet" else r["listen_port"]
+    base = (f"{r['scheme']}://{_hostport(alias, port, r['scheme'])}" if alias
+            else f"http://glove-{session}-llm:{port}")
+    endpoints = {"llm": {"port": port, "harness": True, "target": target, "aliases": [alias] if alias else [],
+                         "observe": observe}}
     inject = None
     if injected(s):
-        # harness → llm (forwarder) → llm-auth → llm-upstream (forwarder) → target
-        port = AUTH_PORT if r["location"] == "internet" else r["listen_port"]
-        endpoints = {
-            "llm": {"port": port, "harness": True, "observe": observe,
-                    "target": {"service": "llm-auth", "network": "llmauth", "port": AUTH_PORT}},
-            "llm-upstream": {"port": r["port"], "harness": False, "target": target,
-                             "listen_networks": ["llmauth"], "observe": observe},
-        }
-        base = f"http://glove-{session}-llm:{port}"
+        # harness → llm (forwarder) → llm-auth (serving TLS as the alias, if any) → llm-upstream → target
+        endpoints["llm"]["target"] = {"service": "llm-auth", "network": "llmauth", "port": AUTH_PORT}
+        endpoints["llm-upstream"] = {"port": r["port"], "harness": False, "target": target,
+                                     "listen_networks": ["llmauth"], "observe": observe}
         inject = {
             "upstream": f"glove-{session}-llm-upstream:{r['port']}",
             "tls_name": r["host"] if r["scheme"] == "https" else "",
+            "serve_tls": serve_tls,
             "host": _hostport(r["host"], r["port"], r["scheme"]),
-            "allow": json.dumps(allowed_paths(cat, r["base_path"])),
+            "allow": json.dumps(allowed_paths(cat, r["base_path"], auth.get("paths") if serve_tls else None)),
             "port": AUTH_PORT,
         }
-    else:
-        base = (f"{r['scheme']}://{_hostport(r['alias'], r['port'], r['scheme'])}" if r["alias"]
-                else f"http://glove-{session}-llm:{r['listen_port']}")
-        endpoints = {"llm": {"port": r["listen_port"], "harness": True, "target": target,
-                             "aliases": [r["alias"]] if r["alias"] else [], "observe": observe}}
     exports = {
         "base_url": base + r["base_path"],
         "api": cat["api"],

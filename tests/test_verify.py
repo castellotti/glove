@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -134,6 +135,32 @@ def test_secret_sidecars_are_recreated_and_verify_failure_stops_everything(tmp_p
     assert "glove-s-gluetun" in ups[1] and "--force-recreate" not in ups[1]
     assert ["docker", "logs", "--tail", "25", "glove-s-gluetun"] in calls
     assert calls[-1][-1] == "down"  # fail closed
+
+
+def test_a_failed_up_on_a_subnet_a_foreign_network_took_is_subnet_taken(tmp_path, monkeypatch):
+    from glove.runtimes.docker import DockerRuntime
+
+    plan = _plan(tmp_path, {"vpn": {"provider": "x", "wireguard_key": "keychain:k"}})
+    f = _compose_file(tmp_path, plan)
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if "up" in cmd:
+            raise subprocess.CalledProcessError(1, cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(session.subprocess, "run", run)
+    mine = "172.31.5.0/27"
+    plan.network = replace(plan.network, subnets={"net": mine})
+    nets = {"glove-s-net": [mine], "unrelated": ["10.99.0.0/24"]}  # its own networks are no conflict
+    monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: nets)
+    with pytest.raises(subprocess.CalledProcessError):
+        session.start_sidecars(plan, f, provider="docker", env={})
+    nets["glove-other-net"] = [mine]
+    with pytest.raises(session.SubnetTaken, match="glove-other-net"):
+        session.start_sidecars(plan, f, provider="docker", env={})
+    assert calls[-1][-1] == "down"  # stopped first, as any failed start
 
 
 def test_redact_log_drops_credential_lines():

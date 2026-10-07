@@ -109,5 +109,5 @@ def test_gaps_documented(tmp_path):
     assert any("unwrapped" in g for g in gaps)
     assert not any("stays in the harness env" in g for g in gaps)  # no secret in the harness env
     plan = _plan(tmp_path)
-    plan.passthrough_env = ["CLAUDE_CODE_OAUTH_TOKEN"]
+    plan.passthrough_env = ["SOME_TOKEN"]
     assert any("stays in the harness env" in g for g in get_enforcer("srt").gaps(plan))

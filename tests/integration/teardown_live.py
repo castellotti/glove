@@ -24,13 +24,8 @@ import re
 import subprocess
 import sys
 
-from live_common import check, glove, inspect, kept, live_session, summary, wait_for
+from live_common import check, glove, glove_up, inspect, kept, leftovers, live_session, summary, wait_for
 from ptyio import Tui
-
-
-def glove_up(directory) -> Tui:
-    """`glove up` as an operator runs it, on a terminal of its own."""
-    return Tui([sys.executable, "-m", "glove.cli", "up", str(directory)], dict(os.environ), 30, 100)
 
 
 def main(directory: str) -> int:
@@ -82,10 +77,7 @@ def main(directory: str) -> int:
             print("== glove down --wipe")
             down = glove("down", "--wipe", str(s.sd.root))
             check("`glove down --wipe`", down.returncode == 0, (down.stdout + down.stderr)[-300:])
-            left = {kind: subprocess.run([rt, *cmd, "-q", "--filter", f"name={s.prefix}"], capture_output=True,
-                                         text=True).stdout.split()
-                    for kind, cmd in (("containers", ["ps", "-a"]), ("networks", ["network", "ls"]),
-                                      ("volumes", ["volume", "ls"]))}
+            left = leftovers(rt, s.prefix)
             check("no container, network or volume left", not any(left.values()), str(left))
     return summary()
 
