@@ -21,7 +21,6 @@
     "PI_OFFLINE": "1"
   },
   "image": "glove/pi:0.5.0-420dab327b",
-  "passthrough_env": [],
   "transcripts": [
     null,
     null

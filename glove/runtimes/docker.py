@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -139,6 +140,33 @@ class DockerRuntime:
             "bind_selinux": None,
         }
 
+    def throwaway_argv(
+        self, image: str, argv: list[str], *, plan: SessionPlan | None = None, network: str = "none",
+        user: str = "65534:65534", env: Iterable[str] = (), mounts: Iterable[tuple[str, str]] = (),
+        entrypoint: str | None = None, seccomp: str | None = None, pids: int = 64, memory: str = "128m",
+    ) -> list[str]:
+        """`run` of a hardened throwaway container (a probe, a check): removed on
+        exit, no capabilities, no-new-privileges, read-only rootfs (a tmpfs
+        /tmp), pids and memory limits, glove's default seccomp (`seccomp`: another
+        profile's path), no network unless one is named, non-root (`user`). With
+        `plan`, as the harness: its uid/gid, in the session's user namespace
+        (rootless Podman's keep-id).
+        `env`: names only, the values come from the caller's environment (never
+        an argv); `mounts`: (source, target) pairs, read-only, never relabelled
+        (a probe must not change a host file's SELinux label)."""
+        userns = None
+        if plan is not None:
+            user, userns = f"{plan.uid}:{plan.gid}", self.compose_extra(plan)["userns_mode"]
+        sec = ["--security-opt", f"seccomp={seccomp}"] if seccomp else self._probe_seccomp_args()
+        vols = [x for src, dst in mounts for x in ("-v", f"{src}:{dst}:ro")]
+        return [
+            self.cli, "run", "--rm", "--network", network, *(["--userns", userns] if userns else []),
+            "--user", user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", *sec,
+            "--read-only", "--tmpfs", "/tmp", "--pids-limit", str(pids), "--memory", memory,
+            *[x for k in env for x in ("-e", k)], *vols,
+            *(["--entrypoint", entrypoint] if entrypoint else []), image, *argv,
+        ]
+
     # Start sidecars one `compose up` at a time (podman); docker starts them together.
     serial_start = False
     # Added to every `compose` process's environment.
@@ -165,7 +193,7 @@ class DockerRuntime:
         # or rules (the export roots).
         validate_export_isolation(plan)
         # Env keys render into compose unquoted: a newline would add keys.
-        for k in (*plan.environment, *plan.enforcer_env, *plan.passthrough_env):
+        for k in (*plan.environment, *plan.enforcer_env):
             if not _ENV_KEY.match(k):
                 raise HardeningError(f"harness env key {k!r} is not a plain variable name")
         extra = self.compose_extra(plan)
@@ -200,7 +228,6 @@ class DockerRuntime:
             "placeholder_host_dir": plan.placeholder_host_dir,
             "environment": plan.environment,
             "enforcer_env": plan.enforcer_env,
-            "passthrough_env": plan.passthrough_env,
             "policies_host_dir": plan.policies_host_dir,
             "policies_container_dir": plan.policies_container_dir,
             "system_mounts": plan.system_mounts,
@@ -340,16 +367,8 @@ class DockerRuntime:
         ``docker run`` would use Docker's built-in default and could report a
         different Landlock/userns result than the hardened container gets.
         """
-        proc = subprocess.run(
-            [
-                self.cli, "run", "--rm",
-                "--cap-drop", "ALL",
-                "--security-opt", "no-new-privileges:true",
-                *self._probe_seccomp_args(),
-                PROBE_IMAGE, "python", "-c", _PROBE,
-            ],
-            capture_output=True, text=True,
-        )
+        proc = subprocess.run(self.throwaway_argv(PROBE_IMAGE, ["python", "-c", _PROBE]),
+                              capture_output=True, text=True)
         if proc.returncode != 0:
             return Check("landlock (hardened container)", "fail", proc.stderr.strip()[-300:])
         try:

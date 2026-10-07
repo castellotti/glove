@@ -34,6 +34,9 @@ class _StubRuntime:
     def ps(self) -> list[RunningSession]:
         return []
 
+    def throwaway_argv(self, image: str, argv: list[str], **kw) -> list[str]:
+        raise NotImplementedError(f"runtime {self.name!r} is not implemented yet ({self._desc})")
+
     def doctor(self) -> list[Check]:
         return [Check(f"runtime {self.name}", "info", f"stub — not implemented ({self._desc})")]
 

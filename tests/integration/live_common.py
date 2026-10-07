@@ -144,7 +144,7 @@ class LiveSession:
         ensure_images(self.cfg, self.plan, self.rt)
         print(f"  (images ready in {time.time() - t:.0f}s: {self.plan.image})", flush=True)
         start_sidecars(self.plan, self.sd.compose, provider=self.rt, env=self.env)
-        prepare_harness(self.sd, self.cfg, self.plan, self.secrets)
+        prepare_harness(self.sd, self.cfg, self.plan)
 
     def relaunch(self) -> None:
         """Re-read the session file and start again, as the next `glove up`

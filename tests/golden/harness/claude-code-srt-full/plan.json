@@ -31,7 +31,6 @@
     "KSTORE_QUERY_STORES": "both"
   },
   "image": "glove/claude-code:0.2.0-dee1521c33-1a6d8b66c1-srt-46f57ff955",
-  "passthrough_env": [],
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.claude/projects"

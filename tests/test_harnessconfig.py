@@ -171,7 +171,7 @@ def test_key_reference_renders_env_var_name_never_the_key(tmp_path, monkeypatch)
     prov = json.loads((home / ".pi" / "agent" / "models.json").read_text())["providers"]["glove"]
     assert prov["apiKey"] == f"${LLM_API_KEY_ENV}"
     # injected: the harness's variable holds a placeholder, never the key
-    assert plan.passthrough_env == [] and plan.environment[LLM_API_KEY_ENV] == INJECTED_KEY
+    assert plan.environment[LLM_API_KEY_ENV] == INJECTED_KEY
     for f in home.rglob("*"):
         if f.is_file():
             assert "sk-NEVER-ON-DISK" not in f.read_text()

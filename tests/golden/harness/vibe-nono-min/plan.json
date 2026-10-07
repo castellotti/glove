@@ -21,7 +21,6 @@
     "VIBE_HOME": "/home/agent/.vibe"
   },
   "image": "glove/vibe:0.5.0-0bbb2688dc",
-  "passthrough_env": [],
   "transcripts": [
     null,
     null

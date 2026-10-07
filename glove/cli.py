@@ -343,7 +343,7 @@ def up(
         launched_at = time.time()
         try:
             launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild and attempt == 1, secrets=secrets,
-                   prepare=partial(prepare_harness, sd, cfg, plan, secrets))
+                   prepare=partial(prepare_harness, sd, cfg, plan))
         except SubnetTaken as e:
             if attempt == SUBNET_ATTEMPTS:
                 raise _fail(f"{e} — gave up after {attempt} attempts") from e
@@ -392,39 +392,34 @@ def preflight(sd, cfg, plan) -> None:
     clear_stale_harness(cfg.provider, plan.harness_service)
 
 
-def prepare_harness(sd, cfg, plan, secrets: dict[str, str]) -> None:
+def prepare_harness(sd, cfg, plan) -> None:
     """`glove up` once the sidecars are up: launch-time resolution (e.g. llm
     `model: auto`) through a throwaway container on the harness network,
     recorded in effective.yml, then the final harness home."""
     from dataclasses import asdict
 
-    _resolve_extensions(plan, cfg.provider, secrets)
+    _resolve_extensions(plan, cfg.provider)
     # keeps what plan time recorded (the extensions' resolutions)
     _, resolved = sdm.read_effective(sd.effective)
     sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
     render_home(cfg, plan, sd.home)
 
 
-def _resolve_extensions(plan, provider: str, secrets: dict[str, str]) -> None:
+def _resolve_extensions(plan, provider: str) -> None:
     """Run each active extension's `resolve` hook (after sidecars are up) and
     refresh the model descriptor from the inference slot's resolved exports."""
     from .extensions import base_context
-    from .harnessconfig import LLM_API_KEY_ENV, harness_model
+    from .harnessconfig import harness_model
     from .session import probe_http
 
     comp = plan.composition
-    name = plan.model.api_key_env if plan.model is not None else None
-    key = {LLM_API_KEY_ENV: secrets[name]} if name in secrets else None
     for a in comp.active:
         if a.hooks is None or not hasattr(a.hooks, "resolve"):
             continue
         ex = a.exports
 
-        def probe(url, method="GET", body=None, auth=False, _ex=ex):
-            return probe_http(provider, plan, url, method=method, body=body, auth_env=key if auth else None,
-                              auth_header=_ex.get("auth_header", "Authorization"),
-                              auth_scheme=_ex.get("auth_scheme", "Bearer"),
-                              headers=_ex.get("probe_headers") or {})
+        def probe(url, method="GET", body=None, _ex=ex):
+            return probe_http(provider, plan, url, method=method, body=body, headers=_ex.get("probe_headers") or {})
 
         try:
             a.exports, notes = a.hooks.resolve(base_context(comp, a), ex, probe)

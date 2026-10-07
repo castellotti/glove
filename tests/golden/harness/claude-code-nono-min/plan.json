@@ -21,7 +21,6 @@
     "NODE_EXTRA_CA_CERTS": "/run/glove/llm-ca/ca.pem"
   },
   "image": "glove/claude-code:0.2.0-dee1521c33",
-  "passthrough_env": [],
   "transcripts": [
     null,
     null

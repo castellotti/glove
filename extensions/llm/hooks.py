@@ -303,13 +303,13 @@ def _extract(doc: Any, spec: Any) -> Any:
 MAX_MODEL_PAGES = 20
 
 
-def _model_ids(cat: dict[str, Any], root: str, probe, auth: bool) -> list[str]:
+def _model_ids(cat: dict[str, Any], root: str, probe) -> list[str]:
     """Every id the models endpoint lists, following a paginated list
     (`has_more` + `last_id`, the catalog's `models_cursor` names the parameter)."""
     endpoint, cursor = cat.get("models_endpoint", "/v1/models"), cat.get("models_cursor")
     url, ids = root + endpoint, []
     for _ in range(MAX_MODEL_PAGES):
-        status, text = probe(url, auth=auth)  # core retries while a forwarder is still starting
+        status, text = probe(url)  # core retries while a forwarder is still starting
         if status != 200:
             raise LlmError(f"llm: {cat['name']} did not answer {endpoint} (HTTP {status}): "
                            f"{text[:200]} — is the server running and reachable at the configured endpoint?")
@@ -332,14 +332,13 @@ def _served(model: str, ids: list[str], cat: dict[str, Any]) -> bool:
 
 def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
     """Resolve `model: auto` / `capabilities: auto`. Returns (exports, notes).
-    `probe(url, method=, body=, auth=)` → (status, text) via a throwaway container."""
+    `probe(url, method=, body=)` → (status, text) via a throwaway container holding
+    no key (llm-auth adds it)."""
     cat = load_provider(ctx["settings"]["provider"])
     root = _server_root(exports["base_url"], cat)
-    # injected: llm-auth adds the key, and glove's probe holds none
-    auth = bool(exports.get("api_key_secret")) and not exports.get("api_key_injected")
     notes: list[str] = []
     out = dict(exports)
-    ids = _model_ids(cat, root, probe, auth)
+    ids = _model_ids(cat, root, probe)
     if exports["model"] == "auto":
         if len(ids) != 1:
             raise LlmError(f"llm: model: auto needs exactly one model at {cat.get('models_endpoint')}, found "
@@ -355,7 +354,7 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
         body = None
         if spec.get("body"):
             body = json.loads(json.dumps(spec["body"]).replace("{model}", out["model"]))
-        status, text = probe(root + path, method=spec.get("method", "GET"), body=body, auth=auth)
+        status, text = probe(root + path, method=spec.get("method", "GET"), body=body)
         if status == 200:
             doc = json.loads(text)
             probed = {k: _extract(doc, spec[k]) for k in CAPABILITY_KEYS if k in spec}
