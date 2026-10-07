@@ -356,8 +356,11 @@ def probe_http(
     script = (f'{prelude}for w in {waits} 0; do code=$({curl}); rc=$?; '
               f'case $rc in {fast}) [ "$w" -gt 0 ] && sleep "$w" && continue;; esac; break; done; '
               'echo "$code $rc"; cat /tmp/b 2>/dev/null')
+    # in the session's user namespace, as the harness it stands in for (rootless
+    # Podman's keep-id: what it mounts is owned by the session uid as seen there)
+    userns = get_runtime(provider).compose_extra(plan)["userns_mode"]
     cmd = [
-        provider, "run", "--rm", "--network", plan.network.internal_network,
+        provider, "run", "--rm", "--network", plan.network.internal_network, *(["--userns", userns] if userns else []),
         "--user", f"{plan.uid}:{plan.gid}", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
         "--read-only", "--tmpfs", "/tmp", "-e", "M", "-e", "U", "-e", "B", *trust,
         *(["-e", "GLOVE_LLM_API_KEY"] if auth_env else []),

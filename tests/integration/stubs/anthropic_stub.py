@@ -7,7 +7,16 @@ first `---`>". Everything else → a fixed sentence. Logs each
 request path, the auth header names present and which key arrived (never
 values: `key=`, see llm_stub.key_kind) and tool names. With GLOVE_TEST_LLM_KEY
 set, a request without that key (`x-api-key`, or `Authorization: Bearer`) gets
-a 401, as Anthropic's API would.
+a 401, as Anthropic's API would. Its account API answers `{}` (`/api/oauth/...`)
+or 404, "none" (`/api/claude_code/...`, remote settings and policy limits: a
+body Claude Code can't parse makes it retry for ~5 s before the TUI draws).
+
+    anthropic_stub.py <port> [<tls-name> <ca-dir>]
+
+With a name it stands in for the provider itself (test_llm_inject.sh
+claude-code-oauth): run in the llm-auth image, it listens on every address and
+serves TLS as that name with a session CA made as llm-auth makes its own
+(`llm_auth.server_tls`), publishing the CA's certificate to `<ca-dir>/ca.pem`.
 """
 
 from __future__ import annotations
@@ -51,9 +60,20 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_HEAD(self):
+        if self._refused():
+            return None
+        self.send_response(200)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
     def do_GET(self):
         if self._refused():
             return None
+        if self.path.startswith("/api/claude_code/"):
+            return self._json({}, 404)
+        if self.path.startswith("/api/"):
+            return self._json({})
         if self.path.startswith("/v1/models"):
             return self._json({"data": [{"id": "claude-stub", "type": "model", "display_name": "stub"}]})
         self._json({}, 404)
@@ -120,5 +140,12 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1])
-    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+    port, tls = int(sys.argv[1]), sys.argv[2:]
+    srv = ThreadingHTTPServer(("0.0.0.0" if tls else "127.0.0.1", port), H)
+    if tls:
+        sys.path.insert(0, "/opt/glove/llm")
+        from llm_auth import server_tls
+
+        srv.socket = server_tls(*tls).wrap_socket(srv.socket, server_side=True)
+        print(f"stub: serving TLS as {tls[0]} on :{port}", flush=True)
+    srv.serve_forever()

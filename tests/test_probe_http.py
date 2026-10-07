@@ -71,3 +71,19 @@ def test_it_trusts_what_the_harness_trusts(plan, monkeypatch):
     script = cmd[-1]
     assert script.startswith("cat /etc/ssl/certs/ca-certificates.crt /run/glove/c/ca.pem > /tmp/ca.pem")
     assert "curl --cacert /tmp/ca.pem -sS " in script
+
+
+def test_on_rootless_podman_it_runs_in_the_sessions_userns(tmp_path, monkeypatch):
+    """A channel is owned by the session uid as keep-id maps it: a probe in the
+    default rootless map can't read it (live: curl (60), the CA unread)."""
+    from glove.runtimes import podman
+
+    (tmp_path / "work").mkdir()
+    cfg = make_cfg(harness="pi", workdir=str(tmp_path / "work"), name="s", runtime="podman", enforcer="nono")
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=501, gid=20)
+    monkeypatch.setattr(podman, "_host_info", lambda cli: {"rootless": "true"})
+    calls = _run(monkeypatch, "200 0\n")
+    session.probe_http("podman", plan, "https://x/")
+    assert calls[0][calls[0].index("--userns") + 1] == "keep-id"
+    session.probe_http("docker", plan, "https://x/")
+    assert "--userns" not in calls[1]

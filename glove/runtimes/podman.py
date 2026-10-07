@@ -120,6 +120,7 @@ class PodmanRuntime(DockerRuntime):
     )
 
     _rootless: bool | None = None
+    network_subnets_format: ClassVar[str] = "{{.Name}}{{range .Subnets}} {{.Subnet}}{{end}}"
 
     # --- rootless detection ------------------------------------------------
 
