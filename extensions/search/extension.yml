@@ -41,7 +41,7 @@ verify:
 harness:
   env:
     SEARXNG_URL: { value: "{{ endpoint.search.url }}", when: { endpoint.search: { set: true } } }
-  pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
+  pi: { extensions: [pi-extension], tools: [web_search] }   # Pi has no MCP: its own extension
   mcp:                                  # rendered by harnesses that speak MCP
-    - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp" }
+    - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp", tools: web_search }
   brief: brief.md

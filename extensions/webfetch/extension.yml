@@ -42,10 +42,10 @@ harness:
     GLOVE_FETCH_ALLOW:
       value: "{{ (slot.egress.guard_hosts + slot.egress.guard_cidrs) | join(',') }}"
       when: { harness: pi, slot.egress.provider: corporate }
-  pi: { extensions: [pi-extension] }   # Pi's web_fetch tool
+  pi: { extensions: [pi-extension], tools: [web_fetch] }   # Pi's web_fetch tool
   claude-code:                          # Claude Code's own WebFetch, through the proxy
     web_fetch: { proxy: "{{ endpoint.proxy.url }}" }
   mcp:                                  # Vibe (its native web_fetch is blocked by its hook)
     - { name: webfetch, transport: http, url: "{{ endpoint['webfetch-mcp'].url }}/mcp",
-        when: { harness: vibe } }
+        tools: fetch_url, when: { harness: vibe } }
   brief: brief.md

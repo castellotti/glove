@@ -1,8 +1,10 @@
 """Pi adapter: models.json + settings.json, and Pi's `-e` extensions.
 
-Extensions contribute Pi code as `harness: {pi: {extensions: [<dir>, …]}}`
-(Pi has no MCP): each directory is baked into the derived image under
-/opt/glove/ext/<ext>/ and loaded with `pi -e <path>`. Skills come from the
+Extensions contribute Pi code as `harness: {pi: {extensions: [<dir>, …],
+tools: [<name>, …]}}` (Pi has no MCP): each directory is baked into the derived
+image under /opt/glove/ext/<ext>/ and loaded with `pi -e <path>`, and the tools
+it registers are added to the session's tool inventory (passthrough; the
+enforcer extension refuses any tool not in it). Skills come from the
 neutral `harness.skills` contribution (`comp.skills`).
 """
 
@@ -12,13 +14,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from glove.extensions import ExtensionError, active_items
-from glove.harnessconfig import rel_config_home
+from glove.extensions import ExtensionError, active_items, render_value
+from glove.harnessconfig import mcp_tool_names, rel_config_home
 from glove.image import staged_name
 
 # What Pi sends when the endpoint needs no key (Pi refuses a provider without one).
 NO_KEY_PLACEHOLDER = "glove-no-key"
-SECTION_KEYS = frozenset({"extensions"})
+SECTION_KEYS = frozenset({"extensions", "tools"})
 
 
 def _merged(first: list, extra: list | None) -> list:
@@ -26,13 +28,25 @@ def _merged(first: list, extra: list | None) -> list:
     return [*first, *(e for e in extra or [] if e not in first)]
 
 
-def extensions(comp) -> list[tuple[str, Path]]:
-    """(extension, source dir) of every Pi extension the session's extensions contribute."""
-    out: list[tuple[str, Path]] = []
+def _sections(comp):
     for a, section, ctx in comp.harness_items:
         where = f"extension {a.name!r} harness"
         if not isinstance(section, dict) or set(section) - SECTION_KEYS:
             raise ExtensionError(f"{where}: `pi:` takes {sorted(SECTION_KEYS)}")
+        yield a, section, ctx, where
+
+
+def tool_names(comp) -> list[str]:
+    """The tools the session's Pi extensions register (`pi: {tools: …}`, a list
+    or comma-separated)."""
+    return [n for _a, section, ctx, where in _sections(comp)
+            for n in mcp_tool_names(render_value(section.get("tools") or [], ctx, where))]
+
+
+def extensions(comp) -> list[tuple[str, Path]]:
+    """(extension, source dir) of every Pi extension the session's extensions contribute."""
+    out: list[tuple[str, Path]] = []
+    for a, section, ctx, where in _sections(comp):
         for item in active_items(section.get("extensions"), ctx):
             src = a.manifest.path / (item["src"] if isinstance(item, dict) else item)
             if not src.is_dir():

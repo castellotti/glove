@@ -1,0 +1,34 @@
+{
+  "shell": [
+    "bash",
+    "file_system.bash",
+    "process.start"
+  ],
+  "file_write": [
+    "write_file",
+    "edit",
+    "search_replace",
+    "file_system.write_file",
+    "file_system.edit",
+    "file_system.search_replace"
+  ],
+  "allow": [
+    "read_file",
+    "todo",
+    "cron",
+    "file_system.read_file",
+    "process.list",
+    "process.output",
+    "process.stop",
+    "process.write",
+    "self.sleep",
+    "vibe.todo",
+    "vibe.cron",
+    "vibe.unified_harness_scratchpad"
+  ],
+  "ask": [],
+  "deny": [
+    "web_fetch",
+    "web_search"
+  ]
+}

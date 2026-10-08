@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-420dab327b-4ba559dea5-srt-46f57ff955
+    image: glove/pi:0.5.0-610fba8774-5973244862-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer", "-e", "/opt/glove/ext/playwright/pi-extension", "-e", "/opt/glove/ext/search/pi-extension", "-e", "/opt/glove/ext/webfetch/pi-extension"]
     stdin_open: true

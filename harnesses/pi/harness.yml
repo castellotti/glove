@@ -62,3 +62,12 @@ pip: { install: [pip3, install, --no-cache-dir, --break-system-packages], bootst
 resume: { continue: [--continue], session: [--session, "{id}"] }
 # Neutral extension contributions this harness renders (see extensions/README).
 contributions: [skills]
+# The tool inventory (measured on 1.0.4 with codemode on): the enforcer
+# extension wraps `shell`, holds `file_write` to the write roots, passes `allow`
+# and refuses any other tool, an extension's or a renamed one (fail closed).
+# Extensions add their own tools (`pi: {tools: …}`); codemode's nested calls are
+# classified one by one. grep, find and ls are built in, off by default.
+tools:
+  shell: [bash]
+  file_write: [write, edit]
+  allow: [read, grep, find, ls, codemode]

@@ -62,3 +62,19 @@ def make_session(root, extra: str = "", **kw):
     (root / "work").mkdir(parents=True, exist_ok=True)
     (root / "glove-session.yml").write_text(session_file(extra, **kw))
     return root
+
+
+def path_rule_cases(tmp) -> tuple[str, list[tuple[str, str | None]]]:
+    """harnesses/path_rule_cases.json laid out under `tmp` (resolved): the write
+    root (also the cwd), and (path, checked path or None) per case."""
+    import json
+    from pathlib import Path
+
+    tmp = Path(tmp).resolve()
+    data = json.loads((Path(__file__).resolve().parents[1] / "harnesses" / "path_rule_cases.json").read_text())
+    for d in ("work/real", "home"):
+        (tmp / d).mkdir(parents=True)
+    for link, target in data["symlinks"].items():
+        (tmp / link).symlink_to(target.format(tmp=tmp))
+    return str(tmp / "work"), [(c["path"].format(tmp=tmp), c["checked"] and c["checked"].format(tmp=tmp))
+                               for c in data["cases"]]

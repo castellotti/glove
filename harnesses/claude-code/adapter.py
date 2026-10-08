@@ -12,8 +12,13 @@ stops Claude Code from starting. They carry:
   server is rendered as `glove-cc-prefix --mcp <name>`, which the prefix runs
   from `mcp-<name>.argv` beside the settings under the harness's own sandbox,
   as Pi and Vibe run theirs: the tool profile has no network to reach a sidecar;
-- managed-only hooks, permission rules and MCP servers, and deny rules on the
-  config home (`//` is an absolute path; Edit rules cover every write tool);
+- managed-only hooks, permission rules and MCP servers; the tools the
+  session's inventory (tools.json) classes shell, file_write and allow are
+  approved, `deny` ones denied, and the rest (`ask`, a tool a new release
+  adds) prompt;
+  Read is denied on the config home and Edit (it covers every write tool) on
+  what the harness may write that is not a write root: the whole home and
+  /dev/shm (`//` is an absolute path);
 - the switches that keep Claude Code to its inference host;
 - with `webfetch`, Claude Code's own WebFetch through the egress proxy
   (`HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`).
@@ -37,19 +42,21 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from glove.config import ConfigError
-from glove.enforcers.base import argv_lines
+from glove.enforcers.base import TOOLS_FILE, argv_lines, write_roots
 from glove.extensions import ExtensionError, render_value
 from glove.harnessconfig import INJECTED_KEY, mcp_tool_names, rel_config_home
+from glove.mounts import CONTAINER_HOME
 from glove.naming import scoped
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
 SKILLS_ROOT = "/opt/glove/cc"  # `--add-dir`: Claude Code loads <dir>/.claude/skills
 DEFAULT_HOST = "api.anthropic.com"
-# The built-in tools glove approves: every command runs under the tool wrapper
-# and every file write stays inside the mounts, as with Pi and Vibe.
-ALLOW_TOOLS = ["Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS", "Agent",
-               "Task", "TodoWrite", "WebSearch"]
+# What the harness process may write beyond the write roots, under any
+# enforcer (nono+srt: the whole home and /dev/shm; nono: the config home): its
+# write tools are denied there, so they reach what a shell command may. Claude
+# Code's rules can't say "only these", and deny wins.
+HARNESS_WRITABLE = (CONTAINER_HOME, "/dev/shm")
 # WebFetch fetches from inside the container, which reaches only the session's
 # forwarders: refused rather than left to fail, unless `webfetch` gives it the
 # egress proxy.
@@ -152,10 +159,19 @@ def _no_proxy(plan) -> str:
     return ",".join(dict.fromkeys(hosts))
 
 
+def _write_denies(plan) -> list[str]:
+    roots = write_roots(plan)
+    for p in HARNESS_WRITABLE:
+        if any(r == p or r.startswith(f"{p}/") for r in roots):
+            raise ConfigError(f"claude-code: write root under {p}: its write tools are denied there")
+    return [f"Edit(/{p}/**)" for p in HARNESS_WRITABLE]
+
+
 def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], mcp_deny: list[str],
                      wrapped: bool) -> dict[str, Any]:
     perms = _config(cfg).get("permissions") or {}
     home = plan.profile.config_home_path
+    tools = json.loads(plan.policies[TOOLS_FILE])
     env = dict(MANAGED_ENV)
     if wrapped:
         env["CLAUDE_CODE_SHELL_PREFIX"] = SHELL_PREFIX
@@ -173,9 +189,11 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
         "allowedMcpServers": [{"serverName": n} for n in servers],
         "permissions": {
             "defaultMode": perms.get("defaultMode", "default"),
-            "allow": [*ALLOW_TOOLS, *([WEB_FETCH] if proxy else []), *mcp_allow, *(perms.get("allow") or [])],
-            "deny": [f"Read(/{home}/**)", f"Edit(/{home}/**)", *([] if proxy else [WEB_FETCH]), *mcp_deny,
-                     *(perms.get("deny") or [])],
+            "allow": [*tools["shell"], *tools["file_write"], *tools["allow"], *([WEB_FETCH] if proxy else []),
+                      *mcp_allow, *(perms.get("allow") or [])],
+            # WebFetch is denied unless webfetch hands it the egress proxy
+            "deny": [f"Read(/{home}/**)", *_write_denies(plan),
+                     *(d for d in tools["deny"] if not proxy or d != WEB_FETCH), *mcp_deny, *(perms.get("deny") or [])],
         },
         "enableArtifact": False,
         "disableClaudeAiConnectors": True,

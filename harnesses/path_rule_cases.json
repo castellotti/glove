@@ -1,0 +1,19 @@
+{
+  "about": "The write rule Pi's enforcer extension and Vibe's pre_tool hook hold a file tool to, as shared vectors (harnesses/pi/tests/test_enforcer_ext.py, harnesses/vibe/tests/test_vibe_hook.py). {tmp} is a fresh directory holding work/ (the one write root, cwd), work/real/ and home/; `symlinks` are created first. `checked` is the path the call is rewritten to, null when refused.",
+  "symlinks": {"work/link": "{tmp}/home", "work/alias": "{tmp}/work/real", "work/dangling": "{tmp}/home/not-yet"},
+  "cases": [
+    {"path": "sub/a.py", "checked": "{tmp}/work/sub/a.py"},
+    {"path": "{tmp}/work/a.py", "checked": "{tmp}/work/a.py"},
+    {"path": "{tmp}/work/../work/b", "checked": "{tmp}/work/b"},
+    {"path": "alias/a.py", "checked": "{tmp}/work/real/a.py"},
+    {"path": "link/planted", "checked": null, "why": "a symlink out of the roots is followed, as the write would"},
+    {"path": "link/../x", "checked": null, "why": "`..` after a symlink: its target's parent"},
+    {"path": "dangling", "checked": null, "why": "a dangling symlink: the write creates its target"},
+    {"path": "../home/x", "checked": null},
+    {"path": "{tmp}/workx/a", "checked": null, "why": "a root's name as a prefix"},
+    {"path": "~/x", "checked": null},
+    {"path": "/etc/passwd", "checked": null},
+    {"path": "{tmp}/work/a b", "checked": null, "why": "a space a tool might normalize after the check"},
+    {"path": "{tmp}/work/a.py ", "checked": null, "why": "stripped after the check"}
+  ]
+}

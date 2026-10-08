@@ -43,7 +43,7 @@ def test_vibe_gets_fetch_url_from_a_sidecar(tmp_path, observe):
     cfg = make_cfg(harness="vibe", name="s", workdir=str(tmp_path), extensions=exts)
     plan, text = render(cfg, tmp_path)
     assert [s for _, s in plan.composition.mcp] == [
-        {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp"}]
+        {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp", "tools": "fetch_url"}]
     # the harness reaches the fetcher, never the egress proxy
     roles = {s.role for s in plan.network.sidecars if s.harness}
     assert "webfetch-mcp" in roles and "proxy" not in roles

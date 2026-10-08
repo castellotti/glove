@@ -11,6 +11,7 @@ harness's code runs.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from dataclasses import dataclass, field
 from functools import cache
@@ -27,12 +28,22 @@ MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
     "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
-    "masked_files", "protected_home", "version", "audited_version", "brief",
+    "masked_files", "protected_home", "version", "audited_version", "brief", "tools",
 })
-REQUIRED_KEYS = ("name", "image", "version", "audited_version", "entry", "config_home", "context_file")
+REQUIRED_KEYS = ("name", "image", "version", "audited_version", "entry", "config_home", "context_file", "tools")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
 # in an extension manifest); see glove/extensions.py `_harness_contrib`.
 CONTRIBUTIONS = frozenset({"mcp", "skills"})
+# The harness's tool inventory (`tools:`), by what glove does with a call:
+# `shell` runs under the tool wrapper, `file_write` is held to the write roots,
+# `allow` passes through, `ask` is left to the harness's own prompt (a harness
+# without one refuses it), `deny` is refused. A tool in no class is
+# refused too: an upstream rename fails closed.
+TOOL_CLASSES = ("shell", "file_write", "allow", "ask", "deny")
+# What a session or an extension may add: passthrough only, never a name glove
+# wraps, holds or refuses.
+TOOL_FIXED = ("shell", "file_write", "deny")
+TOOL_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 
 
 @dataclass(frozen=True)
@@ -89,6 +100,8 @@ class HarnessProfile:
     # What the agent should know about this harness under glove (`brief:`, a
     # markdown file in the harness dir), added to its context file.
     brief: str = ""
+    # The tool inventory, class → tool names (TOOL_CLASSES).
+    tools: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
 
@@ -121,6 +134,34 @@ def _strs(v: object, where: str) -> tuple[str, ...]:
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise ConfigError(f"{where}: want a list of strings")
     return tuple(v)
+
+
+def _tool_classes(raw: object, where: str) -> dict[str, tuple[str, ...]]:
+    if not isinstance(raw, dict) or set(raw) - set(TOOL_CLASSES):
+        raise ConfigError(f"{where}: tools takes {list(TOOL_CLASSES)}")
+    out = {k: _strs(v, f"{where} tools.{k}") for k, v in raw.items()}
+    names = [n for v in out.values() for n in v]
+    if len(names) != len(set(names)) or not all(TOOL_NAME.fullmatch(n) for n in names):
+        raise ConfigError(f"{where}: a tool is in two classes, or a name is not a plain tool name")
+    return out
+
+
+def tool_inventory(profile: HarnessProfile, tool_allow: list[str], comp) -> dict[str, list[str]]:
+    """The session's tool inventory (`tools.json`), every class: the harness's,
+    with the passthrough tools the session's extensions add (the adapter's
+    `tool_names`) and its own `harness_config.tools.allow` (`tool_allow`) in
+    `allow`."""
+    fixed = {n for c in TOOL_FIXED for n in profile.tools.get(c, ())}
+    added = [*adapter_call(profile, "tool_names", comp, default=[]), *tool_allow]
+    bad = [n for n in added if n in fixed or not TOOL_NAME.fullmatch(n)]
+    if bad:
+        raise ConfigError(f"tools {bad}: an added tool only passes through; {profile.name}'s shell, file-write "
+                          "and denied tools keep their rule")
+    out = {c: list(profile.tools.get(c, ())) for c in TOOL_CLASSES}
+    out["allow"] = list(dict.fromkeys([*out["allow"], *added]))
+    # an `ask` tool the session lists passes through: it is in `allow` only
+    out["ask"] = [n for n in out["ask"] if n not in added]
+    return out
 
 
 def load_profile(path: Path) -> HarnessProfile:
@@ -174,7 +215,7 @@ def load_profile(path: Path) -> HarnessProfile:
         pip_bootstrap=_strs(pip.get("bootstrap") or [], f"{where} pip.bootstrap"),
         resume_continue=_strs(resume["continue"], f"{where} resume") if "continue" in resume else None,
         resume_session=_strs(resume["session"], f"{where} resume") if "session" in resume else None,
-        contributions=contrib, version=version, path=path, **opt,
+        contributions=contrib, version=version, tools=_tool_classes(raw["tools"], where), path=path, **opt,
     )
 
 

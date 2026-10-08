@@ -91,6 +91,7 @@ audited_version: 1.0.0
 entry: [h]
 config_home: { env: H_HOME, path: /home/agent/.h }
 context_file: /home/agent/.h/AGENTS.md
+tools: { shell: [sh] }
 """
 
 
@@ -115,6 +116,11 @@ def test_a_minimal_manifest_loads(tmp_path):
     (GOOD + "brief: missing.md\n", "h"),               # no such file
     (GOOD.replace("version: 1.0.0\n", ""), "h"),      # no release pinned
     (GOOD.replace("audited_version: 1.0.0", "audited_version: 0.9.0"), "h"),  # a release not re-audited
+    (GOOD.replace("tools: { shell: [sh] }\n", ""), "h"),                    # no tool inventory
+    (GOOD.replace("{ shell: [sh] }", "{ shell: [sh], wrap: [x] }"), "h"),  # unknown tool class
+    (GOOD.replace("{ shell: [sh] }", "{ shell: [sh], allow: [sh] }"), "h"),  # a tool in two classes
+    (GOOD.replace("{ shell: [sh] }", "{ shell: [\"s h\"] }"), "h"),       # not a tool name
+    (GOOD.replace("{ shell: [sh] }", "{ shell: sh }"), "h"),               # not a list
 ])
 def test_bad_manifests_are_refused(tmp_path, body, dirname):
     with pytest.raises(ConfigError):
