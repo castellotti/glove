@@ -13,10 +13,8 @@
 set -u
 HARNESS="${1:-pi}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/inject"; export GLOVE_HOME="$TMPROOT/gh"
 . "$ROOT/tests/integration/lib_session.sh"
-STUB=
-trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
+driver_init inject
 
 runtime_facts
 ENF="${2:-$([ -n "$SRT_REFUSED" ] && echo nono || echo nono+srt)}"

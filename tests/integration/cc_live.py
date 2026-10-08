@@ -28,6 +28,8 @@ from pathlib import Path
 
 from live_common import check, check_version, live_session, summary
 
+from glove.runtimes import get_runtime
+
 # What Claude Code may ask its inference host for (anything else is a leak).
 STUB_PATHS = re.compile(r"^(POST /v1/messages(/count_tokens)?|GET /v1/models|HEAD /api/hello|HEAD /)(\?.*)?$")
 
@@ -43,8 +45,9 @@ def main(directory: str, stub_log: str) -> int:
               json.loads((sd.home / ".claude" / "settings.json").read_text())["env"]["CLAUDE_CODE_SHELL_PREFIX"] == "")
 
         print("== glove-cc-prefix fails closed")
-        r = subprocess.run([s.rt, "run", "--rm", "--entrypoint", "/opt/glove/bin/glove-cc-prefix", plan.image,
-                            "echo SHOULD-NOT-RUN"], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(get_runtime(s.rt).throwaway_argv(plan.image, ["echo SHOULD-NOT-RUN"], plan=plan,
+                                                            entrypoint="/opt/glove/bin/glove-cc-prefix"),
+                           capture_output=True, text=True, timeout=120)
         check("no tool wrapper → 126, command not run", r.returncode == 126 and "SHOULD-NOT-RUN" not in r.stdout
               and "fail closed" in r.stderr, f"{r.returncode} {r.stdout} {r.stderr}")
         r = run("a", "b", entry="/opt/glove/bin/glove-cc-prefix")

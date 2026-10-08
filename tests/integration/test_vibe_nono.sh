@@ -12,9 +12,8 @@ RT="${RT:-docker}"   # docker | podman
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/tests/integration/lib_session.sh"
-IMAGE="${GLOVE_VIBE_IMAGE:-$(glove_image vibe)}"
-WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
-export GLOVE_HOME
+image_driver
+IMAGE="${GLOVE_VIBE_IMAGE:-$(ensure_image vibe)}" || exit 1
 PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.vibe"
 
@@ -63,7 +62,7 @@ echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/
   && bad "hook exited 0 on bad input" || ok "hook exits non-zero on bad input (strict -> deny)"
 
 echo "== entrypoint validates policies =="
-"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
@@ -84,7 +83,6 @@ for how in "a child of the harness" "the session leader"; do
     || bad "wrapped command opened /dev/tty ($how): $out"
 done
 
-rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 # `vibe -p` through the stub (the pre_tool hook wraps the command) and a hook

@@ -28,17 +28,13 @@ memory exactly as `glove up` does; nothing here prints them.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
-from pathlib import Path
 
-from live_common import check, live_session, summary
+from live_common import check, live_session, mcp_client_argv, summary
 
 from glove.extensions import image_tag
 from glove.verify import ECHO_URL, host_public_ip, probe
-
-HERE = Path(__file__).parent
 
 
 def main(directory: str) -> int:
@@ -90,10 +86,8 @@ def main(directory: str) -> int:
                   bool(real) and want, f"host {real or '?'}, exit {exit_ip or '?'}")
 
         def mcp(ext: str, host: str, steps: list, header: str | None = None) -> str:
-            r = subprocess.run([rt, "run", "--rm", "--network", f"{s}-net", "--cap-drop", "ALL", "--read-only",
-                                "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{HERE}:/t:ro", "--entrypoint",
-                                "python3", image_tag(comp.by_name(ext), "mcp"), "/t/mcp_client.py",
-                                f"http://{host}:8000/mcp", header or f"{host}:8000", json.dumps(steps)],
+            r = subprocess.run(mcp_client_argv(rt, image_tag(comp.by_name(ext), "mcp"), f"{s}-net",
+                                               f"http://{host}:8000/mcp", header or f"{host}:8000", steps),
                                capture_output=True, text=True, timeout=180)
             return (r.stdout + r.stderr).strip()
 

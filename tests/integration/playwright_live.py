@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from live_common import check, inspect, live_session, summary, wait_for
+from live_common import check, inspect, live_session, mcp_client_argv, summary, wait_for
 
 from glove.extensions import image_tag
 
@@ -58,10 +58,7 @@ def main(directory: str) -> int:
             return subprocess.run([rt, "exec", f"{s}-pw", "bash", "-c", script], capture_output=True, text=True)
 
         def mcp(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> str:
-            r = subprocess.run([rt, "run", "--rm", "--network", network, "--cap-drop", "ALL", "--read-only",
-                                "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{HERE}:/t:ro",
-                                "--entrypoint", "python3", pw_image, "/t/mcp_client.py",
-                                f"http://{host}:8931/mcp", f"{host}:8931", json.dumps(steps)],
+            r = subprocess.run(mcp_client_argv(rt, pw_image, network, f"http://{host}:8931/mcp", f"{host}:8931", steps),
                                capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
 
@@ -218,11 +215,9 @@ def main(directory: str) -> int:
             def click(secret: str) -> tuple[str, str]:
                 w, h = (int(x) for x in pws["viewport"].split("x"))
                 client = subprocess.Popen(
-                    [rt, "run", "--rm", "--network", f"{s}-net", "--cap-drop", "ALL", "--read-only",
-                     "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{HERE}:/t:ro", "--entrypoint", "python3",
-                     pw_image, "/t/mcp_client.py", f"http://{s}-browser:8931/mcp", f"{s}-browser:8931",
-                     json.dumps([["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
-                                 ["browser_snapshot", {}]])],
+                    mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp", f"{s}-browser:8931",
+                                    [["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
+                                     ["browser_snapshot", {}]]),
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 time.sleep(8)
                 rfb = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pycryptodome", "python",

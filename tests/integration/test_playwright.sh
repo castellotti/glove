@@ -23,13 +23,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 CASE="${1:-headless}"
 PORT="${STUB_PORT:-18085}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/pw"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
 . "$ROOT/tests/integration/lib_session.sh"
+driver_init pw
 stub_llm "$CASE" "$PORT"
-python3 "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!; disown "$STUB"
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 HARNESS=pi; EXTRA=""; PW="{}"
 case "$CASE" in
   headless) EXTRA=$'  observe: {}\n  filter: {}\n' ;;

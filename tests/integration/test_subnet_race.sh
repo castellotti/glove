@@ -7,10 +7,8 @@
 # See subnet_race_live.py for the checks.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/race"; export GLOVE_HOME="$TMPROOT/gh"
 . "$ROOT/tests/integration/lib_session.sh"
-STUB=
-trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
+driver_init race
 
 runtime_facts
 stub_session "$S" pi nono || exit 1

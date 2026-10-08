@@ -21,14 +21,10 @@ PORT="${STUB_PORT:-18085}"
 HARNESS="${HARNESS:-claude-code}"
 ENFORCERS=("${@:-nono}")
 [ "$#" -eq 0 ] && ENFORCERS=(nono nono+srt)
-TMPROOT="$(mktemp -d)"; export GLOVE_HOME="$TMPROOT/gh"
 . "$ROOT/tests/integration/lib_session.sh"
+driver_init
 stub_llm "$HARNESS" "$PORT"
-STUB=
-trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!
-sleep 1
+start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 OBS=""; [ -n "${OBSERVE:-}" ] && OBS="  observe: {}"
 rc=0
 for enf in "${ENFORCERS[@]}"; do

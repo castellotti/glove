@@ -19,8 +19,8 @@ ENDPOINT="${1:?usage: $0 <host:port> [<keychain-service>] [<provider>] [<capabil
 SERVICE="${2:-}"
 PROVIDER="${3:-openai-compatible}"
 CAPS="${4:-auto}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/llmlan"; export GLOVE_HOME="$TMPROOT/gh"
-trap 'rm -rf "$TMPROOT"' EXIT
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init llmlan
 uv run --project "$ROOT" glove new minimal "$S" >/dev/null
 KEY=""; [ -n "$SERVICE" ] && KEY=", api_key: keychain:$SERVICE"
 printf 'glove: 3\ntemplate: minimal\nharness: pi\nextensions:\n  llm: {provider: %s, location: lan, endpoint: "%s", model: auto, capabilities: %s%s}\n' \

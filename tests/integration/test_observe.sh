@@ -18,13 +18,10 @@ EG="$ROUTE: {}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18083}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/observe-$ROUTE"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
 . "$ROOT/tests/integration/lib_session.sh"
+driver_init "observe-$ROUTE"
 stub_llm pi "$PORT"
-python3 "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!; disown "$STUB"
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 case "$ROUTE" in
   direct|tor) ;;
   vpn) EG="vpn: ${VPN_SETTINGS:?set VPN_SETTINGS to the vpn extension settings (flow YAML)}" ;;

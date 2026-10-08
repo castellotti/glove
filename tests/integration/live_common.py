@@ -30,6 +30,7 @@ from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, preflight, prepare_harness
 from glove.plan import SessionPlan, secret_env
+from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
 
 RESULTS: list[bool] = []
@@ -240,3 +241,13 @@ def live_session(directory: str, *, logs: str | None = None,
             teardown(sid, provider=s.rt, wipe=True)
     if not started:  # nothing to run the block against: the driver ends here
         raise SystemExit(summary())
+
+
+def mcp_client_argv(rt: str, image: str, network: str, url: str, host: str, steps: list) -> list[str]:
+    """mcp_client.py (beside this file) calling `steps` on the MCP at `url` (Host:
+    `host`) from a hardened throwaway on `network`, in `image` (a sidecar's own:
+    its python and MCP library)."""
+    return get_runtime(rt).throwaway_argv(
+        image, ["/t/mcp_client.py", url, host, json.dumps(steps)], network=network,
+        user=f"{os.getuid()}:{os.getgid()}", mounts=[(str(Path(__file__).parent), "/t")], entrypoint="python3",
+        memory="256m")

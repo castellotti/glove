@@ -10,10 +10,8 @@ set -u
 HARNESS="${1:-pi}"
 RT="${RT:-docker}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/nonosrt"; export GLOVE_HOME="$TMPROOT/gh"
 . "$ROOT/tests/integration/lib_session.sh"
-STUB=
-trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
+driver_init nonosrt
 
 stub_session "$S" "$HARNESS" nono+srt || exit 1
 mkdir -p "$S/work/.git/hooks" "$S/work/.vscode" "$S/work/sub"; : > "$S/work/.git/config"; : > "$S/work/.envrc"

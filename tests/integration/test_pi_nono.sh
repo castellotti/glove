@@ -9,7 +9,7 @@
 # noted at the bottom and must be run manually against a live model.
 #
 # Usage:  bash tests/integration/test_pi_nono.sh
-# Requires: docker, and `glove build pi` (or `docker build` of the pi harness).
+# Requires: docker or podman; builds the pi image when missing (ensure_image).
 # NOTE: no `pipefail` — `docker ... | grep -q` makes grep close the pipe on the
 # first match, SIGPIPE-killing docker; under pipefail that non-zero would mask a
 # real match. We want the pipeline status to be grep's.
@@ -18,11 +18,8 @@ RT="${RT:-docker}"   # docker | podman
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/tests/integration/lib_session.sh"
-IMAGE="${GLOVE_PI_IMAGE:-$(glove_image pi)}"
-WORKDIR="$(mktemp -d)"
-HOMEDIR="$(mktemp -d)"
-GLOVE_HOME="$(mktemp -d)"
-export GLOVE_HOME
+image_driver
+IMAGE="${GLOVE_PI_IMAGE:-$(ensure_image pi)}" || exit 1
 PASS=0 FAIL=0
 
 # Mirror the real glove hardening set, with /work and /home/agent as writable
@@ -86,12 +83,11 @@ run_harness 'echo cfg > /home/agent/.pi/agent/x && echo wrote_home_ok' | grep -q
   2>&1 | grep -qi 'permission denied' && ok "nested tool denied harness transcript" || bad "nested tool read transcript"
 
 echo "== entrypoint fail-closed =="
-"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint validates good policies and execs" || bad "entrypoint rejected valid policies"
-BADDIR="$(mktemp -d)"; printf '{ this is not valid json ' > "$BADDIR/harness.json"; printf '{}' > "$BADDIR/tool.json"
-"$RT" run --rm -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+BADDIR="$TMPROOT/bad"; mkdir "$BADDIR"; printf '{ this is not valid json ' > "$BADDIR/harness.json"; printf '{}' > "$BADDIR/tool.json"
+"$RT" run "${hardened[@]}" -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && bad "entrypoint ran with an invalid policy" || ok "entrypoint fails closed on invalid policy"
-rm -rf "$BADDIR"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
 # a harness-like process on a real tty runs the rendered wrapper; the command
@@ -111,7 +107,6 @@ for how in "a child of the harness" "the session leader"; do
     || bad "wrapped command opened /dev/tty ($how): $out"
 done
 
-rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 # A harness turn through the stub (credential path, wrapped tools): test_config_protect.sh,

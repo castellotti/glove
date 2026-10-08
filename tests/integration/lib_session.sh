@@ -8,6 +8,51 @@
 #       $S_POLICIES  <dir>/.glove/enforcer   (ring-1 policies)
 #       $S_COMPOSE   <dir>/.glove/compose.yml (compose project glove-$S_ID)
 # Needs ROOT (the glove checkout) and GLOVE_HOME (a throwaway home) set.
+
+#   driver_init [name]
+#     a driver's throwaway state: TMPROOT (a fresh dir), S=$TMPROOT/<name>, a
+#     fresh GLOVE_HOME under it (never the operator's: a driver ignores an
+#     exported one), and an EXIT trap that stops the stub ($STUB) and removes
+#     TMPROOT (`chmod -R u+w` first: a session dir holds read-only placeholders;
+#     once more after a pause: Docker Desktop's file share can hold a bind's
+#     source briefly after `compose down`)
+driver_init() {
+  TMPROOT="$(mktemp -d)"; S="$TMPROOT/${1:-session}"; export GLOVE_HOME="$TMPROOT/gh"; STUB=
+  trap '[ -n "$STUB" ] && kill "$STUB" 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null
+        rm -rf "$TMPROOT" 2>/dev/null || { sleep 3; rm -rf "$TMPROOT"; }' EXIT
+}
+
+#   image_driver
+#     driver_init for the drivers that run the harness image by hand: WORKDIR
+#     and HOMEDIR (bound at /work and /home/agent) under TMPROOT
+image_driver() {
+  driver_init; WORKDIR="$TMPROOT/work"; HOMEDIR="$TMPROOT/home"; mkdir -p "$WORKDIR" "$HOMEDIR"
+}
+
+#   start_stub <port> <log> [stub]
+#     starts stubs/<stub> (default $STUB_PY, see stub_llm) on <port> in the
+#     background (STUB: its pid, for driver_init's trap) and waits until it
+#     listens (wait_stub)
+start_stub() {
+  launch_stub "$@" && wait_stub "$1" "$2"
+}
+
+launch_stub() {
+  uv run --quiet --no-project python "$ROOT/tests/integration/stubs/${3:-$STUB_PY}" "$1" > "$2" 2>&1 &
+  STUB=$!; disown "$STUB"
+}
+
+#   wait_stub <port> <log>
+#     until $STUB listens on <port>; a stub that exits (e.g. on a port another
+#     run holds) fails here: the listener would be someone else's
+wait_stub() {
+  for _ in $(seq 300); do
+    kill -0 "$STUB" 2>/dev/null || { echo "the llm stub exited (port $1 taken?): $2" >&2; return 1; }
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0; sleep 0.1
+  done
+  echo "the llm stub is not listening on :$1 ($2)" >&2; return 1
+}
+
 new_session() {
   local dir="$1" harness="$2" extra="${3:-}"
   mkdir -p "$dir/work"
@@ -46,22 +91,17 @@ stub_llm() {
 #   stub_session <dir> <harness> <enforcer> [extra yaml: top-level, or indented for more extensions]
 #     a session at <dir> (`glove new minimal`, runtime $RT) whose llm is the
 #     tool-driving host stub on $STUB_PORT (default 18080), started in the
-#     background (STUB: its pid, for the caller's trap; its log <dir>.stub.log),
+#     background (start_stub; its log <dir>.stub.log),
 #     with a secret-shaped FAKE_API_KEY in its env (claude-code-oauth: no stub,
 #     see stub_llm)
 stub_session() {
   local dir="$1" harness="$2" enforcer="$3" extra="${4:-}" port="${STUB_PORT:-18080}"
   stub_llm "$harness" "$port"
-  if [ -n "$STUB_PY" ]; then
-    uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$port" > "$dir.stub.log" 2>&1 &
-    STUB=$!
-  fi
+  [ -z "$STUB_PY" ] || launch_stub "$port" "$dir.stub.log"
   uv run --quiet --project "$ROOT" glove new minimal "$dir" >/dev/null || return 1
   printf 'glove: 3\ntemplate: minimal\nruntime: %s\nharness: %s\nenforcer: %s\nenv: {FAKE_API_KEY: sk-probe-not-a-secret}\nextensions:\n  llm: %s\n%b' \
     "${RT:-docker}" "${harness%-oauth}" "$enforcer" "$LLM" "$extra" > "$dir/glove-session.yml"
-  [ -z "$STUB_PY" ] && return 0
-  for _ in $(seq 300); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0; sleep 0.1; done
-  echo "the llm stub is not listening on :$port ($dir.stub.log)" >&2; return 1
+  [ -z "$STUB_PY" ] || wait_stub "$port" "$dir.stub.log"
 }
 
 #   glove_image <harness> [srt]
@@ -72,6 +112,18 @@ glove_image() {
 from glove.enforcers.base import srt_suffix
 from glove.harness import base_image, get_profile
 print(base_image(get_profile(sys.argv[1])) + (srt_suffix() if sys.argv[2:] == ["srt"] else ""))' "$@"
+}
+
+#   ensure_image <harness> [srt]
+#     glove_image's tag, built first (`glove build`, provider $RT) when the
+#     runtime doesn't have it: the drivers that run the image directly
+ensure_image() {
+  local tag; tag="$(glove_image "$@")" || return 1
+  if ! "${RT:-docker}" image inspect "$tag" >/dev/null 2>&1; then
+    echo "building $tag" >&2
+    uv run --quiet --project "$ROOT" glove build "$1" --provider "${RT:-docker}" ${2:+--enforcer nono+srt} >&2 || return 1
+  fi
+  echo "$tag"
 }
 
 #   runtime_facts

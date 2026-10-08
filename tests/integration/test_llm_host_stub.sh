@@ -10,11 +10,9 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${STUB_PORT:-18080}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/llmstub"; export GLOVE_HOME="$TMPROOT/gh"
-python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init llmstub
+start_stub "$PORT" "$TMPROOT/stub.log" llm_stub.py || exit 1
 uv run --project "$ROOT" glove new minimal "$S" >/dev/null
 cat > "$S/glove-session.yml" <<YAML
 glove: 3

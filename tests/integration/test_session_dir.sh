@@ -18,11 +18,9 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18081}"
-TMPROOT="$(mktemp -d)"; G1="$TMPROOT/g1"; export GLOVE_HOME="$TMPROOT/gh"
-python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init g1; G1="$S"
+start_stub "$PORT" "$TMPROOT/stub.log" llm_stub.py || exit 1
 glove() { uv run --quiet --project "$ROOT" glove "$@"; }
 pass=0; fail=0
 ok() { if eval "$2"; then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1"; fail=$((fail+1)); fi; }

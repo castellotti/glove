@@ -5,17 +5,16 @@
 # relaxed nested-userns seccomp. See NOTE in test_pi_nono.sh re: pipefail.
 #
 # Usage:  bash tests/integration/test_pi_srt.sh
-# Requires: docker + `glove build pi --enforcer srt` (the -srt-<hash> overlay image).
+# Requires: docker; builds the -srt-<hash> overlay image when missing (ensure_image).
 set -u
 RT="${RT:-docker}"   # docker | podman
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/tests/integration/lib_session.sh"
 runtime_facts
 if [ -n "$SRT_REFUSED" ]; then echo "SKIP: $SRT_REFUSED"; exit 2; fi
-IMAGE="${GLOVE_PI_SRT_IMAGE:-$(glove_image pi srt)}"
+image_driver
+IMAGE="${GLOVE_PI_SRT_IMAGE:-$(ensure_image pi srt)}" || exit 1
 SECCOMP="$ROOT/glove/runtimes/seccomp/nested-userns.json"
-WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
-export GLOVE_HOME
 PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.pi/agent"
 
@@ -91,7 +90,6 @@ strong_leak="$(proc_probe /work/strong.json --security-opt systempaths=unconfine
 echo "  strong mode: processes whose environ exposes the key = $strong_leak"
 [ "$strong_leak" = "0" ] && ok "strong: harness environ hidden (PID namespace)" || bad "strong mode exposes harness environ"
 
-rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 echo "Documented gaps (see 'glove policy show'): harness process is unwrapped (ring 0 only);"
