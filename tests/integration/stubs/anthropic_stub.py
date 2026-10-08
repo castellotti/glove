@@ -1,11 +1,14 @@
 """Anthropic Messages look-alike for the Claude Code integration checks (stdlib only).
 
 `CALL <tool> <json>` in the last user text → a tool_use; a tool_result → text
-"TOOL RESULT: <first 400 chars>". A request without tools (Claude Code's
+"TOOL RESULT: <first 400 chars>". `SEQ [[<tool>, <json>], …]` in the first
+user text → those tool calls one after another in one turn, then "TOOL
+RESULTS: <each result's first 400 chars, joined by |||>". A request without tools (Claude Code's
 WebFetch summariser, title generation) → "ECHO: <the user text, from the
 first `---`>". Everything else → a fixed sentence. Logs each
 request path, the auth header names present and which key arrived (never
-values: `key=`, see llm_stub.key_kind) and tool names. With GLOVE_TEST_LLM_KEY
+values: `key=`, see llm_stub.key_kind) and the tool names offered
+(`tools=a,b`, as llm_stub; live_common.offered_tools). With GLOVE_TEST_LLM_KEY
 set, a request without that key (`x-api-key`, or `Authorization: Bearer`) gets
 a 401, as Anthropic's API would. Its account API answers `{}` (`/api/oauth/...`)
 or 404, "none" (`/api/claude_code/...`, remote settings and policy limits: a
@@ -27,9 +30,40 @@ import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from llm_stub import KEY, key_kind, refused
+from llm_stub import KEY, _text, key_kind, refused
 
 REPLY = "hello from the glove anthropic stub"
+
+
+def _tool_use(name: str, args: dict) -> list[dict]:
+    return [{"type": "tool_use", "id": "toolu_" + uuid.uuid4().hex[:20], "name": name, "input": args}]
+
+
+def _seq(msgs) -> list[dict] | None:
+    """The next block of a `SEQ` turn (see the module doc), or None."""
+    first = next((msg for msg in msgs if msg.get("role") == "user"), {})
+    m = re.search(r"SEQ (\[.*\])", _text(first.get("content")), re.S)
+    if not m:
+        return None
+    steps = json.loads(m.group(1))
+    done = [b for msg in msgs if msg.get("role") == "user" and isinstance(msg.get("content"), list)
+            for b in msg["content"] if b.get("type") == "tool_result"]
+    if len(done) < len(steps):
+        return _tool_use(*steps[len(done)])
+    return [{"type": "text", "text": "TOOL RESULTS: " + " ||| ".join(_text(b.get("content"))[:400] for b in done)}]
+
+
+def _reply(result, text: str, tools: list) -> list[dict]:
+    """A tool result's echo, a `CALL`'s tool_use, an echo (no tools) or the fixed reply."""
+    if result is not None:
+        c = _text(result.get("content"))
+        print(f"stub: tool_result is_error={result.get('is_error')} {c[:400]!r}", flush=True)
+        return [{"type": "text", "text": "TOOL RESULT: " + c[:400]}]
+    if m := re.search(r"CALL (\w+) (\{.*\})", text, re.S):
+        return _tool_use(m.group(1), json.loads(m.group(2)))
+    if not tools:
+        return [{"type": "text", "text": "ECHO: " + text[text.find("---"):][:1200]}]
+    return [{"type": "text", "text": REPLY}]
 
 
 def _last_user(msgs):
@@ -88,24 +122,12 @@ class H(BaseHTTPRequestHandler):
         if not self.path.startswith("/v1/messages"):
             return self._json({}, 404)
         tools = [t.get("name") for t in req.get("tools") or []]
-        print(f"stub: tools={tools}", flush=True)
+        print(f"stub: tools={','.join(tools)}", flush=True)
         content = _last_user(req.get("messages") or [])
         blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
         result = next((b for b in blocks if b.get("type") == "tool_result"), None)
-        text = " ".join(b.get("text", "") for b in blocks if b.get("type") == "text")
-        out: list[dict]
-        if result is not None:
-            c = result.get("content")
-            c = c if isinstance(c, str) else " ".join(x.get("text", "") for x in c or [] if isinstance(x, dict))
-            print(f"stub: tool_result is_error={result.get('is_error')} {c[:400]!r}", flush=True)
-            out = [{"type": "text", "text": "TOOL RESULT: " + c[:400]}]
-        elif (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
-            out = [{"type": "tool_use", "id": "toolu_" + uuid.uuid4().hex[:20], "name": m.group(1),
-                    "input": json.loads(m.group(2))}]
-        elif not tools:
-            out = [{"type": "text", "text": "ECHO: " + text[text.find("---"):][:1200]}]
-        else:
-            out = [{"type": "text", "text": REPLY}]
+        text = _text(blocks)
+        out = (tools and _seq(req.get("messages") or [])) or _reply(result, text, tools)
         stop = "tool_use" if out[0]["type"] == "tool_use" else "end_turn"
         if not req.get("stream"):
             return self._json({"id": "msg_stub", "type": "message", "role": "assistant", "model": req.get("model"),

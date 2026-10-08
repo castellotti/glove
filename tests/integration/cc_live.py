@@ -14,7 +14,11 @@ then in the harness service:
      the agent cannot plant project settings (ring 0 binds them read-only),
      whose `env` would reach processes Claude Code starts outside ring 1;
      a stdio MCP server runs under the harness sandbox, with network;
-  4. the transcript lands in projects/ (what observe exports for Layman), and the
+  4. every tool Claude Code offers is in the session's inventory (tools.json),
+     none it denies; a `cd` in one Bash call doesn't carry into the next (two
+     calls in one turn); Write is refused in the home and /dev/shm (writable
+     to the harness process under nono+srt, not to a tool command);
+  5. the transcript lands in projects/ (what observe exports for Layman), and the
      stub saw only the paths Claude Code needs.
 """
 
@@ -26,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from live_common import check, check_version, live_session, summary
+from live_common import check, check_version, live_session, offered_tools, summary
 
 from glove.runtimes import get_runtime
 
@@ -106,6 +110,23 @@ def main(directory: str, stub_log: str) -> int:
               out.replace("\n", " ")[-300:])
         s.call("Bash", {"command": "echo after-plant"})
         check("… so no planted env ran", not (sd.root / "work" / "ENV-RAN").exists())
+
+        print("== the tool inventory and the write rule")
+        inv = s.inventory
+        offered = offered_tools(Path(stub_log).read_text())
+        unlisted = sorted(n for n in offered - {n for c in inv.values() for n in c} if not n.startswith("mcp__"))
+        check("every tool Claude Code offers is in its inventory", bool(offered) and not unlisted, str(unlisted))
+        check("… none it denies is offered", not offered & set(inv["deny"]), str(offered & set(inv["deny"])))
+        r = s.seq(("Bash", {"command": "cd /tmp && pwd"}), ("Bash", {"command": "pwd"}),
+                  ("Write", {"file_path": "/home/agent/.config/planted", "content": "x"}),
+                  ("Write", {"file_path": "/dev/shm/planted", "content": "x"}))
+        r += [""] * (4 - len(r))
+        # (under nono each Bash result starts with bash's refused /etc/bash.bashrc)
+        check("a `cd` in one Bash call does not carry into the next (back in /work)",
+              "/tmp" in r[0].split() and "/work" in r[1].split(), str(r[:2])[:400])
+        check("Write into the home outside the config home is denied",
+              not (sd.home / ".config" / "planted").exists() and "denied" in r[2].lower(), r[2][:300])
+        check("Write into /dev/shm is denied", "denied" in r[3].lower(), r[3][:300])
 
         print("== transcripts and traffic")
         jsonl = list((sd.home / ".claude" / "projects").glob("*/*.jsonl"))

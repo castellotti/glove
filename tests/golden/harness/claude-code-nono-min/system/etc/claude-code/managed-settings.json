@@ -12,7 +12,8 @@
       "NotebookEdit",
       "Read",
       "Agent",
-      "WebSearch"
+      "WebSearch",
+      "WaitForMcpServers"
     ],
     "deny": [
       "Read(//home/agent/.claude/**)",

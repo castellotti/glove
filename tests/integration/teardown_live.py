@@ -19,7 +19,6 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys

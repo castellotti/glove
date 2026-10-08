@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from live_common import check, inspect, live_session, mcp_client_argv, summary, wait_for
+from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
 
 from glove.extensions import image_tag
 
@@ -107,19 +107,15 @@ def main(directory: str) -> int:
         print(f"== the agent ({cfg.harness}) browses")
         log = Path(os.environ["STUB_LOG"]) if os.environ.get("STUB_LOG") else None
         mark = len(log.read_text()) if log else 0
-        prefix = {"vibe": "playwright_", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
+        prefix = {"vibe": "mcp_playwright.", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
         ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
         offered = set()
-        if log:
-            for line in log.read_text()[mark:].splitlines():
-                m = re.match(r"stub: chat .* tools=(.*)$", line)
-                if m:
-                    offered |= set(m.group(1).split(","))
-                m = re.match(r"stub: tools=(\[.*\])$", line)  # the anthropic stub
-                if m:
-                    offered |= set(json.loads(m.group(1).replace("'", '"')))
+        if cfg.harness == "vibe":  # Vibe offers MCP tools in run_typescript only
+            offered = set(live.vibe_functions("mcp_playwright"))
+        elif log:
+            offered = offered_tools(log.read_text()[mark:])
         browser_tools = sorted(t for t in offered if "browser_" in t)
         check("offered the allowlisted browser tools only",
               f"{prefix}browser_navigate" in offered and len(browser_tools) == len(pws["tools"])

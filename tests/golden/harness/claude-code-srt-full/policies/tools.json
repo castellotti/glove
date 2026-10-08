@@ -10,7 +10,8 @@
   "allow": [
     "Read",
     "Agent",
-    "WebSearch"
+    "WebSearch",
+    "WaitForMcpServers"
   ],
   "ask": [
     "Workflow",

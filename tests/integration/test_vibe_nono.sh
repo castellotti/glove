@@ -52,10 +52,10 @@ out="$(echo "$HOOKIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/
 echo "$out" | grep -q 'nono wrap .* -- bash -c' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
 echo "$out" | grep -q 'tool_input' && ok "hook returns tool_input replacement" || bad "no tool_input in hook output"
 
-echo "== baked vibe-hook denies a web-egress tool =="
+echo "== baked vibe-hook refuses a tool not in the inventory (web_fetch) =="
 WEBIN='{"hook_event_name":"pre_tool","tool_name":"web_fetch","tool_input":{"url":"http://x"}}'
 echo "$WEBIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null \
-  | grep -q '"deny"' && ok "web_fetch denied" || bad "web_fetch not denied"
+  | grep -q '"deny"' && ok "web_fetch (unlisted) refused" || bad "web_fetch not refused"
 
 echo "== baked vibe-hook fails closed on bad input =="
 echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook >/dev/null 2>&1 \
