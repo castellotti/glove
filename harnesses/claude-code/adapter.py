@@ -12,7 +12,8 @@ stops Claude Code from starting. They carry:
   server is rendered as `glove-cc-prefix --mcp <name>`, which the prefix runs
   from `mcp-<name>.argv` beside the settings under the harness's own sandbox,
   as Pi and Vibe run theirs: the tool profile has no network to reach a sidecar;
-- managed-only hooks, permission rules and MCP servers; the tools the
+- managed-only hooks (which also keeps installed mods from running),
+  permission rules and MCP servers, and no sideloaded plugins; the tools the
   session's inventory (tools.json) classes shell, file_write and allow are
   approved, `deny` ones denied, and the rest (`ask`, a tool a new release
   adds) prompt;
@@ -183,8 +184,10 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
         # only off the default host: CC treats a base URL as a gateway
         env["ANTHROPIC_BASE_URL"] = model.base_url
     return {
+        # also keeps installed mods (in-process plugin code) from running
         "allowManagedHooksOnly": True,
         "allowManagedPermissionRulesOnly": True,
+        "disableSideloadFlags": True,
         "allowManagedMcpServersOnly": True,
         "allowedMcpServers": [{"serverName": n} for n in servers],
         "permissions": {

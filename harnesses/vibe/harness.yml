@@ -5,11 +5,11 @@ summary: Mistral Vibe.
 # pre_tool hook) only. Optional capabilities are opt-in extensions.
 image: glove/vibe:0.5.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 2.26.0
+version: 2.26.1
 # The release protected_home, trusted_files and masked_files were audited
 # against: a new release can add a dir it loads code or config from, so glove
 # refuses a `version` that has not been re-audited.
-audited_version: 2.26.0
+audited_version: 2.26.1
 # `--trust` trusts /work for this run (no trust dialog; the project's AGENTS.md
 # loads): what else Vibe would load from the project is masked below.
 entry: [vibe, --trust, --yolo, --workdir, /work]
@@ -50,13 +50,14 @@ contributions: [mcp]
 # and shadow a hook of the same name, and its config, tools and plugins load
 # into Vibe. Masked: an empty read-only directory, whatever the repo holds.
 masked_files: [.vibe/, .agents/]
-# The tool inventory, by the names the pre_tool hook sees (measured on 2.26.0:
-# grouped, `file_system.bash`; the top-level names Vibe also offers): the hook
-# wraps `shell`, holds `file_write` to the write roots, passes `allow` and
-# refuses any other tool (fail closed). run_typescript, search_tool_functions
-# and skill never reach the hook, only the calls they make. glove's MCP servers
-# add `mcp_<server>.<tool>` for each tool their allowlist names. Vibe 2.26 has
-# no native web tool; older ones are denied (no direct egress).
+# The tool inventory, by the names the pre_tool hook sees (measured on the
+# audited version: grouped, `file_system.bash`; the top-level names Vibe also
+# offers): the hook wraps `shell`, holds `file_write` to the write roots, passes
+# `allow` and refuses any other tool (fail closed). run_typescript,
+# search_tool_functions and skill never reach the hook, only the calls they
+# make. glove's MCP servers add `mcp_<server>.<tool>` for each tool their
+# allowlist names. Vibe 2.26 has no native web tool; older ones are denied (no
+# direct egress).
 tools:
   shell: [bash, file_system.bash, process.start]
   file_write: [write_file, edit, search_replace, file_system.write_file, file_system.edit,

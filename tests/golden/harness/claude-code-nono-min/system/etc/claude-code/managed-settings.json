@@ -1,6 +1,7 @@
 {
   "allowManagedHooksOnly": true,
   "allowManagedPermissionRulesOnly": true,
+  "disableSideloadFlags": true,
   "allowManagedMcpServersOnly": true,
   "allowedMcpServers": [],
   "permissions": {

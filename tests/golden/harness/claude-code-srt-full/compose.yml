@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-dee1521c33-1a6d8b66c1-srt-46f57ff955
+    image: glove/claude-code:0.2.0-0256463c32-0db75fe15f-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/claude", "--add-dir", "/opt/glove/cc"]
     stdin_open: true
@@ -107,6 +107,12 @@ services:
       - type: bind
         source: "<TMP>/home/.claude/rules"
         target: "/home/agent/.claude/rules"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/dev-mods"
+        target: "/home/agent/.claude/dev-mods"
         read_only: true
       # observe export: the harness writes its transcripts straight into
       # ~/.glove/observe/<id>/transcripts (after the home bind, so it overlays it)

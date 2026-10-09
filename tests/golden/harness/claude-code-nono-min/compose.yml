@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-dee1521c33
+    image: glove/claude-code:0.2.0-0256463c32
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/claude"]
     stdin_open: true
@@ -97,6 +97,12 @@ services:
       - type: bind
         source: "<TMP>/home/.claude/rules"
         target: "/home/agent/.claude/rules"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the rw bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.claude/dev-mods"
+        target: "/home/agent/.claude/dev-mods"
         read_only: true
       # channel llm-ca (llm): a directory shared with its
       # sidecar(s) llm-auth (session tmpfs; no network)

@@ -164,7 +164,7 @@ mdurl==0.1.2
     #   mistral-vibe
 miniaudio==1.71 ; platform_machine != 'aarch64' or sys_platform != 'linux'
     # via mistral-vibe
-mistral-vibe==2.26.0
+mistral-vibe==2.26.1
 mistralai==2.6.0
     # via mistral-vibe
 more-itertools==11.0.2
