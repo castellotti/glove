@@ -30,7 +30,7 @@ import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from llm_stub import KEY, _text, key_kind, refused
+from llm_stub import KEY, _text, key_kind, refused, seq_step
 
 REPLY = "hello from the glove anthropic stub"
 
@@ -42,15 +42,13 @@ def _tool_use(name: str, args: dict) -> list[dict]:
 def _seq(msgs) -> list[dict] | None:
     """The next block of a `SEQ` turn (see the module doc), or None."""
     first = next((msg for msg in msgs if msg.get("role") == "user"), {})
-    m = re.search(r"SEQ (\[.*\])", _text(first.get("content")), re.S)
-    if not m:
-        return None
-    steps = json.loads(m.group(1))
-    done = [b for msg in msgs if msg.get("role") == "user" and isinstance(msg.get("content"), list)
+    done = [_text(b.get("content")) for msg in msgs
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list)
             for b in msg["content"] if b.get("type") == "tool_result"]
-    if len(done) < len(steps):
-        return _tool_use(*steps[len(done)])
-    return [{"type": "text", "text": "TOOL RESULTS: " + " ||| ".join(_text(b.get("content"))[:400] for b in done)}]
+    step = seq_step(_text(first.get("content")), done)
+    if step is None:
+        return None
+    return _tool_use(*step) if isinstance(step, tuple) else [{"type": "text", "text": step}]
 
 
 def _reply(result, text: str, tools: list) -> list[dict]:

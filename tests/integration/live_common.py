@@ -215,8 +215,8 @@ class LiveSession:
 
     def seq(self, *steps: tuple[str, dict]) -> list[str]:
         """The results of `steps` (tool, args), called one after another in one
-        turn (the anthropic stub's `SEQ`)."""
-        return tool_results(self.ask("SEQ " + json.dumps(steps)))
+        turn (the stubs' `SEQ`): one per step, "" for a step that got none."""
+        return (tool_results(self.ask("SEQ " + json.dumps(steps))) + [""] * len(steps))[:len(steps)]
 
     def vibe_functions(self, *connectors: str) -> list[str]:
         """The functions Vibe's run_typescript offers from `connectors` (its
