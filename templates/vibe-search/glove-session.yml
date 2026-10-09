@@ -46,8 +46,8 @@ brief: |
 
   ## How to research
 
-  1. `searxng_web_search` to find candidate URLs.
-  2. `webfetch_fetch_url` the promising ones to read their content, then cite them.
+  1. `tools.mcp_searxng.web_search` (in `run_typescript`) to find candidate URLs.
+  2. `tools.mcp_webfetch.fetch_url` the promising ones to read their content, then cite them.
   3. The search index and exit IP are shared and rate-limited: do not hammer
      them, and on a 429 back off instead of retrying.
 

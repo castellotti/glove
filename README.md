@@ -462,6 +462,30 @@ channels): Pi's `write`/`edit` and
 Vibe's `write_file`/`search_replace`, nested calls included, are refused into
 the home, through a symlink or `..`, and (Pi) as `~` or `@path`.
 
+**The tool inventory fails closed.** Each harness's `harness.yml` lists its
+tools (`tools:`) by what glove does with a call: `shell` runs under the tool
+wrapper, `file_write` is held to the write roots, `allow` passes through, `ask`
+is left to the harness's own prompt (Claude Code) and `deny` is refused. glove
+renders the session's list as `/etc/glove/enforcer/tools.json` (read-only):
+the harness's classes, the tools its extensions add (a Pi extension's
+`pi: {tools: …}`; for Vibe, `mcp_<server>.<tool>` for each tool a glove MCP
+server's allowlist names) and the session's own additions. Pi's enforcer
+extension and Vibe's hook refuse any other tool, and every tool when the file
+is missing, so a tool a new release adds or renames stays refused until glove
+classifies it. **If you add your own Pi extension or a Vibe
+`harness_config.mcp_servers` server, list its tools** (pass-through only):
+
+```yaml
+harness_config:
+  tools:
+    allow: [mcp_myserver.lookup]   # Vibe: a session MCP server's tool; Pi: an extension's tool name
+```
+
+A name glove wraps, holds or denies is refused at plan time. A Vibe MCP tool
+is listed as `mcp_<server>.<tool>`, the name the agent calls from
+`run_typescript`. The rest of Vibe's `harness_config.tools` (its own
+`[tools.<name>]` tables) still goes to its `config.toml`.
+
 Pi 1.x features, as glove renders them:
 
 - **Built-in MCP: off** (`extensions: ["-builtin:mcp"]`). Pi starts stdio MCP
@@ -512,13 +536,21 @@ extensions:
     (with network, as Pi and Vibe run theirs), not the tool wrapper;
   - only managed hooks, permission rules and MCP servers: a project's
     `.claude/settings.json` hooks and `.mcp.json` servers never run;
-  - Read/Edit denied on the config home (`//home/agent/.claude/**`);
+  - Read denied on the config home (`//home/agent/.claude/**`), and Edit (every
+    write tool) on the whole home and `/dev/shm`, which the harness process may
+    write under `nono+srt` but a tool command may not: Write and Edit reach what
+    a shell command reaches;
   - the project's `.claude/settings.json` and `settings.local.json` are bound
     read-only (ring 0, `trusted_files` in `harness.yml`; an empty placeholder
     when missing, and `.claude` pinned so it can't be moved aside): Claude Code
     applies their `env` and commands to processes it starts itself, outside
     the tool wrapper, so the agent must not write them;
-  - the built-in tools are pre-approved (as Pi and Vibe auto-approve);
+  - the tools its inventory (`harnesses/claude-code/harness.yml`) classes
+    `shell`, `file_write` or `allow` are pre-approved; the `ask` ones
+    (`Workflow`, `Skill`, `Cron*`, …) and any a new release adds prompt, as
+    Claude Code ships, unless `harness_config.tools.allow` pre-approves them;
+    `EnterWorktree`/`ExitWorktree` are denied (they run git from the harness
+    process, outside ring 1);
     `WebFetch` is allowed with `webfetch` (through the egress proxy:
     `HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`; see
     [SECURITY.md](docs/SECURITY.md) for what that widens) and denied without it;
@@ -544,8 +576,8 @@ extensions:
   from `/opt/glove/cc/.claude/skills` (baked) and loaded with `--add-dir`, so
   the agent can read a skill's files by the path Claude Code shows it.
   Transcripts: `projects/<cwd>/<uuid>.jsonl`, exported by `observe`.
-- `harness_config` takes `settings` (user-scope settings) and `permissions`
-  (`defaultMode`, extra `allow`/`deny` rules).
+- `harness_config` takes `settings` (user-scope settings), `permissions`
+  (`defaultMode`, extra `allow`/`deny` rules) and `tools.allow`.
 - `anthropic-compatible` runs Claude Code against any server that speaks the
   Anthropic Messages API (llama.cpp, vLLM, LiteLLM, a gateway).
 
@@ -613,14 +645,17 @@ Core validates all of it:
     (whether the value is set at all);
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
     an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
-    with `tools` as an allowlist; Claude Code: `managed-mcp.json`, `tools` as
-    allow rules and the rest of `all_tools` as deny rules);
+    with `tools` as an allowlist that also enters the tool inventory as
+    `mcp_<server>.<tool>`, so a server without `tools` is refused; Claude Code: `managed-mcp.json`, `tools` as allow
+    rules and the rest of `all_tools` as deny rules);
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);
   - `<harness>: {...}`: a section only that harness's adapter reads, e.g.
-    `pi: {extensions: [pi-extension]}` (glove renders no MCP for Pi: its
-    built-in MCP is off, so it loads its own code with `pi -e`).
+    `pi: {extensions: [pi-extension], tools: [web_search]}` (glove renders no
+    MCP for Pi: its built-in MCP is off, so it loads its own code with `pi -e`).
+    `tools` (a list or comma-separated) names the tools that code registers;
+    they join the tool inventory, and Pi refuses any it doesn't name.
 
   Any other key is an error.
 - **Fragments** (`compose/services.yml.j2`, Jinja) see a restricted context,
@@ -940,8 +975,9 @@ must each be defeated:
   home / secrets, has **no network** and no terminal to type into the harness.
 - **Ring 2 - Harness integration**: a Pi extension / Vibe `pre_tool` hook routes
   every `bash`/`!` command through ring 1 (nested calls too), holds the
-  file-write tools to the same write roots as ring 1, and blocks egress tools; a
-  generated context file tells the agent the rules.
+  file-write tools to the same write roots as ring 1, and refuses every tool not
+  in the session's tool inventory (fail closed; Claude Code prompts for one
+  instead); a generated context file tells the agent the rules.
 
 See **[docs/SECURITY.md](docs/SECURITY.md)** for the full threat model and the
 Docker Desktop macOS blast-radius explanation.
@@ -1000,7 +1036,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi verified (`test_pi_srt.sh`: env/`/proc` key leaks, no user namespaces); tool commands only; Vibe untested |
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested**. Key injection (`llm-auth`) verified live against the stubs: Pi, Vibe and Claude Code on Docker, Pi on Podman (`test_llm_inject.sh`); a subscription token in `llm-auth` (TLS as `api.anthropic.com`, the session CA) against a stand-in for the provider on Docker and Podman (`test_llm_inject.sh claude-code-oauth`); through a real LAN server, a cloud provider with an API key, or a real subscription (`test_cc_account.sh`): **untested** |
-| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh`: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, transcripts; `test_nono_srt.sh claude-code`; `test_config_protect.sh claude-code`: the protected home read-only, `.claude.json` still written) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct`), `playwright` headless with observe (`test_playwright.sh claude-code`: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
+| Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh`: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, every tool it offers in its inventory, a `cd` not carried into the next Bash call, Write denied in the home and `/dev/shm`, transcripts; `test_nono_srt.sh claude-code`; `test_config_protect.sh claude-code`: the protected home read-only, `.claude.json` still written) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct`), `playwright` headless with observe (`test_playwright.sh claude-code`: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
@@ -1066,15 +1102,16 @@ bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks 
 bash tests/integration/test_config_protect.sh vibe nono  # the harness's config vs the agent (9 checks;
                                               # also: pi 6, claude-code 7; any enforcer)
 bash tests/integration/test_tool_confine.sh pi  # the hooks' tool names by effect: shell wrapped, file
-                                              # writes held to the roots, Pi's MCP off (20; vibe 15)
+                                              # writes held to the roots, Pi's MCP off, the tool
+                                              # inventory fails closed (24; vibe 19)
 bash tests/integration/test_teardown.sh pi nono   # one harness per session, git config, `glove down` (9 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (12 checks)
-bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (23 checks per enforcer)
+bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (28 checks per enforcer)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
                                               # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
 HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP + WebFetch via the proxy
-                                              # (14 checks; also: vibe 16/18; OBSERVE=1 adds flows)
-bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (21 checks;
+                                              # (13 checks; also: vibe 16; OBSERVE=1 adds flows)
+bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (20 checks;
                                               # also: headless, novnc, control, vibe)
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
