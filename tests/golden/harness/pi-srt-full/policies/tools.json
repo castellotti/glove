@@ -1,0 +1,33 @@
+{
+  "shell": [
+    "bash"
+  ],
+  "file_write": [
+    "write",
+    "edit"
+  ],
+  "allow": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "codemode",
+    "browser_status",
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_snapshot",
+    "browser_take_screenshot",
+    "browser_click",
+    "browser_type",
+    "browser_hover",
+    "browser_select_option",
+    "browser_press_key",
+    "browser_wait_for",
+    "browser_tabs",
+    "browser_handle_dialog",
+    "web_search",
+    "web_fetch"
+  ],
+  "ask": [],
+  "deny": []
+}

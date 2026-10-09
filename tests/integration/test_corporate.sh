@@ -14,11 +14,9 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18084}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/corp"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
-python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!; disown "$STUB"
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init corp
+start_stub "$PORT" "$TMPROOT/stub.log" llm_stub.py || exit 1
 mkdir -p "$S/work"
 cat > "$S/glove-session.yml" <<YML
 glove: 3

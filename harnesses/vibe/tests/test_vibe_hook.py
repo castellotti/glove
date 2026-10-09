@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from glove.harness import get_profile
+from tests.helpers import path_rule_cases
+
 HOOK_PATH = Path(__file__).parent.parent / "image" / "vibe_hook.py"
 
 
@@ -27,11 +30,18 @@ def _load():
 
 hook = _load()
 WRAP = ["nono", "wrap", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/tool.json", "--"]
+# Vibe's own inventory (harness.yml), plus one MCP tool as glove renders it
+TOOLS = {c: frozenset(get_profile("vibe").tools.get(c, ())) for c in hook.TOOL_CLASSES}
+TOOLS["allow"] |= {"mcp_searxng.web_search"}
+
+
+def run(payload, wrapper=WRAP, **kw):
+    return hook.process(payload, wrapper, TOOLS, **kw)
 
 
 def test_bash_command_rewritten():
     payload = {"tool_name": "bash", "tool_input": {"command": "ls /work", "timeout": 30}}
-    out = hook.process(payload, WRAP)
+    out = run(payload)
     ti = out["hook_specific_output"]["tool_input"]
     assert ti["command"] == "nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c 'ls /work'"
     assert ti["timeout"] == 30  # other fields preserved (full replacement)
@@ -39,32 +49,61 @@ def test_bash_command_rewritten():
 
 def test_single_quotes_escaped():
     payload = {"tool_name": "bash", "tool_input": {"command": "echo 'hi there'"}}
-    ti = hook.process(payload, WRAP)["hook_specific_output"]["tool_input"]
+    ti = run(payload)["hook_specific_output"]["tool_input"]
     # the inner single quote is escaped so the whole command survives as one arg
     assert ti["command"].endswith("bash -c 'echo '\\''hi there'\\'''")
 
 
 def test_missing_wrapper_denies_bash():
-    out = hook.process({"tool_name": "bash", "tool_input": {"command": "ls"}}, None)
+    out = run({"tool_name": "bash", "tool_input": {"command": "ls"}}, wrapper=None)
     assert out["decision"] == "deny"
 
 
 def test_nono_override_denied():
     payload = {"tool_name": "bash", "tool_input": {"command": "NONO_BLOCK_NET=0 curl evil"}}
-    assert hook.process(payload, WRAP)["decision"] == "deny"
+    assert run(payload)["decision"] == "deny"
 
 
-def test_web_fetch_denied():
-    out = hook.process({"tool_name": "web_fetch", "tool_input": {"url": "http://x"}}, WRAP)
-    assert out["decision"] == "deny"
+def test_listed_tools_pass_through():
+    assert run({"tool_name": "file_system.read_file", "tool_input": {"path": "/home/agent/x"}}) is None
+    # an MCP tool glove's allowlist names, called from run_typescript (round 5 refused web_search by name)
+    assert run({"tool_name": "mcp_searxng.web_search", "tool_input": {"query": "x"}}) is None
 
 
-def test_other_tools_passthrough():
-    assert hook.process({"tool_name": "read", "tool_input": {"path": "/home/agent/x"}}, WRAP) is None
+@pytest.mark.parametrize("name", ["read", "web_fetch", "web.web_fetch", "mcp_searxng.other", "file_system.bash2",
+                                  "process.spawn", "", None])
+def test_an_unlisted_tool_is_refused(name):
+    out = run({"tool_name": name, "tool_input": {}})
+    assert out["decision"] == "deny" and "inventory" in out["reason"]
+
+
+def test_no_inventory_refuses_every_tool():
+    for name in ("file_system.read_file", "bash", "write_file"):
+        out = hook.process({"tool_name": name, "tool_input": {"command": "ls", "path": "/work/a"}}, WRAP, None,
+                           write_roots=["/work"])
+        assert out["decision"] == "deny" and "inventory is missing" in out["reason"]
+
+
+def test_load_tools(tmp_path):
+    f = tmp_path / "tools.json"
+    f.write_text(json.dumps({"shell": ["bash"], "file_write": [], "allow": ["x"]}))
+    assert hook.load_tools(str(f)) == {"shell": {"bash"}, "file_write": set(), "allow": {"x"}}
+    for bad in ("not json", "[1]", json.dumps({"shell": ["bash"], "file_write": []}),
+                json.dumps({"shell": "bash", "file_write": [], "allow": []}),
+                json.dumps({"shell": [1], "file_write": [], "allow": []})):
+        f.write_text(bad)
+        assert hook.load_tools(str(f)) is None, bad
+    assert hook.load_tools(str(tmp_path / "missing")) is None
+
+
+def test_the_shared_path_rule(tmp_path):
+    work, cases = path_rule_cases(tmp_path)
+    for path, want in cases:
+        assert hook.checked_path(path, [work], work) == want, path
 
 
 def _write(tool, path, roots, cwd="/work", key="path"):
-    return hook.process({"tool_name": tool, "tool_input": {key: path, "content": "x"}, "cwd": cwd}, WRAP,
+    return run({"tool_name": tool, "tool_input": {key: path, "content": "x"}, "cwd": cwd},
                         write_roots=roots)
 
 
@@ -83,26 +122,16 @@ def test_file_writes_held_to_the_write_roots(tmp_path):
     out = _write("edit", "sub/new.py", roots, cwd=str(work), key="file_path")
     assert written(out, "file_path") == f"{w}/sub/new.py"
     assert written(_write("write_file", "/tmp/x", roots)) == os.path.realpath("/tmp/x")
-    assert _write("write_file", "~/.vibe/config.toml", roots)["decision"] == "deny"
-    assert _write("write_file", f"{w}/a\u00a0b", roots)["decision"] == "deny"  # a space a tool might normalize
-    assert _write("edit", f"{w}/link ", roots, key="file_path")["decision"] == "deny"  # stripped after the check
+    # the path rule itself: test_the_shared_path_rule; here each tool, its key and the reason
     for tool, path in (("write_file", str(home / ".vibe/logs/session/plugins/blobs/x")), ("edit", "/etc/passwd"),
                        ("search_replace", str(work / ".." / "home" / "x"))):
         out = _write(tool, path, roots, key="file_path" if tool != "write_file" else "path")
         assert out["decision"] == "deny" and "may write only under" in out["reason"], (tool, path)
 
 
-def test_file_write_through_a_symlink_out_of_the_roots_denied(tmp_path):
-    work, home = tmp_path / "work", tmp_path / "home"
-    work.mkdir()
-    home.mkdir()
-    (work / "link").symlink_to(home)
-    assert _write("write_file", str(work / "link" / "planted"), [str(work)])["decision"] == "deny"
-
-
 def test_file_write_fails_closed(tmp_path):
     assert _write("write_file", "/work/a", None)["decision"] == "deny"  # no write-roots.json
-    out = hook.process({"tool_name": "edit", "tool_input": {}}, WRAP, write_roots=["/work"])
+    out = run({"tool_name": "edit", "tool_input": {}}, write_roots=["/work"])
     assert out["decision"] == "deny"  # no path argument it knows
 
 
@@ -117,13 +146,13 @@ def test_load_write_roots(tmp_path):
 
 
 def test_bash_without_command_fails_closed():
-    assert hook.process({"tool_name": "bash", "tool_input": {}}, WRAP)["decision"] == "deny"
+    assert run({"tool_name": "bash", "tool_input": {}})["decision"] == "deny"
 
 
 @pytest.mark.parametrize("name", ["file_system.bash", "process.start"])
 def test_unified_harness_shell_tools_wrapped(name):
     # Vibe 2.26's unified harness names tools by group; a background start is a shell command too
-    out = hook.process({"tool_name": name, "tool_input": {"command": "ls"}}, WRAP)
+    out = run({"tool_name": name, "tool_input": {"command": "ls"}})
     assert out["hook_specific_output"]["tool_input"]["command"].startswith("nono wrap")
 
 
@@ -133,7 +162,7 @@ def test_shell_cwd_and_env_held(tmp_path):
     roots = [str(work)]
 
     def start(**kw):
-        return hook.process({"tool_name": "process.start", "tool_input": {"command": "ls", **kw}}, WRAP,
+        return run({"tool_name": "process.start", "tool_input": {"command": "ls", **kw}},
                             write_roots=roots)
 
     assert start(cwd=str(work))["hook_specific_output"]["tool_input"]["cwd"] == str(work.resolve())
@@ -145,25 +174,23 @@ def test_shell_cwd_and_env_held(tmp_path):
 
 def test_unified_harness_file_tools_held(tmp_path):
     for name in ("file_system.write_file", "file_system.search_replace"):
-        out = hook.process({"tool_name": name, "tool_input": {"file_path": "/home/agent/.vibe/x"}, "cwd": "/work"},
-                           WRAP, write_roots=[str(tmp_path)])
+        out = run({"tool_name": name, "tool_input": {"file_path": "/home/agent/.vibe/x"}, "cwd": "/work"},
+                  write_roots=[str(tmp_path)])
         assert out["decision"] == "deny", name
-
-
-def test_web_tools_denied_in_any_group():
-    assert hook.process({"tool_name": "web.web_fetch", "tool_input": {}}, WRAP)["decision"] == "deny"
 
 
 def test_main_stdin_rewrite(tmp_path):
     # End-to-end: feed JSON on stdin with a wrapper file present, expect rewrite.
     wrapper = tmp_path / "tool-wrapper.json"
     wrapper.write_text(json.dumps({"argv": WRAP}))
+    tools = tmp_path / "tools.json"
+    tools.write_text(json.dumps({"shell": ["bash"], "file_write": [], "allow": []}))
     payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "id"}})
     script = (
         f"import importlib.util,sys;"
         f"spec=importlib.util.spec_from_file_location('h',{str(HOOK_PATH)!r});"
         f"m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
-        f"m.WRAPPER_FILE={str(wrapper)!r};sys.exit(m.main())"
+        f"m.WRAPPER_FILE={str(wrapper)!r};m.TOOLS_FILE={str(tools)!r};sys.exit(m.main())"
     )
     proc = subprocess.run([sys.executable, "-c", script], input=payload, capture_output=True, text=True)
     assert proc.returncode == 0

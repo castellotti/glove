@@ -19,11 +19,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
-from .enforcers.base import WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
+from .enforcers.base import TOOLS_FILE, WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
-from .harness import HarnessProfile, adapter_call, effective_image, get_profile
+from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
 from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
 from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_home, protected_paths
 from .naming import project_name, scoped
@@ -443,6 +443,7 @@ def build_session_plan(
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
     plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
+    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, comp), indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)

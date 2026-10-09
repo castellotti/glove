@@ -15,8 +15,10 @@ set -u
 RT="${RT:-docker}"   # docker | podman
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GLOVE_HOME="$(mktemp -d)"; S="$GLOVE_HOME/s"; WORKDIR="$S/work"; mkdir -p "$WORKDIR"
-export GLOVE_HOME
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init s; WORKDIR="$S/work"; mkdir -p "$WORKDIR"
+# compose runs the harness directly (no `glove up` to build it): the default enforcer's image
+ensure_image pi $([ "$RT" = docker ] && echo srt) >/dev/null || exit 1
 PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
@@ -25,7 +27,6 @@ git -C "$WORKDIR" init -q && git -C "$WORKDIR" config user.email t@example.com &
 echo hi > "$WORKDIR/README" && git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -qm init
 
 echo "== rendering (glove plan, protect_ide_files: true) =="
-. "$ROOT/tests/integration/lib_session.sh"
 new_session "$S" pi 'protect_ide_files: true\n'
 ENVID="$S_ID"; COMPOSE="$S_COMPOSE"
 [ -f "$COMPOSE" ] && ok "compose rendered ($COMPOSE)" || { bad "no compose file"; exit 1; }
@@ -67,7 +68,6 @@ done
 [ -d "$WORKDIR/.git" ] && [ ! -e "$WORKDIR/.git-moved" ] && ok "host: .git intact" || bad "host: .git moved"
 
 "$RT" compose -f "$COMPOSE" down -v >/dev/null 2>&1  # `compose run` created the session networks
-rm -rf "$WORKDIR" "$GLOVE_HOME" 2>/dev/null || true
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

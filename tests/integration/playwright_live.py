@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from live_common import check, inspect, live_session, summary, wait_for
+from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
 
 from glove.extensions import image_tag
 
@@ -58,10 +58,7 @@ def main(directory: str) -> int:
             return subprocess.run([rt, "exec", f"{s}-pw", "bash", "-c", script], capture_output=True, text=True)
 
         def mcp(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> str:
-            r = subprocess.run([rt, "run", "--rm", "--network", network, "--cap-drop", "ALL", "--read-only",
-                                "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{HERE}:/t:ro",
-                                "--entrypoint", "python3", pw_image, "/t/mcp_client.py",
-                                f"http://{host}:8931/mcp", f"{host}:8931", json.dumps(steps)],
+            r = subprocess.run(mcp_client_argv(rt, pw_image, network, f"http://{host}:8931/mcp", f"{host}:8931", steps),
                                capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
 
@@ -110,19 +107,15 @@ def main(directory: str) -> int:
         print(f"== the agent ({cfg.harness}) browses")
         log = Path(os.environ["STUB_LOG"]) if os.environ.get("STUB_LOG") else None
         mark = len(log.read_text()) if log else 0
-        prefix = {"vibe": "playwright_", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
+        prefix = {"vibe": "mcp_playwright.", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
         ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
         offered = set()
-        if log:
-            for line in log.read_text()[mark:].splitlines():
-                m = re.match(r"stub: chat .* tools=(.*)$", line)
-                if m:
-                    offered |= set(m.group(1).split(","))
-                m = re.match(r"stub: tools=(\[.*\])$", line)  # the anthropic stub
-                if m:
-                    offered |= set(json.loads(m.group(1).replace("'", '"')))
+        if cfg.harness == "vibe":  # Vibe offers MCP tools in run_typescript only
+            offered = set(live.vibe_functions("mcp_playwright"))
+        elif log:
+            offered = offered_tools(log.read_text()[mark:])
         browser_tools = sorted(t for t in offered if "browser_" in t)
         check("offered the allowlisted browser tools only",
               f"{prefix}browser_navigate" in offered and len(browser_tools) == len(pws["tools"])
@@ -218,11 +211,9 @@ def main(directory: str) -> int:
             def click(secret: str) -> tuple[str, str]:
                 w, h = (int(x) for x in pws["viewport"].split("x"))
                 client = subprocess.Popen(
-                    [rt, "run", "--rm", "--network", f"{s}-net", "--cap-drop", "ALL", "--read-only",
-                     "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{HERE}:/t:ro", "--entrypoint", "python3",
-                     pw_image, "/t/mcp_client.py", f"http://{s}-browser:8931/mcp", f"{s}-browser:8931",
-                     json.dumps([["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
-                                 ["browser_snapshot", {}]])],
+                    mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp", f"{s}-browser:8931",
+                                    [["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
+                                     ["browser_snapshot", {}]]),
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 time.sleep(8)
                 rfb = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pycryptodome", "python",

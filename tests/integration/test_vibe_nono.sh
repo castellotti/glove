@@ -12,9 +12,8 @@ RT="${RT:-docker}"   # docker | podman
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$ROOT/tests/integration/lib_session.sh"
-IMAGE="${GLOVE_VIBE_IMAGE:-$(glove_image vibe)}"
-WORKDIR="$(mktemp -d)"; HOMEDIR="$(mktemp -d)"; GLOVE_HOME="$(mktemp -d)"
-export GLOVE_HOME
+image_driver
+IMAGE="${GLOVE_VIBE_IMAGE:-$(ensure_image vibe)}" || exit 1
 PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.vibe"
 
@@ -53,17 +52,17 @@ out="$(echo "$HOOKIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/
 echo "$out" | grep -q 'nono wrap .* -- bash -c' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
 echo "$out" | grep -q 'tool_input' && ok "hook returns tool_input replacement" || bad "no tool_input in hook output"
 
-echo "== baked vibe-hook denies a web-egress tool =="
+echo "== baked vibe-hook refuses a tool not in the inventory (web_fetch) =="
 WEBIN='{"hook_event_name":"pre_tool","tool_name":"web_fetch","tool_input":{"url":"http://x"}}'
 echo "$WEBIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null \
-  | grep -q '"deny"' && ok "web_fetch denied" || bad "web_fetch not denied"
+  | grep -q '"deny"' && ok "web_fetch (unlisted) refused" || bad "web_fetch not refused"
 
 echo "== baked vibe-hook fails closed on bad input =="
 echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook >/dev/null 2>&1 \
   && bad "hook exited 0 on bad input" || ok "hook exits non-zero on bad input (strict -> deny)"
 
 echo "== entrypoint validates policies =="
-"$RT" run --rm -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
@@ -84,7 +83,6 @@ for how in "a child of the harness" "the session leader"; do
     || bad "wrapped command opened /dev/tty ($how): $out"
 done
 
-rm -rf "$WORKDIR" "$HOMEDIR" "$GLOVE_HOME"
 echo
 echo "== RESULT: $PASS passed, $FAIL failed =="
 # `vibe -p` through the stub (the pre_tool hook wraps the command) and a hook

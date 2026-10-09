@@ -12,8 +12,8 @@ MODEL="${1:-claude-haiku-4-5}"
 ENFORCER="${2:-nono+srt}"
 RT="${RT:-docker}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/ccacct"; export GLOVE_HOME="$TMPROOT/gh"
-trap 'chmod -R u+w "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init ccacct
 mkdir -p "$S/work"
 cat > "$S/glove-session.yml" <<YAML
 glove: 3

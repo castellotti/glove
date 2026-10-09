@@ -1,8 +1,9 @@
 # vibe-search template
 
 Private web research with Mistral Vibe: the `pi-search` template with Vibe as
-the harness. `searxng_web_search` (a per-session SearXNG) and
-`webfetch_fetch_url` reach Vibe as MCP tools served by hardened sidecars, and
+the harness. `web_search` (a per-session SearXNG) and `fetch_url` reach Vibe
+as MCP tools served by hardened sidecars (called from `run_typescript` as
+`tools.mcp_searxng.web_search` and `tools.mcp_webfetch.fetch_url`), and
 both leave only through the session's egress provider, a VPN tunnel by default
 (Tor or direct are one line away).
 

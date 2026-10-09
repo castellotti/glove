@@ -49,14 +49,14 @@ def test_nono_wraps_harness_command(tmp_path):
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
     assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
     assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json", "tool-wrapper.argv",
-                                  "write-roots.json"}
+                                  "write-roots.json", "tools.json"}
 
 
 def test_none_enforcer_leaves_command_bare(tmp_path):
     plan = build_session_plan(_cfg(tmp_path, enforcer="none"), home_dir=str(tmp_path / "h"))
     assert plan.harness_command == list(plan.profile.entry)
-    # no ring 1, but the harness hooks still hold its own file tools to the write roots
-    assert set(plan.policies) == {"write-roots.json"}
+    # no ring 1, but the harness hooks still hold its file tools to the write roots and its tools to the inventory
+    assert set(plan.policies) == {"write-roots.json", "tools.json"}
 
 
 def test_limits_flow_through(tmp_path):

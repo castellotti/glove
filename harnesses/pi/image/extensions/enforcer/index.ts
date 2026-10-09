@@ -14,6 +14,13 @@
  * symlinks), checked, and the call is rewritten to that checked absolute path.
  * Nested calls (codemode) pass through `tool_call` too.
  *
+ * Every tool call is classified by the session's inventory
+ * (/etc/glove/enforcer/tools.json, rendered by glove from harness.yml, the
+ * session's extensions and its `harness_config.tools.allow`): `shell` is
+ * wrapped, `file_write` held to the write roots, `allow` passed through, and any
+ * other tool blocked, so a tool a new Pi release or an operator extension adds
+ * fails closed. Without a readable inventory every tool is blocked.
+ *
  * The wrapper argv is read from /etc/glove/enforcer/tool-wrapper.json, rendered by
  * glove's enforcer — so this extension is enforcer-agnostic (nono today, srt
  * later). If the wrapper file is missing or unreadable, the extension FAILS CLOSED
@@ -31,7 +38,9 @@ import { fileURLToPath } from "node:url";
 
 const WRAPPER_FILE = "/etc/glove/enforcer/tool-wrapper.json";
 const ROOTS_FILE = "/etc/glove/enforcer/write-roots.json";
-const FILE_WRITE_TOOLS = new Set(["write", "edit"]);
+const TOOLS_FILE = "/etc/glove/enforcer/tools.json";
+const TOOL_CLASSES = ["shell", "file_write", "allow"] as const;
+type Tools = Record<(typeof TOOL_CLASSES)[number], Set<string>>;
 // What Pi's path normalization turns into a plain space: refused, so the path
 // checked is the path written.
 const ODD_SPACE = /[\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]/;
@@ -57,6 +66,18 @@ function loadRoots(): string[] | null {
     }
   } catch {
     // fall through — no roots, file writes fail closed below
+  }
+  return null;
+}
+
+/** The inventory, class → tool names; null when missing or malformed. */
+export function loadTools(file: string = TOOLS_FILE): Tools | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const ok = TOOL_CLASSES.every((c) => Array.isArray(data[c]) && data[c].every((n: unknown) => typeof n === "string"));
+    if (ok) return Object.fromEntries(TOOL_CLASSES.map((c) => [c, new Set<string>(data[c])])) as Tools;
+  } catch {
+    // fall through — no inventory, every tool blocked below
   }
   return null;
 }
@@ -124,15 +145,15 @@ function wrapCommand(argv: string[], command: string): string {
 // Reject attempts to neuter the enforcer by overriding its env in the command.
 const NONO_OVERRIDE = /(^|[;&|(\s])NONO_[A-Z0-9_]*=/;
 
-export default async function (pi: ExtensionAPI) {
-  const argv = loadWrapper();
-  const roots = loadRoots();
+type ToolEvent = { toolName: string; input: unknown };
+type Verdict = { block: true; reason: string } | undefined;
 
+/** The `tool_call` handler: each call classified by the inventory (`tools`). */
+export function toolCallHandler(argv: string[] | null, roots: string[] | null, tools: Tools | null) {
   // Pi's own file tools: only under the write roots, at the path checked.
-  pi.on("tool_call", (event, ctx) => {
-    if (!FILE_WRITE_TOOLS.has(event.toolName)) return;
+  const holdWrite = (event: ToolEvent, cwd: string): Verdict => {
     const input = event.input as { path?: unknown };
-    const real = roots && typeof input.path === "string" ? resolveWritePath(input.path, ctx?.cwd ?? process.cwd()) : null;
+    const real = roots && typeof input.path === "string" ? resolveWritePath(input.path, cwd) : null;
     if (!roots || !real) {
       return { block: true, reason: `glove enforcer: ${event.toolName} needs a plain path and the write roots (fail closed)` };
     }
@@ -141,14 +162,13 @@ export default async function (pi: ExtensionAPI) {
     }
     input.path = real;
     return;
-  });
+  };
 
-  // Model-issued `bash` tool: mutate the command in place (PLAN §5.2).
-  pi.on("tool_call", (event) => {
-    if (event.toolName !== "bash") return;
+  // A shell tool: mutate the command in place (PLAN §5.2).
+  const wrapShell = (event: ToolEvent): Verdict => {
     const input = event.input as { command?: string };
     if (typeof input.command !== "string") {
-      return { block: true, reason: "glove enforcer: bash without a command string (fail closed)" };
+      return { block: true, reason: `glove enforcer: ${event.toolName} without a command string (fail closed)` };
     }
     if (!argv) {
       return { block: true, reason: "glove enforcer: tool wrapper missing — shell blocked (fail closed)" };
@@ -158,7 +178,23 @@ export default async function (pi: ExtensionAPI) {
     }
     input.command = wrapCommand(argv, input.command);
     return;
-  });
+  };
+
+  return (event: ToolEvent, ctx?: { cwd?: string }): Verdict => {
+    if (!tools) return { block: true, reason: "glove enforcer: the tool inventory is missing — every tool blocked (fail closed)" };
+    if (tools.file_write.has(event.toolName)) return holdWrite(event, ctx?.cwd ?? process.cwd());
+    if (tools.shell.has(event.toolName)) return wrapShell(event);
+    if (tools.allow.has(event.toolName)) return;
+    return {
+      block: true,
+      reason: `glove enforcer: tool ${event.toolName} is not in this session's tool inventory (harness_config.tools.allow can add one)`,
+    };
+  };
+}
+
+export default async function (pi: ExtensionAPI) {
+  const argv = loadWrapper();
+  pi.on("tool_call", toolCallHandler(argv, loadRoots(), loadTools()));
 
   // Operator `!`/`!!` commands: run through the same wrapper via custom operations.
   pi.on("user_bash", (event) => {

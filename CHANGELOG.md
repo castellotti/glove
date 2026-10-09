@@ -6,6 +6,30 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **A tool inventory per harness, failing closed.** Each `harness.yml` lists
+  its tools (`tools:`) as `shell` (wrapped), `file_write` (held to the write
+  roots), `allow` (pass-through), `ask` (left to the harness's prompt) or
+  `deny`, measured on Pi 1.0.4, Vibe 2.26.0 and Claude Code 2.1.292; glove
+  refuses a manifest without one. The session's list renders read-only as
+  `/etc/glove/enforcer/tools.json`, with the tools its extensions add (a Pi
+  extension's `pi: {tools: …}`, Vibe's `mcp_<server>.<tool>` from each MCP
+  allowlist) and the session's `harness_config.tools.allow` (pass-through
+  only: a shell, file-write or denied name is refused at plan time). Pi's
+  enforcer extension and Vibe's `pre_tool` hook refuse every other tool, and
+  every tool when the file is missing, so a tool a new release adds or
+  renames no longer runs unchecked. A Vibe `harness_config.mcp_servers`
+  server's tools and an operator's own Pi extension's tools now need
+  `harness_config.tools.allow`.
+- **Claude Code's approvals from the inventory:** Bash, Edit, Write,
+  NotebookEdit, Read, Agent, WebSearch and WaitForMcpServers are
+  pre-approved; the rest it offers (`Workflow`, `Skill`, `Cron*`, …) and any a
+  later release adds prompt, as Claude Code ships; `EnterWorktree`/`ExitWorktree`
+  are denied.
+- `tests/integration`: the tool inventory live (every offered tool listed,
+  an unlisted one refused, none without `tools.json`, Pi's opt-in end to end),
+  Claude Code's cwd across Bash calls and its write rule. The drivers build a
+  missing image, always use a throwaway `GLOVE_HOME` (never an exported one),
+  and run their own MCP clients hardened.
 - **Harness upgrades:** Pi 1.0.4, Vibe 2.26.0, Claude Code 2.1.292, each
   re-audited (`audited_version`). Claude Code's own fetches from
   `downloads.claude.ai` through the egress proxy (2.1.288 already made them)
@@ -192,6 +216,15 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- Claude Code's write tools (`Edit` rules) are denied on the whole home and
+  `/dev/shm`, not only the config home: under `nono+srt` its Write tool could
+  create `~/.config/…` (persisting into the session home) and `/dev/shm/…`,
+  which a tool command can't.
+- The `search` and `webfetch` MCP servers have tool allowlists (`web_search`,
+  `fetch_url`): Vibe hides their other tools, and Claude Code pre-approves
+  only `web_search` (was the whole `searxng` server; it has no `webfetch` MCP).
+- Vibe's brief tells the agent MCP tools are `run_typescript` functions
+  (`tools.mcp_<server>.<tool>(…)`).
 - Extension compose fragments: an empty `services:` fragment adds nothing.
 - The harness gets no passthrough secret env any more (`passthrough_env` is
   gone: every LLM key or token is injected by `llm-auth`). An inference
@@ -332,6 +365,13 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- Vibe 2.26: glove's hook refused the search tool (`mcp_searxng.web_search`)
+  through the previous by-name block on `web_search`/`web_fetch` (now gone: the
+  inventory names glove's MCP tools exactly), and the integration drivers
+  still called Vibe's MCP tools by 2.25's top-level names (`test_playwright
+  vibe` 13/15, now 15/15; `test_egress` with Vibe 16/16).
+- `test_ring0_protect.sh` left its temp dir behind (Docker Desktop's share
+  holds a bind source briefly after `compose down`).
 - Podman: glove read other networks' subnets in Docker's format
   (`.IPAM.Config`), so it saw none and could allocate a subnet already in use;
   it now reads Podman's `.Subnets`.

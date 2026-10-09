@@ -16,7 +16,12 @@ extension, Vibe's pre_tool hook), by the tool names each harness uses today
   4. Pi: built-in MCP is off: a stdio server in the home's mcp.json (written by
      the host, as if it were not read-only) or in the project's .pi/mcp.json
      never starts (control: it does with glove's `-builtin:mcp` removed), and
-     the harness cannot write mcp.json.
+     the harness cannot write mcp.json;
+  5. the tool inventory (tools.json) fails closed: every tool the harness offers
+     is in it (Vibe: also run_typescript's functions); a tool not in it is
+     refused (Pi: an operator extension's tool; Vibe: vibe.todo taken out of
+     the file), and every tool is when the file is missing; Pi: the session's
+     `harness_config.tools.allow` lets the extension's tool run.
 Prints PASS/FAIL per check; exits non-zero on any failure.
 """
 
@@ -28,13 +33,23 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
-from live_common import check, check_version, live_session, summary, tool_result
+from live_common import check, check_version, live_session, offered_tools, summary, tool_result
 from nono_srt_live import lines
 
 CONFIG = {"pi": "/home/agent/.pi/agent/settings.json", "vibe": "/home/agent/.vibe/config.toml"}
 # A home file the harness process may write (ring 0 allows it): only the hook refuses the agent.
 TARGET = {"pi": "/home/agent/.pi/agent/auth.json", "vibe": "/home/agent/.vibe/logs/session/plugins/planted"}
 DENIED = "glove enforcer"
+# Vibe's tools that never reach its hook, only the calls they make (measured, Vibe 2.26)
+VIBE_UNHOOKED = {"run_typescript", "search_tool_functions", "skill"}
+PROBE_EXT = """export default function (pi: any) {
+  pi.registerTool({
+    name: "glove_probe", label: "glove probe", description: "Returns a marker.",
+    parameters: { type: "object", properties: {} },
+    async execute() { return { content: [{ type: "text", text: "PROBE-" + "RAN" }], details: {} }; },
+  });
+}
+"""
 
 
 def probe(config: str, out: str) -> str:
@@ -44,14 +59,18 @@ def probe(config: str, out: str) -> str:
 
 
 @contextmanager
-def host_edit(path: Path, text: str):
-    """`path` holds `text` for the block (the host's copy: a ring-0 read-only file
-    the harness could never write), then its old contents and mode again."""
+def host_edit(path: Path, text: str | None):
+    """`path` holds `text` (None: is gone) for the block (the host's copy: a
+    ring-0 read-only file the harness could never write), then its old contents
+    and mode again."""
     old, mode = (path.read_text(), path.stat().st_mode) if path.exists() else (None, None)
     try:
         if old is not None:
             path.chmod(mode | 0o200)
-        path.write_text(text)
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(text)
         yield
     finally:
         if old is None:
@@ -64,6 +83,8 @@ def host_edit(path: Path, text: str):
 def main(directory: str) -> int:
     with live_session(directory) as s:
         h, home, work = s.cfg.harness, s.sd.home, s.sd.root / "work"
+        stub_log = Path(f"{directory}.stub.log")
+        offered_end = None  # where the stub log reaches Pi's runs with its built-in MCP on: not glove's tools
         check_version(s)
         settings = home / ".pi" / "agent" / "settings.json"
 
@@ -142,10 +163,43 @@ def main(directory: str) -> int:
                 check("nor the project's .pi/mcp.json", not (work / "mcp-project").exists())
                 on = json.loads(settings.read_text())
                 on["extensions"] = [e for e in on.get("extensions", []) if e != "-builtin:mcp"]
+                offered_end = len(stub_log.read_text())
                 with host_edit(settings, json.dumps(on)):
                     s.ask("hello")
                 check("control: with -builtin:mcp removed it does", (work / "mcp-home").exists())
                 check("… the project's still not (defaultProjectTrust: never)", not (work / "mcp-project").exists())
+        print("== the tool inventory fails closed")
+        inventory, inv = s.sd.state / "enforcer" / "tools.json", s.inventory
+        listed = {n for c in ("shell", "file_write", "allow") for n in inv[c]}
+        offered = offered_tools(stub_log.read_text()[:offered_end])
+        if h == "vibe":  # the hook sees a top-level tool by its group's name (read_file: file_system.read_file)
+            offered = {n for n in offered - VIBE_UNHOOKED if not any(x.endswith(f".{n}") for x in listed)}
+            nested = s.vibe_functions("file_system", "process", "vibe", "self")
+            check("every run_typescript function is in the inventory", bool(nested) and set(nested) <= listed,
+                  str(sorted(set(nested) - listed) or nested))
+        # (Vibe: what's left once mapped may be nothing)
+        check(f"every tool {h} offers is in the inventory", offered <= listed and (bool(offered) or h == "vibe"),
+              str(sorted(offered - listed)) or "nothing offered")
+        if h == "pi":
+            ext = home / ".pi" / "agent" / "extensions"
+            ext.mkdir(parents=True, exist_ok=True)
+            (ext / "glove-probe.ts").write_text(PROBE_EXT)
+            r = tool_result(s.call("glove_probe", {}), 300)
+            check("an operator extension's tool, not listed: refused", "inventory" in r and "PROBE-RAN" not in r, r)
+        else:
+            with host_edit(inventory, json.dumps({**inv, "allow": [n for n in inv["allow"] if n != "vibe.todo"]})):
+                r = tool_result(s.call("todo", {"action": "read"}), 300)
+            check("a tool taken out of the inventory (vibe.todo): refused", DENIED in r and "inventory" in r, r)
+        with host_edit(inventory, None):
+            r = tool_result(s.call(s.bash_tool, {"command": "echo SHELL-RAN"}), 300)
+        check("no tools.json: every tool refused (the shell too)", "SHELL-RAN" not in r and "inventory" in r, r)
+        if h == "pi":
+            session = s.sd.root / "glove-session.yml"
+            session.write_text(session.read_text() + "harness_config: {tools: {allow: [glove_probe]}}\n")
+            s.relaunch()
+            check("… listed in harness_config.tools.allow, it runs",
+                  "glove_probe" in json.loads(inventory.read_text())["allow"]
+                  and "PROBE-RAN" in tool_result(s.call("glove_probe", {}), 300))
     return summary()
 
 

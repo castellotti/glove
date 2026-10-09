@@ -1,0 +1,48 @@
+{
+  "shell": [
+    "bash",
+    "file_system.bash",
+    "process.start"
+  ],
+  "file_write": [
+    "write_file",
+    "edit",
+    "search_replace",
+    "file_system.write_file",
+    "file_system.edit",
+    "file_system.search_replace"
+  ],
+  "allow": [
+    "read_file",
+    "todo",
+    "cron",
+    "file_system.read_file",
+    "process.list",
+    "process.output",
+    "process.stop",
+    "process.write",
+    "self.sleep",
+    "vibe.todo",
+    "vibe.cron",
+    "vibe.unified_harness_scratchpad",
+    "mcp_playwright.browser_navigate",
+    "mcp_playwright.browser_navigate_back",
+    "mcp_playwright.browser_snapshot",
+    "mcp_playwright.browser_take_screenshot",
+    "mcp_playwright.browser_click",
+    "mcp_playwright.browser_type",
+    "mcp_playwright.browser_hover",
+    "mcp_playwright.browser_select_option",
+    "mcp_playwright.browser_press_key",
+    "mcp_playwright.browser_wait_for",
+    "mcp_playwright.browser_tabs",
+    "mcp_playwright.browser_handle_dialog",
+    "mcp_searxng.web_search",
+    "mcp_webfetch.fetch_url"
+  ],
+  "ask": [],
+  "deny": [
+    "web_fetch",
+    "web_search"
+  ]
+}

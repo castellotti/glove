@@ -44,3 +44,18 @@ protected_home:
   - .claude/plugins/
   - .claude/output-styles/
   - .claude/rules/
+# The tool inventory (measured on 2.1.292, with and without MCP servers): the
+# managed settings pre-approve `shell` (run under the shell prefix),
+# `file_write` (denied outside the write roots) and `allow`; `ask` is left to
+# Claude Code's prompt, as it ships; `deny` is denied. EnterWorktree runs git
+# from the harness process, outside ring 1, and cannot work under ring 0's
+# read-only .git anyway. WebFetch reaches only the session's forwarders: denied
+# unless webfetch hands it the egress proxy (then approved). A tool a new
+# release adds prompts; the live test (cc_live) checks the list at upgrade time.
+tools:
+  shell: [Bash]
+  file_write: [Edit, Write, NotebookEdit]
+  allow: [Read, Agent, WebSearch, WaitForMcpServers]   # the last: offered with MCP servers; it only waits
+  ask: [Workflow, Skill, CronCreate, CronDelete, CronList, ScheduleWakeup, ListAgents, SendMessage,
+        TaskStop, ReportFindings]
+  deny: [EnterWorktree, ExitWorktree, WebFetch]

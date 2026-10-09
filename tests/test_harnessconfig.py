@@ -46,7 +46,8 @@ def test_vibe_config_toml(tmp_path):
     pw = next(s for s in doc["mcp_servers"] if s["name"] == "playwright")
     assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp" and "tools" not in pw
     # the playwright allowlist, as a Vibe denylist scoped to that server's tools
-    (deny,) = doc["disabled_tools"]
+    deny, search = doc["disabled_tools"]
+    assert search == "re:searxng_(?!(?:web_search)$).*"  # search's own allowlist
     assert deny.startswith("re:playwright_(?!(?:browser_navigate|")
     hidden = re.compile(deny.removeprefix("re:"))
     assert hidden.fullmatch("playwright_browser_run_code_unsafe") and hidden.fullmatch("playwright_browser_evaluate")

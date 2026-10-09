@@ -85,7 +85,9 @@ harness:
     BROWSER_MCP_URL: "{{ endpoint.browser.url }}/mcp"
     BROWSER_MCP_TOOLS: "{{ settings.tools | join(',') }}"
     BROWSER_MODE: "{{ settings.mode }}"
-  pi: { extensions: [pi-extension] }   # Pi has no MCP: its own extension
+  pi:                                  # Pi has no MCP: its own extension, registering the allowlist
+    extensions: [pi-extension]         # (or browser_status when the browser is unreachable)
+    tools: "browser_status,{{ settings.tools | join(',') }}"
   mcp:                                  # rendered by harnesses that speak MCP
     - name: playwright
       transport: http

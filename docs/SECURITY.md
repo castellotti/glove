@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots; block egress tools; the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; native web-fetch tools |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -425,10 +425,14 @@ Claude Code from starting (fail closed).
 - **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
   `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
   servers). A project's hooks and `.mcp.json` servers do not run.
-- **Config home:** `Read(//home/agent/.claude/**)` and
-  `Edit(//home/agent/.claude/**)` are denied to the agent's file tools (`//`
-  is an absolute path; Edit rules cover every writing tool). Tool commands
-  cannot reach the home at all (ring 1). Contributed skills are therefore
+- **Config home and the write rule:** `Read(//home/agent/.claude/**)` is
+  denied, and so is `Edit` (which covers every writing tool) on
+  `//home/agent/**` and `/dev/shm/**` (`//` is an absolute path). Under
+  `nono+srt` srt lets the harness process write the home and `/dev/shm`, so
+  without the rule the Write tool could plant `~/.config/…` (it persists into
+  the session home) where a tool command can't; with it, Write and Edit reach
+  only what a tool command reaches. Tool
+  commands cannot reach the home at all (ring 1). Contributed skills are therefore
   linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
   home, so a skill's files are readable by the path Claude Code shows. Ring 0
   also binds what Claude Code loads from the home read-only
@@ -439,9 +443,18 @@ Claude Code from starting (fail closed).
   `projects/`, `sessions/` (measured on 2.1.288), and since 2.1.292
   `session-env/` and `shell-snapshots/`.
   `/model`'s "set as default" reports that it can't save.
-- **Tools:** the built-in tools are pre-approved, as Pi and Vibe auto-approve;
-  every command still runs under ring 1. `WebFetch` is denied unless the
-  session has `webfetch` (see "Claude Code's own WebFetch" below). An extension's
+- **Tools:** approvals come from the inventory in `harness.yml` (`tools:`):
+  `shell`, `file_write` and `allow` are pre-approved (every command still runs
+  under ring 1, every write under the rule above); the `ask` tools (`Workflow`,
+  `Skill`, `Cron*`, `SendMessage`, …) and any a new release adds prompt, as
+  Claude Code ships (`defaultMode: default`); `deny` is denied:
+  `EnterWorktree`/`ExitWorktree` (they would run git from the harness
+  process, outside ring 1; ring 0's read-only `.git` parts already break them)
+  and `WebFetch` unless the session has `webfetch` (see "Claude Code's own
+  WebFetch" below). `cc_live.py` checks at each upgrade that every tool
+  Claude Code offers is classified. A `cd` in one Bash call does not carry
+  into the next (measured: `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`), so the
+  wrapper's `--allow-cwd` never grants a directory the agent `cd`'d into. An extension's
   MCP allowlist (`tools`) becomes allow rules, and every other tool the server
   is known to have (`all_tools`) a deny rule, so Claude Code never offers it
   and no prompt can approve it (Playwright's `browser_run_code_unsafe`,
@@ -566,8 +579,15 @@ wrapper and the planted hook ran in the harness.
   `file_system.write_file`): glove's hook knows those names, wraps
   `process.start` like `bash`, refuses a shell call's own `env` and a `cwd`
   outside the write roots, and denies a shell tool without a command string.
-  `test_tool_confine.sh` pins every name by its effect, so a rename upstream
-  fails a check instead of silently unwrapping a tool.
+- **The tool inventory fails closed** (ring 2). Pi's extension and Vibe's
+  hook refuse any tool not in the session's read-only `tools.json`, and every
+  tool when it is missing, so an unclassified tool can't run unchecked: a
+  rename like the one above would otherwise have unwrapped the shell silently
+  (how the list is built: README, "The tool inventory fails closed"). An
+  operator's Pi extension or a session's own Vibe MCP server stays refused
+  until `harness_config.tools.allow` lists it, a documented widening.
+  `test_tool_confine.sh` pins every name by its effect and checks that every
+  tool the harness offers is listed.
 - **Pi's built-in MCP is off** (`extensions: ["-builtin:mcp"]` in the rendered,
   read-only settings): Pi 1.x starts stdio MCP servers from the harness
   process, outside ring 1, with the harness's rights (its home, the session's

@@ -13,15 +13,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${STUB_PORT:-18081}"
 ENFORCERS=("${@:-nono}")
 [ "$#" -eq 0 ] && ENFORCERS=(nono nono+srt)
-TMPROOT="$(mktemp -d)"; export GLOVE_HOME="$TMPROOT/gh"
 . "$ROOT/tests/integration/lib_session.sh"
+driver_init
 stub_llm claude-code "$PORT"
-STUB=
-trap '[ -n "$STUB" ] && kill $STUB 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-
-uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$STUB_PY" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!
-sleep 1
+start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 # an out-of-tree extension with a stdio MCP server that probes the network
 mkdir -p "$GLOVE_HOME"
 printf 'extension_paths: ["%s"]\n' "$ROOT/tests/integration/extensions" > "$GLOVE_HOME/config.yml"

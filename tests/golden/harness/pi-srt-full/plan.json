@@ -37,7 +37,7 @@
     "PI_OFFLINE": "1",
     "SEARXNG_URL": "http://glove-s-search:8080"
   },
-  "image": "glove/pi:0.5.0-420dab327b-4ba559dea5-srt-46f57ff955",
+  "image": "glove/pi:0.5.0-610fba8774-5973244862-srt-46f57ff955",
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.pi/agent/sessions"

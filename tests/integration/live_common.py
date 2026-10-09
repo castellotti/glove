@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -30,22 +31,26 @@ from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, preflight, prepare_harness
 from glove.plan import SessionPlan, secret_env
+from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
 
 RESULTS: list[bool] = []
 # Each harness's own tools, by what they do: shell, file write (name, path
-# argument, content argument), web search and fetch; and its CLI.
+# argument, content argument), web search and fetch; and its CLI. Vibe's MCP
+# tools by the name its hook sees (`mcp_<server>.<tool>`; `call` runs them
+# from run_typescript, the only place Vibe 2.26 offers them).
 TOOLS = {
     "pi": {"bash": "bash", "write": ("write", "path", "content"), "search": "web_search", "fetch": "web_fetch",
            "cli": "/usr/local/bin/pi"},
     "vibe": {"bash": "bash", "write": ("write_file", "path", "content"),
-             "search": "searxng_web_search", "fetch": "webfetch_fetch_url", "cli": "vibe"},
+             "search": "mcp_searxng.web_search", "fetch": "mcp_webfetch.fetch_url", "cli": "vibe"},
     "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content"),
                     "search": "mcp__searxng__web_search", "fetch": "WebFetch", "cli": "/usr/local/bin/claude"},
 }
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
+    ok = bool(ok)
     RESULTS.append(ok)
     print(f"  {'PASS' if ok else 'FAIL'}: {name}" + (f"  [{detail}]" if detail and not ok else ""), flush=True)
 
@@ -63,6 +68,18 @@ def tool_result(out: str, n: int | None = None) -> str:
     characters), else the run's tail."""
     i = out.find("TOOL RESULT")
     return " ".join(out[i:].split())[:n] if i >= 0 else out[-(n or 600):]
+
+
+def tool_results(out: str) -> list[str]:
+    """Each result of a `SEQ` turn (the stub's `TOOL RESULTS`), whitespace
+    collapsed; else the run's tail."""
+    i = out.find("TOOL RESULTS: ")
+    return [" ".join(r.split()) for r in out[i + 14:].split("|||")] if i >= 0 else [out[-300:]]
+
+
+def offered_tools(log: str) -> set[str]:
+    """Every tool name the stubs logged as offered (`tools=a,b`) in `log`."""
+    return {n for m in re.finditer(r"^stub: (?:chat .* )?tools=(.*)$", log, re.M) for n in m[1].split(",") if n}
 
 
 def summary() -> int:
@@ -135,6 +152,11 @@ class LiveSession:
         return self.tools["bash"]
 
     @property
+    def inventory(self) -> dict[str, list[str]]:
+        """The session's tool inventory (tools.json), by class."""
+        return json.loads((self.sd.state / "enforcer" / "tools.json").read_text())
+
+    @property
     def prefix(self) -> str:
         """The session's container and network names start with it."""
         return f"glove-{self.sid}"
@@ -182,8 +204,26 @@ class LiveSession:
         return r.stdout + r.stderr
 
     def call(self, tool: str, args: dict, timeout: int = 300) -> str:
-        """One tool call through the agent (`CALL …` to the stub): its output."""
+        """One tool call through the agent (`CALL …` to the stub): its output.
+        Vibe's `mcp_<server>.<tool>` goes through run_typescript (the error,
+        if any, as its result)."""
+        if self.cfg.harness == "vibe" and (m := re.fullmatch(r"(mcp_\w+)\.(\w+)", tool)):
+            code = (f"async function main() {{ try {{ return await tools.{m[1]}.{m[2]}({json.dumps(args)}); }} "
+                    "catch (e) { return 'ERR ' + String(e); } }")
+            tool, args = "run_typescript", {"code": code}
         return self.ask(f"CALL {tool} {json.dumps(args)}", timeout)
+
+    def seq(self, *steps: tuple[str, dict]) -> list[str]:
+        """The results of `steps` (tool, args), called one after another in one
+        turn (the anthropic stub's `SEQ`)."""
+        return tool_results(self.ask("SEQ " + json.dumps(steps)))
+
+    def vibe_functions(self, *connectors: str) -> list[str]:
+        """The functions Vibe's run_typescript offers from `connectors` (its
+        search_tool_functions), as its hook names them."""
+        out = tool_result(self.call("search_tool_functions", {"mode": "all_connector_capabilities",
+                                                              "connectors": list(connectors)}))
+        return re.findall(r"\d+\. ([\w.]+)", out.split("All Connector Capabilities", 1)[-1])
 
     def sh(self, cmd: str) -> str:
         """One shell command through the agent's own tool: what the model saw."""
@@ -240,3 +280,13 @@ def live_session(directory: str, *, logs: str | None = None,
             teardown(sid, provider=s.rt, wipe=True)
     if not started:  # nothing to run the block against: the driver ends here
         raise SystemExit(summary())
+
+
+def mcp_client_argv(rt: str, image: str, network: str, url: str, host: str, steps: list) -> list[str]:
+    """mcp_client.py (beside this file) calling `steps` on the MCP at `url` (Host:
+    `host`) from a hardened throwaway on `network`, in `image` (a sidecar's own:
+    its python and MCP library)."""
+    return get_runtime(rt).throwaway_argv(
+        image, ["/t/mcp_client.py", url, host, json.dumps(steps)], network=network,
+        user=f"{os.getuid()}:{os.getgid()}", mounts=[(str(Path(__file__).parent), "/t")], entrypoint="python3",
+        memory="256m")

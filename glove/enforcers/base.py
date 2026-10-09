@@ -38,6 +38,9 @@ TMP = "/tmp"
 # write_file/edit: they run in the harness process, outside ring 1) to these
 # roots, as every enforcer holds a tool command (`write_roots`).
 WRITE_ROOTS_FILE = "write-roots.json"
+# The tool inventory the harness hooks classify each call by (harness.tool_inventory):
+# a tool not in it is refused, and so is every tool when it is missing.
+TOOLS_FILE = "tools.json"
 
 # Enforcers that run srt (bubblewrap) in the harness container: the `-srt`
 # image overlay and the relaxed nested-userns seccomp profile.

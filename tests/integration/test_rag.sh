@@ -16,11 +16,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18084}"
 MODELS="${RAG_MODELS_DIR:?set RAG_MODELS_DIR to a fastembed cache holding BAAI/bge-small-en-v1.5}"
-TMPROOT="$(mktemp -d)"; S="$TMPROOT/rag"; export GLOVE_HOME="${GLOVE_HOME:-$TMPROOT/gh}"
-python3 "$ROOT/tests/integration/stubs/llm_stub.py" "$PORT" > "$TMPROOT/stub.log" 2>&1 &
-STUB=$!; disown "$STUB"
-trap 'kill $STUB 2>/dev/null; rm -rf "$TMPROOT"' EXIT
-sleep 1
+. "$ROOT/tests/integration/lib_session.sh"
+driver_init rag
+start_stub "$PORT" "$TMPROOT/stub.log" llm_stub.py || exit 1
 mkdir -p "$S/work/data/input"
 cp "$ROOT"/extensions/ocr/tests/fixtures/{sample.png,scanned.pdf,text-layer.pdf} "$S/work/data/input/"
 printf '# Field notes\n\nGlove sandboxes coding agents; the knowledge store is offline.\n' > "$S/work/data/input/notes.md"

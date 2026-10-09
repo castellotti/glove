@@ -7,22 +7,20 @@
     "defaultMode": "default",
     "allow": [
       "Bash",
-      "Read",
       "Edit",
       "Write",
-      "MultiEdit",
       "NotebookEdit",
-      "Glob",
-      "Grep",
-      "LS",
+      "Read",
       "Agent",
-      "Task",
-      "TodoWrite",
-      "WebSearch"
+      "WebSearch",
+      "WaitForMcpServers"
     ],
     "deny": [
       "Read(//home/agent/.claude/**)",
-      "Edit(//home/agent/.claude/**)",
+      "Edit(//home/agent/**)",
+      "Edit(//dev/shm/**)",
+      "EnterWorktree",
+      "ExitWorktree",
       "WebFetch"
     ]
   },

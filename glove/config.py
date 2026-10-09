@@ -79,6 +79,11 @@ class Config:
     # gets an empty placeholder (creates it on the host), hence opt-in.
     protect_ide_files: bool = False
     harness_config: dict[str, Any] = field(default_factory=dict)
+    # `harness_config.tools.allow`: tools the session adds to its harness's tool
+    # inventory (passthrough only; glove/harness.py tool_inventory). glove's key,
+    # taken out of harness_config so no adapter renders it (Vibe's own `tools`
+    # tables stay).
+    tool_allow: list[str] = field(default_factory=list)
     env: dict[str, Any] = field(default_factory=dict)
     # git config for the harness and its commands (key → value or values), after
     # core's mount-root safe.directory and extensions' (glove/plan.py).
@@ -118,6 +123,7 @@ class Config:
         # checked and filled once, so every reader sees the same normalized value
         self.enforcer_options = enforcer_options(self.enforcer_options)
         self.tools = _tools(self.tools)
+        self.harness_config, self.tool_allow = _tool_allow(self.harness_config, self.tool_allow)
         self.git_config = self.git_config or {}
         git_config_pairs(self.git_config, "git_config")
 
@@ -248,6 +254,19 @@ def _coerce(data: dict[str, Any]) -> Config:
     if limits_raw is not None:
         cfg.limits = _coerce_limits(limits_raw)
     return cfg
+
+
+def _tool_allow(hc: Any, allow: list[str]) -> tuple[Any, list[str]]:
+    """`harness_config` without glove's `tools.allow`, and that list."""
+    tools = hc.get("tools") if isinstance(hc, dict) else None
+    if not isinstance(tools, dict) or "allow" not in tools:
+        return hc, allow
+    added = tools["allow"]
+    if not isinstance(added, list) or not all(isinstance(n, str) for n in added):
+        raise ConfigError(f"harness_config.tools.allow must be a list of tool names, got {added!r}")
+    rest = {k: v for k, v in tools.items() if k != "allow"}
+    hc = {k: v for k, v in hc.items() if k != "tools"} | ({"tools": rest} if rest else {})
+    return hc, [*allow, *(n for n in added if n not in allow)]
 
 
 def _tools(raw: Any) -> dict[str, list[str]]:
