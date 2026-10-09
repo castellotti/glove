@@ -12,7 +12,9 @@
  * they are held to the same write roots (/etc/glove/enforcer/write-roots.json):
  * the path is resolved the way Pi and the kernel would (`@`, `~`, `file://`,
  * symlinks), checked, and the call is rewritten to that checked absolute path.
- * Nested calls (codemode) pass through `tool_call` too.
+ * Nested calls (codemode) pass through `tool_call` too. A checked call's input
+ * is then frozen, so an extension whose handler runs after this one can't
+ * change it.
  *
  * Every tool call is classified by the session's inventory
  * (/etc/glove/enforcer/tools.json, rendered by glove from harness.yml, the
@@ -148,6 +150,22 @@ const NONO_OVERRIDE = /(^|[;&|(\s])NONO_[A-Z0-9_]*=/;
 type ToolEvent = { toolName: string; input: unknown };
 type Verdict = { block: true; reason: string } | undefined;
 
+// Captured when this module loads (glove's enforcer loads first): every extension
+// shares Pi's JS context, and a later one could replace Object.freeze before a call.
+const { freeze, values } = Object;
+
+/** A checked call's input and everything in it, frozen: Pi runs every
+ * extension's `tool_call` handler on this same object, and the tool on it
+ * afterwards, so a later handler could otherwise change it after the check
+ * (measured: a home extension unwrapped `bash` and moved a write into the
+ * home). Now such a change throws, and Pi refuses the call. */
+function deepFreeze(o: unknown, seen = new WeakSet<object>()): void {
+  if (!o || typeof o !== "object" || seen.has(o)) return;
+  seen.add(o);
+  freeze(o);
+  for (const v of values(o)) deepFreeze(v, seen);
+}
+
 /** The `tool_call` handler: each call classified by the inventory (`tools`). */
 export function toolCallHandler(argv: string[] | null, roots: string[] | null, tools: Tools | null) {
   // Pi's own file tools: only under the write roots, at the path checked.
@@ -161,6 +179,7 @@ export function toolCallHandler(argv: string[] | null, roots: string[] | null, t
       return { block: true, reason: `glove enforcer: ${event.toolName} may write only under ${roots.join(", ")}, not ${real}` };
     }
     input.path = real;
+    deepFreeze(input);
     return;
   };
 
@@ -177,6 +196,7 @@ export function toolCallHandler(argv: string[] | null, roots: string[] | null, t
       return { block: true, reason: "glove enforcer: NONO_* env overrides are not allowed" };
     }
     input.command = wrapCommand(argv, input.command);
+    deepFreeze(input);
     return;
   };
 

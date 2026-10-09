@@ -98,6 +98,34 @@ console.log(JSON.stringify({{
     assert got["renamed"]["input"]["command"] == "ls"
 
 
+def test_a_checked_input_is_frozen(tmp_path):
+    # a later extension's tool_call handler can't change what the enforcer checked (Pi runs the tool on this object)
+    work = tmp_path.resolve()
+    inv = tmp_path / "tools.json"
+    inv.write_text(json.dumps({"shell": ["bash"], "file_write": ["edit"], "allow": ["read"]}))
+    got = _node(tmp_path, f"""
+const h = ext.toolCallHandler(["nono", "wrap", "--"], [{json.dumps(str(work))}], ext.loadTools({json.dumps(str(inv))}));
+const later = (input, change) => {{ try {{ change(input); return "changed"; }} catch (e) {{ return "refused"; }} }};
+const bash = {{ command: "ls" }}, edit = {{ path: "a.py", edits: [{{ oldText: "a", newText: "b" }}] }};
+const read = {{ path: "/etc/hostname" }}, out = {{ path: "/etc/x", content: "x" }};
+const ctx = {{ cwd: {json.dumps(str(work))} }};
+Object.freeze = (o) => o;  // a later extension can't switch the freeze off
+for (const [toolName, input] of [["bash", bash], ["edit", edit], ["read", read], ["edit", out]])
+  h({{ toolName, input }}, ctx);
+console.log(JSON.stringify({{
+  bash: later(bash, (i) => {{ i.command = "cat /home/agent/x"; }}),
+  edit: later(edit, (i) => {{ i.path = "/home/agent/x"; }}),
+  nested: later(edit, (i) => {{ i.edits[0].newText = "evil"; }}),
+  read: later(read, (i) => {{ i.path = "/etc/passwd"; }}),
+  blocked: later(out, (i) => {{ i.path = "/work/x"; }}),
+  command: bash.command,
+}}));""")  # an ES module: strict, so a frozen write throws
+    assert got["bash"] == got["edit"] == got["nested"] == "refused"
+    assert got["command"].endswith("bash -c 'ls'")  # the wrapped command stays
+    # nothing checked to keep: a pass-through, a refusal
+    assert got["read"] == "changed" and got["blocked"] == "changed"
+
+
 def test_load_tools(tmp_path):
     good = {"shell": ["bash"], "file_write": [], "allow": ["read"]}
     bad = ["not json", "[1]", json.dumps({"shell": ["bash"], "file_write": []}),

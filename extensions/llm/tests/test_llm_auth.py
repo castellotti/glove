@@ -186,12 +186,23 @@ def test_an_unreachable_upstream_is_a_502(proxy):
     assert _request(port, "GET", "/v1/models")[0] == 502
 
 
+def _logged(capsys, *want: str) -> str:
+    """The captured output once every `want` line is in it (llm-auth logs a
+    request from its server thread after the client has the answer); fails
+    after 5 s."""
+    out, deadline = capsys.readouterr().out, time.time() + 5
+    while not all(w in out for w in want) and time.time() < deadline:
+        time.sleep(0.02)
+        out += capsys.readouterr().out
+    assert all(w in out for w in want), out
+    return out
+
+
 def test_logs_name_the_path_never_a_value(proxy, capsys):
     port, _ = proxy()
     _request(port, "GET", "/v1/models?limit=1000", headers={"Authorization": "Bearer glove-injected"})
     _request(port, "GET", "/v1/files")
-    out = capsys.readouterr().out
-    assert "llm-auth: GET /v1/models 200" in out and "llm-auth: GET /v1/files 403" in out
+    out = _logged(capsys, "llm-auth: GET /v1/models 200", "llm-auth: GET /v1/files 403")
     assert KEY not in out and "glove-injected" not in out and "limit" not in out
 
 
@@ -283,10 +294,8 @@ def test_a_failed_handshake_is_logged_and_dropped(tls_proxy, capsys):
         s.sendall(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r\n")  # plain HTTP to the TLS port
         with contextlib.suppress(ConnectionResetError):
             assert s.recv(65536) == b""  # closed, or reset: never an answer
-    deadline = time.time() + 5
-    while "tls handshake failed" not in (out := capsys.readouterr().out) and time.time() < deadline:
-        time.sleep(0.05)
-    assert "tls handshake failed" in out and Upstream.seen == []
+    _logged(capsys, "tls handshake failed")
+    assert Upstream.seen == []
 
 
 def test_serving_tls_needs_a_name_and_a_ca_dir():
