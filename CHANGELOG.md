@@ -236,7 +236,9 @@ All notable changes to glove are documented here.
   `~/.config/nono`) is on tmpfs under nono and nono+srt; glove creates those
   mount points in the session home at launch. `test_config_protect.sh`
   checks it live: new paths outside the config home are EROFS to the harness
-  service, its sessions are written and `--continue` resumes.
+  service, its sessions are written and `--continue` resumes. A session home
+  from before keeps its files, read-only outside the config home; a harness
+  launch on one is untested (see `docs/SECURITY.md`, "The harness home").
 - **srt unsets every secret-shaped name glove puts in the harness env.** srt
   has no glob form, so tool commands under `enforcer: srt` lost only the LLM
   key's variable; a secret-shaped `env:` entry (`*KEY*`, `*TOKEN*`, …, nono's

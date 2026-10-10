@@ -32,7 +32,8 @@ context_file: /home/agent/.pi/agent/AGENTS.override.md
 # comes first on a tool command's PATH). The rendered `defaultProjectTrust:
 # never` and empty trust store keep the project's `.pi/` (its `mcp.json`
 # included) and `.agents/skills` from loading. Pi writes auth.json,
-# models-store.json and sessions/ itself (and lock dirs beside them).
+# models-store.json and sessions/ itself (and lock dirs beside them);
+# `.agents/` is read-only with the home.
 protected_home:
   - .pi/agent/settings.json
   - .pi/agent/models.json

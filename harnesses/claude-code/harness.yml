@@ -36,8 +36,9 @@ trusted_files: [.claude/settings.json, .claude/settings.local.json]
 # skills, plugins, output styles and rules from, and the mods Claude writes
 # (`dev-mods/`). It writes .claude.json, backups/, history.jsonl,
 # projects/ (its auto-memory too), sessions/ (and more over time) in the
-# config home: those stay writable (it replaces .claude.json by rename). The managed settings deny Read of the config home and Edit of the
-# whole home.
+# config home: those stay writable (it replaces .claude.json by rename).
+# The managed settings deny Read of the config home and Edit of the whole
+# home.
 protected_home:
   - .claude/settings.json
   - .claude/CLAUDE.md
