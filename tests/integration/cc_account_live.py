@@ -49,9 +49,9 @@ def main(directory: str) -> int:
         tdir = Path(plan.transcripts_host_dir) if plan.transcripts_host_dir else sd.home / ".claude" / "projects"
         jsonl = list(tdir.glob("*/*.jsonl"))
         check("transcripts in projects/ (what observe exports)", len(jsonl) >= 2, str(jsonl))
-        for p in jsonl:
-            if secrets["CLAUDE_CODE_OAUTH_TOKEN"] in p.read_text():
-                check(f"the token is not in transcript {p.name}", False)
+        # the token reaches llm-auth as a compose secret (named by the extension, not CLAUDE_CODE_OAUTH_TOKEN)
+        leaked = [p.name for p in jsonl if any(v and v in p.read_text() for v in secrets.values())]
+        check("no secret in any transcript", bool(secrets) and not leaked, str(leaked))
         if plan.transcripts_host_dir:
             llm = [r for r in s.flows() if r.get("service") == "llm"]
             check("observe: llm flows recorded, naming the real host (SNI)",
