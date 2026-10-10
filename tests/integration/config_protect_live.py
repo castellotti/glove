@@ -8,17 +8,23 @@ hook shadowing glove's, a Pi project extension: each would touch a marker):
   1. in the harness service, every read-only ring-0 bind (`protected_home`,
      `trusted_files`, `masked_files`, the /work paths the host trusts) refuses
      a write, and the config home cannot be renamed away; Vibe's masked
-     project dirs are empty though the host's are not;
+     project dirs are empty though the host's are not; the home outside the
+     config home is read-only (EROFS: a new file or dir at its top level, in
+     ~/.config, ~/.agents, ~/.local/bin, above the config home) while the
+     config home itself is writable;
   2. the agent's own file-write tool cannot overwrite a config file glove
      rendered;
   3. a tool call still runs, wrapped (no secret-shaped env), and the planted
      code never ran; Claude Code still writes its own state (.claude.json);
-  4. Vibe's TUI: a command its pre_tool hook denies (strict) shows the denial.
+  4. the harness's own writes: its sessions dir holds the turns, and
+     `--continue` resumes the latest session (a session file grows);
+  5. Vibe's TUI: a command its pre_tool hook denies (strict) shows the denial.
 Prints PASS/FAIL per check; exits non-zero on any failure.
 """
 
 from __future__ import annotations
 
+import posixpath
 import shlex
 import sys
 from pathlib import Path
@@ -27,6 +33,24 @@ from live_common import check, live_session, summary, tool_result
 from nono_srt_live import PLANTED, PLANTS, lines
 
 from glove.mounts import CONTAINER_HOME
+from glove.sessions import sessions_dir
+
+REPLY = "hello from the glove "  # both stubs' answer to a plain prompt starts so
+
+
+def outside(config_home: str) -> list[str]:
+    """Files a harness never writes, outside its config home: new at the home's
+    top level, in dirs other tools load from, and above the config home."""
+    paths = [f"{CONTAINER_HOME}/{rel}" for rel in (".glove-new", ".glove-newdir/x", ".config/glove-probe",
+                                                    ".agents/glove-probe", ".local/bin/glove-probe")]
+    if (parent := posixpath.dirname(config_home)) != CONTAINER_HOME:
+        paths.append(f"{parent}/glove-probe")
+    return paths
+
+
+def files(root: Path) -> dict[Path, int]:
+    """Every file under `root` and its size."""
+    return {f: f.stat().st_size for f in root.rglob("*") if f.is_file()} if root.is_dir() else {}
 
 
 def main(directory: str) -> int:
@@ -45,6 +69,11 @@ def main(directory: str) -> int:
                         f"{'' if p.kind == 'file' else '/x'} 2>/dev/null; echo \"W{i}=$?\"\n" for i, p in enumerate(ro))
         probe += f"mv {home} {home}.x 2>/dev/null; echo MV=$?\n"
         probe += "".join(f"echo M{i}=$(ls -A /work/{shlex.quote(m)} | wc -l)\n" for i, m in enumerate(masked))
+        out = outside(home)
+        probe += "".join(f"{{ mkdir -p {shlex.quote(posixpath.dirname(f))} && touch {shlex.quote(f)}; }} 2>&1 "
+                         f"| grep -q 'Read-only file system'; echo O{i}=$?\n"
+                         for i, f in enumerate(out))
+        probe += f"touch {home}/.glove-probe && rm {home}/.glove-probe; echo CW=$?\n"
         r = s.run("-c", probe, entry="bash")
         w = lines(r.stdout + r.stderr)
         in_home = sum(p.container_path.startswith(CONTAINER_HOME + "/") for p in ro)
@@ -52,6 +81,10 @@ def main(directory: str) -> int:
               in_home > 0 and all(w.get(f"W{i}") not in (None, "0") for i in range(len(ro))),
               str({p.container_path: w.get(f"W{i}") for i, p in enumerate(ro) if w.get(f"W{i}") in (None, "0")}))
         check(f"{home} cannot be renamed", w.get("MV") not in (None, "0"), str(w.get("MV")))
+        check(f"{len(out)} new paths outside {home} are read-only (EROFS)",
+              all(w.get(f"O{i}") == "0" for i in range(len(out))),
+              str([f for i, f in enumerate(out) if w.get(f"O{i}") != "0"]))
+        check(f"{home} itself is writable", w.get("CW") == "0", str(w.get("CW")))
         for i, m in enumerate(masked):
             check(f"the masked /work/{m} is empty (the host's is not)",
                   w.get(f"M{i}") == "0", str(w.get(f"M{i}")))
@@ -73,6 +106,18 @@ def main(directory: str) -> int:
         if h == "claude-code":
             check("Claude Code still writes its state (.claude.json)",
                   state.exists() and state.stat().st_mtime > mark)
+
+        print(f"== the harness's own writes ({h}'s sessions, --continue)")
+        sessions = (Path(plan.transcripts_host_dir) if plan.transcripts_host_dir
+                    else sessions_dir(plan.profile, s.sd.home))
+        seen = files(sessions)
+        check(f"the turns are in its sessions dir ({sessions.name}/)", bool(seen), str(sessions))
+        r = s.run(*plan.harness_command, *plan.profile.resume_args(None), "-p", "again")
+        after = files(sessions)
+        check("--continue answers", r.returncode == 0 and REPLY in r.stdout, (r.stdout + r.stderr)[-300:])
+        check("and resumed the latest session (a session file grew)",
+              any(after.get(f, 0) > n for f, n in seen.items()),
+              f"{len(seen)} files before, {len(after)} after")
 
         if h == "vibe":
             print("== Vibe's TUI: a strict pre_tool denial is shown")

@@ -11,10 +11,12 @@ Pi's own `sandbox` extension). Unlike nono, srt:
   relaxed seccomp profile (`nested-userns.json`, selected in `plan._seccomp_for`
   when `enforcer: srt`). `srt.nested: strong` additionally needs
   `systempaths=unconfined` (masked /proc exposed to the container).
-- strips secrets from tool commands only by **exact name**: the LLM key's
-  name is rendered as a `credentials.envVars` entry with `mode: deny`, which
-  srt turns into bwrap `--unsetenv` (a guard: the harness holds only a
-  placeholder). srt has no glob form, unlike nono's `deny_vars`.
+- strips secrets from tool commands only by **exact name** (srt has no glob
+  form, unlike nono's `deny_vars`): every name in the harness env that
+  matches nono's secret globs, and the LLM key's, is rendered as a
+  `credentials.envVars` entry with `mode: deny`, which srt turns into bwrap
+  `--unsetenv` (the harness holds only a placeholder for the key). glove sets
+  the harness env, so these are all the names it knows of.
   srt's credential *masking* (sentinel + proxy-side substitution) exists but
   requires TLS termination, so glove does not use it. An LLM API key or
   subscription token never reaches the harness (`llm`'s llm-auth injects it).
@@ -36,12 +38,13 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING
 
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, SRT, write_roots
+from .base import ENFORCER_DIR, SECRET_DENY_VARS, SRT, write_roots
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -90,11 +93,18 @@ def render_settings(plan: SessionPlan) -> dict:
         # Tool commands get no network (only the harness browser tool reaches
         # the web). srt network is allow-only, so empty allowedDomains = blocked.
         "network": {"allowedDomains": [], "deniedDomains": []},
-        # unset by exact name, a guard: no secret reaches the harness env (llm-auth injects the key)
-        "credentials": {"envVars": [{"name": LLM_API_KEY_ENV, "mode": "deny"}]},
+        "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in denied_env(plan)]},
         "enableWeakerNestedSandbox": weak,
         "seccomp": {"applyPath": APPLY_SECCOMP},
     }
+
+
+def denied_env(plan: SessionPlan) -> list[str]:
+    """The names srt unsets for tool commands: the LLM key's (a guard: the
+    harness holds a placeholder) and each harness env name nono's secret globs
+    match in any case (over-denying is the safe side), by exact name."""
+    secret = (k for k in plan.environment if any(fnmatchcase(k.upper(), g) for g in SECRET_DENY_VARS))
+    return sorted({LLM_API_KEY_ENV, *secret})
 
 
 def tool_wrapper_argv() -> list[str]:

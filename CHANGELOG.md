@@ -234,7 +234,14 @@ All notable changes to glove are documented here.
   the one place each writes) is re-bound read-write, with `protected_home`
   read-only inside it. nono's state (`~/.nono`, `~/.local/state/nono`,
   `~/.config/nono`) is on tmpfs under nono and nono+srt; glove creates those
-  mount points in the session home at launch.
+  mount points in the session home at launch. `test_config_protect.sh`
+  checks it live: new paths outside the config home are EROFS to the harness
+  service, its sessions are written and `--continue` resumes.
+- **srt unsets every secret-shaped name glove puts in the harness env.** srt
+  has no glob form, so tool commands under `enforcer: srt` lost only the LLM
+  key's variable; a secret-shaped `env:` entry (`*KEY*`, `*TOKEN*`, …, nono's
+  `deny_vars` globs, any case) reached them. Each such name is now unset by
+  its exact name, as nono strips them by glob.
 
 - Claude Code: `.claude/dev-mods/`, where Claude writes the mods it builds
   (plugin code that runs in its process), is read-only, and the managed

@@ -39,25 +39,12 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, write_roots
+from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, SECRET_DENY_VARS, write_roots
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
 
 GLOVE_READ = ["/etc/glove", "/opt/glove"]
-
-# Env vars a shell command must never see (the LLM key and any secret-shaped
-# name). nono's environment.deny_vars strips these from wrapped commands.
-SECRET_DENY_VARS = [
-    LLM_API_KEY_ENV,
-    "*KEY*",
-    "*TOKEN*",
-    "*SECRET*",
-    "*API_KEY*",
-    "*CREDENTIAL*",
-    "*PASSWORD*",
-]
 
 # Commands agents legitimately need that live in nono's default deny list; the
 # tool profile re-allows them (startup-only gate — the strong guarantee is the
