@@ -400,8 +400,8 @@ and observe's `session.json` record them, and external monitors (Layman) pick a
 transcript parser by them.
 
 Each manifest pins the harness release its image installs (`version`, passed
-to the build as `HARNESS_VERSION`; Pi 1.0.4, Vibe 2.26.0, Claude Code
-2.1.292) and names the release its protected paths (below) were audited
+to the build as `HARNESS_VERSION`; Pi 1.1.0, Vibe 2.26.1, Claude Code
+2.1.295) and names the release its protected paths (below) were audited
 against (`audited_version`). glove refuses a manifest whose two differ, so a
 new release goes in only with a re-audit. The base image tag is the `image`
 version plus a hash of what it is built from (its `image/` context, glove-pty,
@@ -460,7 +460,10 @@ The agent's file-write tools run in the harness process, so the hooks hold
 them to the write roots (`/work`, rw mounts, `/tmp`, writable extension
 channels): Pi's `write`/`edit` and
 Vibe's `write_file`/`search_replace`, nested calls included, are refused into
-the home, through a symlink or `..`, and (Pi) as `~` or `@path`.
+the home, through a symlink or `..`, and (Pi) as `~` or `@path`. Pi's
+enforcer then freezes a checked call, so a `tool_call` handler that runs after
+it can't change it: the change throws and Pi refuses the call. Load only Pi
+extensions you trust (see [SECURITY.md](docs/SECURITY.md)).
 
 **The tool inventory fails closed.** Each harness's `harness.yml` lists its
 tools (`tools:`) by what glove does with a call: `shell` runs under the tool
@@ -535,7 +538,10 @@ extensions:
     from a read-only argv beside the settings, under the harness's sandbox
     (with network, as Pi and Vibe run theirs), not the tool wrapper;
   - only managed hooks, permission rules and MCP servers: a project's
-    `.claude/settings.json` hooks and `.mcp.json` servers never run;
+    `.claude/settings.json` hooks and `.mcp.json` servers never run, nor do
+    installed mods (plugin code in Claude Code's process); sideloaded plugins
+    (`--plugin-dir`/`--plugin-url`) are refused, and `dev-mods/`, where Claude
+    writes the mods it builds, is read-only;
   - Read denied on the config home (`//home/agent/.claude/**`), and Edit (every
     write tool) on the whole home and `/dev/shm`, which the harness process may
     write under `nono+srt` but a tool command may not: Write and Edit reach what
@@ -1103,7 +1109,8 @@ bash tests/integration/test_config_protect.sh vibe nono  # the harness's config 
                                               # also: pi 6, claude-code 7; any enforcer)
 bash tests/integration/test_tool_confine.sh pi  # the hooks' tool names by effect: shell wrapped, file
                                               # writes held to the roots, Pi's MCP off, the tool
-                                              # inventory fails closed (24; vibe 19)
+                                              # inventory fails closed, a checked call
+                                              # can't be changed after the check (26; vibe 19)
 bash tests/integration/test_teardown.sh pi nono   # one harness per session, git config, `glove down` (9 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (12 checks)
 bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (28 checks per enforcer)

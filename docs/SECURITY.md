@@ -424,7 +424,7 @@ Claude Code from starting (fail closed).
   (`test_cc_nono.sh` plants both files with the Write tool and a command).
 - **Locks:** `allowManagedHooksOnly`, `allowManagedPermissionRulesOnly`,
   `allowManagedMcpServersOnly` + `allowedMcpServers` (only glove-rendered MCP
-  servers). A project's hooks and `.mcp.json` servers do not run.
+  servers), `disableSideloadFlags`. A project's hooks and `.mcp.json` servers do not run.
 - **Config home and the write rule:** `Read(//home/agent/.claude/**)` is
   denied, and so is `Edit` (which covers every writing tool) on
   `//home/agent/**` and `/dev/shm/**` (`//` is an absolute path). Under
@@ -437,12 +437,21 @@ Claude Code from starting (fail closed).
   home, so a skill's files are readable by the path Claude Code shows. Ring 0
   also binds what Claude Code loads from the home read-only
   (`protected_home`): `settings.json`, `CLAUDE.md` and the `agents/`,
-  `commands/`, `skills/`, `plugins/`, `output-styles/` and `rules/` dirs, so a
-  deny rule Claude Code fails to apply still leaves them unwritable. What it
-  writes stays writable: `.claude.json`, `backups/`, `history.jsonl`,
-  `projects/`, `sessions/` (measured on 2.1.288), and since 2.1.292
-  `session-env/` and `shell-snapshots/`.
+  `commands/`, `skills/`, `plugins/`, `output-styles/`, `rules/` and
+  `dev-mods/` dirs, so a deny rule Claude Code fails to apply still leaves them
+  unwritable. What it writes stays writable: `.claude.json`, `backups/`,
+  `history.jsonl`, `projects/`, `sessions/`, `session-env/` and
+  `shell-snapshots/`. `projects/<cwd>/memory/` (auto-memory) holds prompt text
+  that later sessions load; the agent's Write tool can't reach it (the Edit
+  deny on the home).
   `/model`'s "set as default" reports that it can't save.
+- **Mods** are plugin code inside Claude Code's process, with file, process
+  and network access; they can register tools or deny calls. The managed
+  `allowManagedHooksOnly` keeps installed mods from running, and
+  `disableSideloadFlags` refuses `--plugin-dir`/`--plugin-url`. Measured: a
+  probe mod named by `CLAUDE_CODE_PLUGIN_DIRS` ran only without the lock, and
+  one in `dev-mods/` never loaded. Claude Code's built-in mods, its
+  `sec-default` guard among them, still run per its docs (not measured here).
 - **Tools:** approvals come from the inventory in `harness.yml` (`tools:`):
   `shell`, `file_write` and `allow` are pre-approved (every command still runs
   under ring 1, every write under the rule above); the `ask` tools (`Workflow`,
@@ -588,6 +597,16 @@ wrapper and the planted hook ran in the harness.
   until `harness_config.tools.allow` lists it, a documented widening.
   `test_tool_confine.sh` pins every name by its effect and checks that every
   tool the harness offers is listed.
+- **A checked call can't be changed after the check** (Pi). Pi runs every
+  extension's `tool_call` handler on one input object, then the tool on it, so
+  an extension loaded after glove's enforcer could rewrite a call it had
+  already wrapped or checked (measured: a home extension's handler unwrapped
+  `bash`, which read Pi's settings from the home, and moved a write into the
+  home). The enforcer now deep-freezes a shell or file-write call's input once
+  it passes: a later change throws and Pi refuses the call. This stops a
+  well-meant extension that rewrites commands from silently unwrapping them,
+  not a hostile one: an extension is code in the harness process and could
+  start a process itself. **Load only extensions you trust.**
 - **Pi's built-in MCP is off** (`extensions: ["-builtin:mcp"]` in the rendered,
   read-only settings): Pi 1.x starts stdio MCP servers from the harness
   process, outside ring 1, with the harness's rights (its home, the session's

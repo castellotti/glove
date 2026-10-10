@@ -6,6 +6,13 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Pi: a checked call can't be changed after the check.** The enforcer
+  deep-freezes a shell or file-write call's input once it passes, so an
+  extension's `tool_call` handler that runs later can't rewrite it; a change
+  throws and Pi refuses the call (see `docs/SECURITY.md`).
+- `tests/integration`: the llama.cpp stub, like the Anthropic one, returns
+  several tool calls in one turn (`SEQ`), so the Pi and Vibe drivers batch
+  their calls; `test_tool_confine.sh` checks the frozen input live.
 - **A tool inventory per harness, failing closed.** Each `harness.yml` lists
   its tools (`tools:`) as `shell` (wrapped), `file_write` (held to the write
   roots), `allow` (pass-through), `ask` (left to the harness's prompt) or
@@ -30,8 +37,11 @@ All notable changes to glove are documented here.
   Claude Code's cwd across Bash calls and its write rule. The drivers build a
   missing image, always use a throwaway `GLOVE_HOME` (never an exported one),
   and run their own MCP clients hardened.
-- **Harness upgrades:** Pi 1.0.4, Vibe 2.26.0, Claude Code 2.1.292, each
-  re-audited (`audited_version`). Claude Code's own fetches from
+- **Harness upgrades:** Pi 1.1.0, Vibe 2.26.1, Claude Code 2.1.295, each
+  re-audited (`audited_version`): no tool outside the inventories, no new path
+  through llm-auth, no new place in the home they load code or config from;
+  new state they write (Vibe's session registry, Claude Code's auto-memory)
+  stays writable. Claude Code's own fetches from
   `downloads.claude.ai` through the egress proxy (2.1.288 already made them)
   are documented as a residual in `docs/SECURITY.md`. Each dependency tree is now pinned: Pi
   installs from a committed `package-lock.json` (`npm ci --ignore-scripts`;
@@ -216,6 +226,10 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- Claude Code: `.claude/dev-mods/`, where Claude writes the mods it builds
+  (plugin code that runs in its process), is read-only, and the managed
+  settings set `disableSideloadFlags` (no `--plugin-dir`/`--plugin-url`).
+  `allowManagedHooksOnly` already kept installed mods from running (measured).
 - Claude Code's write tools (`Edit` rules) are denied on the whole home and
   `/dev/shm`, not only the config home: under `nono+srt` its Write tool could
   create `~/.config/…` (persisting into the session home) and `/dev/shm/…`,
@@ -365,6 +379,7 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- A flaky llm-auth log test now waits for the log lines.
 - Vibe 2.26: glove's hook refused the search tool (`mcp_searxng.web_search`)
   through the previous by-name block on `web_search`/`web_fetch` (now gone: the
   inventory names glove's MCP tools exactly), and the integration drivers
