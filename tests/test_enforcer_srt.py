@@ -55,6 +55,14 @@ def test_llm_key_denied_to_tool_commands(tmp_path):
         ]
 
 
+def test_secret_shaped_harness_env_denied_by_name(tmp_path):
+    # every harness env name nono's deny_vars globs match (any case) is unset
+    # by its exact name; the others reach tool commands
+    env = {"FAKE_API_KEY": "x", "GH_TOKEN": "x", "db_password": "x", "AWS_SECRET_ACCESS_KEY": "x", "EDITOR": "vi"}
+    names = [v["name"] for v in render_settings(_plan(tmp_path, env=env))["credentials"]["envVars"]]
+    assert names == sorted(["AWS_SECRET_ACCESS_KEY", "FAKE_API_KEY", "GH_TOKEN", "GLOVE_LLM_API_KEY", "db_password"])
+
+
 def test_no_top_level_allow_unix_sockets(tmp_path):
     # srt's root schema is not strict, so a misplaced key is silently dropped;
     # allowUnixSockets is a macOS-only network key and must not be rendered.

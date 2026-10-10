@@ -30,70 +30,66 @@ services:
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
       NONO_NO_PROXY: "localhost,127.0.0.1"
     volumes:
+      # the harness home, read-only: its config home is re-bound read-write below
       - type: bind
         source: "<TMP>/home"
         target: /home/agent
+        read_only: true
       - type: bind
         source: "<TMP>/work"
         target: /work
-      # ring 0: re-bound so it is a mount point and cannot be renamed away
-      # (after the rw bind it sits in, so it overlays it)
+      # ring 0: re-bound read-write: a mount point, so it cannot be renamed away
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe"
         target: "/home/agent/.vibe"
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/config.toml"
         target: "/home/agent/.vibe/config.toml"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/hooks.toml"
         target: "/home/agent/.vibe/hooks.toml"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/.env"
         target: "/home/agent/.vibe/.env"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/tools"
         target: "/home/agent/.vibe/tools"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/plugins"
         target: "/home/agent/.vibe/plugins"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/agents"
         target: "/home/agent/.vibe/agents"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/prompts"
         target: "/home/agent/.vibe/prompts"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<TMP>/home/.vibe/skills"
         target: "/home/agent/.vibe/skills"
-        read_only: true
-      # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
-      - type: bind
-        source: "<TMP>/home/.agents"
-        target: "/home/agent/.agents"
         read_only: true
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under the home overlays the bind. mode is forced
@@ -123,6 +119,16 @@ services:
       # mount can't host) lives here; the agent's Landlock policy still denies it.
       - type: tmpfs
         target: /home/agent/.local/state/nono
+        tmpfs:
+          mode: 01777
+      # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
+      # a target nested under the home overlays the bind. mode is forced
+      # explicitly: over a mountpoint that already exists on the bind, a bare
+      # tmpfs mounts 755 root:root and the non-root harness can't write it.
+      # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
+      # mount can't host) lives here; the agent's Landlock policy still denies it.
+      - type: tmpfs
+        target: /home/agent/.config/nono
         tmpfs:
           mode: 01777
     networks:

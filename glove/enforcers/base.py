@@ -14,6 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from ..harnessconfig import LLM_API_KEY_ENV
+
 if TYPE_CHECKING:
     from ..plan import SessionPlan
     from ..runtimes.base import Check
@@ -45,6 +47,19 @@ TOOLS_FILE = "tools.json"
 # Enforcers that run srt (bubblewrap) in the harness container: the `-srt`
 # image overlay and the relaxed nested-userns seccomp profile.
 SRT_ENFORCERS = frozenset({"srt", "nono+srt"})
+
+# Env vars a shell command must never see (the LLM key and any secret-shaped
+# name): nono's environment.deny_vars strips them by glob, srt each harness env
+# name they match by exact name (srt.denied_env).
+SECRET_DENY_VARS = (
+    LLM_API_KEY_ENV,
+    "*KEY*",
+    "*TOKEN*",
+    "*SECRET*",
+    "*API_KEY*",
+    "*CREDENTIAL*",
+    "*PASSWORD*",
+)
 
 
 def workdir(plan: SessionPlan) -> str:

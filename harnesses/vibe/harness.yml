@@ -17,10 +17,11 @@ config_home: { env: VIBE_HOME, path: /home/agent/.vibe }
 # What the agent is told about this harness under glove (its context file).
 brief: brief.md
 context_file: /home/agent/.vibe/AGENTS.md
-# Read-only to the agent (ring 0), relative to the home: the config and hooks
-# glove renders (its pre_tool hook wraps every command), `.env` (VIBE_*
-# settings), and the dirs Vibe loads tools, plugins, agents, prompts and
-# skills from.
+# Ring 0 binds the home read-only and the config home (.vibe/) read-write (it
+# writes logs/ and replaces vibehistory by rename); read-only inside it
+# (relative to the home): the config and hooks glove renders (its pre_tool hook
+# wraps every command), `.env` (VIBE_* settings), and the dirs Vibe loads tools,
+# plugins, agents, prompts and skills from; `.agents/` is read-only with the home.
 protected_home:
   - .vibe/config.toml
   - .vibe/hooks.toml

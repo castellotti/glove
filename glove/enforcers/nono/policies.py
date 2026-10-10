@@ -29,8 +29,9 @@ tests/integration/test_pi_nono.sh). A key subtlety: nono refuses to grant a
 directory that contains its own protected state roots (`$HOME/.nono`,
 `$HOME/.local/state/nono`), so the harness profile grants only the harness's
 *config subdir* (e.g. `/home/agent/.pi/agent`) rather than all of `$HOME` — the
-supervisor still writes nono state on the (ungranted) home bind mount, and the
-sandboxed agent cannot touch it.
+supervisor writes its state on tmpfs under the home (`NonoEnforcer.extra_tmpfs`;
+ring 0 binds the rest of the home read-only), and the sandboxed agent cannot
+touch it.
 """
 
 from __future__ import annotations
@@ -38,25 +39,12 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ...harnessconfig import LLM_API_KEY_ENV
-from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, write_roots
+from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, SECRET_DENY_VARS, write_roots
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
 
 GLOVE_READ = ["/etc/glove", "/opt/glove"]
-
-# Env vars a shell command must never see (the LLM key and any secret-shaped
-# name). nono's environment.deny_vars strips these from wrapped commands.
-SECRET_DENY_VARS = [
-    LLM_API_KEY_ENV,
-    "*KEY*",
-    "*TOKEN*",
-    "*SECRET*",
-    "*API_KEY*",
-    "*CREDENTIAL*",
-    "*PASSWORD*",
-]
 
 # Commands agents legitimately need that live in nono's default deny list; the
 # tool profile re-allows them (startup-only gate — the strong guarantee is the

@@ -32,117 +32,108 @@ services:
       GLOVE_LLM_API_KEY: "glove-injected"
       NONO_NO_PROXY: "localhost,127.0.0.1"
     volumes:
+      # the harness home, read-only: its config home is re-bound read-write below
       - type: bind
         source: "<tmp>/home"
         target: /home/agent
+        read_only: true
       - type: bind
         source: "<tmp>/work"
         target: /work
-      # ring 0: re-bound so it is a mount point and cannot be renamed away
-      # (after the rw bind it sits in, so it overlays it)
-      - type: bind
-        source: "<tmp>/home/.pi"
-        target: "/home/agent/.pi"
-      # ring 0: re-bound so it is a mount point and cannot be renamed away
-      # (after the rw bind it sits in, so it overlays it)
+      # ring 0: re-bound read-write: a mount point, so it cannot be renamed away
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent"
         target: "/home/agent/.pi/agent"
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/settings.json"
         target: "/home/agent/.pi/agent/settings.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/models.json"
         target: "/home/agent/.pi/agent/models.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/trust.json"
         target: "/home/agent/.pi/agent/trust.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/AGENTS.override.md"
         target: "/home/agent/.pi/agent/AGENTS.override.md"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/SYSTEM.md"
         target: "/home/agent/.pi/agent/SYSTEM.md"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/APPEND_SYSTEM.md"
         target: "/home/agent/.pi/agent/APPEND_SYSTEM.md"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/mcp.json"
         target: "/home/agent/.pi/agent/mcp.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/keybindings.json"
         target: "/home/agent/.pi/agent/keybindings.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/extensions"
         target: "/home/agent/.pi/agent/extensions"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/skills"
         target: "/home/agent/.pi/agent/skills"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/prompts"
         target: "/home/agent/.pi/agent/prompts"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/themes"
         target: "/home/agent/.pi/agent/themes"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/bin"
         target: "/home/agent/.pi/agent/bin"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/npm"
         target: "/home/agent/.pi/agent/npm"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: "<tmp>/home/.pi/agent/git"
         target: "/home/agent/.pi/agent/git"
-        read_only: true
-      # ring 0: read-only over a path the host or the harness later runs or trusts
-      # (after the rw bind it sits in, so it overlays it)
-      - type: bind
-        source: "<tmp>/home/.agents"
-        target: "/home/agent/.agents"
         read_only: true
       # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
       # a target nested under the home overlays the bind. mode is forced
@@ -172,6 +163,16 @@ services:
       # mount can't host) lives here; the agent's Landlock policy still denies it.
       - type: tmpfs
         target: /home/agent/.local/state/nono
+        tmpfs:
+          mode: 01777
+      # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
+      # a target nested under the home overlays the bind. mode is forced
+      # explicitly: over a mountpoint that already exists on the bind, a bare
+      # tmpfs mounts 755 root:root and the non-root harness can't write it.
+      # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
+      # mount can't host) lives here; the agent's Landlock policy still denies it.
+      - type: tmpfs
+        target: /home/agent/.config/nono
         tmpfs:
           mode: 01777
     networks:

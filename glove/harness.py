@@ -90,10 +90,12 @@ class HarnessProfile:
     # (always the empty placeholder): config a repo could use against glove,
     # e.g. Vibe's project hooks, which run before glove's and can shadow it.
     masked_files: tuple[str, ...] = ()
-    # What it loads from its own (writable) home, relative to the home; a
-    # trailing `/` marks a directory: its settings, hooks and trust store, and
-    # the dirs it loads code from. Ring 0 binds them read-only, so the agent
-    # cannot reconfigure the harness or plant code in it for the next start.
+    # What it loads from its home, relative to the home; a trailing `/` marks a
+    # directory: its settings, hooks and trust store, and the dirs it loads code
+    # from. Ring 0 binds the home read-only and its config home read-write (the
+    # one place it writes), and these read-only over that, so the agent cannot
+    # reconfigure the harness or plant code in it for the next start (an entry
+    # outside the config home is read-only with the home).
     protected_home: tuple[str, ...] = ()
     # The harness release its image installs (the HARNESS_VERSION build arg).
     version: str = ""

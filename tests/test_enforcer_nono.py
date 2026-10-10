@@ -139,11 +139,13 @@ def test_nono_backs_state_roots_with_tmpfs(tmp_path):
     assert "/home/agent/.local/state/nono" in tmpfs
     assert "/home/agent/.local/state" not in tmpfs
     assert "/home/agent/.nono" in tmpfs
+    assert "/home/agent/.config/nono" in tmpfs  # its profile drafts: the home is read-only
     for policy in ("harness.json", "tool.json"):
         fs = json.loads(plan.policies[policy])["filesystem"]
         grants = [*fs["allow"], *fs.get("read", [])]
         assert "/home/agent/.local/state/nono" not in grants
         assert "/home/agent/.nono" not in grants
+        assert "/home/agent/.config/nono" not in grants
 
 
 def test_none_enforcer_adds_no_tmpfs(tmp_path):

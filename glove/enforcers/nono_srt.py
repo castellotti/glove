@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
 from .base import ENFORCER_DIR, GLOVE_PTY, workdir, write_roots
+from .nono import STATE_TMPFS
 from .nono import policies as nono_policies
 from .srt import APPLY_SECCOMP, GLOVE_SRT, NODE, SrtEnforcer
 
@@ -111,7 +112,7 @@ class NonoSrtEnforcer:
         return {}
 
     def extra_tmpfs(self, plan: SessionPlan) -> list[str]:
-        return []
+        return list(STATE_TMPFS)  # `nono wrap` around each tool command writes its state there
 
     def cap_add(self, plan: SessionPlan) -> list[str]:
         return []

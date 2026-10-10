@@ -92,6 +92,24 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
     assert vols[targets.index("/work/.envrc")]["source"] == str(tmp_path / "ph" / ".envrc")
 
 
+def test_home_is_read_only_and_only_the_config_home_rebound_writable(tmp_path):
+    cfg, work = _session_cfg(tmp_path)
+    from glove.plan import build_session_plan
+    from glove.runtimes import get_runtime
+
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), cwd=str(work), uid=501, gid=20,
+                              state_dir=str(tmp_path / "ext"))
+    vols = yaml.safe_load(get_runtime("docker").render(plan, tmp_path).compose_yaml)[
+        "services"]["glove-vibe-local-harness"]["volumes"]
+    binds = {v["target"]: v for v in vols if v["type"] == "bind"}
+    targets = [v["target"] for v in vols]
+    assert binds["/home/agent"]["read_only"] is True
+    writable = [t for t, v in binds.items() if t.startswith("/home/agent") and not v.get("read_only")]
+    assert writable == ["/home/agent/.vibe"]  # only the config home
+    order = [targets.index(t) for t in ("/home/agent", "/home/agent/.vibe", "/home/agent/.vibe/hooks.toml")]
+    assert order == sorted(order)  # each overlays the one before
+
+
 def test_internal_networks_and_forwarder_joins(tmp_path):
     cfg, work = _session_cfg(tmp_path)
     _, text = render(cfg, tmp_path, cwd=str(work))
