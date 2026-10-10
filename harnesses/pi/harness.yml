@@ -24,14 +24,15 @@ brief: brief.md
 # replace AGENTS.md/CLAUDE.md there (even an empty one), so glove's brief takes
 # that name and is read-only (below).
 context_file: /home/agent/.pi/agent/AGENTS.override.md
-# Read-only to the agent (ring 0), relative to the home: the settings, models,
+# Ring 0 binds the home read-only and the config home (.pi/agent/) read-write;
+# read-only inside it (relative to the home): the settings, models,
 # trust store and brief glove renders; the files Pi 1.x loads prompts, MCP
 # servers and keybindings from (an empty one is ignored: created at launch);
 # and the dirs Pi loads code, skills, prompts and themes from (`bin/` also
 # comes first on a tool command's PATH). The rendered `defaultProjectTrust:
 # never` and empty trust store keep the project's `.pi/` (its `mcp.json`
 # included) and `.agents/skills` from loading. Pi writes auth.json,
-# models-store.json and sessions/ itself.
+# models-store.json and sessions/ itself (and lock dirs beside them).
 protected_home:
   - .pi/agent/settings.json
   - .pi/agent/models.json

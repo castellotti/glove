@@ -249,43 +249,74 @@ def test_trusted_files_outside_a_rw_mount_are_skipped(tmp_path):
 
 
 HOME_PROTECTED = [".vibe/hooks.toml", ".vibe/tools/", ".agents/"]
+CONFIG_HOME = "/home/agent/.vibe"
 
 
 def _home(tmp_path):
-    return Mount(host_path=str(tmp_path / "home"), container_path="/home/agent", mode="rw")
+    return Mount(host_path=str(tmp_path / "home"), container_path="/home/agent", mode="ro")
 
 
-def test_protected_home_binds_the_homes_own_copy_with_its_dirs_pinned(tmp_path):
+def test_protected_home_rebinds_the_config_home_rw_and_binds_its_own_copies_ro(tmp_path):
     got = [(p.container_path, p.host_path, p.kind, p.read_only)
-           for p in protected_home(_home(tmp_path), HOME_PROTECTED)]
+           for p in protected_home(_home(tmp_path), CONFIG_HOME, HOME_PROTECTED)]
     home = tmp_path / "home"
     assert got == [
-        ("/home/agent/.vibe", f"{home}/.vibe", "dir", False),  # pinned: `mv .vibe x` fails
+        ("/home/agent/.vibe", f"{home}/.vibe", "dir", False),  # writable, and pinned: `mv .vibe x` fails
         # never a placeholder: glove renders the file there (or creates it empty)
         ("/home/agent/.vibe/hooks.toml", f"{home}/.vibe/hooks.toml", "file", True),
         ("/home/agent/.vibe/tools", f"{home}/.vibe/tools", "dir", True),
-        ("/home/agent/.agents", f"{home}/.agents", "dir", True),
+        # .agents/ is outside the config home: read-only with the home, no bind
     ]
+
+
+def test_protected_home_pins_nothing_above_the_config_home(tmp_path):
+    got = [p.container_path for p in protected_home(_home(tmp_path), "/home/agent/.pi/agent",
+                                                    [".pi/agent/settings.json"])]
+    assert got == ["/home/agent/.pi/agent", "/home/agent/.pi/agent/settings.json"]  # not .pi: the home is ro
+
+
+@pytest.mark.parametrize("config_home", ["/home/agent", "/home/other/.vibe", "/home/agent/../x"])
+def test_config_home_outside_the_home_is_refused(tmp_path, config_home):
+    with pytest.raises(MountError, match="must be inside /home/agent"):
+        protected_home(_home(tmp_path), config_home, [])
 
 
 def test_bind_sources_are_created_empty_and_existing_ones_kept(tmp_path):
     (tmp_path / "home" / ".vibe").mkdir(parents=True)
     (tmp_path / "home" / ".vibe" / "hooks.toml").write_text("kept")
-    make_bind_sources(protected_home(_home(tmp_path), HOME_PROTECTED))
+    make_bind_sources(protected_home(_home(tmp_path), CONFIG_HOME, HOME_PROTECTED), str(tmp_path / "home"),
+                      ["/tmp", "/home/agent/.local/state/nono"])
     assert (tmp_path / "home" / ".vibe" / "hooks.toml").read_text() == "kept"
     assert (tmp_path / "home" / ".vibe" / "tools").is_dir()
-    assert (tmp_path / "home" / ".agents").is_dir()
+    assert not (tmp_path / "home" / ".agents").exists()  # no bind: nothing to create
+    # a mount point under the read-only home, which the runtime cannot create
+    assert (tmp_path / "home" / ".local" / "state" / "nono").is_dir()
+    assert sorted(p.name for p in (tmp_path / "home").iterdir()) == [".local", ".vibe"]
 
 
-@pytest.mark.parametrize("plant", ["file-link", "file-is-dir", "dir-is-file"])
+def test_mount_point_through_a_symlink_is_refused(tmp_path):
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / ".local").symlink_to(tmp_path)
+    with pytest.raises(MountError, match="not a symlink"):
+        make_bind_sources((), str(tmp_path / "home"), ["/home/agent/.local/state/nono"])
+    assert not (tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("plant", ["file-link", "file-is-dir", "dir-is-file", "config-home-link", "outside-link"])
 def test_protected_home_path_of_the_wrong_kind_is_refused(tmp_path, plant):
     vibe = tmp_path / "home" / ".vibe"
-    vibe.mkdir(parents=True)
+    vibe.parent.mkdir(parents=True)
+    if plant == "config-home-link":
+        vibe.symlink_to(tmp_path)
+    else:
+        vibe.mkdir()
     if plant == "file-link":
         (vibe / "hooks.toml").symlink_to(tmp_path)
     elif plant == "file-is-dir":
         (vibe / "hooks.toml").mkdir()
-    else:
+    elif plant == "dir-is-file":
         (vibe / "tools").write_text("")
+    elif plant == "outside-link":  # outside the config home: no bind, but still checked
+        (tmp_path / "home" / ".agents").symlink_to(tmp_path)
     with pytest.raises(MountError, match="glove protects it"):
-        protected_home(_home(tmp_path), HOME_PROTECTED)
+        protected_home(_home(tmp_path), CONFIG_HOME, HOME_PROTECTED)

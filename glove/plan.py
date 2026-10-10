@@ -131,8 +131,9 @@ class SessionPlan:
 
 
 def home_mount(home_dir: str) -> Mount:
-    """The harness home: the session's `.glove/home`, read-write at CONTAINER_HOME."""
-    return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="rw")
+    """The harness home: the session's `.glove/home`, read-only at CONTAINER_HOME
+    (the config home is re-bound read-write over it: `protected_home`)."""
+    return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="ro")
 
 
 def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
@@ -314,7 +315,7 @@ def build_session_plan(
     mount_plan = replace(mount_plan, protect=protected_paths(
         mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
         trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
-    ) + protected_home(home, profile.protected_home))
+    ) + protected_home(home, profile.config_home_path, profile.protected_home))
     network = build_network_plan(cfg, session, comp)
 
     # glove alone sets git's config env vars (GIT_CONFIG_PARAMETERS, below)

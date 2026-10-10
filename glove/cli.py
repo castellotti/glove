@@ -241,7 +241,9 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     from .mounts import make_bind_sources
 
     write_system_files(plan, sd.state / "harness")
-    make_bind_sources(plan.protect)  # a pinned dir, or a protected file in the home, may not exist yet
+    # a pinned dir, the config home or a file protected in it, or a tmpfs mount
+    # point under the read-only home may not exist yet
+    make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)
     if any(p.host_path is None for p in plan.protect):
         from .mounts import write_placeholders
 

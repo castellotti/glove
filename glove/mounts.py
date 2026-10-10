@@ -276,16 +276,41 @@ def protected_paths(
     return tuple(out.values())
 
 
-def protected_home(home: Mount, paths: Sequence[str]) -> tuple[Protect, ...]:
-    """Ring-0 read-only binds over what the harness loads from its own writable
-    home (the profile's `protected_home`, relative to `home`; a trailing `/`
-    marks a directory), pinned like a trusted file. They bind the home's own
-    copy, never a placeholder: glove renders the files there (a missing one is
-    created empty at launch), and an empty directory changes nothing."""
+def protected_home(home: Mount, config_home: str, paths: Sequence[str]) -> tuple[Protect, ...]:
+    """Ring 0 for the harness home, which is bound read-only: the harness's
+    config home (`config_home`, a container path) re-bound read-write, the one
+    place a harness writes (measured: Pi, Vibe and Claude Code replace files and
+    create lock dirs there, so it is writable as a whole), and over it
+    read-only binds of what the harness loads from there (the profile's
+    `protected_home`, relative to `home`; a trailing `/` marks a directory),
+    pinned like a trusted file. They bind the home's own copy, never a
+    placeholder: glove renders the files there (a missing one is created empty
+    at launch), and an empty directory changes nothing. An entry outside the
+    config home is read-only with the home: it is only checked (no symlink)."""
+    if not _inside(home.container_path, posixpath.normpath(config_home)):
+        raise MountError(f"config home {config_home} must be inside {home.container_path}")
+    rel = posixpath.relpath(config_home, home.container_path)
+    _check_path(home.host_path, rel, "dir")
+    conf = Mount(host_path=os.path.join(home.host_path, rel), container_path=config_home, mode="rw")
     out: dict[str, Protect] = {}
-    for rel in paths:
-        _protect_trusted([home], posixpath.join(home.container_path, rel), partial(_add, out), source="own")
+    _add(out, conf, conf.host_path, ".", "dir", read_only=False)
+    for entry in paths:
+        _check_path(home.host_path, entry.rstrip("/"), "dir" if entry.endswith("/") else "file")
+        # outside the config home: the read-only home covers it (no bind)
+        _protect_trusted([home, conf], posixpath.join(home.container_path, entry), partial(_add, out), source="own")
     return tuple(out.values())
+
+
+def _check_path(root: str, rel: str, kind: str) -> None:
+    """Refuse a symlink, or a file where a directory belongs (or the reverse),
+    on the way from `root` to `rel` (`kind` is the last one's)."""
+    parts = rel.split("/")
+    for i in range(1, len(parts) + 1):
+        host = os.path.join(root, *parts[:i])
+        is_dir = i < len(parts) or kind == "dir"
+        if os.path.islink(host) or (os.path.exists(host) and os.path.isdir(host) != is_dir):
+            raise MountError(f"{host}: glove protects it or mounts over it, so it must be a "
+                             f"{'directory' if is_dir else 'regular file'}, not a symlink")
 
 
 def _add(out: dict[str, Protect], root: Mount, host: str | None, rel: str, kind: str, read_only: bool = True) -> None:
@@ -305,14 +330,11 @@ def _protect_trusted(mounts: list[Mount], path: str, add, *, source: str = "auto
     if m is None or m.mode != "rw":
         return  # not agent-writable: the read-only mount or rootfs covers it
     parts = os.path.relpath(path, m.container_path).split("/")
+    _check_path(m.host_path, "/".join(parts), kind)
     for i in range(1, len(parts) + 1):
         sub = "/".join(parts[:i])
         host = os.path.join(m.host_path, sub)
         last = i == len(parts)
-        is_dir = not last or kind == "dir"
-        if os.path.islink(host) or (os.path.exists(host) and os.path.isdir(host) != is_dir):
-            raise MountError(f"{host}: the harness loads its config from here, so glove protects it; "
-                             f"it must be a {'directory' if is_dir else 'regular file'}, not a symlink")
         if not last:
             add(m, host, sub, "dir", read_only=False)  # pin: no rename
         else:
@@ -342,9 +364,11 @@ def _resolve_working_dir(
     return os.path.normpath(os.path.join(best.container_path, rel))
 
 
-def make_bind_sources(protect: tuple[Protect, ...]) -> None:
+def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points: Sequence[str] = ()) -> None:
     """Create the bind sources that do not exist yet: the dirs pinned over a
-    trusted file, and the home's protected files and dirs (empty)."""
+    trusted file, the config home and its protected files and dirs (empty);
+    and the `mount_points` (container paths, e.g. tmpfs targets) under the
+    read-only home, where the runtime cannot create one."""
     for p in protect:
         if p.host_path and not os.path.lexists(p.host_path):
             if p.kind == "dir":
@@ -352,6 +376,11 @@ def make_bind_sources(protect: tuple[Protect, ...]) -> None:
             else:
                 os.makedirs(os.path.dirname(p.host_path), exist_ok=True)
                 Path(p.host_path).touch()
+    for target in mount_points:
+        if _inside(CONTAINER_HOME, target):
+            rel = posixpath.relpath(target, CONTAINER_HOME)
+            _check_path(home_dir, rel, "dir")
+            os.makedirs(os.path.join(home_dir, rel), exist_ok=True)
 
 
 def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:

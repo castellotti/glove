@@ -401,7 +401,7 @@ transcript parser by them.
 
 Each manifest pins the harness release its image installs (`version`, passed
 to the build as `HARNESS_VERSION`; Pi 1.1.0, Vibe 2.26.1, Claude Code
-2.1.295) and names the release its protected paths (below) were audited
+2.1.296) and names the release its protected paths (below) were audited
 against (`audited_version`). glove refuses a manifest whose two differ, so a
 new release goes in only with a re-audit. The base image tag is the `image`
 version plus a hash of what it is built from (its `image/` context, glove-pty,

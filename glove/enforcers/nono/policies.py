@@ -29,8 +29,9 @@ tests/integration/test_pi_nono.sh). A key subtlety: nono refuses to grant a
 directory that contains its own protected state roots (`$HOME/.nono`,
 `$HOME/.local/state/nono`), so the harness profile grants only the harness's
 *config subdir* (e.g. `/home/agent/.pi/agent`) rather than all of `$HOME` — the
-supervisor still writes nono state on the (ungranted) home bind mount, and the
-sandboxed agent cannot touch it.
+supervisor writes its state on tmpfs under the home (`NonoEnforcer.extra_tmpfs`;
+ring 0 binds the rest of the home read-only), and the sandboxed agent cannot
+touch it.
 """
 
 from __future__ import annotations

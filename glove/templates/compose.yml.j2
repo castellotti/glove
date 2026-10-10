@@ -69,9 +69,11 @@ services:
       {{ k }}: {{ v | tojson }}
 {% endfor %}
     volumes:
+      # the harness home, read-only: its config home is re-bound read-write below
       - type: bind
         source: {{ home.host_path | tojson }}
         target: {{ home.container_path }}
+        read_only: true
 {% if policies_host_dir %}
       # ring-1 enforcer policies (read-only; never inside /work, PLAN §4.1)
       - type: bind
@@ -105,8 +107,8 @@ services:
 {% for p in protect %}
 {% if p.host_path or placeholder_host_dir %}
       # ring 0: {{ "read-only over a path the host or the harness later runs or trusts" if p.read_only
-      else "re-bound so it is a mount point and cannot be renamed away" }}
-      # (after the rw bind it sits in, so it overlays it)
+      else "re-bound read-write: a mount point, so it cannot be renamed away" }}
+      # (after the bind it sits in, so it overlays it)
       - type: bind
         source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.name) | tojson }}
         target: {{ p.container_path | tojson }}

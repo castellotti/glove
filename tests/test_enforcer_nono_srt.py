@@ -53,6 +53,13 @@ def test_tool_commands_drop_the_terminal_then_run_under_nono(tmp_path):
     assert tool["network"]["block"] is True and "GLOVE_LLM_API_KEY" in tool["environment"]["deny_vars"]
 
 
+def test_nono_state_under_the_read_only_home_is_on_tmpfs(tmp_path):
+    # `nono wrap` writes its state and profile drafts under the home on every
+    # tool command; ring 0 binds the home read-only
+    assert {"/home/agent/.nono", "/home/agent/.local/state/nono", "/home/agent/.config/nono"} <= set(
+        _plan(tmp_path).hardening.tmpfs)
+
+
 def test_harness_settings(tmp_path):
     s = render_harness_settings(_plan(tmp_path))
     assert s["seccomp"] == {"applyPath": APPLY_SECCOMP}
