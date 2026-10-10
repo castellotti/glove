@@ -20,7 +20,7 @@
     "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
     "PI_OFFLINE": "1"
   },
-  "image": "glove/pi:0.5.0-610fba8774",
+  "image": "glove/pi:0.5.0-faf71f952c",
   "transcripts": [
     null,
     null

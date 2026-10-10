@@ -120,7 +120,6 @@ def main(directory: str, stub_log: str) -> int:
         r = s.seq(("Bash", {"command": "cd /tmp && pwd"}), ("Bash", {"command": "pwd"}),
                   ("Write", {"file_path": "/home/agent/.config/planted", "content": "x"}),
                   ("Write", {"file_path": "/dev/shm/planted", "content": "x"}))
-        r += [""] * (4 - len(r))
         # (under nono each Bash result starts with bash's refused /etc/bash.bashrc)
         check("a `cd` in one Bash call does not carry into the next (back in /work)",
               "/tmp" in r[0].split() and "/work" in r[1].split(), str(r[:2])[:400])

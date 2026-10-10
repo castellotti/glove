@@ -3,6 +3,6 @@
   "private": true,
   "description": "Pi's dependency tree, pinned by package-lock.json (Pi 1.x ships no shrinkwrap). Regenerate with the version in harness.yml: see harnesses/pi/image/Dockerfile.",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.4"
+    "@earendil-works/pi-coding-agent": "1.1.0"
   }
 }

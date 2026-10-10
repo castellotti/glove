@@ -13,6 +13,9 @@ Tool driving (egress tests): when the last user message contains
 message is a tool result it answers `TOOL RESULT: <first 1500 chars>` (Vibe 2.26 puts the
 wrapped command and stderr before stdout). So a
 `pi -p "CALL web_fetch {...}"` exercises the real tool path end to end.
+`SEQ [[<tool>, <json>], …]` in the first user message makes those tool calls one
+after another in one turn, then answers "TOOL RESULTS: <each result's first 400
+chars, joined by |||>" (as the anthropic stub; live_common.LiveSession.seq).
 The skill directories Pi lists in its system prompt are logged as `skills=`.
 """
 
@@ -101,7 +104,15 @@ class H(BaseHTTPRequestHandler):
         msgs = req.get("messages") or []
         last = msgs[-1] if msgs else {}
         text = _text(last.get("content"))
-        if last.get("role") == "tool":
+        first = next((m for m in msgs if m.get("role") == "user"), {})
+        done = [_text(m.get("content")) for m in msgs if m.get("role") == "tool"]
+        step = seq_step(_text(first.get("content")), done) if tools else None
+        if isinstance(step, tuple):
+            call = {"index": 0, "id": f"call_{len(done) + 1}", "type": "function",
+                    "function": {"name": step[0], "arguments": json.dumps(step[1])}}
+        elif step is not None:
+            reply = step
+        elif last.get("role") == "tool":
             reply = "TOOL RESULT: " + " ".join(text.split())[:1500]
         elif last.get("role") == "user" and (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
             call = {"index": 0, "id": "call_1", "type": "function",
@@ -123,6 +134,19 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
         usage = {**base, "choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
         self.wfile.write(f"data: {json.dumps(usage)}\n\ndata: [DONE]\n\n".encode())
+
+
+def seq_step(first_user: str, done: list[str]) -> tuple[str, dict] | str | None:
+    """A `SEQ` turn's next tool call (name, args), its closing "TOOL RESULTS: …"
+    text once every step has a result in `done`, or None (no SEQ)."""
+    m = re.search(r"SEQ (\[.*\])", first_user, re.S)
+    if not m:
+        return None
+    steps = json.loads(m.group(1))
+    if len(done) < len(steps):
+        name, args = steps[len(done)]
+        return name, args
+    return "TOOL RESULTS: " + " ||| ".join(d[:400] for d in done)
 
 
 def _text(content) -> str:

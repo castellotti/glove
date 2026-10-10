@@ -4,11 +4,11 @@ summary: Anthropic's Claude Code CLI (native binary), signed in with an API key 
 # 0.2.0: native binary + ring-1 enforcer (nono, glove-pty, glove-cc-prefix) only.
 image: glove/claude-code:0.2.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 2.1.292
+version: 2.1.295
 # The release protected_home, trusted_files and masked_files were audited
 # against: a new release can add a dir it loads code or config from, so glove
 # refuses a `version` that has not been re-audited.
-audited_version: 2.1.292
+audited_version: 2.1.295
 # By path: a `toolchains` block may put other binaries first on PATH.
 entry: [/usr/local/bin/claude]
 config_home: { env: CLAUDE_CONFIG_DIR, path: /home/agent/.claude }
@@ -32,9 +32,11 @@ contributions: [mcp, skills]
 trusted_files: [.claude/settings.json, .claude/settings.local.json]
 # Read-only to the agent (ring 0), relative to the home: the settings and
 # memory file glove renders, and the dirs Claude Code loads agents, commands,
-# skills, plugins, output styles and rules from. It writes .claude.json,
-# backups/, history.jsonl, projects/, sessions/ (and more over time): those
-# stay writable. The managed settings also deny Read/Edit of the whole home.
+# skills, plugins, output styles and rules from, and the mods Claude writes
+# (`dev-mods/`). It writes .claude.json, backups/, history.jsonl,
+# projects/ (its auto-memory too), sessions/ (and more over time): those stay
+# writable. The managed settings deny Read of the config home and Edit of the
+# whole home.
 protected_home:
   - .claude/settings.json
   - .claude/CLAUDE.md
@@ -44,13 +46,14 @@ protected_home:
   - .claude/plugins/
   - .claude/output-styles/
   - .claude/rules/
-# The tool inventory (measured on 2.1.292, with and without MCP servers): the
-# managed settings pre-approve `shell` (run under the shell prefix),
-# `file_write` (denied outside the write roots) and `allow`; `ask` is left to
-# Claude Code's prompt, as it ships; `deny` is denied. EnterWorktree runs git
-# from the harness process, outside ring 1, and cannot work under ring 0's
-# read-only .git anyway. WebFetch reaches only the session's forwarders: denied
-# unless webfetch hands it the egress proxy (then approved). A tool a new
+  - .claude/dev-mods/
+# The tool inventory (measured on the audited version, with and without MCP
+# servers): the managed settings pre-approve `shell` (run under the shell
+# prefix), `file_write` (denied outside the write roots) and `allow`; `ask` is
+# left to Claude Code's prompt, as it ships; `deny` is denied. EnterWorktree
+# runs git from the harness process, outside ring 1, and cannot work under ring
+# 0's read-only .git anyway. WebFetch reaches only the session's forwarders:
+# denied unless webfetch hands it the egress proxy (then approved). A tool a new
 # release adds prompts; the live test (cc_live) checks the list at upgrade time.
 tools:
   shell: [Bash]

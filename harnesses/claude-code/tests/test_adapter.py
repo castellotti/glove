@@ -92,6 +92,7 @@ def test_no_enforcer_no_prefix(tmp_path):
 def test_managed_settings_lock_hooks_rules_mcp_and_the_config_home(tmp_path):
     m = _managed(_plan(tmp_path)[1])
     assert m["allowManagedHooksOnly"] and m["allowManagedPermissionRulesOnly"] and m["allowManagedMcpServersOnly"]
+    assert m["disableSideloadFlags"] is True
     assert m["allowedMcpServers"] == []
     # `//` is an absolute path; Edit rules cover every file-writing tool: denied wherever the harness may write
     # that a tool command may not (the home, /dev/shm), Read only on the config home
@@ -286,7 +287,7 @@ def test_the_trusted_project_settings_and_the_home_loaders_are_protected(tmp_pat
                    "/work/.claude/settings.local.json": ("file", True), home: ("dir", False),
                    **{f"{home}/{f}": ("file", True) for f in ("settings.json", "CLAUDE.md")},
                    **{f"{home}/{d}": ("dir", True)
-                      for d in ("agents", "commands", "skills", "plugins", "output-styles", "rules")}}
+                      for d in ("agents", "commands", "skills", "plugins", "output-styles", "rules", "dev-mods")}}
 
 
 def test_system_files_are_rewritten_in_place(tmp_path):
