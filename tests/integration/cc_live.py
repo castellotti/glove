@@ -9,7 +9,8 @@ then in the harness service:
   2. /etc/claude-code (the managed settings) is read-only to the harness;
   3. `claude -p "CALL <tool> …"` through the stub: the Bash tool runs under the
      tool wrapper even though the agent's own settings blank the prefix; Read
-     and Write into the config home are denied; a project's hooks and
+     and Write into the config home are denied; no secret-shaped env reaches
+     it, in any case, set by the session or not by glove (a plain name does); a project's hooks and
      `.mcp.json` stdio servers never run;
      the agent cannot plant project settings (ring 0 binds them read-only),
      whose `env` would reach processes Claude Code starts outside ring 1;
@@ -71,11 +72,13 @@ def main(directory: str, stub_log: str) -> int:
         print("== the agent (claude -p through the stub)")
         cmd = ("cat /home/agent/.claude/settings.json >/dev/null 2>&1 && echo HOME-READ || echo HOME-DENIED; "
                "echo keys=$(env | grep -c -e ANTHROPIC_API_KEY -e CLAUDE_CODE_OAUTH_TOKEN); "
-               "curl -sS -m 4 http://example.com >/dev/null 2>&1; echo net=$?")
+               f"curl -sS -m 4 http://example.com >/dev/null 2>&1; echo net=$?; {s.secret_probe()}")
         out = s.call("Bash", {"command": cmd})
         check("Bash runs wrapped despite the blanked prefix: config home denied",
               "HOME-DENIED" in out and "HOME-READ" not in out, out.replace("\n", " ")[-300:])
         check("… the key is not in its env", "keys=0" in out, out.replace("\n", " ")[-300:])
+        check("… nor any secret-shaped name, in any case (a plain name is)", s.secret_free(out),
+              out.replace("\n", " ")[-300:])
         check("… no network", re.search(r"net=[1-9]", out) is not None, out.replace("\n", " ")[-300:])
         out = s.call("Read", {"file_path": "/work/.mcp.json"})
         check("control: Read in /work works", "MCP-RAN" in out, out.replace("\n", " ")[-300:])

@@ -12,6 +12,7 @@ printed); a failed start ends the driver with its summary. Teardown is
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -30,11 +31,23 @@ from ptyio import Tui
 from extensions.observe.netview import read_records
 from glove import registry
 from glove.cli import _materialize_plan, _open, preflight, prepare_harness
+from glove.enforcers.base import SECRET_DENY_VARS
 from glove.plan import SessionPlan, secret_env
 from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
 
 RESULTS: list[bool] = []
+# A secret-shaped env name glove never set (as an image layer's or the
+# runtime's would be): every harness run gets it, beside the session's `env:`.
+UNLISTED_NAME = "image_Token"
+UNLISTED_FLAG = ("-e", f"{UNLISTED_NAME}=probe")  # on every compose run
+
+
+def _secret(name: str) -> bool:
+    """`name` matches one of nono's deny_vars globs, in any case (what the scrub unsets)."""
+    return any(fnmatch.fnmatchcase(name.upper(), g.upper()) for g in SECRET_DENY_VARS)
+
+
 # Each harness's own tools, by what they do: shell, file write (name, path
 # argument, content argument), web search and fetch; and its CLI. Vibe's MCP
 # tools by the name its hook sees (`mcp_<server>.<tool>`; `call` runs them
@@ -166,6 +179,24 @@ class LiveSession:
         """The observe dir's net/ (flows, status), symlinks resolved."""
         return Path(os.path.realpath(registry.observe_dir(self.sid))) / "net"
 
+    @property
+    def secret_names(self) -> list[str]:
+        """The env names a tool command must lose: the session's secret-shaped ones, any case, and UNLISTED_NAME."""
+        return [n for n in self.cfg.env if _secret(n)] + [UNLISTED_NAME]
+
+    def secret_probe(self) -> str:
+        """Shell printing KEYS=<how many secret_names are in its env> and KEEP=<how many of the session's other
+        `env:` names are>."""
+        keep = [n for n in self.cfg.env if not _secret(n)]
+        return (f"echo KEYS=$(env | grep -cE '^({'|'.join(self.secret_names)})='); "
+                f"echo KEEP=$(env | grep -cE '^({'|'.join(keep) or '$^'})=')")
+
+    def secret_free(self, out: str) -> bool:
+        """What `secret_probe` printed (anywhere in `out`, a model's view): no secret name, every other one kept."""
+        keep = sum(not _secret(n) for n in self.cfg.env)
+        return (re.search(r"KEYS=0(?!\d)", out) is not None
+                and re.search(rf"KEEP={keep}(?!\d)", out) is not None)
+
     def containers(self) -> list[str]:
         """The names of the session's running containers."""
         return subprocess.run([self.rt, "ps", "--format", "{{.Names}}", "--filter", f"name={self.prefix}-"],
@@ -184,6 +215,12 @@ class LiveSession:
         start_sidecars(self.plan, self.sd.compose, provider=self.rt, env=self.env)
         prepare_harness(self.sd, self.cfg, self.plan)
 
+    def reconfigure(self, line: str) -> None:
+        """Append `line` (top-level YAML) to the session file and relaunch."""
+        session = self.sd.root / "glove-session.yml"
+        session.write_text(session.read_text() + line + "\n")
+        self.relaunch()
+
     def relaunch(self) -> None:
         """Re-read the session file and start again, as the next `glove up`
         would (sidecars recreated where they changed)."""
@@ -193,8 +230,8 @@ class LiveSession:
 
     def run(self, *argv: str, entry: str | None = None, extra: tuple[str, ...] = (),
             timeout: int = 300) -> subprocess.CompletedProcess:
-        """`compose run` of the harness service (`extra`: compose-run flags)."""
-        return subprocess.run([*self.base, "run", "--rm", "-T", *extra, *(["--entrypoint", entry] if entry else []),
+        """`compose run` of the harness service (`extra`: compose-run flags), with UNLISTED_NAME set."""
+        return subprocess.run([*self.base, "run", "--rm", "-T", *UNLISTED_FLAG, *extra, *(["--entrypoint", entry] if entry else []),
                                self.plan.harness_service, *argv], env=self.env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=timeout)
 
@@ -232,7 +269,7 @@ class LiveSession:
 
     def tui(self, rows: int, cols: int) -> Tui:
         """The harness as `glove up` attaches it, on a pty."""
-        return Tui([*self.base, "run", "--rm", self.plan.harness_service, *self.plan.harness_command], self.env,
+        return Tui([*self.base, "run", "--rm", *UNLISTED_FLAG, self.plan.harness_service, *self.plan.harness_command], self.env,
                    rows, cols)
 
 
