@@ -1,7 +1,7 @@
 """The ``nono+srt`` enforcer — srt wraps the harness, nono wraps every tool command.
 
     glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- <harness>
-        tool command: glove-pty notty -- nono wrap --profile tool.json -- bash -c <cmd>  (as with nono)
+        tool command: glove-pty notty -u <glob>... -- nono wrap --profile tool.json -- bash -c <cmd>  (as with nono)
 
 srt is outermost because bubblewrap needs mount/pivot_root, which Landlock
 cannot grant; nono's Landlock stacks inside it (verified by the M8 spike).

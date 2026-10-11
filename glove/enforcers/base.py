@@ -49,8 +49,9 @@ TOOLS_FILE = "tools.json"
 SRT_ENFORCERS = frozenset({"srt", "nono+srt"})
 
 # Env vars a shell command must never see (the LLM key and any secret-shaped
-# name): nono's environment.deny_vars strips them by glob, srt each harness env
-# name they match by exact name (srt.denied_env).
+# name): `glove-pty notty -u` unsets them by glob, any case, before every tool
+# command (scrub_argv); nono's environment.deny_vars (by glob, case-sensitive)
+# and srt's envVars (each harness env name they match, srt.denied_env) again.
 SECRET_DENY_VARS = (
     LLM_API_KEY_ENV,
     "*KEY*",
@@ -60,6 +61,15 @@ SECRET_DENY_VARS = (
     "*CREDENTIAL*",
     "*PASSWORD*",
 )
+
+
+def scrub_argv() -> list[str]:
+    """The start of every enforcer's tool wrapper: `glove-pty notty` unsets
+    each SECRET_DENY_VARS glob (any case, whoever set the var) and gives up
+    the controlling terminal (keeping the process group, so an abort still
+    kills the command): with /dev/tty a command could TIOCSTI keystrokes into
+    the harness TUI."""
+    return [GLOVE_PTY, "notty", *(a for g in SECRET_DENY_VARS for a in ("-u", g)), "--"]
 
 
 def workdir(plan: SessionPlan) -> str:

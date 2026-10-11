@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-faf71f952c
+    image: glove/pi:0.5.0-5782abbef9
     working_dir: /work
     command: ["nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer"]
     stdin_open: true
@@ -27,6 +27,7 @@ services:
     environment:
       HOME: "/home/agent"
       PI_CODING_AGENT_DIR: "/home/agent/.pi/agent"
+      PI_CODING_AGENT_SESSION_DIR: "/home/agent/.pi/agent/sessions/--work--"
       PI_OFFLINE: "1"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
       GLOVE_LLM_API_KEY: "glove-injected"
@@ -62,6 +63,12 @@ services:
       - type: bind
         source: "<tmp>/home/.pi/agent/trust.json"
         target: "/home/agent/.pi/agent/trust.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the bind it sits in, so it overlays it)
+      - type: bind
+        source: "<tmp>/home/.pi/agent/auth.json"
+        target: "/home/agent/.pi/agent/auth.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
       # (after the bind it sits in, so it overlays it)

@@ -40,7 +40,7 @@ from nono_srt_live import lines
 
 CONFIG = {"pi": "/home/agent/.pi/agent/settings.json", "vibe": "/home/agent/.vibe/config.toml"}
 # A home file the harness process may write (ring 0 allows it): only the hook refuses the agent.
-TARGET = {"pi": "/home/agent/.pi/agent/auth.json", "vibe": "/home/agent/.vibe/logs/session/plugins/planted"}
+TARGET = {"pi": "/home/agent/.pi/agent/sessions/planted", "vibe": "/home/agent/.vibe/logs/session/plugins/planted"}
 DENIED = "glove enforcer"
 # Vibe's tools that never reach its hook, only the calls they make (measured, Vibe 2.26)
 VIBE_UNHOOKED = {"run_typescript", "search_tool_functions", "skill"}

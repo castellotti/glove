@@ -78,8 +78,11 @@ class Protect:
     read_only: bool = True
 
     @property
-    def name(self) -> str:
-        return os.path.basename(self.container_path)
+    def placeholder(self) -> str:
+        """Its placeholder source, relative to the placeholder dir: the
+        container path, so a bind nested in a placeholder has its mount point
+        there, and two placeholders never share a source."""
+        return self.container_path.lstrip("/")
 
 
 @dataclass(frozen=True)
@@ -225,8 +228,7 @@ def _hooks_path(git_config: str, repo: str) -> str | None:
 
 
 def protected_paths(
-    mounts: list[Mount], *, protect_ide_files: bool = False, trusted: Sequence[str] = (),
-    masked: Sequence[str] = (),
+    mounts: list[Mount], *, protect_ide_files: bool = False, files: Sequence[tuple[str, str]] = (),
 ) -> tuple[Protect, ...]:
     """Ring-0 read-only binds for every rw mount (§6.3 of the v3 plan).
 
@@ -239,13 +241,14 @@ def protected_paths(
     Residual gap (documented): a path created later (e.g. `git init` in a
     directory with no repo yet) or a nested repo/submodule is not covered.
 
-    `trusted` (container paths; the harness profile's `trusted_files`, a
-    trailing `/` marking a directory) are always protected: a missing one gets
-    a placeholder, and each directory between it and the mount root is pinned
+    `files` (container path, source; the harness profile's working-dir
+    `protect:` entries, a trailing `/` marking a directory) are always
+    protected: with source "auto" the mount's own copy, or a placeholder when
+    missing; with "empty" always the placeholder (the harness never sees the
+    mount's own copy). Each directory between one and the mount root is pinned
     read-write (a missing one is created at launch), so `mv .claude x` cannot
-    swap in a fresh copy. `masked` (the profile's `masked_files`) are pinned
-    the same way but always get the placeholder: the harness never sees the
-    mount's own copy."""
+    swap in a fresh copy. Shallower paths go first, so a path inside a masked
+    directory binds inside its placeholder (no pin over it)."""
     out: dict[str, Protect] = {}
     add = partial(_add, out)
     for m in mounts:
@@ -269,10 +272,8 @@ def protected_paths(
                     add(m, None, rel, kind)  # placeholder
                 elif os.path.exists(real) and _inside(m.host_path, real):
                     add(m, real, os.path.relpath(real, m.host_path), kind)
-    for path in trusted:
-        _protect_trusted(mounts, path, add)
-    for path in masked:
-        _protect_trusted(mounts, path, add, source="empty")
+    for path, source in sorted(files, key=lambda f: f[0].rstrip("/").count("/")):
+        _protect_path(mounts, path, add, source=source)
     return tuple(out.values())
 
 
@@ -281,8 +282,9 @@ def protected_home(home: Mount, config_home: str, paths: Sequence[str]) -> tuple
     config home (`config_home`, a container path) re-bound read-write, the one
     place a harness writes (measured: Pi, Vibe and Claude Code replace files and
     create lock dirs there, so it is writable as a whole), and over it
-    read-only binds of what the harness loads from there (the profile's
-    `protected_home`, relative to `home`; a trailing `/` marks a directory),
+    read-only binds of what the harness loads from there (`paths`, the
+    profile's `~/` `protect:` entries, relative to `home`; a trailing `/`
+    marks a directory),
     pinned like a trusted file. They bind the home's own copy, never a
     placeholder: glove renders the files there (a missing one is created empty
     at launch), and an empty directory changes nothing. An entry outside the
@@ -297,7 +299,7 @@ def protected_home(home: Mount, config_home: str, paths: Sequence[str]) -> tuple
     for entry in paths:
         _check_path(home.host_path, entry.rstrip("/"), "dir" if entry.endswith("/") else "file")
         # outside the config home: the read-only home covers it (no bind)
-        _protect_trusted([home, conf], posixpath.join(home.container_path, entry), partial(_add, out), source="own")
+        _protect_path([home, conf], posixpath.join(home.container_path, entry), partial(_add, out), source="own")
     return tuple(out.values())
 
 
@@ -318,7 +320,7 @@ def _add(out: dict[str, Protect], root: Mount, host: str | None, rel: str, kind:
     out.setdefault(cpath, Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only))
 
 
-def _protect_trusted(mounts: list[Mount], path: str, add, *, source: str = "auto") -> None:
+def _protect_path(mounts: list[Mount], path: str, add, *, source: str = "auto") -> None:
     """Protect `path` (a trailing `/` marks a directory), pinning the dirs above
     it. Its bind source: the mount's own copy if it exists, else a placeholder
     ("auto"); always the placeholder ("empty"); always its own ("own", created
@@ -384,13 +386,20 @@ def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points:
 
 
 def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:
-    """Create the empty file/dir sources for placeholder binds (outside /work)."""
+    """Create the empty file/dir sources for placeholder binds (outside /work),
+    and the mount point of each bind nested in a placeholder directory (the
+    runtime cannot create one in a read-only bind)."""
     directory.mkdir(parents=True, exist_ok=True)
+    holders = {p.container_path for p in protect if p.host_path is None and p.kind == "dir"}
     for p in protect:
-        if p.host_path is None:
-            target = directory / p.name
-            if p.kind == "dir":
-                target.mkdir(exist_ok=True)
-            else:
-                target.touch(exist_ok=True)
+        if p.host_path is None or posixpath.dirname(p.container_path) in holders:
+            _make_empty(directory / p.placeholder, p.kind)
     return directory
+
+
+def _make_empty(target: Path, kind: str) -> None:
+    if kind == "dir":
+        target.mkdir(parents=True, exist_ok=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch(exist_ok=True)

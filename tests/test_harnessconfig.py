@@ -9,7 +9,7 @@ import tomllib
 import pytest
 from helpers import STUB_LLM, make_cfg
 
-from glove.config import AddDir
+from glove.config import AddDir, ConfigError
 from glove.harnessconfig import INJECTED_KEY, LLM_API_KEY_ENV, ModelDescriptor, build_environment_context, render_home
 from glove.plan import build_session_plan
 
@@ -211,3 +211,29 @@ def test_pi_harness_config_overrides(tmp_path):
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000
+
+
+@pytest.mark.parametrize("opt", [None, False, True])
+def test_vibe_project_skills_opt_in(tmp_path, opt):
+    # The repo's .vibe/ and .agents/ stay masked; project_skills shows only
+    # their skills/ through, read-only, and never reaches Vibe's config.toml.
+    kw = {} if opt is None else {"harness_config": {"project_skills": opt}}
+    _, plan, home = _home("vibe", tmp_path, **kw)
+    got = {p.container_path: p for p in plan.protect if p.container_path.startswith("/work/")}
+    assert got["/work/.vibe"].host_path is None and got["/work/.agents"].host_path is None
+    skills = {"/work/.vibe/skills", "/work/.agents/skills"}
+    assert (skills <= set(got)) is bool(opt) and all(got[s].read_only for s in skills & set(got))
+    assert "project_skills" not in tomllib.loads((home / ".vibe" / "config.toml").read_text())
+
+
+def test_vibe_project_skills_must_be_a_bool(tmp_path):
+    with pytest.raises(ConfigError, match="project_skills must be true or false"):
+        _home("vibe", tmp_path, harness_config={"project_skills": "yes"})
+
+
+def test_pi_pins_its_session_dir_and_renders_no_credentials(tmp_path):
+    _, plan, home = _home("pi", tmp_path)
+    assert plan.environment["PI_CODING_AGENT_SESSION_DIR"] == "/home/agent/.pi/agent/sessions/--work--"
+    assert json.loads((home / ".pi" / "agent" / "auth.json").read_text()) == {}
+    auth = next(p for p in plan.protect if p.container_path == "/home/agent/.pi/agent/auth.json")
+    assert auth.read_only and auth.host_path == str(home / ".pi" / "agent" / "auth.json")

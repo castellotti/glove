@@ -14,6 +14,7 @@ routing and probes live in the `llm` extension.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -163,6 +164,9 @@ def render_home(cfg: Config, plan: SessionPlan, home_dir: Path) -> list[Path]:
     """
     home_dir.mkdir(parents=True, exist_ok=True)
     profile = plan.profile
+    # the `protect:` opt-ins are glove's (plan.py), not the harness's config
+    cfg = copy.copy(cfg)
+    cfg.harness_config = {k: v for k, v in cfg.harness_config.items() if k not in profile.opt_ins}
     # the harness's native config (its adapter: harnesses/<name>/adapter.py)
     written: list[Path] = adapter_call(profile, "render_home", cfg, profile, home_dir, plan.model,
                                        plan.composition, plan.mount_plan, default=[])

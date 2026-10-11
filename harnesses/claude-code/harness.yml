@@ -5,9 +5,9 @@ summary: Anthropic's Claude Code CLI (native binary), signed in with an API key 
 image: glove/claude-code:0.2.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
 version: 2.1.296
-# The release protected_home, trusted_files and masked_files were audited
-# against: a new release can add a dir it loads code or config from, so glove
-# refuses a `version` that has not been re-audited.
+# The release `protect` was audited against: a new release can add a dir it
+# loads code or config from, so glove refuses a `version` that has not been
+# re-audited.
 audited_version: 2.1.296
 # By path: a `toolchains` block may put other binaries first on PATH.
 entry: [/usr/local/bin/claude]
@@ -29,26 +29,26 @@ contributions: [mcp, skills]
 # Project settings apply their `env` (LD_PRELOAD, BASH_ENV, exported functions)
 # and commands to processes Claude Code starts itself, outside ring 1: ring 0
 # binds them read-only, so only what the operator brought in is loaded.
-trusted_files: [.claude/settings.json, .claude/settings.local.json]
 # Ring 0 binds the home read-only and the config home (.claude/) read-write;
-# read-only inside it (relative to the home): the settings and
-# memory file glove renders, and the dirs Claude Code loads agents, commands,
-# skills, plugins, output styles and rules from, and the mods Claude writes
-# (`dev-mods/`). It writes .claude.json, backups/, history.jsonl,
-# projects/ (its auto-memory too), sessions/ (and more over time) in the
-# config home: those stay writable (it replaces .claude.json by rename).
-# The managed settings deny Read of the config home and Edit of the whole
-# home.
-protected_home:
+# read-only inside it: the settings and memory file glove renders, and the dirs
+# Claude Code loads agents, commands, skills, plugins, output styles and rules
+# from, and the mods Claude writes (`dev-mods/`). It writes .claude.json,
+# backups/, history.jsonl, projects/ (its auto-memory too), sessions/ (and more
+# over time) in the config home: those stay writable (it replaces .claude.json
+# by rename). The managed settings deny Read of the config home and Edit of
+# the whole home.
+protect:
   - .claude/settings.json
-  - .claude/CLAUDE.md
-  - .claude/agents/
-  - .claude/commands/
-  - .claude/skills/
-  - .claude/plugins/
-  - .claude/output-styles/
-  - .claude/rules/
-  - .claude/dev-mods/
+  - .claude/settings.local.json
+  - ~/.claude/settings.json
+  - ~/.claude/CLAUDE.md
+  - ~/.claude/agents/
+  - ~/.claude/commands/
+  - ~/.claude/skills/
+  - ~/.claude/plugins/
+  - ~/.claude/output-styles/
+  - ~/.claude/rules/
+  - ~/.claude/dev-mods/
 # The tool inventory (measured on the audited version, with and without MCP
 # servers): the managed settings pre-approve `shell` (run under the shell
 # prefix), `file_write` (denied outside the write roots) and `allow`; `ask` is

@@ -14,7 +14,7 @@ import pytest
 from helpers import make_cfg
 
 from glove.config import ConfigError
-from glove.harness import HARNESSES_DIR, get_profile, known_harnesses, load_profile
+from glove.harness import HARNESSES_DIR, ProtectEntry, get_profile, known_harnesses, load_profile
 from glove.plan import build_session_plan
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,11 +107,22 @@ def test_a_minimal_manifest_loads(tmp_path):
     (GOOD.replace("api: 1", "api: 2"), "h"),           # wrong api
     (GOOD, "other"),                                   # name ≠ directory
     (GOOD + "contributions: [tools]\n", "h"),          # unknown contribution
-    (GOOD + "masked_files: [../x/]\n", "h"),           # outside the working dir
-    (GOOD + "protected_home: [/etc/x]\n", "h"),        # absolute
-    (GOOD + "protected_home: [.h/../x]\n", "h"),       # escapes the home
-    (GOOD + "protected_home: [./]\n", "h"),            # the home itself
-    (GOOD + "protected_home: [.h//x]\n", "h"),         # empty component
+    (GOOD + "protect: ['../x/']\n", "h"),            # outside the working dir
+    (GOOD + "protect: [/etc/x]\n", "h"),              # absolute
+    (GOOD + "protect: ['~/.h/../x']\n", "h"),        # escapes the home
+    (GOOD + "protect: ['~/./']\n", "h"),              # the home itself
+    (GOOD + "protect: ['~/.h//x']\n", "h"),          # empty component
+    (GOOD + "protect: [{path: '~/.h/x', source: empty}]\n", "h"),  # the home's is always its own
+    (GOOD + "protect: [{path: '~/.h/x', source: own}]\n", "h"),    # (no source there)
+    (GOOD + "protect: [{path: .h/x, source: own}]\n", "h"),       # the working dir's is auto or empty
+    (GOOD + "protect: [{path: .h/x, from: y}]\n", "h"),           # unknown entry key
+    (GOOD + "protect: [{path: .h/x/, opt_in: x}]\n", "h"),       # an opt-in not inside a masked dir
+    (GOOD + "protect: [{path: .h/, source: empty}, {path: .h/x/, opt_in: Bad-Key}]\n", "h"),  # not a key
+    (GOOD + "protect: [{path: .h/, source: empty}, {path: .h/x/, source: empty, opt_in: x}]\n", "h"),
+    (GOOD + "protect: .h/x\n", "h"),                  # not a list
+    (GOOD + "trusted_files: [.h/x]\n", "h"),          # folded into protect: an unknown key
+    (GOOD + "masked_files: [.h/]\n", "h"),
+    (GOOD + "protected_home: [.h/x]\n", "h"),
     (GOOD + "brief: ../x.md\n", "h"),                  # outside the harness dir
     (GOOD + "brief: missing.md\n", "h"),               # no such file
     (GOOD.replace("version: 1.0.0\n", ""), "h"),      # no release pinned
@@ -127,9 +138,18 @@ def test_bad_manifests_are_refused(tmp_path, body, dirname):
         load_profile(_manifest(tmp_path, dirname, body))
 
 
-def test_protected_home_keeps_its_directory_marker(tmp_path):
-    p = load_profile(_manifest(tmp_path, "h", GOOD + "protected_home: [.h/settings.json, .h/tools/]\n"))
-    assert p.protected_home == (".h/settings.json", ".h/tools/")
+def test_protect_entries_by_where_and_source(tmp_path):
+    body = GOOD + ("protect: ['~/.h/settings.json', '~/.h/tools/', .h/settings.json, {path: .h/, source: empty},"
+                   " {path: .h/skills/, opt_in: project_skills}]\n")
+    p = load_profile(_manifest(tmp_path, "h", body))
+    assert p.protect == (
+        ProtectEntry(".h/settings.json", home=True, source="own"),
+        ProtectEntry(".h/tools/", home=True, source="own"),
+        ProtectEntry(".h/settings.json"),
+        ProtectEntry(".h/", source="empty"),
+        ProtectEntry(".h/skills/", opt_in="project_skills"),
+    )
+    assert p.opt_ins == {"project_skills"}
 
 
 def test_pinned_dependency_trees_match_the_harness_version():

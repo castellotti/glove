@@ -19,7 +19,7 @@ dangerous_commands deny groups):
   widens the tool sandbox's read surface to whole runtime trees, so it rests on
   the image-layout assumption that glove's harness images bake no secret under
   those prefixes (secrets reach the harness via env, and the tool profile's
-  ``environment.deny_vars`` already strips secret-shaped vars). The residual
+  the tool wrapper's scrub strips secret-shaped vars). The residual
   risk — a prompt-injected read of a credential a future image layer dropped
   there — is contained by ``network.block``: the tool sandbox has no egress, so
   a read cannot be exfiltrated. The paths stay read-only in both profiles.
@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ..base import ENFORCER_DIR, GLOVE_PTY, NONO, SECRET_DENY_VARS, write_roots
+from ..base import ENFORCER_DIR, NONO, SECRET_DENY_VARS, scrub_argv, write_roots
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
@@ -135,14 +135,10 @@ def render_tool_profile(plan: SessionPlan) -> dict:
 
 
 def tool_wrapper_argv() -> list[str]:
-    """The prefix the harness hooks prepend to every shell command.
-
-    `glove-pty notty` first gives up the controlling terminal (keeping the
-    process group, so an abort still kills the command): nono's base policy
-    grants /dev/tty, and with it a command could TIOCSTI keystrokes into the
-    harness TUI."""
+    """The prefix the harness hooks prepend to every shell command: the
+    scrub (nono's base policy grants /dev/tty), then nono."""
     return [
-        GLOVE_PTY, "notty", "--",
+        *scrub_argv(),
         NONO, "wrap", "-s", "--allow-cwd",
         "--profile", f"{ENFORCER_DIR}/tool.json", "--",
     ]

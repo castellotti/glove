@@ -3,7 +3,8 @@
 For users who prefer Anthropic's runtime (parity with Claude Code's sandbox, or
 Pi's own `sandbox` extension). Unlike nono, srt:
 
-- **wraps tool commands only** (`srt -s srt-settings.json -- bash -c <cmd>`);
+- **wraps tool commands only** (`glove-pty notty -u … -- srt -s
+  srt-settings.json -- bash -c <cmd>`, the scrub before it as with nono);
   it has no "wrap the whole TUI and run proxies for children" mode, so the
   harness *process* is protected by ring 0 alone (documented in doctor / policy
   show).
@@ -15,8 +16,9 @@ Pi's own `sandbox` extension). Unlike nono, srt:
   form, unlike nono's `deny_vars`): every name in the harness env that
   matches nono's secret globs, and the LLM key's, is rendered as a
   `credentials.envVars` entry with `mode: deny`, which srt turns into bwrap
-  `--unsetenv` (the harness holds only a placeholder for the key). glove sets
-  the harness env, so these are all the names it knows of.
+  `--unsetenv` (the harness holds only a placeholder for the key). This is
+  the second layer: the scrub before srt unsets every secret-shaped name by
+  glob, whoever set it.
   srt's credential *masking* (sentinel + proxy-side substitution) exists but
   requires TLS termination, so glove does not use it. An LLM API key or
   subscription token never reaches the harness (`llm`'s llm-auth injects it).
@@ -44,7 +46,7 @@ from typing import TYPE_CHECKING
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, SECRET_DENY_VARS, SRT, write_roots
+from .base import ENFORCER_DIR, SECRET_DENY_VARS, SRT, scrub_argv, write_roots
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -108,7 +110,7 @@ def denied_env(plan: SessionPlan) -> list[str]:
 
 
 def tool_wrapper_argv() -> list[str]:
-    return [SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+    return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
 
 class SrtEnforcer:

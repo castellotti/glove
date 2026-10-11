@@ -56,7 +56,8 @@ def _shq(s: str) -> str:
 def wrap_command(wrapper_argv: list[str], command: str) -> str:
     # NON-login shell, same as Pi's enforcer extension: a login shell sources
     # /etc/profile, which nono's default profile denies (deny_shell_configs).
-    return f"{' '.join(wrapper_argv)} bash -c {_shq(command)}"
+    # each argv element quoted: the scrub's globs (`-u '*KEY*'`) must not expand
+    return f"{' '.join(map(_shq, wrapper_argv))} bash -c {_shq(command)}"
 
 
 def load_wrapper_argv(path: str | None = None) -> list[str] | None:

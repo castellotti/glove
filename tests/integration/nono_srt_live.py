@@ -149,8 +149,8 @@ def main(directory: str) -> int:
 
         print("== the tool position (the rendered tool wrapper, inside the harness position)")
         t_ = lines(in_harness(shlex.join([*wrapper, "bash", "-c", TOOL_PROBE])))
-        check("wrapper: glove-pty notty → nono wrap",
-              wrapper[1] == "notty" and wrapper[3:5] == [NONO, "wrap"])
+        check("wrapper: glove-pty notty (the scrub) → nono wrap",
+              wrapper[1] == "notty" and wrapper[wrapper.index("--") + 1:][:2] == [NONO, "wrap"])
         check("no user namespace", t_.get("T_UNSHARE_USER") not in (None, "0"), str(t_))
         check("secret-shaped env stripped (nono deny_vars)", t_.get("T_KEY") == "0")
         check("no network (nono)", t_.get("T_NET") not in (None, "0"))

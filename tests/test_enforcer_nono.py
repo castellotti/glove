@@ -16,7 +16,7 @@ from helpers import make_cfg
 
 from glove.config import AddDir
 from glove.enforcers import get_enforcer
-from glove.enforcers.base import ENFORCER_DIR, NONO
+from glove.enforcers.base import ENFORCER_DIR, NONO, scrub_argv
 from glove.plan import build_session_plan
 
 GOLDEN = Path(__file__).parent / "golden" / "nono"
@@ -107,9 +107,10 @@ def test_wrap_and_wrapper_argv(tmp_path):
     assert f"{ENFORCER_DIR}/harness.json" in wrapped
 
     wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
-    # no controlling terminal first (no TIOCSTI into the harness), then nono
-    assert wrapper[:3] == ["/opt/glove/bin/glove-pty", "notty", "--"]
-    assert wrapper[3:5] == [NONO, "wrap"]
+    # the scrub first (secret env by glob, no TIOCSTI into the harness), then nono
+    n = len(scrub_argv())
+    assert wrapper[:n] == scrub_argv()
+    assert wrapper[n:n + 2] == [NONO, "wrap"]
     assert wrapper[-1] == "--"
     assert f"{ENFORCER_DIR}/tool.json" in wrapper
 

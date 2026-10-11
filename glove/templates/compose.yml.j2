@@ -110,7 +110,7 @@ services:
       else "re-bound read-write: a mount point, so it cannot be renamed away" }}
       # (after the bind it sits in, so it overlays it)
       - type: bind
-        source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.name) | tojson }}
+        source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.placeholder) | tojson }}
         target: {{ p.container_path | tojson }}
 {% if p.read_only %}
         read_only: true

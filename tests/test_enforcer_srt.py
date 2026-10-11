@@ -13,7 +13,7 @@ from helpers import make_cfg
 
 from glove.config import AddDir
 from glove.enforcers import get_enforcer
-from glove.enforcers.base import ENFORCER_DIR, SRT, srt_suffix
+from glove.enforcers.base import ENFORCER_DIR, GLOVE_PTY, SECRET_DENY_VARS, SRT, scrub_argv, srt_suffix
 from glove.enforcers.srt import render_settings
 from glove.plan import build_session_plan
 
@@ -89,9 +89,11 @@ def test_srt_does_not_wrap_harness(tmp_path):
     plan = _plan(tmp_path)
     assert plan.harness_command == list(plan.profile.entry)  # TUI unwrapped
     assert plan.image.endswith(srt_suffix())  # distinct image variant
+    # srt unsets only exact names: the scrub before it unsets every secret
+    # glob, any case, and gives up the terminal, as under nono.
     wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
-    assert wrapper[0] == SRT
-    assert f"{ENFORCER_DIR}/srt-settings.json" in wrapper
+    n = len(scrub_argv())
+    assert wrapper[:n] == scrub_argv() and wrapper[n:] == [SRT, "-s", f"{ENFORCER_DIR}/srt-settings.json", "--"]
 
 
 def test_srt_uses_relaxed_seccomp(tmp_path):
@@ -112,3 +114,9 @@ def test_gaps_documented(tmp_path):
     gaps = get_enforcer("srt").gaps(_plan(tmp_path))
     assert any("unwrapped" in g for g in gaps)
     assert not any("stays in the harness env" in g for g in gaps)  # no secret in the harness env
+
+
+def test_scrub_argv_unsets_every_secret_glob():
+    argv = scrub_argv()
+    assert argv[:2] == [GLOVE_PTY, "notty"] and argv[-1] == "--"
+    assert argv[2:6] == ["-u", "GLOVE_LLM_API_KEY", "-u", "*KEY*"] and len(argv) == 3 + 2 * len(SECRET_DENY_VARS)

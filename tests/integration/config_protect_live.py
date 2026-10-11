@@ -5,8 +5,8 @@ enforcer and runtime (driven by test_config_protect.sh).
 
 With the project config an agent could plant in /work already there (a Vibe
 hook shadowing glove's, a Pi project extension: each would touch a marker):
-  1. in the harness service, every read-only ring-0 bind (`protected_home`,
-     `trusted_files`, `masked_files`, the /work paths the host trusts) refuses
+  1. in the harness service, every read-only ring-0 bind (`protect:` in
+     harness.yml, the /work paths the host trusts) refuses
      a write, and the config home cannot be renamed away; Vibe's masked
      project dirs are empty though the host's are not; the home outside the
      config home is read-only (EROFS: a new file or dir at its top level, in
@@ -57,7 +57,7 @@ def main(directory: str) -> int:
     with live_session(directory) as s:
         plan, h = s.plan, s.cfg.harness
         work, home = s.sd.root / "work", plan.profile.config_home_path
-        masked = [m.rstrip("/") for m in plan.profile.masked_files]
+        masked = [e.path.rstrip("/") for e in plan.profile.protect if not e.home and e.source == "empty"]
         plants = {**PLANTS.get(h, {}), "AGENTS.md": "# project notes\n", **{f"{m}/.glove-probe": "x\n" for m in masked}}
         for rel, text in plants.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)

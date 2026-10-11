@@ -141,7 +141,8 @@ function wrapCommand(argv: string[], command: string): string {
   // which nono's default profile denies (deny_shell_configs), printing a harmless
   // but noisy "bash: /etc/profile: Permission denied" on every command. PATH is
   // already set by the image env, so login-shell setup is unnecessary here.
-  return `${argv.join(" ")} bash -c ${shq(command)}`;
+  // Each argv element quoted: the scrub's globs (`-u '*KEY*'`) must not expand.
+  return `${argv.map(shq).join(" ")} bash -c ${shq(command)}`;
 }
 
 // Reject attempts to neuter the enforcer by overriding its env in the command.
