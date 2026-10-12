@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 import yaml
@@ -55,9 +54,9 @@ def test_headless_sidecar_is_hardened_and_alone_on_its_network(tmp_path):
     assert pw["environment"]["PW_ALLOWED_HOST"] == "glove-s-browser:8931"
     assert pw["environment"]["PW_PROXY"] == "http://glove-s-browser-egress:8888"
     assert pw["healthcheck"]["test"][-1] == "exec 3<>/dev/tcp/127.0.0.1/8931"
-    # its binds: the output dir and the MCP config, both in its own state
+    # its binds: the output dir, the download staging dir and the MCP config, all in its own state
     binds = {v["target"]: v for v in pw["volumes"]}
-    assert set(binds) == {"/data/output", "/etc/glove/playwright/mcp.json"}
+    assert set(binds) == {"/data/output", "/data/staging", "/etc/glove/playwright/mcp.json"}
     assert binds["/etc/glove/playwright/mcp.json"]["read_only"] is True
     assert all(v["source"].startswith(str(tmp_path / "ext" / "playwright")) for v in binds.values())
     # invariant 1: nothing published, anywhere
@@ -85,7 +84,8 @@ def test_the_mcp_never_gets_a_cdp_port_or_file_access():
         assert flag not in src
     assert "--proxy-server \"$PW_PROXY\"" in src and "--allowed-hosts \"$PW_ALLOWED_HOST\"" in src
     # with the sandbox on, both modes prove it before serving (fail closed at `glove up`)
-    assert src.count("    require_sandbox\n") == 2 and 'chromium_sandbox: "off"' in src
+    assert "prepare() {\n  require_sandbox\n" in src and src.count("    prepare\n") == 2
+    assert 'chromium_sandbox: "off"' in src
 
 
 def test_one_playwright_pin():
@@ -149,31 +149,68 @@ def test_session_profile_persists_in_state_and_is_refused_under_tor(tmp_path):
     _plan(tmp_path / "t2", egress=("tor", {}), profile="session", allow_persistent_profile_with_tor=True)
 
 
-def test_downloads_and_uploads_into_work_are_opt_in(tmp_path):
-    doc = _project(tmp_path, downloads="work", uploads="work")
-    binds = {v["target"]: v for v in doc["services"]["glove-s-pw"]["volumes"]}
-    work = Path(tmp_path / "work").resolve()
-    assert binds["/data/output"]["source"] == f"{work}/browser-output" and not binds["/data/output"].get("read_only")
-    assert binds["/data/uploads"]["source"] == f"{work}/browser-uploads" and binds["/data/uploads"]["read_only"]
-    plan = _plan(tmp_path / "b", downloads="work", uploads="work")
+def test_downloads_and_uploads_are_opt_in_and_never_a_work_bind(tmp_path):
+    # downloads: an output (<session>/browser-output, the sidecar writes it, the
+    # harness reads it at /work/browser-output); uploads: an input
+    # (<session>/browser-uploads, the harness writes it at /work/browser-uploads,
+    # the sidecar reads it at the same path). Neither binds a path in /work.
+    plan, text = render(_cfg(tmp_path, downloads="work", uploads="work"), tmp_path, session_dir=str(tmp_path))
+    doc = yaml.safe_load(text)
+    pw, harness = doc["services"]["glove-s-pw"], doc["services"][plan.harness_service]
+    binds = {v["target"]: v for v in pw["volumes"]}
+    out, up = binds["/run/glove-output/browser-output"], binds["/work/browser-uploads"]
+    assert out["source"] == str(tmp_path / "browser-output") and not out.get("read_only")
+    assert up["source"] == str(tmp_path / "browser-uploads") and up["read_only"] is True
+    work = str(tmp_path / "work")
+    assert "/data/output" not in binds and not any(work in str(v.get("source")) for v in binds.values())
+    assert pw["environment"]["PW_OUTPUT"] == "/run/glove-output/browser-output"
+    assert pw["environment"]["PW_UPLOADS"] == "/work/browser-uploads"
+    hb = {v["target"]: v for v in harness["volumes"]}
+    assert hb["/work/browser-output"]["read_only"] and not hb["/work/browser-uploads"].get("read_only")
     materialize(plan.composition)
-    assert (tmp_path / "b" / "work" / "browser-output").is_dir()
+    assert (tmp_path / "browser-output").is_dir() and (tmp_path / "browser-uploads").is_dir()
     brief = dict(plan.composition.rendered_briefs())["playwright"]
     assert "/work/browser-output/" in brief and "/work/browser-uploads/" in brief
+    assert "operator may be watching" not in brief  # novnc only
+    # off by default: the state output dir, the image's empty uploads dir
+    pw = _project(tmp_path / "off")["services"]["glove-s-pw"]
+    assert "PW_OUTPUT" not in pw["environment"] and "PW_UPLOADS" not in pw["environment"]
 
 
-def test_a_sidecar_never_binds_all_of_work(tmp_path, monkeypatch):
+def test_an_upload_dir_planted_as_a_link_is_refused(tmp_path):
+    # the input's mount point is in /work, which the agent writes
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "browser-uploads").symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(Exception, match="browser-uploads"):
+        render(_cfg(tmp_path, uploads="work"), tmp_path, session_dir=str(tmp_path))
+
+
+def test_downloads_stage_on_disk_not_in_tmpfs(tmp_path):
+    plan = _plan(tmp_path)
+    materialize(plan.composition)
+    state = tmp_path / "ext" / "playwright"
+    cfg = json.loads((state / "mcp.json").read_text())
+    assert cfg["browser"]["launchOptions"]["downloadsPath"] == "/data/staging"
+    (state / "downloading" / "staged").write_text("x")
+    materialize(plan.composition)  # never emptied here: a running sidecar may be using it
+    assert (state / "downloading" / "staged").exists()
+    # the sidecar clears it as it starts (prepare, in both modes), before the browser
+    assert "  find /data/staging -mindepth 1 -delete" in (IMAGE / "glove-pw-start").read_text()
+
+
+@pytest.mark.parametrize("sub", ["", "browser-output"])
+def test_a_sidecar_never_binds_work_or_a_path_in_it(tmp_path, monkeypatch, sub):
     import glove.compose as compose_mod
 
     real = compose_mod._volumes
 
     def widen(comp, a, short, vols, *rest, **kw):
         if a.name == "playwright":
-            vols = [*vols, {"type": "bind", "source": str(comp.work_dir), "target": "/w"}]
+            vols = [*vols, {"type": "bind", "source": str(comp.work_dir / sub), "target": "/w"}]
         return real(comp, a, short, vols, *rest, **kw)
 
     monkeypatch.setattr(compose_mod, "_volumes", widen)
-    with pytest.raises(ExtensionError, match="never binds all of /work"):
+    with pytest.raises(ExtensionError, match="never binds a path in /work"):
         render(_cfg(tmp_path), tmp_path)
 
 

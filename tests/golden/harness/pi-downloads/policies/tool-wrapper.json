@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "/opt/glove/bin/glove-pty",
+    "notty",
+    "-u",
+    "GLOVE_LLM_API_KEY",
+    "-u",
+    "*KEY*",
+    "-u",
+    "*TOKEN*",
+    "-u",
+    "*SECRET*",
+    "-u",
+    "*API_KEY*",
+    "-u",
+    "*CREDENTIAL*",
+    "-u",
+    "*PASSWORD*",
+    "-u",
+    "GLOVE_DOWNLOAD_MCP_URL",
+    "-u",
+    "GLOVE_FETCH_PROXY",
+    "--",
+    "/usr/bin/nono",
+    "wrap",
+    "-s",
+    "--allow-cwd",
+    "--profile",
+    "/etc/glove/enforcer/tool.json",
+    "--"
+  ]
+}

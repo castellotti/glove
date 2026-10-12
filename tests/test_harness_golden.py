@@ -22,6 +22,9 @@ UPDATE = os.environ.get("GLOVE_UPDATE_GOLDEN") == "1"
 WEB = {"direct": {}, "search": {}, "webfetch": {}, "playwright": {}, "media": {}, "ocr": {}, "observe": {},
        "filter": {}}
 
+# webfetch downloads: the fetcher sidecar for every harness, behind a gate
+DOWNLOADS = {"direct": {}, "webfetch": {"downloads": "work"}, "observe": {}}
+
 CASES = {
     "pi-nono-min": {"harness": "pi", "enforcer": "nono", "extensions": {}},
     "pi-srt-full": {
@@ -51,6 +54,13 @@ CASES = {
         "harness_config": {"include_commit_signature": False, "disabled_tools": ["task"],
                            "mcp_servers": [{"name": "extra", "transport": "http", "url": "http://x:1/mcp"}]},
         "brief": "# brief\n\nDo the thing.",
+    },
+    "pi-downloads": {"harness": "pi", "enforcer": "nono+srt", "extensions": dict(DOWNLOADS)},
+    "vibe-downloads": {"harness": "vibe", "enforcer": "nono+srt", "extensions": dict(DOWNLOADS)},
+    "claude-code-downloads": {
+        "harness": "claude-code", "enforcer": "nono+srt",
+        "extensions": {**DOWNLOADS, "llm": {"provider": "anthropic", "model": "claude-x", "auth": "oauth",
+                                           "api_key": "keychain:test-cc"}},
     },
 }
 

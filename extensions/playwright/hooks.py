@@ -1,7 +1,7 @@
 """`playwright` hooks: the sidecar's MCP config, and host-mode wiring.
 
 Sidecar modes (headless, novnc): `materialize` renders the MCP config the
-sidecar reads (read-only) and creates its output/profile dirs. Host mode:
+sidecar reads (read-only) and creates its output, profile and staging dirs. Host mode:
 headed Chrome + the pinned Playwright MCP run on the host in tmux
 (glove/hostsvc.py) on per-session loopback ports, and the `browser` endpoint
 forwards to that MCP. The Chrome profile and MCP output live in this
@@ -28,6 +28,10 @@ PORTS_FILE = "host-ports.json"
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 # `ca`: staged into this extension's state, bound read-only into the sidecar.
 CA_FILE = "corporate-ca.pem"
+# Where Chromium stages a download (`<state>/downloading`, on disk) before the
+# MCP copies it into the output dir: Playwright's default is under /tmp, a
+# tmpfs that counts against the sidecar's memory.
+STAGING = "/data/staging"
 
 
 def _chrome():
@@ -113,7 +117,7 @@ def mcp_config(settings: dict[str, Any]) -> dict[str, Any]:
         w, h = settings["viewport"].split("x")
         args += [f"--window-size={w},{h}", "--window-position=0,0"]
     return {"browser": {"contextOptions": {"timezoneId": settings["timezone"], "locale": settings["locale"]},
-                        "launchOptions": {"args": args}}}
+                        "launchOptions": {"args": args, "downloadsPath": STAGING}}}
 
 
 def materialize(ctx: dict[str, Any]) -> None:
@@ -131,11 +135,9 @@ def materialize(ctx: dict[str, Any]) -> None:
         (state / CA_FILE).chmod(0o644)
     if s["profile"] == "session":
         (state / "profile").mkdir(mode=0o700, exist_ok=True)
-    for setting, sub in (("downloads", "browser-output"), ("uploads", "browser-uploads")):
-        if s[setting] == "work":
-            if not ctx["work"]["host"]:
-                raise ValueError(f"playwright.{setting}: work needs the session's work dir")
-            Path(ctx["work"]["host"], sub).mkdir(exist_ok=True)
+    # emptied by the sidecar as it starts (glove-pw-start), never here: a
+    # sidecar from the last launch may still be running and using it
+    (state / "downloading").mkdir(mode=0o700, exist_ok=True)
 
 
 def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:

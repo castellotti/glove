@@ -1,0 +1,33 @@
+{
+  "providers": {
+    "glove": {
+      "baseUrl": "http://glove-s-llm:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "glove-no-key",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "thinkingFormat": "reasoning_effort",
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "test-model",
+          "name": "test-model (glove)",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}

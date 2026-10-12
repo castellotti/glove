@@ -49,16 +49,20 @@ def _secret(name: str) -> bool:
 
 
 # Each harness's own tools, by what they do: shell, file write (name, path
-# argument, content argument), web search and fetch; and its CLI. Vibe's MCP
+# argument, content argument), web search, fetch and download; and its CLI. Vibe's MCP
 # tools by the name its hook sees (`mcp_<server>.<tool>`; `call` runs them
 # from run_typescript, the only place Vibe 2.26 offers them).
 TOOLS = {
     "pi": {"bash": "bash", "write": ("write", "path", "content"), "search": "web_search", "fetch": "web_fetch",
-           "cli": "/usr/local/bin/pi"},
+           "download": "web_download", "download_status": "web_download_status", "cli": "/usr/local/bin/pi"},
     "vibe": {"bash": "bash", "write": ("write_file", "path", "content"),
-             "search": "mcp_searxng.web_search", "fetch": "mcp_webfetch.fetch_url", "cli": "vibe"},
+             "search": "mcp_searxng.web_search", "fetch": "mcp_webfetch.fetch_url",
+             "download": "mcp_webdownload.web_download", "download_status": "mcp_webdownload.web_download_status",
+             "cli": "vibe"},
     "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content"),
-                    "search": "mcp__searxng__web_search", "fetch": "WebFetch", "cli": "/usr/local/bin/claude"},
+                    "search": "mcp__searxng__web_search", "fetch": "WebFetch",
+                    "download": "mcp__webdownload__web_download",
+                    "download_status": "mcp__webdownload__web_download_status", "cli": "/usr/local/bin/claude"},
 }
 
 
@@ -252,7 +256,18 @@ class LiveSession:
 
     def seq(self, *steps: tuple[str, dict]) -> list[str]:
         """The results of `steps` (tool, args), called one after another in one
-        turn (the stubs' `SEQ`): one per step, "" for a step that got none."""
+        turn (the stubs' `SEQ`): one per step, "" for a step that got none.
+        Vibe's `mcp_<server>.<tool>` steps run in one run_typescript, in order
+        (one MCP session, as SEQ's), each result cut to its share of the stub's 1500 characters."""
+        if self.cfg.harness == "vibe" and all(re.fullmatch(r"mcp_\w+\.\w+", t) for t, _ in steps):
+            share = 1100 // len(steps)  # the JSON escaping around it grows it
+            calls = ", ".join(f"() => tools.{t}({json.dumps(a)})" for t, a in steps)
+            code = (f"async function main() {{ const out = []; for (const f of [{calls}]) {{ "
+                    "try { const r = await f(); out.push(typeof r === 'string' ? r : JSON.stringify(r)); } "
+                    "catch (e) { out.push('ERR ' + String(e)); } } "
+                    f"return out.map(r => r.slice(0, {share})).join(' ||| '); }}")
+            res = tool_result(self.call("run_typescript", {"code": code}))
+            return (res.removeprefix("TOOL RESULT:").split("|||") + [""] * len(steps))[:len(steps)]
         return (tool_results(self.ask("SEQ " + json.dumps(steps))) + [""] * len(steps))[:len(steps)]
 
     def vibe_functions(self, *connectors: str) -> list[str]:

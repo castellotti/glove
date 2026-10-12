@@ -22,3 +22,9 @@ logins persist under `.glove/`.
 On Podman set `playwright.chromium_sandbox: "off"`: Podman's compose cannot
 apply the seccomp profile Chromium's sandbox needs, and glove refuses rather
 than dropping it silently.
+
+With `downloads: work` what the browser saves lands in `browser-output/` in the
+session directory (read-only to the agent at `/work/browser-output/`); with
+`uploads: work` the agent can upload files it puts in
+`/work/browser-uploads/`. Don't combine `uploads: work` with a `profile:
+session` you have logged in with (see `docs/SECURITY.md`).

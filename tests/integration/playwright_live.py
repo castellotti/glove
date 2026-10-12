@@ -19,6 +19,12 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      view` serves noVNC on 127.0.0.1 and refuses foreign Host/Origin; input is
      refused server-side unless allow_control and the full password; the
      clipboard is off;
+  6. `downloads: work`: a .7z download lands in <session>/browser-output (read-only
+     to the shell, `7z l` reads it), and a 2 GB ISO (above the 768 MB /tmp)
+     lands complete; `uploads: work`: browser_file_upload sends a 0600 file
+     from /work/browser-uploads (read-only to the sidecar), refuses
+     /etc/passwd, and the result for a link to a sidecar file is printed
+     (SECURITY.md's residual); not under Vibe (a known issue, TODO.md 0t);
   then tears down. Prints PASS/FAIL per check; exit 0 only if all pass.
 """
 
@@ -34,11 +40,19 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
+from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, tool_result, wait_for
 
 from glove.extensions import image_tag
 
 HERE = Path(__file__).parent
+# downloads/uploads (`downloads: work`, `uploads: work`)
+# (archive.org's .7z files, the research case, 500 often enough to make the check flaky)
+SEVENZ = "https://github.com/ip7z/7zip/releases/download/24.08/7z2408-extra.7z"
+SEVENZ_SIZE = 1611651
+BIG = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.7.0-amd64-standard.iso",
+       2020130816)
+# short: the stub keeps the first 400 characters of each SEQ result, and the page's URL comes first
+UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().then(t=>document.title='GOT:'+t)\">"
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
 
@@ -164,6 +178,82 @@ def main(directory: str) -> int:
                                         and (r.get("dest") or {}).get("host") == "example.org"], 15)
             check("the browser's request is blocked at the gate", bool(blocked) and "Example Domain" not in ans,
                   ans[-120:].replace("\n", " "))
+
+        if pws["downloads"] == "work":
+            print("== downloads (browser-output)")
+            out_dir = sd.root / "browser-output"
+            src = {m.get("Destination"): m for m in pw.get("Mounts") or []}.get("/run/glove-output/browser-output", {})
+            check("the sidecar binds <session>/browser-output rw", os.path.realpath(src.get("Source", "")) ==
+                  os.path.realpath(out_dir) and src.get("RW") is True, src.get("Source", ""))
+            out = live.sh("touch /work/browser-output/x; echo rc=$?")
+            check("a tool command can't write /work/browser-output", "rc=1" in out, out[-120:])
+            res = live.seq((f"{prefix}browser_navigate", {"url": SEVENZ}), (f"{prefix}browser_wait_for", {"time": 15}))
+            print(f"    {' ||| '.join(r[-300:] for r in res)}")
+            name = SEVENZ.rsplit("/", 1)[1]
+            got = wait_for(lambda: (out_dir / name).is_file() and (out_dir / name).stat().st_size == SEVENZ_SIZE, 60)
+            check(f"a .7z downloads to <session>/browser-output/{name}", bool(got),
+                  f"{(out_dir / name).stat().st_size if (out_dir / name).exists() else 0} B")
+            check("…and the response says `Downloaded file`", any("Downloaded file" in r for r in res))
+            if got:
+                out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
+                check("7z l reads it from the shell", "files" in out, out[-160:])
+            # a download larger than the sidecar's 768 MB /tmp: staged on disk (<state>/downloading)
+            big, size = BIG
+            t = time.time()
+
+            def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
+                return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
+
+            # one MCP session held open (its context closes, and the download with it, when the session ends)
+            client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
+                                                      f"{s}-browser:8931", [["browser_navigate", {"url": big}],
+                                                                            ["sleep", {"s": 1800}]]),
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            try:
+                got = wait_for(landed, timeout=1800, step=5)
+            finally:
+                client.terminate()
+                out = client.communicate(timeout=30)[0]
+            print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
+            check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
+                  ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
+        if pws["uploads"] == "work" and cfg.harness == "vibe":
+            # Vibe's every MCP call gets a fresh browser context: the file chooser a click opens is gone
+            # before browser_file_upload (TODO.md 0t)
+            print("  KNOWN ISSUE: uploads under Vibe (each MCP call a fresh browser context), not checked")
+        elif pws["uploads"] == "work":
+            print("== uploads (browser-uploads)")
+            up = sd.root / "browser-uploads"
+            src = {m.get("Destination"): m for m in pw.get("Mounts") or []}.get("/work/browser-uploads", {})
+            check("the sidecar binds <session>/browser-uploads read-only at the same path",
+                  os.path.realpath(src.get("Source", "")) == os.path.realpath(up) and src.get("RW") is False,
+                  src.get("Source", ""))
+            out = live.sh("umask 077; printf 'hello upload' > /work/browser-uploads/up.txt; echo rc=$?; "
+                          "ln -sf /etc/hostname /work/browser-uploads/link.txt")
+            check("a tool command writes /work/browser-uploads (a 0600 file)", "rc=0" in out
+                  and (up / "up.txt").stat().st_mode & 0o777 == 0o600, out[-120:])
+            r = exec_pw("touch /work/browser-uploads/x; echo rc=$?")
+            check("the sidecar can't write it", "rc=0" not in r.stdout, r.stdout.strip()[-80:])
+            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}), 1500)
+            ref = (re.search(r'button "Choose File" \[ref=(\w+)\]', first) or
+                   re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+
+            def upload(path: str) -> list[str]:
+                return live.seq((f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}),
+                                (f"{prefix}browser_click", {"element": "Choose File", "target": ref}),
+                                (f"{prefix}browser_file_upload", {"paths": [path]}),
+                                (f"{prefix}browser_wait_for", {"time": 2}),
+                                (f"{prefix}browser_snapshot", {}))
+
+            res = upload("/work/browser-uploads/up.txt")
+            print(f"    ref {ref}: {' ||| '.join(r[-160:] for r in res)}")
+            check("browser_file_upload sends a file from /work/browser-uploads",
+                  any("Page Title: GOT:hello upload" in r for r in res), res[-1][-200:])
+            res = upload("/etc/passwd")
+            check("…and refuses one outside it", not any("Page Title: GOT:" in r for r in res), res[2][-200:])
+            res = upload("/work/browser-uploads/link.txt")
+            print(f"    (residual, SECURITY.md: a link in the dir names a sidecar file: "
+                  f"{'sent' if any('Page Title: GOT:' in r for r in res) else 'refused'}: {res[2][-120:]})")
 
         if mode == "novnc":
             print("== novnc")

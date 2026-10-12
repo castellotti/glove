@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_session
+from helpers import darwin, make_session, quarantine_attr
 from typer.testing import CliRunner
 
 from glove import registry as reg
@@ -626,3 +626,32 @@ def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypa
     assert result.exit_code == 1 and "chrome: absent" in result.output and not started
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
+
+
+def test_files_left_in_an_old_work_subdir_are_pointed_out(home, tmp_path):
+    # downloads: work used to land in work/browser-output/; the output beside
+    # work/ is now mounted over that path, hiding what is left there
+    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work}\n")
+    (d / "work" / "browser-output").mkdir()
+    (d / "work" / "browser-output" / "old.zip").write_text("x")
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 0, result.output
+    assert "work/browser-output/ has files" in result.output and "move them there" in result.output
+    (d / "work" / "browser-output" / "old.zip").unlink()
+    assert "has files" not in runner.invoke(app, ["plan", str(d)]).output
+
+
+@darwin
+def test_down_and_downloads_mark_quarantine_the_outputs_not_the_inputs(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work, uploads: work}\n")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: None)
+    monkeypatch.setattr("glove.cli.build_session_plan", None)  # down never re-plans: plan time recorded them
+    (d / "browser-output" / "x.dmg").write_bytes(b"x")
+    (d / "browser-uploads" / "mine.pdf").write_bytes(b"y")
+
+    result = runner.invoke(app, ["down", str(d)])
+    assert result.exit_code == 0 and "quarantined 1 downloaded file" in result.output, result.output
+    assert quarantine_attr(d / "browser-output" / "x.dmg") and not quarantine_attr(d / "browser-uploads" / "mine.pdf")
+    result = runner.invoke(app, ["downloads", "mark", str(d)])
+    assert result.exit_code == 0 and "nothing new to quarantine (1 already marked)" in result.output

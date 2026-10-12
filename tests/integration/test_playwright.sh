@@ -12,6 +12,8 @@
 #   vibe      Vibe, headless, direct egress: the allowlist hides the rest
 #   claude-code  Claude Code, headless, direct egress, observe: the allowlist
 #             is allow rules, every other known tool a managed deny
+#   downloads  headless with downloads: work and uploads: work (+ browser_file_upload);
+#             HARNESS=vibe|claude-code for the other harnesses (default pi)
 #   SANDBOX=off … runs any case with `chromium_sandbox: off`
 #
 # A throwaway session dir (llm → the tool-driving stub) runs
@@ -25,22 +27,25 @@ CASE="${1:-headless}"
 PORT="${STUB_PORT:-18085}"
 . "$ROOT/tests/integration/lib_session.sh"
 driver_init pw
-stub_llm "$CASE" "$PORT"
-start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
-HARNESS=pi; EXTRA=""; PW="{}"
+CASE_HARNESS="${HARNESS:-pi}"; HARNESS=pi; EXTRA=""; PW="{}"; TOP=""
 case "$CASE" in
   headless) EXTRA=$'  observe: {}\n  filter: {}\n' ;;
   novnc)    PW="{mode: novnc}" ;;
   control)  PW="{mode: novnc, allow_control: true}" ;;
   vibe)     HARNESS=vibe ;;
   claude-code) HARNESS=claude-code; EXTRA=$'  observe: {}\n' ;;
+  downloads) HARNESS="$CASE_HARNESS"
+             PW="{downloads: work, uploads: work, tools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for, browser_file_upload]}"
+             TOP=$'apt_packages: [p7zip-full]\n' ;;
   *) echo "unknown case $CASE" >&2; exit 2 ;;
 esac
+stub_llm "$HARNESS" "$PORT"
+start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 # SANDBOX=off: Chromium without its sandbox (the container is the only boundary)
 if [ "${SANDBOX:-on}" = off ]; then IN="${PW#\{}"; IN="${IN%\}}"; PW="{${IN}${IN:+, }chromium_sandbox: \"off\"}"; fi
 mkdir -p "$S/work"
-printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\nextensions:\n  llm: %s\n  direct: {}\n  playwright: %s\n%s' \
-  "$RT" "$HARNESS" "$LLM" "$PW" "$EXTRA" > "$S/glove-session.yml"
+printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\n%sextensions:\n  llm: %s\n  direct: {}\n  playwright: %s\n%s' \
+  "$RT" "$HARNESS" "$TOP" "$LLM" "$PW" "$EXTRA" > "$S/glove-session.yml"
 echo "== runtime $RT, case $CASE"
 ( cd "$S" && STUB_LOG="$TMPROOT/stub.log" uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/playwright_live.py" . )
 RC=$?

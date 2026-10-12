@@ -125,7 +125,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     provider: mullvad       # any gluetun provider, or `custom`
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
-  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url)
+  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url); {downloads: work} adds web_download
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
@@ -316,6 +316,7 @@ glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exp
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove keychain set <service>                 # store a secret, prompting (never in argv)
+glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
 glove observe status [--dir D] [--json]      # (observe) gate health + per-service totals
@@ -645,9 +646,9 @@ Core validates all of it:
   sandbox; never the harness's), and a runtime that cannot apply it refuses the
   session rather than dropping it (podman). No extension publishes ports, joins
   the harness network, mounts the docker socket, or binds host paths other
-  than its own session state and, for a trusted extension and a setting the
-  user chose, a named subdirectory of `work/` (all of it only with the `work`
-  privilege: `github`'s sidecar, which pushes the agent's checkout). A
+  than its own session state, its outputs and inputs (below), and all of
+  `work/` only with the `work` privilege (`github`'s sidecar, which pushes the
+  agent's checkout); never a path inside `work/`. A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
   refuses), so it gets one as `llm-auth` gets the LLM key: a `launch_env` hook
   fills an `environment:` key declared without a value, at `compose up`.
@@ -657,6 +658,15 @@ Core validates all of it:
   harness and its commands write (and grants no network for). A relay's client
   leaves requests there as files and FIFOs; glove's seccomp below srt forbids
   Unix sockets, so there is no socket.
+- **Outputs and inputs** (`outputs: {name: {services: [...]}}`, `inputs:` the
+  same; in-tree or trusted only) are directories of the session,
+  `<session>/<name>/`, beside `work/`. An output is written by the listed
+  sidecars (at `/run/glove-output/<name>`) and read-only to the harness at
+  `/work/<name>`; an input is written by the harness at `/work/<name>` and
+  read-only in the sidecars at that same path. Not a subdirectory of `work/`,
+  which the agent could swap for a link the sidecar's bind would follow at its
+  next restart. `glove up` points out an old `work/<name>/` that still holds
+  files the mount now hides.
 - **The harness** only ever gets forwarders on its internal network.
 - **Remote addresses** (`target: {address: host:port}`) are dialled only by the
   inference provider (`via: llm`), the egress provider (`via: wan`), or, for a
@@ -675,8 +685,11 @@ Core validates all of it:
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
-  - `env: {K: value}` or `{K: {value: …, when: …}}`: a value is set as rendered,
-    even when empty; `when:` leaves the variable unset unless it matches. A
+  - `env: {K: value}` or `{K: {value: …, when: …, shell: false}}`: a value is set
+    as rendered, even when empty; `when:` leaves the variable unset unless it
+    matches; `shell: false` keeps it from shell commands (the tool wrapper
+    unsets it; any enforcer but `none`), for a variable only the harness
+    process uses. A
     `when:` (here, on endpoints, services, verify checks and list items) matches
     setting names, `harness`, `renders` (the contributions the harness renders,
     e.g. `renders: mcp` rather than a list of harnesses), dotted
@@ -703,7 +716,9 @@ Core validates all of it:
   `own_endpoints.<name>` (the extension's own, `{host, port}`, e.g. for a
   sidecar dialling its forwarders), `state`, `mount`, `work`
   (`{{ work.host }}` the host dir, `{{ work.target }}` where the `work`
-  privilege binds it), `images`, `slot`, `channel.<name>.path` and `exports`.
+  privilege binds it), `images`, `slot`, `channel.<name>.path`,
+  `output.<name>.path`/`input.<name>.path` (where a sidecar sees it) and
+  `exports`.
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
@@ -761,6 +776,18 @@ sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
 itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which
 reaches the proxy only through its own hop (`webfetch-egress`; with `observe`,
 a gate labelling its flows `client: webfetch`). Both need an egress provider.
+`web_fetch`/`fetch_url` return text only: a PDF, an archive or an image is
+described (`[binary: application/pdf, 812345 bytes] <url>`), never returned. An
+`http://` URL goes to the proxy as a plain request, as a browser sends it
+(only `https://` is tunnelled). With `webfetch: {downloads: work}` every
+harness also gets `web_download`/`web_download_status`: the `fetcher` sidecar
+saves files of any size to `<session>/downloads/` (read-only to the agent at
+`/work/downloads/`) through the same egress and guard, as asynchronous jobs that
+resume, with a `min_free` reserve on the host disk
+([extensions/webfetch/README.md](extensions/webfetch/README.md)). On macOS
+`glove down` (or `glove downloads mark` mid-session) stamps the quarantine
+attribute on new files there and in the browser's `browser-output/`, so
+Gatekeeper vets one opened from Finder.
 The `pi-search` template puts it together: `glove new pi-search <dir>`.
 
 **`corporate`** is a netgate proxy that resolves and dials destinations itself
@@ -956,7 +983,10 @@ gets allow rules for them and a managed deny rule for every other tool the
 pinned MCP has. A private CA
 for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
 `corporate_ca`, so set both when the browser is used. The sidecar's Node trusts it
-through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
+through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
+`downloads: work` what the browser saves lands in `<session>/browser-output/`
+(read-only at `/work/browser-output/`); with `uploads: work` it uploads from
+`/work/browser-uploads/` (read-only in the sidecar). Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 
@@ -1082,9 +1112,10 @@ Refused on podman: its compose provider can't apply the profile.
 | Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
 | Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
+| Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the harness-only vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` and `test_netgate_shutdown.sh` on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
-| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only) |
+| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe every MCP call gets a fresh browser context, so a click after a navigate (and so an upload) fails: **known issue**; Podman: **untested** |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
@@ -1161,6 +1192,11 @@ HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP +
                                               # (13 checks; also: vibe 16; OBSERVE=1 adds flows)
 bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (20 checks;
                                               # also: headless, novnc, control, vibe)
+HARNESS=claude-code bash tests/integration/test_playwright.sh downloads  # browser downloads/uploads
+                                              # (28 checks; pi 27, vibe 21 without uploads)
+bash tests/integration/test_downloads.sh direct  # web_download end to end, observe + filter (27 checks
+                                              # on macOS with OCR=1; also: vpn with VPN_SETTINGS=…,
+                                              # HARNESS=vibe|claude-code, RT=podman, BIG=dvd)
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))

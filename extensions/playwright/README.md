@@ -25,8 +25,8 @@ extensions:
     # timezone: UTC            # the browser's timezone and locale (not matched to the exit)
     # locale: en-US
     # chromium_sandbox: "on"   # "off": the container is the only boundary (required on podman)
-    # downloads: session       # work: what the browser saves lands in work/browser-output/
-    # uploads: none            # work: browser_file_upload may send files from work/browser-uploads/
+    # downloads: session       # work: what the browser saves lands in <session>/browser-output/ (/work/browser-output, read-only)
+    # uploads: none            # work: browser_file_upload may send files from /work/browser-uploads/ (<session>/browser-uploads/)
     # resources: {memory: 2g, cpus: 2, pids: 2048}
     # ca: local/corporate-ca.pem   # a private CA's PEM the sidecar trusts too (no default)
     # novnc only:
@@ -65,8 +65,31 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   the only boundary.
 - **Downloads, snapshots, screenshots** land in `.glove/ext/playwright/output/`,
   which the agent cannot read from a shell (screenshots and snapshots come back
-  to it inline). `downloads: work` moves that directory to `work/browser-output/`:
-  treat what lands there as hostile content.
+  to it inline). `downloads: work` moves that directory to
+  `<session>/browser-output/`: the sidecar writes it, and the harness sees it
+  read-only at `/work/browser-output/` (a core `outputs:` directory, beside
+  `work/`, so the agent cannot swap it for a link the sidecar would follow on a
+  restart). Treat what lands there as hostile content. A link to a `.zip`/`.7z`
+  or other binary downloads when the agent navigates to or clicks it; PDFs and
+  media open in the browser instead (`web_download` saves those). Chromium
+  stages a download in `.glove/ext/playwright/downloading/` (on disk, emptied at
+  each launch), not in the sidecar's `/tmp` tmpfs, which counts against its
+  memory; the MCP then copies it into the output directory, so a large file is
+  held twice until the browser context closes.
+- **Uploads** (`uploads: work`, off by default): the agent puts a file in
+  `/work/browser-uploads/` and passes its path to `browser_file_upload` (add
+  that tool to `tools`). It is a core `inputs:` directory,
+  `<session>/browser-uploads/`: read-write in the harness, read-only in the
+  sidecar at the same path, so a compromised browser cannot plant anything
+  there for the agent to write through, and the agent cannot swap it for a
+  link. The MCP reads files only from there (its working directory, or the
+  `/work` root Claude Code sends) and its output directory. Anything put
+  there can leave through the browser. It checks the path as a string, so a
+  symlink there resolves inside the sidecar and can name a sidecar file: with
+  `profile: session`, the browser profile itself (see `docs/SECURITY.md`).
+- **`browser_evaluate`** (JavaScript in the page, inside the sidecar) is a
+  reasonable addition to `tools` for sites that render nothing without it.
+  `browser_run_code_unsafe` is not: it runs code in the MCP process.
 - **Chromium phones home** even with Playwright's switches: in live runs the
   flows showed `accounts.google.com`, `clients2.google.com`,
   `update.googleapis.com` and `www.google.com`. With `filter`, block them.

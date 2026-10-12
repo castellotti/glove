@@ -76,9 +76,9 @@ Every capability (the model, search, the browser, …) is an extension in
   rather than granting `NET_BIND_SERVICE`.
 - Never: published ports, `privileged`, host network/PID/IPC namespaces, the
   docker socket, host binds outside the extension's own session state (or an
-  export root it owns, below, or — trusted extensions, on a setting the user
-  chose — a named subdirectory of `work/`; all of `work/` only with the `work`
-  privilege, below), or a sidecar on the harness network. The harness reaches extensions only through
+  export root it owns, its `outputs:`/`inputs:` directories, below, or all of
+  `work/` with the `work` privilege, below; never a path inside `work/`), or a
+  sidecar on the harness network. The harness reaches extensions only through
   single-purpose forwarders. Only the active egress provider joins the routable
   `wan` network.
 - **Seccomp exceptions** name a core profile; the only one is `chromium-userns`
@@ -100,6 +100,18 @@ Every capability (the model, search, the browser, …) is an extension in
   with named sidecars of the same extension, writable by the harness and its
   commands (every enforcer grants exactly those paths, and no network). The
   harness mounts no other volume (re-checked on the merged project).
+- **Outputs and inputs** (`outputs:`/`inputs:`, in-tree or trusted only) are
+  directories of the session, `<session>/<name>/`, beside `work/` rather than in
+  it. An output is written by the named sidecars and read-only in the harness at
+  `/work/<name>` (`webfetch`'s downloads, the browser's output); an input is the
+  reverse, written by the harness and read-only in the sidecars at the same path
+  (the browser's uploads). Never a subdirectory of `work/`: a sidecar restarts
+  on its own, and a runtime re-resolves a bind source at every start, so the
+  agent could swap such a directory for a symlink to any host directory and
+  have the sidecar write (or read) there. Core creates each directory and
+  refuses one that is a link (`check_path`), for the session dir and for the
+  mount point under `/work`. A sidecar reading an input gets keep-id on rootless
+  Podman, so a file the agent made 0600 still reads.
 - **LAN hosts** (`via: lan`, in-tree or trusted only): an endpoint may dial a
   host:port the user named, for a sidecar only (never `harness: true`), over
   core's routable `lan` network, which only those forwarders may join
@@ -117,7 +129,14 @@ Every capability (the model, search, the browser, …) is an extension in
   host's own bridge gateways.
 - **The `work` privilege** (in-tree or trusted only) binds the harness's whole
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
-  it. It exists for `github` (below).
+  it. It exists for `github` (below). `/work` itself is the session's `work/`,
+  which the agent cannot replace.
+- **Harness-process-only variables.** An extension's harness env entry with
+  `shell: false` (webfetch's proxy and download URLs for Pi) is unset by the
+  tool wrapper before every shell command, like the secret-shaped names (every
+  enforcer but `none`, which wraps nothing). Not a
+  secret: shell commands have no network to use it on, and seeing it only
+  invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
@@ -258,6 +277,23 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   everything else is refused with the gate's reason, and the host gateway,
   metadata and the session's network are refused even inside an allowed CIDR.
   **Untested:** a real corporate VPN (split DNS and routes via the host).
+- **Downloads (`webfetch: {downloads: work}`).** `web_download` is served by
+  the `fetcher` sidecar for every harness, so the harness process (which can
+  write its own config home) never writes a downloaded file: a symlink the agent
+  plants can only steer a write within the sidecar's own filesystem (a read-only
+  root and a tmpfs). The sidecar's one writable bind is `<session>/downloads/`
+  (an output, above), read-only to the agent at `/work/downloads/`. Each file is
+  opened `O_EXCL|O_NOFOLLOW` as a `.part` and linked to a free name only when
+  complete, never over an existing file. The destination guard runs on every
+  redirect hop, the request goes through the same egress (under `observe`,
+  labelled `tool: web_download`, so `filter` can block downloads apart from
+  fetches), at most 3 run at once, and `min_free` keeps a free-space reserve on
+  the host volume. Downloaded content is untrusted. A file written through a
+  bind carries no macOS quarantine attribute, so `glove down` (and
+  `glove downloads mark`, during a session) stamps `com.apple.quarantine` on
+  what is new in every output dir (`downloads/`, `browser-output/`), host-side,
+  never following a link; Gatekeeper then vets one the operator opens from
+  Finder. Until then (a running session) it would not.
 
 ### Browser (`playwright`)
 
@@ -297,9 +333,22 @@ has no server-side switch for it). The controls:
   exists only on loopback and only while `view` runs. Anything the operator
   types in control is visible to the agent.
 - **Downloads and uploads.** What the browser saves stays in the sidecar's
-  state dir, which the agent's shell cannot read, unless `downloads: work`.
-  `browser_file_upload` is confined to an empty directory unless
-  `uploads: work` (then `work/browser-uploads/`, read-only).
+  state dir, which the agent's shell cannot read, unless `downloads: work`
+  (then the output `<session>/browser-output/`, read-only to the agent at
+  `/work/browser-output/`). Chromium stages a download on disk in the state
+  dir, which the sidecar empties as it starts. `browser_file_upload` is
+  confined to an empty directory unless `uploads: work` (then the input
+  `<session>/browser-uploads/`, read-only in the sidecar at
+  `/work/browser-uploads/`). **Residual:** the MCP checks an upload's path as a
+  string, so a symlink the agent puts in that directory resolves inside the
+  sidecar and can name one of the sidecar's own files (reproduced live: a link
+  to `/etc/hostname` uploaded the sidecar's). With `profile: session`,
+  the browser profile (cookies of a site the operator logged into) could be
+  uploaded to a page the agent chooses. The agent can already act with those
+  cookies through the browser; this lets the cookies themselves leave, for use
+  outside the session. The sidecar holds no glove secret (the VNC passwords
+  guard a loopback listener; a CA is public). Keep `uploads: work` off with a
+  persistent profile you have logged in with.
 - **Host mode** runs the browser and the MCP as the operator, on the desktop,
   with the host's network: refused when the egress is anonymising (vpn, tor),
   and with Vibe unless `i_accept_host_rce: true`. Its CDP and MCP ports are

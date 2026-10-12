@@ -25,7 +25,8 @@ extensions:
     allow_control: false       # true: `glove playwright view --control` may click and type
     # clipboard: "off"         # off | to-browser | both
     # profile: ephemeral       # session: keep cookies/logins across launches (under .glove/)
-    # downloads: session       # work: downloads land in work/browser-output/
+    # downloads: session       # work: downloads land in browser-output/ (read-only at /work/browser-output/)
+    # uploads: none            # work: the browser uploads only from browser-uploads/ (/work/browser-uploads/)
     # chromium_sandbox: "on"   # "off" on podman (it cannot apply the sandbox's seccomp profile)
   # observe: {}                # every destination the browser reaches, as flow records
   # filter: {}                 # and `glove filter block <host>` (needs observe)

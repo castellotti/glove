@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "webdownload": {
+      "type": "http",
+      "url": "http://glove-s-webdownload-mcp:8000/mcp"
+    }
+  }
+}

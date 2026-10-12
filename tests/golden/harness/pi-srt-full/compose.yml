@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-5782abbef9-6108bf3950-srt-46f57ff955
+    image: glove/pi:0.5.0-5782abbef9-7c33c892b3-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer", "-e", "/opt/glove/ext/playwright/pi-extension", "-e", "/opt/glove/ext/search/pi-extension", "-e", "/opt/glove/ext/webfetch/pi-extension"]
     stdin_open: true
@@ -268,7 +268,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:78d11488ca
+    image: glove/ext-playwright-pw:4b2d814a01
     init: true
     command:
     - glove-pw-start
@@ -301,6 +301,9 @@ services:
     - type: bind
       source: <TMP>/ext/playwright/output
       target: /data/output
+    - type: bind
+      source: <TMP>/ext/playwright/downloading
+      target: /data/staging
     - type: bind
       source: <TMP>/ext/playwright/mcp.json
       target: /etc/glove/playwright/mcp.json

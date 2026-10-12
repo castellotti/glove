@@ -156,22 +156,22 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
                     raise ExtensionError(f"{where}: the {root!r} export root binds read-only here")
                 bind = dict(v)
             elif comp.work_dir is not None and _within(src, str(comp.work_dir)):
-                # a named subdirectory of /work (a setting the user opted into),
-                # never /work itself (e.g. the browser's downloads) — unless the
-                # service holds the `work` privilege, and then at /work, rw
-                if os.path.realpath(src) == os.path.realpath(comp.work_dir):
-                    if not work:
-                        raise ExtensionError(f"{where}: a sidecar never binds all of /work, only a subdirectory "
-                                             "(or with the `work` privilege)")
-                    if v.get("target") != WORK_TARGET or v.get("read_only"):
-                        raise ExtensionError(f"{where}: the `work` privilege binds /work read-write at {WORK_TARGET}")
-                require_trust(a, f"{where}: binding /work or a subdirectory")
+                # all of /work, read-write at /work, with the `work` privilege;
+                # never a path in it: the agent can swap one for a link that the
+                # bind follows when the sidecar restarts (`outputs:`/`inputs:`
+                # are directories beside /work instead)
+                if os.path.realpath(src) != os.path.realpath(comp.work_dir) or not work:
+                    raise ExtensionError(f"{where}: a sidecar never binds a path in /work, only all of it with "
+                                         "the `work` privilege (for files it writes or reads: `outputs:`/`inputs:`)")
+                if v.get("target") != WORK_TARGET or v.get("read_only"):
+                    raise ExtensionError(f"{where}: the `work` privilege binds /work read-write at {WORK_TARGET}")
+                require_trust(a, f"{where}: binding /work")
                 bind = dict(v)
             else:
                 raise ExtensionError(
                     f"{where}: a sidecar may bind only its state dir ({{{{ state }}}}), read-only its "
-                    "assets ({{ assets }}), an export root it owns ({{ exports.<root> }}), or a "
-                    "subdirectory of /work ({{ work.host }}/<dir>)"
+                    "assets ({{ assets }}), an export root it owns ({{ exports.<root> }}), or all of /work "
+                    "with the `work` privilege"
                 )
             if label:
                 # SELinux hosts deny containers an unlabelled bind; `z`: shared
@@ -264,6 +264,12 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         if c.extension == a.name and short in c.services:
             out.setdefault("volumes", []).append({"type": "volume", "source": c.volume(comp.session),
                                                   "target": c.path})
+    for o in comp.outputs_of(a.name):
+        if short in o.services:
+            bind = {"type": "bind", "source": str(o.host), "target": o.path, **({"read_only": True} if o.input else {})}
+            if extra.get("bind_selinux"):
+                bind["bind"] = {"selinux": extra["bind_selinux"]}
+            out.setdefault("volumes", []).append(bind)
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
@@ -280,12 +286,14 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
     if not priv.get("user_root"):
         out["user"] = f"{plan.uid}:{plan.gid}"
         # Rootless podman's keep-id only where the sidecar must be the session
-        # uid: it writes a host bind (it must own what it writes), or shares a
-        # tmpfs volume, which core creates owned by that uid (e.g. the netgate
-        # events socket). Elsewhere its uid stays an unprivileged subuid.
+        # uid: it writes a host bind (it must own what it writes), reads an
+        # input (the harness's files may be 0600), or shares a tmpfs volume,
+        # which core creates owned by that uid (e.g. the netgate events
+        # socket). Elsewhere its uid stays an unprivileged subuid.
         rw_bind = any(v.get("type") == "bind" and not v.get("read_only") for v in out.get("volumes") or [])
         shared = any(v.get("type") == "volume" and v.get("source") in tmpfs_volumes for v in out.get("volumes") or [])
-        if extra.get("userns_mode") and (rw_bind or shared):
+        reads_input = any(o.input and short in o.services for o in comp.outputs_of(a.name))
+        if extra.get("userns_mode") and (rw_bind or shared or reads_input):
             out["userns_mode"] = extra["userns_mode"]
     out["cap_drop"] = ["ALL"]
     if priv.get("cap_add"):
@@ -380,13 +388,15 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
 
 def _channel_volumes(comp: Composition, extra: dict, volumes: dict[str, Any]) -> None:
     """One session tmpfs volume per channel (owned by the session uid, 0700),
-    and a check that each service it names is one of its extension's."""
-    for c in comp.channels:
-        owner = comp.by_name(c.extension)
-        doc = next((d for x, d in comp.fragments if x is owner), {})
-        missing = [x for x in c.services if x not in (doc.get("services") or {})]
+    and a check that each service a channel or an output names is one of its
+    extension's."""
+    for kind, x in [*(("channel", c) for c in comp.channels), *(("output", o) for o in comp.outputs)]:
+        owner = comp.by_name(x.extension)
+        doc = next((d for e, d in comp.fragments if e is owner), {})
+        missing = [svc for svc in x.services if svc not in (doc.get("services") or {})]
         if missing:
-            raise ExtensionError(f"extension {c.extension!r} channel {c.name!r}: no service(s) {missing}")
+            raise ExtensionError(f"extension {x.extension!r} {kind} {x.name!r}: no service(s) {missing}")
+    for c in comp.channels:
         opts = f"size=4m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"
         name = c.volume(comp.session)
         volumes[name] = {"name": name, "driver": "local",

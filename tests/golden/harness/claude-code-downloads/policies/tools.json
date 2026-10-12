@@ -1,0 +1,33 @@
+{
+  "shell": [
+    "Bash"
+  ],
+  "file_write": [
+    "Edit",
+    "Write",
+    "NotebookEdit"
+  ],
+  "allow": [
+    "Read",
+    "Agent",
+    "WebSearch",
+    "WaitForMcpServers"
+  ],
+  "ask": [
+    "Workflow",
+    "Skill",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "ListAgents",
+    "SendMessage",
+    "TaskStop",
+    "ReportFindings"
+  ],
+  "deny": [
+    "EnterWorktree",
+    "ExitWorktree",
+    "WebFetch"
+  ]
+}

@@ -19,7 +19,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
 
 COPY glove-pw-start /usr/local/bin/glove-pw-start
 RUN chmod 0755 /usr/local/bin/glove-pw-start \
-    && mkdir -p /data/output /data/uploads /data/profile /etc/glove/playwright \
+    && mkdir -p /data/output /data/uploads /data/staging /data/profile /etc/glove/playwright \
     && chmod 0777 /data/output /data/profile
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright NODE_PATH=/opt/glove/pw/node_modules

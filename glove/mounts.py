@@ -292,18 +292,18 @@ def protected_home(home: Mount, config_home: str, paths: Sequence[str]) -> tuple
     if not _inside(home.container_path, posixpath.normpath(config_home)):
         raise MountError(f"config home {config_home} must be inside {home.container_path}")
     rel = posixpath.relpath(config_home, home.container_path)
-    _check_path(home.host_path, rel, "dir")
+    check_path(home.host_path, rel, "dir")
     conf = Mount(host_path=os.path.join(home.host_path, rel), container_path=config_home, mode="rw")
     out: dict[str, Protect] = {}
     _add(out, conf, conf.host_path, ".", "dir", read_only=False)
     for entry in paths:
-        _check_path(home.host_path, entry.rstrip("/"), "dir" if entry.endswith("/") else "file")
+        check_path(home.host_path, entry.rstrip("/"), "dir" if entry.endswith("/") else "file")
         # outside the config home: the read-only home covers it (no bind)
         _protect_path([home, conf], posixpath.join(home.container_path, entry), partial(_add, out), source="own")
     return tuple(out.values())
 
 
-def _check_path(root: str, rel: str, kind: str) -> None:
+def check_path(root: str, rel: str, kind: str) -> None:
     """Refuse a symlink, or a file where a directory belongs (or the reverse),
     on the way from `root` to `rel` (`kind` is the last one's)."""
     parts = rel.split("/")
@@ -332,7 +332,7 @@ def _protect_path(mounts: list[Mount], path: str, add, *, source: str = "auto") 
     if m is None or m.mode != "rw":
         return  # not agent-writable: the read-only mount or rootfs covers it
     parts = os.path.relpath(path, m.container_path).split("/")
-    _check_path(m.host_path, "/".join(parts), kind)
+    check_path(m.host_path, "/".join(parts), kind)
     for i in range(1, len(parts) + 1):
         sub = "/".join(parts[:i])
         host = os.path.join(m.host_path, sub)
@@ -381,7 +381,7 @@ def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points:
     for target in mount_points:
         if _inside(CONTAINER_HOME, target):
             rel = posixpath.relpath(target, CONTAINER_HOME)
-            _check_path(home_dir, rel, "dir")
+            check_path(home_dir, rel, "dir")
             os.makedirs(os.path.join(home_dir, rel), exist_ok=True)
 
 

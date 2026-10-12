@@ -18,8 +18,10 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
   4. runs the harness non-interactively (wrapped, hardened) with the stub
      driving the search and fetch tool calls (Pi web_search/web_fetch, the MCP
      tools for Vibe and Claude Code), so the real tool path is used — and the
-     fetch must refuse this machine and LAN addresses;
-  5. with observe: the fetcher's destinations are flows `client: webfetch`;
+     fetch must refuse this machine and LAN addresses; Pi and Vibe also fetch an
+     http:// page and describe a PNG instead of returning it;
+  5. with observe: the fetcher's destinations are flows `client: webfetch`, and
+     an http:// fetch (Pi and Vibe) reached the gate unwrapped (`proto: http`);
   6. tears the project down (unless KEEP is set).
 Prints PASS/FAIL per check; exit 0 only if all pass. Secrets are resolved in
 memory exactly as `glove up` does; nothing here prints them.
@@ -127,6 +129,11 @@ def main(directory: str) -> int:
             # …not even through a public redirect (needs httpbin.org reachable via the egress)
             calls.append((fetch_tool, {"url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F",
                                        **extra}, "Refused a redirect"))
+            if not cc:  # Claude Code's WebFetch is its own
+                # plain http:// goes to the proxy unwrapped (absolute-form), not tunnelled
+                calls.append((fetch_tool, {"url": "http://example.com/"}, "documentation examples"))
+                # a binary body is described, never returned
+                calls.append((fetch_tool, {"url": "https://httpbin.org/image/png"}, "[binary: image/png, "))
         for tool, args, want in calls:
             answer = live.call(tool, args, timeout=240).strip()
             print(f"    {tool}: {answer[-400:]}")
@@ -137,22 +144,28 @@ def main(directory: str) -> int:
             else:
                 check(label, "TOOL RESULT" in answer and want in answer)
 
-        if comp.by_name("observe") and comp.by_name("webfetch") and cfg.harness != "pi":
+        if comp.by_name("observe") and comp.by_name("webfetch"):
             print("== observe")
             recs = live.flows()
-            # Claude Code's WebFetch goes through the proxy itself; Vibe's fetcher through its own gate
-            svc, client = ("proxy", "harness") if cc else ("webfetch-egress", "webfetch")
+            # Pi's web_fetch and Claude Code's WebFetch go through the proxy; Vibe's fetcher its own gate
+            svc = "webfetch-egress" if cfg.harness == "vibe" else "proxy"
             fetched = [r for r in recs if r.get("service") == svc
                        and (r.get("dest") or {}).get("host") == "example.com"]
-            f = fetched[-1] if fetched else {}
-            check(f"flow: {svc} → example.com, client {client}, tool web_fetch",
-                  (f.get("client"), f.get("tool")) == (client, "web_fetch"),
-                  json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
+            if not cc:  # the http:// fetch reached the gate unwrapped, not as a CONNECT tunnel to :80
+                protos = [r.get("proto") for r in fetched if r["dest"].get("port") == 80]
+                check(f"flow: {svc} → http://example.com/ unwrapped (proto http)",
+                      bool(protos) and set(protos) == {"http"}, f"protos {protos}")
+            if cfg.harness != "pi":
+                client = "harness" if cc else "webfetch"
+                f = fetched[-1] if fetched else {}
+                check(f"flow: {svc} → example.com, client {client}, tool web_fetch",
+                      (f.get("client"), f.get("tool")) == (client, "web_fetch"),
+                      json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
             if cc:
                 dests = sorted({(r.get("dest") or {}).get("host") for r in recs if r.get("service") == "proxy"}
                                - {None})
                 print(f"    (WebFetch destinations through the proxy: {', '.join(dests)})")
-            else:
+            elif cfg.harness == "vibe":
                 hop = [r for r in recs if r.get("service") == "webfetch-mcp"]
                 check("flow: the harness → fetcher hop, client harness",
                       bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")

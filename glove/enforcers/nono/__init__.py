@@ -31,7 +31,7 @@ class NonoEnforcer:
         return policies.harness_argv(entry)
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        return policies.tool_wrapper_argv()
+        return policies.tool_wrapper_argv(plan)
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         # nono's supervisor talks to its child over loopback; keep that direct.

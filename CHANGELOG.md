@@ -6,6 +6,60 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`web_download`, for every harness** (`webfetch: {downloads: work}`, off by
+  default). The `fetcher` sidecar saves a file of any size to
+  `<session>/downloads/`, read-only to the agent at `/work/downloads/`, through
+  the session's egress and the fetch guard (every redirect hop). Jobs are
+  asynchronous (`web_download` waits at most 45 s, then `web_download_status`),
+  streamed to an `O_EXCL|O_NOFOLLOW` `.part` and hashed on the way, linked to a
+  free name only when complete, at most 3 at once, with a 120 s idle timeout;
+  calling it again resumes a failed one (`Range`/`If-Range`). `min_free`
+  (default `2g`) keeps a free-space reserve on the host volume. The harness
+  process never writes a download. Pi registers the tools from the sidecar's
+  MCP; Vibe and Claude Code get the `webdownload` MCP server. Under `observe`
+  the hops are labelled `tool: web_download`, so a `filter` rule can tell them
+  from fetches.
+- **Core `outputs:` and `inputs:`** for extensions: a directory of the session,
+  `<session>/<name>/`, beside `work/`. An output is written by the listed
+  sidecars and read-only to the harness at `/work/<name>`; an input is the
+  reverse (read-only in the sidecars at the same path; keep-id on rootless
+  Podman). Fragments see `output.<name>.path`/`input.<name>.path`.
+- **`when: {any: [...]}`** in manifests: any-of across keys (e.g. `harness:
+  vibe` or `downloads: work`).
+- **`env: {…, shell: false}`** for an extension's harness env var the harness
+  process reads and shell commands never need: the tool wrapper unsets it.
+  webfetch's `GLOVE_FETCH_PROXY`, `GLOVE_DOWNLOAD_MCP_URL` and
+  `GLOVE_FETCH_ALLOW` use it (a proxy URL in the shell only invited a `curl`
+  that fails).
+- `web_fetch`/`fetch_url` **describe a binary body** instead of returning it: a
+  response whose content type isn't text, or an unlabelled one with a NUL in
+  its first 4 KB, becomes `[binary: <type>, <size>] <url>` and the rest is
+  never read; the note points to `web_download` when the session has it. A 429
+  says the server's `Retry-After`.
+- Templates `pi-search` and `vibe-search`: `webfetch: {downloads: work}`,
+  `apt_packages: [p7zip-full]`, a commented `playwright: {downloads: work}`,
+  and brief notes on `7z` and research tips (Wayback CDX, archive.org's APIs, Reddit through pullpush,
+  `#page=N` in the PDF viewer). `browse-watch` documents the new
+  downloads/uploads layout.
+- **macOS quarantine for downloads**: `glove down`, and `glove downloads mark`
+  during a session, stamp `com.apple.quarantine` host-side on new files and
+  directories in the session's output dirs (`downloads/`, `browser-output/`),
+  which a bind never carries, so Gatekeeper vets one opened from Finder. Links
+  are never followed, even one a running sidecar swaps in mid-walk (`os.fwalk`,
+  `O_NOFOLLOW`, `fsetxattr` on the open file), and a file already stamped keeps its
+  attribute (an approval stays). A no-op off macOS.
+- `tests/integration/egress_live.py`: Pi and Vibe fetch `http://example.com/`
+  (with observe the flow must be `proto: http`) and a PNG (the binary note).
+- `tests/integration/test_downloads.sh direct|vpn` (`HARNESS=vibe|claude-code`,
+  `RT=podman`, `OCR=1`, `BIG=dvd`): `web_download` end to end with observe and
+  filter — the binds, a PDF's sha256 (host, shell, tool), a Debian ISO as a job
+  checked against SHA256SUMS with the fetcher's memory sampled, a filter block,
+  a fetcher restart, `glove downloads mark` and `glove down` stamping, the
+  `min_free` refusal. `test_playwright.sh downloads` (`HARNESS=…`): a `.7z` and
+  a 2 GB ISO through the browser, uploads from `/work/browser-uploads` only
+  (not under Vibe: each of its MCP calls gets a fresh browser context, a known
+  issue). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`.
+
 - **Vibe: the repo's skills, opt-in** (`harness_config.project_skills: true`).
   The repo's `.vibe/skills/` and `.agents/skills/` are bound read-only inside
   the masked `.vibe/` and `.agents/`; everything else there stays empty (no
@@ -234,6 +288,24 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **A sidecar never binds a path inside `/work`**, only all of it with the
+  `work` privilege (`github`). A sidecar restarts on its own and the runtime
+  re-resolves a bind source each time, so the agent could swap such a
+  subdirectory for a link to any host directory. Extensions use `outputs:` or
+  `inputs:` instead, and `glove up` warns when an old `work/<name>/` still holds
+  files the new mount hides (move them to `<session>/<name>/`).
+- **Playwright's downloads and uploads moved out of `work/`.** `downloads:
+  work` is the output `<session>/browser-output/` (read-only at
+  `/work/browser-output/`), `uploads: work` the input
+  `<session>/browser-uploads/` (read-only in the sidecar). Chromium stages a
+  download on disk in the state dir (`.glove/ext/playwright/downloading/`,
+  emptied as the sidecar starts) rather than in the sidecar's 768 MB `/tmp`
+  tmpfs, so a large download no longer counts against its memory. One brief
+  for both sidecar modes; it maps the MCP's reported path to
+  `/work/browser-output/` and says PDFs and media open inline.
+- webfetch's brief: `web_download` and the read-only `/work/downloads/` when
+  on, the binary note and `Retry-After`.
+
 - **Secret env is unset by glob, in any case, before every tool command.**
   nono's `deny_vars` is case-sensitive (measured: `db_password`, `api_key`,
   `My_Api_Key` reached a wrapped command) and srt unsets only the exact names
@@ -433,6 +505,16 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
+  port 80 (undici's `ProxyAgent` default), where answers such as
+  web.archive.org's were lost: it goes to the proxy as a plain absolute-form
+  request (`proxyTunnel: false`), as Vibe's fetcher already did; `https://`
+  still tunnels.
+- **Playwright uploads** (`uploads: work`) were refused: the brief's
+  `/work/browser-uploads/` path didn't exist in the sidecar (it was
+  `/data/uploads`), and the MCP reads only from its working directory or the
+  client's root. The directory is now at the same path on both sides.
 
 - A flaky llm-auth log test now waits for the log lines.
 - Vibe 2.26: glove's hook refused the search tool (`mcp_searxng.web_search`)

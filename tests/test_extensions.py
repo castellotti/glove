@@ -141,6 +141,11 @@ def test_when_predicates():
     assert when_matches({"slot.egress.route": "tor"}, ctx)
     assert not when_matches({"slot.egress.route": "vpn"}, ctx)
     assert when_matches(None, ctx)
+    # any-of across keys, ANDed with the rest
+    assert when_matches({"any": [{"harness": "pi"}, {"mode": "host"}]}, ctx)
+    assert not when_matches({"any": [{"harness": "pi"}, {"mode": "headless"}]}, ctx)
+    assert not when_matches({"any": [{"harness": "vibe"}], "n": 2}, ctx)
+    assert not when_matches({"any": []}, ctx) and not when_matches({"any": {"harness": "vibe"}}, ctx)
 
 
 @pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])
@@ -533,7 +538,28 @@ def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
     assert "PI_ONLY" not in got and got["DIR_SET"] == "/d/x" and "DIR_UNSET" not in got
 
 
-@pytest.mark.parametrize("value", ["{ value: x, when: {}, extra: 1 }", "{ when: { harness: pi } }", "null"])
+def test_a_shell_false_env_var_is_unset_before_every_shell_command(tmp_path, tree):
+    _ext(tree, "e", """\
+        api: 1
+        name: e
+        summary: x
+        harness:
+          env:
+            HIDDEN: { value: x, shell: false }
+            SKIPPED: { value: y, when: { harness: vibe }, shell: false }
+            SHOWN: { value: z, shell: true }
+        """)
+    plan, _ = _render(tmp_path, tree, {"llm": STUB_LLM, "e": {}}, enforcer="nono")
+    assert plan.environment["HIDDEN"] == "x"  # the harness process still has it
+    assert plan.composition.shell_hidden_env == {"HIDDEN"}
+    wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
+    assert wrapper[wrapper.index("--") - 2:wrapper.index("--")] == ["-u", "HIDDEN"]
+    assert "SHOWN" not in wrapper and "SKIPPED" not in wrapper
+    assert "HIDDEN" in json.loads(plan.policies["tool.json"])["environment"]["deny_vars"]  # nono too
+
+
+@pytest.mark.parametrize("value", ["{ value: x, when: {}, extra: 1 }", "{ when: { harness: pi } }", "null",
+                                   "{ value: x, shell: no-thanks }"])
 def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
     _ext(tree, "e", f"api: 1\nname: e\nsummary: x\nharness:\n  env: {{ K: {value} }}\n")
     with pytest.raises(ExtensionError, match="env 'K'"):
@@ -613,7 +639,7 @@ def test_an_untrusted_extension_gets_no_channel_and_no_work(tmp_path, ghome):
 
 
 @pytest.mark.parametrize("kw,why", [
-    ({"work": False}, "never binds all of /work"),
+    ({"work": False}, "never binds a path in /work"),
     ({"target": "/data"}, "read-write at /work"),
     ({"ro": ", read_only: true"}, "read-write at /work"),
     ({"services": "[nope]"}, r"no service\(s\) \['nope'\]"),

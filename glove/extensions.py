@@ -36,7 +36,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 from .config import ConfigError, HostService, git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
-from .mounts import WORK_TARGET, host_path
+from .mounts import WORK_TARGET, check_path, host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
@@ -62,6 +62,7 @@ MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
+    "outputs", "inputs",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
@@ -300,10 +301,14 @@ def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
     context value. Keys are setting names, `harness`, `renders` (the harness's
     contributions, a list: it matches when it holds a wanted one) or dotted
     `slot.<s>.<k>`. `{set: true|false}` asks whether the value is set (not null
-    or empty)."""
+    or empty). `any: [<when>, …]` matches when one of its predicates does."""
     if not when:
         return True
     for key, want in when.items():
+        if key == "any":
+            if not isinstance(want, list) or not any(when_matches(w, ctx) for w in want):
+                return False
+            continue
         have = _lookup(ctx, key) if "." in key else ctx.get("settings", {}).get(key, ctx.get(key))
         if isinstance(want, dict) and set(want) == {"set"}:
             if (have not in (None, "", [], {})) != bool(want["set"]):
@@ -424,6 +429,37 @@ class Channel:
         return scoped(session, f"chan-{self.name}")
 
 
+@dataclass(frozen=True)
+class Output:
+    """A directory beside the session's work dir (`<session>/<name>/`) that
+    some of the extension's sidecars write (at `path`) and the harness reads,
+    read-only, at /work/<name> (`target`; e.g. web_download's files). An
+    `input` is the reverse (`inputs:`): the harness writes it at /work/<name>
+    and its sidecars read it, read-only, at the same path (e.g. files the
+    browser may upload). The agent never holds the host path, so it cannot swap
+    it for a link that the bind would follow when a sidecar restarts — unlike a
+    subdirectory of /work."""
+
+    extension: str
+    name: str
+    host: Path
+    services: tuple[str, ...]
+    input: bool = False
+
+    @property
+    def path(self) -> str:
+        return self.target if self.input else f"{OUTPUT_ROOT}/{self.name}"
+
+    @property
+    def target(self) -> str:
+        return f"{WORK_TARGET}/{self.name}"
+
+
+# beside the outputs in the session dir
+RESERVED_OUTPUTS = frozenset({"work", "local"})
+OUTPUT_ROOT = "/run/glove-output"  # where an output's sidecars write it
+
+
 @dataclass
 class Active:
     """One selected extension, resolved."""
@@ -449,6 +485,10 @@ class Composition:
     state_root: Path
     endpoints: list[Endpoint] = field(default_factory=list)
     harness_env: dict[str, str] = field(default_factory=dict)
+    # harness env vars the harness process reads and shell commands never see
+    # (`env: {…, shell: false}`; the tool wrapper unsets them, enforcers.base.scrub_argv;
+    # `enforcer: none` has no wrapper)
+    shell_hidden_env: set[str] = field(default_factory=set)
     git_config: list[tuple[str, str]] = field(default_factory=list)  # `harness.git_config` pairs
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
     # Neutral contributions, collected only when the harness renders them
@@ -462,6 +502,7 @@ class Composition:
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
     channels: list[Channel] = field(default_factory=list)
+    outputs: list[Output] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
@@ -470,8 +511,8 @@ class Composition:
     privileges: dict[str, list[dict]] = field(default_factory=dict)  # "ext/service" → exceptions
     # The session directory (hooks only — never a template) and its /24.
     session_dir: Path | None = None
-    # The harness's /work on the host: trusted extensions may bind a named
-    # subdirectory of it into a sidecar (`{{ work.host }}/<dir>`), never all of it.
+    # The harness's /work on the host: a trusted extension's sidecar binds all
+    # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
@@ -508,6 +549,9 @@ class Composition:
 
     def state_dir(self, ext: str) -> Path:
         return self.state_root / ext
+
+    def outputs_of(self, ext: str) -> list[Output]:
+        return [o for o in self.outputs if o.extension == ext]
 
     def owner(self, root: str) -> Active | None:
         """The active in-tree owner of an export root."""
@@ -582,6 +626,9 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
                           for e in comp.endpoints if e.extension == a.name},
         "state": str(comp.state_dir(a.name)),
         "mount": dict(a.mounts),
+        # the extension's `outputs:`/`inputs:`: where its sidecars see each, and where the harness does
+        **{key: {o.name: {"path": o.path, "target": o.target} for o in comp.outputs_of(a.name) if o.input == inp}
+           for key, inp in (("output", False), ("input", True))},
         # /work on the host, and where the `work` privilege binds it in a sidecar
         "work": {"host": str(comp.work_dir or ""), "target": WORK_TARGET},
         "assets": str(a.manifest.path),
@@ -879,16 +926,22 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                 if layer.get(k):
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
-    for k, v in (h.get("env") or {}).items():  # a value, or {value:, when:} (unset unless it matches)
+    # a value, or {value:, when:, shell:} (unset unless `when` matches; `shell: false`
+    # hides it from shell commands)
+    for k, v in (h.get("env") or {}).items():
+        shell = True
         if isinstance(v, dict):
-            if set(v) - {"value", "when"} or "value" not in v:
-                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …}}")
+            shell = v.get("shell", True)
+            if set(v) - {"value", "when", "shell"} or "value" not in v or not isinstance(shell, bool):
+                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …, shell: false}}")
             if not when_matches(v.get("when"), ctx):
                 continue
             v = v["value"]
         if v is None:
             raise ExtensionError(f"{where}: env {k!r} has no value (use `when:` to leave it unset)")
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
+        if not shell:
+            comp.shell_hidden_env.add(k)
     comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
@@ -949,6 +1002,28 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         target = f"/mnt/{a.name}-{name}"
         a.mounts[name] = target
         comp.harness_mounts.append((a.name, str(host), target))
+
+
+def _outputs(comp: Composition, a: Active, ctx: dict, key: str = "outputs") -> None:
+    """`outputs: {<name>: {services: [<its service>, …], when: …}}` — see
+    `Output`. Core binds it into those services (rw) and the harness (ro);
+    `inputs:` (key) the other way round. A new edge into the harness, so a
+    privilege: in-tree or trusted extensions only."""
+    for name, spec in (a.manifest.raw.get(key) or {}).items():
+        where = f"extension {a.name!r} {key[:-1]} {name!r}"
+        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
+            raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
+        if not when_matches(spec.get("when"), ctx):
+            continue
+        services = spec.get("services") or []
+        if not isinstance(services, list) or not services or not all(isinstance(x, str) for x in services):
+            raise ExtensionError(f"{where}: `services` must name at least one of its services")
+        require_trust(a, f"{where}: a directory shared with the harness")
+        if comp.session_dir is None or comp.work_dir is None:
+            raise ExtensionError(f"{where}: needs a session directory (with a work dir)")
+        if name in RESERVED_OUTPUTS or any(o.name == name for o in comp.outputs):
+            raise ExtensionError(f"{where}: the name is taken")
+        comp.outputs.append(Output(a.name, name, comp.session_dir / name, tuple(services), key == "inputs"))
 
 
 def _channels(comp: Composition, a: Active, ctx: dict) -> None:
@@ -1052,6 +1127,8 @@ def compose(
             for net in (ep.target.network, *ep.listen_networks):
                 if net in CORE_NETWORKS and net != "net":
                     comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
+        _outputs(comp, a, ctx)
+        _outputs(comp, a, ctx, "inputs")
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx)
@@ -1135,6 +1212,9 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 
 
 def materialize(comp: Composition) -> None:
+    for o in comp.outputs:
+        check_path(str(comp.session_dir), o.name, "dir")
+        o.host.mkdir(mode=0o755, exist_ok=True)
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "materialize"):
             ensure_dir(comp.state_dir(a.name))
