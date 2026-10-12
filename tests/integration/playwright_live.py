@@ -12,6 +12,7 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      from the harness network the sidecar is unreachable, the forwarder is not;
   3. the harness (Pi or Vibe, stub-driven) browses example.com through it, and
      is offered the allowlisted tools only (never browser_run_code_unsafe);
+     the page stays between a turn's calls (navigate, then click);
      a shell command cannot reach the MCP (ring 1);
   4. with observe: the browser's destinations are flows `client: playwright,
      tool: browser`; with filter: a blocked site and the SSRF guard's refusal;
@@ -24,7 +25,7 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      768 MB /tmp) lands complete; `uploads: work`: browser_file_upload sends a 0600 file
      from /work/browser-uploads (read-only to the sidecar), refuses
      /etc/passwd, and the result for a link to a sidecar file is printed
-     (SECURITY.md's residual); not under Vibe (a known issue, TODO.md 0t);
+     (SECURITY.md's residual);
   then tears down. Prints PASS/FAIL per check; exit 0 only if all pass.
 """
 
@@ -55,6 +56,7 @@ BIG_ISO = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/d
 UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().then(t=>document.title='GOT:'+t)\">"
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
+BUTTON_PAGE = "data:text/html,<title>WAITING</title><button onclick=\"document.title='CLICKED'\">Go</button>"
 
 
 def big_download(rt: str, pw_image: str, s: str, out_dir: Path) -> None:
@@ -148,6 +150,21 @@ def main(directory: str) -> int:
         ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
+
+        def ref_of(url: str, name: str) -> str:
+            """The ref of `url`'s button `name` (a navigate of its own: its own browser context)."""
+            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": url}), 1500)
+            return (re.search(rf'button "{name}" \[ref=(\w+)\]', first) or
+                    re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+
+        # each live.call is a new harness process (and so a fresh browser context): one turn's calls share a page
+        ref = ref_of(BUTTON_PAGE, "Go")
+        steps = ((f"{prefix}browser_navigate", {"url": BUTTON_PAGE}),
+                 (f"{prefix}browser_click", {"element": "Go", "target": ref}))
+        for label, split in [("", False)] + [(" (Vibe: each its own run_typescript)", True)] * (cfg.harness == "vibe"):
+            res = live.seq(*steps, split=split)
+            check(f"the page stays between a turn's calls: navigate, then click{label}",
+                  "Page Title: CLICKED" in res[1], f"ref {ref}: " + res[1][-160:].replace("\n", " "))
         offered = set()
         if cfg.harness == "vibe":  # Vibe offers MCP tools in run_typescript only
             offered = set(live.vibe_functions("mcp_playwright"))
@@ -224,11 +241,7 @@ def main(directory: str) -> int:
                 big_download(rt, pw_image, s, out_dir)
             else:
                 print("    (BIG=1 adds a 2 GB ISO: a download larger than the sidecar's /tmp)")
-        if pws["uploads"] == "work" and cfg.harness == "vibe":
-            # Vibe's every MCP call gets a fresh browser context: the file chooser a click opens is gone
-            # before browser_file_upload (TODO.md 0t)
-            print("  KNOWN ISSUE: uploads under Vibe (each MCP call a fresh browser context), not checked")
-        elif pws["uploads"] == "work":
+        if pws["uploads"] == "work":
             print("== uploads (browser-uploads)")
             up = sd.root / "browser-uploads"
             src = {m.get("Destination"): m for m in pw.get("Mounts") or []}.get("/work/browser-uploads", {})
@@ -241,9 +254,7 @@ def main(directory: str) -> int:
                   and (up / "up.txt").stat().st_mode & 0o777 == 0o600, out[-120:])
             r = exec_pw("touch /work/browser-uploads/x; echo rc=$?")
             check("the sidecar can't write it", "rc=0" not in r.stdout, r.stdout.strip()[-80:])
-            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}), 1500)
-            ref = (re.search(r'button "Choose File" \[ref=(\w+)\]', first) or
-                   re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+            ref = ref_of(UPLOAD_PAGE, "Choose File")
 
             def upload(path: str) -> list[str]:
                 return live.seq((f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}),

@@ -64,8 +64,11 @@ All notable changes to glove are documented here.
   a fetcher restart, `glove downloads mark` and `glove down` stamping, the
   `min_free` refusal. `test_playwright.sh downloads` (`HARNESS=…`): a `.7z` and
   a 2 GB ISO through the browser, uploads from `/work/browser-uploads` only
-  (not under Vibe: each of its MCP calls gets a fresh browser context, a known
-  issue). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`.
+  (with Vibe too, now that its MCP calls share a session). Every
+  `test_playwright.sh` case checks that the page stays between a turn's calls
+  (a navigate, then a click; with Vibe also across two `run_typescript`
+  calls). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`
+  (`split=True`: each in its own).
 
 - **Vibe: the repo's skills, opt-in** (`harness_config.project_skills: true`).
   The repo's `.vibe/skills/` and `.agents/skills/` are bound read-only inside
