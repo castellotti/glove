@@ -6,6 +6,11 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- Live drivers: no run downloads a large file unless asked. `BIG=1` adds one:
+  `test_downloads.sh` checks the job path with `robots.txt` (`wait_s: 0`) and
+  adds Debian's netinst ISO (`BIG=dvd`: its first DVD); `test_playwright.sh
+  downloads` adds its 2 GB browser download.
+
 - **`web_download`, for every harness** (`webfetch: {downloads: work}`, off by
   default). The `fetcher` sidecar saves a file of any size to
   `<session>/downloads/`, read-only to the agent at `/work/downloads/`, through
@@ -29,8 +34,10 @@ All notable changes to glove are documented here.
 - **`env: {…, shell: false}`** for an extension's harness env var the harness
   process reads and shell commands never need: the tool wrapper unsets it.
   webfetch's `GLOVE_FETCH_PROXY`, `GLOVE_DOWNLOAD_MCP_URL` and
-  `GLOVE_FETCH_ALLOW` use it (a proxy URL in the shell only invited a `curl`
-  that fails).
+  `GLOVE_FETCH_ALLOW`, search's `SEARXNG_URL` and playwright's
+  `BROWSER_MCP_URL`, `BROWSER_MCP_TOOLS` and `BROWSER_MODE` use it (a proxy
+  or service URL in the shell only invited a `curl` that fails). Playwright's
+  are now set for Pi only: Vibe and Claude Code use its MCP server.
 - `web_fetch`/`fetch_url` **describe a binary body** instead of returning it: a
   response whose content type isn't text, or an unlabelled one with a NUL in
   its first 4 KB, becomes `[binary: <type>, <size>] <url>` and the rest is
@@ -57,8 +64,11 @@ All notable changes to glove are documented here.
   a fetcher restart, `glove downloads mark` and `glove down` stamping, the
   `min_free` refusal. `test_playwright.sh downloads` (`HARNESS=…`): a `.7z` and
   a 2 GB ISO through the browser, uploads from `/work/browser-uploads` only
-  (not under Vibe: each of its MCP calls gets a fresh browser context, a known
-  issue). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`.
+  (with Vibe too, now that its MCP calls share a session). Every
+  `test_playwright.sh` case checks that the page stays between a turn's calls
+  (a navigate, then a click; with Vibe also across two `run_typescript`
+  calls). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`
+  (`split=True`: each in its own).
 
 - **Vibe: the repo's skills, opt-in** (`harness_config.project_skills: true`).
   The repo's `.vibe/skills/` and `.agents/skills/` are bound read-only inside
@@ -288,6 +298,16 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Core checks every extension `mcp:` item**, which takes only the fields
+  every harness renders alike: `name` (letters, digits, `_`, `-`; one per
+  session), `transport` (`stdio` or `http`; `streamable-http` means `http`),
+  `url` (http) or `command`, `args` and `env` (stdio), `tools` and
+  `all_tools`. Anything else (`auth`, `headers`, a harness's timeouts) is
+  refused at render time with the extension named. Before, Claude Code dropped
+  an http server's `auth`/`headers` silently, and Vibe passed through its own
+  fields (`prompt`, `*_timeout_sec`, `sampling_enabled`), which no in-tree
+  extension used. The tool names in a `pi: {tools: …}` section are checked
+  the same way.
 - **A sidecar never binds a path inside `/work`**, only all of it with the
   `work` privilege (`github`). A sidecar restarts on its own and the runtime
   re-resolves a bind source each time, so the agent could swap such a
@@ -506,6 +526,19 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Vibe keeps one MCP session per server.** Vibe 2.26 opens a new MCP session
+  for every call to an HTTP server, so under Vibe each Playwright call started
+  in a fresh browser (a click after a navigate, and so an upload, failed). The
+  Vibe adapter now renders every HTTP server an extension contributes
+  (`playwright`, `searxng`, `webfetch`, `webdownload`) as a stdio server, the
+  image's `glove-mcp-bridge <url>`: one HTTP session for the Vibe process,
+  ended (`DELETE`) when Vibe exits. It is a stdlib relay on the image's python;
+  a failed request is answered with an error and the bridge keeps serving, and
+  a session the server lost (a restart) is re-opened. Server and tool names,
+  the allowlist and the hook's inventory are unchanged;
+  `harness_config.mcp_servers` render as written. Verified live on Docker
+  (`test_playwright.sh vibe` and `downloads`); `test_mcp_bridge.sh` (new, 13
+  checks) runs the bridge in the Vibe image on Docker and Podman.
 - **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
   port 80 (undici's `ProxyAgent` default), where answers such as
   web.archive.org's were lost: it goes to the proxy as a plain absolute-form

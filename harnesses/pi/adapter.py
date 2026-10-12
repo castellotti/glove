@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from glove.extensions import ExtensionError, active_items, render_value
-from glove.harnessconfig import mcp_tool_names, rel_config_home
+from glove.extensions import tool_names as checked_tool_names
+from glove.harnessconfig import rel_config_home
 from glove.image import staged_name
 
 # What Pi sends when the endpoint needs no key (Pi refuses a provider without one).
@@ -40,7 +41,7 @@ def tool_names(comp) -> list[str]:
     """The tools the session's Pi extensions register (`pi: {tools: …}`, a list
     or comma-separated)."""
     return [n for _a, section, ctx, where in _sections(comp)
-            for n in mcp_tool_names(render_value(section.get("tools") or [], ctx, where))]
+            for n in checked_tool_names(f"{where} pi", render_value(section.get("tools") or [], ctx, where))]
 
 
 def extensions(comp) -> list[tuple[str, Path]]:

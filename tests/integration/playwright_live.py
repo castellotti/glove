@@ -12,6 +12,7 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      from the harness network the sidecar is unreachable, the forwarder is not;
   3. the harness (Pi or Vibe, stub-driven) browses example.com through it, and
      is offered the allowlisted tools only (never browser_run_code_unsafe);
+     the page stays between a turn's calls (navigate, then click);
      a shell command cannot reach the MCP (ring 1);
   4. with observe: the browser's destinations are flows `client: playwright,
      tool: browser`; with filter: a blocked site and the SSRF guard's refusal;
@@ -20,11 +21,11 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      refused server-side unless allow_control and the full password; the
      clipboard is off;
   6. `downloads: work`: a .7z download lands in <session>/browser-output (read-only
-     to the shell, `7z l` reads it), and a 2 GB ISO (above the 768 MB /tmp)
-     lands complete; `uploads: work`: browser_file_upload sends a 0600 file
+     to the shell, `7z l` reads it), and with BIG=1 a 2 GB ISO (above the
+     768 MB /tmp) lands complete; `uploads: work`: browser_file_upload sends a 0600 file
      from /work/browser-uploads (read-only to the sidecar), refuses
      /etc/passwd, and the result for a link to a sidecar file is printed
-     (SECURITY.md's residual); not under Vibe (a known issue, TODO.md 0t);
+     (SECURITY.md's residual);
   then tears down. Prints PASS/FAIL per check; exit 0 only if all pass.
 """
 
@@ -49,12 +50,36 @@ HERE = Path(__file__).parent
 # (archive.org's .7z files, the research case, 500 often enough to make the check flaky)
 SEVENZ = "https://github.com/ip7z/7zip/releases/download/24.08/7z2408-extra.7z"
 SEVENZ_SIZE = 1611651
-BIG = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.7.0-amd64-standard.iso",
+BIG_ISO = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.7.0-amd64-standard.iso",
        2020130816)
 # short: the stub keeps the first 400 characters of each SEQ result, and the page's URL comes first
 UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().then(t=>document.title='GOT:'+t)\">"
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
+BUTTON_PAGE = "data:text/html,<title>WAITING</title><button onclick=\"document.title='CLICKED'\">Go</button>"
+
+
+def big_download(rt: str, pw_image: str, s: str, out_dir: Path) -> None:
+    """BIG: a download larger than the sidecar's 768 MB /tmp lands complete (staged on disk, <state>/downloading)."""
+    big, size = BIG_ISO
+    t = time.time()
+
+    def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
+        return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
+
+    # one MCP session held open (its context closes, and the download with it, when the session ends)
+    client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
+                                              f"{s}-browser:8931", [["browser_navigate", {"url": big}],
+                                                                    ["sleep", {"s": 1800}]]),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        got = wait_for(landed, timeout=1800, step=5)
+    finally:
+        client.terminate()
+        out = client.communicate(timeout=30)[0]
+    print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
+    check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
+          ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
 
 
 def main(directory: str) -> int:
@@ -125,6 +150,21 @@ def main(directory: str) -> int:
         ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
+
+        def ref_of(url: str, name: str) -> str:
+            """The ref of `url`'s button `name` (a navigate of its own: its own browser context)."""
+            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": url}), 1500)
+            return (re.search(rf'button "{name}" \[ref=(\w+)\]', first) or
+                    re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+
+        # each live.call is a new harness process (and so a fresh browser context): one turn's calls share a page
+        ref = ref_of(BUTTON_PAGE, "Go")
+        steps = ((f"{prefix}browser_navigate", {"url": BUTTON_PAGE}),
+                 (f"{prefix}browser_click", {"element": "Go", "target": ref}))
+        for label, split in [("", False)] + [(" (Vibe: each its own run_typescript)", True)] * (cfg.harness == "vibe"):
+            res = live.seq(*steps, split=split)
+            check(f"the page stays between a turn's calls: navigate, then click{label}",
+                  "Page Title: CLICKED" in res[1], f"ref {ref}: " + res[1][-160:].replace("\n", " "))
         offered = set()
         if cfg.harness == "vibe":  # Vibe offers MCP tools in run_typescript only
             offered = set(live.vibe_functions("mcp_playwright"))
@@ -197,31 +237,11 @@ def main(directory: str) -> int:
             if got:
                 out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
                 check("7z l reads it from the shell", "files" in out, out[-160:])
-            # a download larger than the sidecar's 768 MB /tmp: staged on disk (<state>/downloading)
-            big, size = BIG
-            t = time.time()
-
-            def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
-                return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
-
-            # one MCP session held open (its context closes, and the download with it, when the session ends)
-            client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
-                                                      f"{s}-browser:8931", [["browser_navigate", {"url": big}],
-                                                                            ["sleep", {"s": 1800}]]),
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            try:
-                got = wait_for(landed, timeout=1800, step=5)
-            finally:
-                client.terminate()
-                out = client.communicate(timeout=30)[0]
-            print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
-            check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
-                  ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
-        if pws["uploads"] == "work" and cfg.harness == "vibe":
-            # Vibe's every MCP call gets a fresh browser context: the file chooser a click opens is gone
-            # before browser_file_upload (TODO.md 0t)
-            print("  KNOWN ISSUE: uploads under Vibe (each MCP call a fresh browser context), not checked")
-        elif pws["uploads"] == "work":
+            if os.environ.get("BIG"):
+                big_download(rt, pw_image, s, out_dir)
+            else:
+                print("    (BIG=1 adds a 2 GB ISO: a download larger than the sidecar's /tmp)")
+        if pws["uploads"] == "work":
             print("== uploads (browser-uploads)")
             up = sd.root / "browser-uploads"
             src = {m.get("Destination"): m for m in pw.get("Mounts") or []}.get("/work/browser-uploads", {})
@@ -234,9 +254,7 @@ def main(directory: str) -> int:
                   and (up / "up.txt").stat().st_mode & 0o777 == 0o600, out[-120:])
             r = exec_pw("touch /work/browser-uploads/x; echo rc=$?")
             check("the sidecar can't write it", "rc=0" not in r.stdout, r.stdout.strip()[-80:])
-            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}), 1500)
-            ref = (re.search(r'button "Choose File" \[ref=(\w+)\]', first) or
-                   re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+            ref = ref_of(UPLOAD_PAGE, "Choose File")
 
             def upload(path: str) -> list[str]:
                 return live.seq((f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}),

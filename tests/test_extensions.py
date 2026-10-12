@@ -233,10 +233,10 @@ def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     assert doc["services"]["glove-s-worker"]["cap_add"] == ["NET_ADMIN"]
 
 
-def _render_with(tmp_path, extensions):
+def _render_with(tmp_path, extensions, **kw):
     tmp_path.mkdir(parents=True, exist_ok=True)
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=extensions)
-    plan, text = render(cfg, tmp_path)
+    plan, text = render(cfg, tmp_path, **kw)
     return plan, yaml.safe_load(text)
 
 
@@ -567,6 +567,62 @@ def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
                 manifests=discover(tree))
 
 
+# --- mcp: neutral fields only ----------------------------------------------------------------
+
+
+def _mcp(tree, *items: str, harness="vibe", ext="e"):
+    _ext(tree, ext, f"api: 1\nname: {ext}\nsummary: x\nharness:\n  mcp:\n" + "".join(f"    - {i}\n" for i in items))
+    return compose({"llm": STUB_LLM, ext: {}}, harness=harness, session="s", state_root=Path("/x"),
+                   manifests=discover(tree)).mcp
+
+
+def test_an_mcp_item_is_normalized(tree):
+    got = _mcp(tree, "{ name: h, transport: streamable-http, url: 'http://h/mcp', tools: 'a, b', all_tools: [a, c] }",
+               "{ name: s, command: srv, args: [-p, 1], env: { PORT: 1 } }")
+    assert got == [
+        ("e", {"name": "h", "transport": "http", "url": "http://h/mcp", "tools": ["a", "b"], "all_tools": ["a", "c"]}),
+        ("e", {"name": "s", "transport": "stdio", "command": "srv", "args": ["-p", "1"], "env": {"PORT": "1"}})]
+    assert _mcp(tree, "{ name: s, command: srv }", harness="pi", ext="p") == []  # Pi renders no MCP
+
+
+@pytest.mark.parametrize("item,why", [
+    ("{ url: 'http://h' , transport: http }", "needs a name"),
+    ("{ name: 'a b', command: x }", "needs a name"),
+    ("just-a-string", "needs a name"),
+    ("{ name: h, transport: sse, url: 'http://h' }", "transport is stdio or http"),
+    ("{ name: h, transport: http }", "needs a url"),
+    ("{ name: s }", "needs a command"),
+    ("{ name: h, transport: http, url: 'http://h', headers: { Authorization: x } }", r"\['headers'\] aren't http"),
+    ("{ name: h, transport: http, url: 'http://h', auth: { type: static } }", r"\['auth'\] aren't http"),
+    ("{ name: h, transport: [http], url: 'http://h' }", "transport is stdio or http"),
+    ("{ name: h, transport: http, url: 'http://h', tool_timeout_sec: 9 }",
+     "takes all_tools, name, tools, transport, url"),
+    ("{ name: h, transport: http, url: 'http://h', command: x }", r"\['command'\] aren't http"),
+    ("{ name: s, command: x, url: 'http://h' }", r"\['url'\] aren't stdio"),
+    ("{ name: s, command: x, args: '-p 1' }", "args is a list"),
+    ("{ name: s, command: x, args: [{ a: 1 }] }", "args is a list"),
+    ("{ name: s, command: x, env: [A] }", "env maps names"),
+    ("{ name: s, command: x, env: { lower: v } }", "env maps names"),
+    ("{ name: s, command: x, env: { A: [v] } }", "env maps names"),
+    ("{ name: s, command: x, tools: { a: 1 } }", "want a list of tool names"),
+    ("{ name: s, command: x, tools: 'a, b c' }", r"tools: \['b c'\]"),
+    ("{ name: s, command: x, all_tools: ['a.b'] }", r"all_tools: \['a.b'\]"),
+])
+def test_an_mcp_item_takes_neutral_fields_only(tree, item, why):
+    with pytest.raises(ExtensionError, match=why):
+        _mcp(tree, item)
+
+
+def test_an_mcp_server_name_is_set_once(tree):
+    for name in ("a", "b"):
+        _ext(tree, name, f"api: 1\nname: {name}\nsummary: x\nharness:\n  mcp: [{{ name: s, command: x }}]\n")
+    with pytest.raises(ExtensionError, match="extension 'b' harness: mcp server 's' is already set"):
+        compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="vibe", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+    with pytest.raises(ExtensionError, match="'t' is already set"):
+        _mcp(tree, "{ name: t, command: x }", "{ name: t, command: y }", ext="c")
+
+
 def test_endpoint_aliases_must_be_hostnames(tree):
     _egress(tree)
     _ext(tree, "fetch", """\
@@ -747,3 +803,67 @@ def test_no_sidecar_joins_the_lan_network(tmp_path, ghome):
     doc["services"]["glove-s-direct-proxy"]["networks"]["glove-s-lan"] = {}
     with pytest.raises(ExtensionError, match="only `via: lan` forwarders may"):
         validate_project(doc, plan, plan.composition)
+
+
+# --- outputs and inputs ------------------------------------------------------------------
+
+_OUTISH = """\
+    services:
+      worker:
+        image: {digest}
+        networks: [egress]{env}
+      reader:
+        image: {digest}
+        networks: [egress]
+    """
+
+
+def _outish(tmp_path, ghome, *, trusted=True, outputs="{ dl: { services: [worker] } }",
+            inputs="{ up: { services: [reader] } }", session_dir=True, env=""):
+    _svc_ext(_oot(tmp_path, ghome, trusted, "outish"), "outish", service=_OUTISH.format(digest=DIGEST, env=env),
+             extra=f"outputs: {outputs}\ninputs: {inputs}\n")
+    return _render_with(tmp_path, {"direct": {}, "outish": {}}, session_dir=str(tmp_path) if session_dir else None)
+
+
+def test_an_output_is_written_by_its_services_and_an_input_read_by_them(tmp_path, ghome):
+    env = '\n        environment: { OUT: "{{ output.dl.path }}", IN: "{{ input.up.path }}" }'
+    plan, doc = _outish(tmp_path, ghome, env=env)
+    svc = doc["services"]
+    dl, up = str(tmp_path / "dl"), str(tmp_path / "up")
+    # the output: rw in its sidecar (beside /work, never in it), ro in the harness at /work/dl
+    assert {"type": "bind", "source": dl, "target": "/run/glove-output/dl"} in svc["glove-s-worker"]["volumes"]
+    # the input: rw in the harness, ro in its sidecar at the harness's path
+    assert {"type": "bind", "source": up, "target": "/work/up", "read_only": True} in svc["glove-s-reader"]["volumes"]
+    assert not any(v.get("source") == up for v in svc["glove-s-worker"]["volumes"])
+    assert not any(v.get("source") == dl for v in svc["glove-s-reader"].get("volumes") or [])
+    mounts = {m.container_path: (m.host_path, m.mode) for m in plan.mounts}
+    assert mounts["/work/dl"] == (dl, "ro") and mounts["/work/up"] == (up, "rw")
+    # a fragment finds each where its sidecars see it
+    assert {"OUT": "/run/glove-output/dl", "IN": "/work/up"}.items() <= svc["glove-s-worker"]["environment"].items()
+
+
+def test_an_output_whose_when_fails_is_not_rendered(tmp_path, ghome):
+    plan, _ = _outish(tmp_path, ghome, outputs="{ dl: { services: [worker], when: { harness: vibe } } }",
+                        inputs="{}")
+    assert [o.name for o in plan.composition.outputs] == []
+    assert "/work/dl" not in {m.container_path for m in plan.mounts}
+
+
+@pytest.mark.parametrize("kw,why", [
+    ({"outputs": "{ Bad_Name: { services: [worker] } }"}, "want"),
+    ({"outputs": "{ dl: [worker] }"}, "want"),
+    ({"outputs": "{ dl: { services: [worker], read_only: true } }"}, "want"),
+    ({"outputs": "{ dl: {} }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: [] } }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: worker } }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: [nope] } }"}, r"output 'dl': no service\(s\) \['nope'\]"),
+    ({"inputs": "{ up: { services: [nope] } }"}, r"input 'up': no service\(s\) \['nope'\]"),
+    ({"outputs": "{ work: { services: [worker] } }"}, "the name is taken"),
+    ({"outputs": "{ local: { services: [worker] } }"}, "the name is taken"),
+    ({"inputs": "{ dl: { services: [reader] } }"}, "input 'dl': the name is taken"),
+    ({"session_dir": False}, "needs a session directory"),
+    ({"trusted": False}, "a directory shared with the harness is a privilege"),
+])
+def test_output_and_input_rules(tmp_path, ghome, kw, why):
+    with pytest.raises(ExtensionError, match=why):
+        _outish(tmp_path, ghome, **kw)

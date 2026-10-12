@@ -390,7 +390,9 @@ def _channel_volumes(comp: Composition, extra: dict, volumes: dict[str, Any]) ->
     """One session tmpfs volume per channel (owned by the session uid, 0700),
     and a check that each service a channel or an output names is one of its
     extension's."""
-    for kind, x in [*(("channel", c) for c in comp.channels), *(("output", o) for o in comp.outputs)]:
+    shared = [*(("channel", c) for c in comp.channels),
+              *(("input" if o.input else "output", o) for o in comp.outputs)]
+    for kind, x in shared:
         owner = comp.by_name(x.extension)
         doc = next((d for e, d in comp.fragments if e is owner), {})
         missing = [svc for svc in x.services if svc not in (doc.get("services") or {})]

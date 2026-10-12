@@ -29,6 +29,7 @@ def test_requires_an_egress_provider(tmp_path):
 def test_pi_wiring(tmp_path):
     plan = _plan(tmp_path)
     assert plan.environment["SEARXNG_URL"] == "http://glove-s-search:8080"
+    assert "SEARXNG_URL" in plan.composition.shell_hidden_env
     assert "/opt/glove/ext/search/pi-extension" in plan.command
     fwd = next(s for s in plan.network.sidecars if s.role == "search")
     assert fwd.target == "glove-s-searxng:8080" and fwd.listen_port == 8080
@@ -45,7 +46,7 @@ def test_mcp_harnesses_get_web_search_from_a_sidecar_over_http(tmp_path, harness
     cfg = make_cfg(harness=harness, name="s", workdir=str(work), extensions={"direct": {}, "search": {}, **llm})
     plan, text = render(cfg, tmp_path)
     assert [s for _, s in plan.composition.mcp] == [
-        {"name": "searxng", "transport": "http", "url": "http://glove-s-search-mcp:8000/mcp", "tools": "web_search"}]
+        {"name": "searxng", "transport": "http", "url": "http://glove-s-search-mcp:8000/mcp", "tools": ["web_search"]}]
     fwd = next(s for s in plan.network.sidecars if s.role == "search-mcp")
     assert fwd.target == "glove-s-searxng-mcp:8000" and fwd.networks == ("glove-s-searchnet",)
     svc = yaml.safe_load(text)["services"]["glove-s-searxng-mcp"]

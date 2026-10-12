@@ -15,7 +15,6 @@ routing and probes live in the `llm` extension.
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -81,12 +80,6 @@ def harness_model(profile: HarnessProfile, exports: dict[str, Any]) -> ModelDesc
     model = ModelDescriptor.from_exports(exports)
     name = adapter_call(profile, "secret_env", model) if model.api_key_env else None
     return replace(model, api_key_env=name) if name else model
-
-
-def mcp_tool_names(tools: str | Sequence[Any]) -> list[str]:
-    """An `mcp` contribution's `tools` allowlist (a comma-separated string or a
-    list) as tool names."""
-    return [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if str(t).strip()]
 
 
 def build_environment_context(plan: SessionPlan) -> str:

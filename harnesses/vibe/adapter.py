@@ -9,6 +9,13 @@ from `run_typescript`, as `mcp_<server>.<tool>`: those names join the session's
 tool inventory, which the pre_tool hook refuses every other tool by. A server
 without an allowlist (`harness_config.mcp_servers`) adds none: its tools need
 `harness_config.tools.allow`.
+
+Vibe (2.26.1; re-check at a bump) opens a new MCP session for every call to
+an HTTP server, so a server that keeps state per session (Playwright's pages)
+forgets it between calls. Each HTTP server from `comp.mcp` is rendered as the
+image's stdio bridge (`glove-mcp-bridge <url>`, one session for Vibe's) under
+the same name, so its tool names don't change. `harness_config.mcp_servers`
+render as written.
 """
 
 from __future__ import annotations
@@ -19,10 +26,12 @@ from typing import Any
 
 import tomli_w
 
-from glove.harnessconfig import mcp_tool_names, rel_config_home
+from glove.harnessconfig import rel_config_home
 
 # Descriptor api → Vibe (backend, api_style).
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
+
+MCP_BRIDGE = "/opt/glove/bin/glove-mcp-bridge"
 
 
 def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
@@ -33,13 +42,13 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
     for _ext, item in comp.mcp if comp is not None else []:
         item = dict(item)
         item.pop("all_tools", None)  # the regex below hides every other tool, known or not
-        allow = item.pop("tools", None)
-        if allow is not None:
-            names = mcp_tool_names(allow)
-            ok = re.fullmatch(r"[a-z0-9_]+", item["name"]) and all(re.fullmatch(r"[A-Za-z0-9_-]+", n) for n in names)
-            if not ok:
-                raise ValueError(f"vibe mcp {item['name']!r}: bad tools {names}")
+        names = item.pop("tools", None)  # core checked them
+        if names is not None:
+            if not re.fullmatch(r"[a-z0-9_]+", item["name"]):  # Vibe's `<server>_<tool>` names
+                raise ValueError(f"vibe mcp {item['name']!r}: a server with tools needs a name of [a-z0-9_]")
             disabled.append(f"re:{item['name']}_(?!(?:{'|'.join(names) or '(?!)'})$).*")
+        if item["transport"] == "http":  # core allows only the url: the bridge drops nothing
+            item.update(transport="stdio", command=MCP_BRIDGE, args=[item.pop("url")])
         servers.append(item)
     servers.extend(cfg.harness_config.get("mcp_servers", []))
     return servers, disabled
@@ -47,8 +56,7 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
 
 def tool_names(comp) -> list[str]:
     """The MCP tools glove's servers allow, as the pre_tool hook sees them."""
-    return [f"mcp_{item['name']}.{t}" for _ext, item in comp.mcp if "tools" in item
-            for t in mcp_tool_names(item["tools"])]
+    return [f"mcp_{item['name']}.{t}" for _ext, item in comp.mcp for t in item.get("tools", [])]
 
 
 def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:

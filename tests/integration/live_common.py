@@ -248,17 +248,26 @@ class LiveSession:
         """One tool call through the agent (`CALL …` to the stub): its output.
         Vibe's `mcp_<server>.<tool>` goes through run_typescript (the error,
         if any, as its result)."""
+        tool, args = self._vibe_ts(tool, args)
+        return self.ask(f"CALL {tool} {json.dumps(args)}", timeout)
+
+    def _vibe_ts(self, tool: str, args: dict) -> tuple[str, dict]:
+        """Vibe's `mcp_<server>.<tool>` as the run_typescript call that makes it
+        (the error, if any, as its result); any other step as it is."""
         if self.cfg.harness == "vibe" and (m := re.fullmatch(r"(mcp_\w+)\.(\w+)", tool)):
             code = (f"async function main() {{ try {{ return await tools.{m[1]}.{m[2]}({json.dumps(args)}); }} "
                     "catch (e) { return 'ERR ' + String(e); } }")
-            tool, args = "run_typescript", {"code": code}
-        return self.ask(f"CALL {tool} {json.dumps(args)}", timeout)
+            return "run_typescript", {"code": code}
+        return tool, args
 
-    def seq(self, *steps: tuple[str, dict]) -> list[str]:
+    def seq(self, *steps: tuple[str, dict], split: bool = False) -> list[str]:
         """The results of `steps` (tool, args), called one after another in one
         turn (the stubs' `SEQ`): one per step, "" for a step that got none.
         Vibe's `mcp_<server>.<tool>` steps run in one run_typescript, in order
-        (one MCP session, as SEQ's), each result cut to its share of the stub's 1500 characters."""
+        (one MCP session, as SEQ's), each result cut to its share of the stub's 1500 characters;
+        `split`: each in its own run_typescript call instead."""
+        if split:
+            steps = tuple(self._vibe_ts(t, a) for t, a in steps)
         if self.cfg.harness == "vibe" and all(re.fullmatch(r"mcp_\w+\.\w+", t) for t, _ in steps):
             share = 1100 // len(steps)  # the JSON escaping around it grows it
             calls = ", ".join(f"() => tools.{t}({json.dumps(a)})" for t, a in steps)

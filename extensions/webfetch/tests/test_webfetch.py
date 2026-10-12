@@ -53,7 +53,8 @@ def test_vibe_gets_fetch_url_from_a_sidecar(tmp_path, observe):
     cfg = make_cfg(harness="vibe", name="s", workdir=str(tmp_path), extensions=exts)
     plan, text = render(cfg, tmp_path)
     assert [s for _, s in plan.composition.mcp] == [
-        {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp", "tools": "fetch_url"}]
+        {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp",
+         "tools": ["fetch_url"]}]
     # the harness reaches the fetcher, never the egress proxy
     roles = {s.role for s in plan.network.sidecars if s.harness}
     assert "webfetch-mcp" in roles and "proxy" not in roles
@@ -96,7 +97,8 @@ def test_downloads_put_the_fetcher_on_every_harness(tmp_path, harness):
         from harnesses.pi.adapter import tool_names
         assert {"web_fetch", "web_download", "web_download_status"} <= set(tool_names(comp))
     else:
-        assert [(s["name"], s["tools"]) for _, s in comp.mcp][-1] == ("webdownload", "web_download,web_download_status")
+        assert comp.mcp[-1][1]["name"] == "webdownload"
+        assert comp.mcp[-1][1]["tools"] == ["web_download", "web_download_status"]
     # written by the sidecar beside work/, read by the harness at /work/downloads
     mount = next(m for m in plan.mounts if m.container_path == "/work/downloads")
     assert (mount.host_path, mount.mode) == (str(tmp_path / "downloads"), "ro")

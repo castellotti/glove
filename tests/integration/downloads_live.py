@@ -16,10 +16,13 @@ webdownload MCP for Vibe and Claude Code):
   3. a plain http:// page (the Wayback CDX API) through the fetch tool, and
      with observe the flow says proto http (Pi, Vibe);
   4. a filter block on a host: web_download is refused by the policy, nothing saved;
-  5. a large file (BIG: Debian netinst, or `dvd`) runs as a job: the call
-     returns a job id, the .part grows, the harness answers meanwhile, the
-     fetcher's memory stays flat, the final sha256 matches Debian's SHA256SUMS;
-  6. a fetcher restart: it still binds <session>/downloads and downloads again;
+  5. a download as a job: robots.txt with wait_s 0 (a job id, then the
+     status says saved, with the host file's sha256); BIG=1 adds Debian's
+     netinst ISO, BIG=dvd its first DVD (the .part grows, the harness
+     answers meanwhile, the fetcher's memory stays flat, the sha256 matches
+     Debian's SHA256SUMS);
+  6. a fetcher restart: it still binds <session>/downloads and downloads
+     again (robots.txt, under a free name);
   7. `glove downloads mark` (macOS) stamps com.apple.quarantine on the saved
      files and leaves an already stamped one alone; at the end `glove down`
      stamps one saved after that;
@@ -44,6 +47,7 @@ from live_common import check, glove, inspect, live_session, summary, tool_resul
 PDF = "https://www.worldradiohistory.com/Archive-Hands-On-Electronics/Hands-On-1987-01.pdf"
 CDX = "http://web.archive.org/cdx/search/cdx?url=theoldrobots.com&matchType=domain&limit=5"
 BLOCKED = "https://httpbin.org/bytes/4096"
+ROBOTS = "https://www.worldradiohistory.com/robots.txt"
 DEBIAN = "https://cdimage.debian.org/debian-cd/current/amd64/{}/"
 HIDDEN = ("GLOVE_FETCH_PROXY", "GLOVE_DOWNLOAD_MCP_URL", "GLOVE_FETCH_ALLOW")
 
@@ -57,7 +61,7 @@ def sha256(p: Path) -> str:
 
 
 def big_file() -> tuple[str, str]:
-    """(url, sha256) of the current Debian netinst ISO (BIG=dvd: the first DVD)."""
+    """(url, sha256) of the current Debian netinst ISO (BIG=1), or its first DVD (BIG=dvd)."""
     kind = "iso-dvd" if os.environ.get("BIG") == "dvd" else "iso-cd"
     base = DEBIAN.format(kind)
     sums = urllib.request.urlopen(base + "SHA256SUMS", timeout=30).read().decode()
@@ -85,6 +89,51 @@ def main(directory: str) -> int:
 
         def download(url: str, wait_s: int = 45) -> str:
             return tool_result(live.call(dl, {"url": url, "wait_s": wait_s}, timeout=300), 1500)
+
+        def job_id(res: str) -> str:
+            return (re.search(r"started: (d\d+)", res) or [None, ""])[1]
+
+        def job_status(job: str) -> str:
+            return tool_result(live.call(status, {"id": job}, timeout=240), 600)
+
+        def big_job() -> None:
+            """BIG: a Debian ISO as a job: its .part, the harness meanwhile, the fetcher's memory, SHA256SUMS."""
+            print("== a large file as a job")
+            url, want = big_file()
+            name = url.rsplit("/", 1)[1]
+            part = out_dir / f"{name}.part"
+            res = download(url, wait_s=5)
+            print(f"    {res[-300:]}")
+            job = job_id(res)
+            check("the call returns a job id", bool(job), res[-200:])
+            grew = wait_for(lambda: part.exists() and part.stat().st_size > 50 << 20, timeout=300, step=2)
+            check(".part grows on the host", bool(grew), f"{part.stat().st_size if part.exists() else 0} B")
+            out = live.sh("echo PARTS=$(ls -la /work/downloads/ | grep -c '\\.part$')")
+            check("…and the shell sees it", "PARTS=1" in out, out[-80:])
+            out = job_status(job)
+            check(f"{status} reports it running", "running" in out or "writing" in out or "saved:" in out, out[-200:])
+            out = live.sh("echo still-here")
+            check("the harness answers meanwhile", "still-here" in out, out[-80:])
+            mems, done = [], threading.Event()
+
+            def sample() -> None:
+                while not done.is_set():
+                    mems.append(mem_mib(rt, f"{s}-fetcher"))
+                    time.sleep(5)
+
+            threading.Thread(target=sample, daemon=True).start()
+            t = time.time()
+            finished = wait_for(lambda: (out_dir / name).is_file() and not part.exists(), timeout=3600, step=5)
+            done.set()
+            size = (out_dir / name).stat().st_size if finished else 0
+            print(f"    {size / 2**20:.0f} MiB in {time.time() - t:.0f}s; "
+                  f"fetcher memory MiB {min(mems or [0]):.0f}..{max(mems or [0]):.0f}")
+            check("the job finishes", bool(finished))
+            check("the fetcher's memory stays flat (< 256 MiB)", bool(mems) and 0 < max(mems) < 256,
+                  f"max {max(mems or [0]):.0f} MiB over {len(mems)} samples")
+            if finished:
+                check("sha256 matches Debian's SHA256SUMS", sha256(out_dir / name) == want, want)
+                check(f"{status} says saved with that sha256", want in job_status(job))
 
         def bind_source() -> str:
             mounts = inspect(rt, f"{s}-fetcher").get("Mounts") or []
@@ -143,51 +192,30 @@ def main(directory: str) -> int:
                   and not any(p.name.startswith("4096") for p in out_dir.iterdir()), res[-200:])
             glove("filter", "unblock", "httpbin.org", "--dir", str(live.sd.root))
 
-        print("== a large file as a job")
-        url, want = big_file()
-        name = url.rsplit("/", 1)[1]
-        part = out_dir / f"{name}.part"
-        res = download(url, wait_s=5)
+        print("== a job")
+        res = download(ROBOTS, wait_s=0)
         print(f"    {res[-300:]}")
-        job = (re.search(r"started: (d\d+)", res) or [None, ""])[1]
-        check("the call returns a job id", bool(job), res[-200:])
-        grew = wait_for(lambda: part.exists() and part.stat().st_size > 50 << 20, timeout=300, step=2)
-        check(".part grows on the host", bool(grew), f"{part.stat().st_size if part.exists() else 0} B")
-        out = live.sh("echo PARTS=$(ls -la /work/downloads/ | grep -c '\\.part$')")
-        check("…and the shell sees it", "PARTS=1" in out, out[-80:])
-        out = tool_result(live.call(status, {"id": job}, timeout=240), 600)
-        check(f"{status} reports it running", "running" in out or "writing" in out or "saved:" in out, out[-200:])
-        out = live.sh("echo still-here")
-        check("the harness answers meanwhile", "still-here" in out, out[-80:])
-        mems, done = [], threading.Event()
-
-        def sample() -> None:
-            while not done.is_set():
-                mems.append(mem_mib(rt, f"{s}-fetcher"))
-                time.sleep(5)
-
-        threading.Thread(target=sample, daemon=True).start()
-        t = time.time()
-        finished = wait_for(lambda: (out_dir / name).is_file() and not part.exists(), timeout=3600, step=5)
-        done.set()
-        size = (out_dir / name).stat().st_size if finished else 0
-        print(f"    {size / 2**20:.0f} MiB in {time.time() - t:.0f}s; "
-              f"fetcher memory MiB {min(mems or [0]):.0f}..{max(mems or [0]):.0f}")
-        check("the job finishes", bool(finished))
-        check("the fetcher's memory stays flat (< 256 MiB)", bool(mems) and 0 < max(mems) < 256,
-              f"max {max(mems or [0]):.0f} MiB over {len(mems)} samples")
-        if finished:
-            check("sha256 matches Debian's SHA256SUMS", sha256(out_dir / name) == want, want)
-            out = tool_result(live.call(status, {"id": job}, timeout=240), 600)
-            check(f"{status} says saved with that sha256", want in out, out[-200:])
+        job = job_id(res)
+        check("wait_s 0: the call returns a job id", bool(job), res[-200:])
+        out = ""
+        if job:
+            # the file first (a status call is a harness run); it is renamed into place a moment before
+            # the job says so
+            wait_for(lambda: (out_dir / "robots.txt").is_file(), timeout=120, step=2)
+            out = wait_for(lambda: saved if "saved:" in (saved := job_status(job)) else "", timeout=15, step=2)
+        check(f"{status} says saved, with the host file's sha256", (out_dir / "robots.txt").is_file()
+              and sha256(out_dir / "robots.txt") in out, out[-200:])
+        if os.environ.get("BIG"):
+            big_job()
 
         print("== a fetcher restart")
         subprocess.run([rt, "restart", f"{s}-fetcher"], capture_output=True, check=True)
         wait_for(lambda: inspect(rt, f"{s}-fetcher").get("State", {}).get("Health", {}).get("Status") == "healthy",
                  timeout=60)
         check("after a restart the fetcher still binds <session>/downloads", bind_source() == src, bind_source())
-        res = download("https://www.worldradiohistory.com/robots.txt")
-        check("…and downloads there", "saved: /work/downloads/robots" in res, res[-200:])
+        res = download(ROBOTS)
+        check("…and downloads there, under a free name (robots-1.txt)", "saved: /work/downloads/robots-1.txt" in res,
+              res[-200:])
 
         if sys.platform == "darwin":
             print("== quarantine")
@@ -204,13 +232,13 @@ def main(directory: str) -> int:
 
             # one more, left unstamped for `glove down` (below)
             fresh = re.search(r"saved: /work/downloads/([^\s\\\"]+)",
-                              download("https://www.worldradiohistory.com/robots.txt"))
+                              download(ROBOTS))
 
         print("== min_free above the free space")
         session = live.sd.root / "glove-session.yml"
         session.write_text(session.read_text().replace("downloads: work", "downloads: work, min_free: 900000g"))
         live.relaunch()
-        res = download("https://www.worldradiohistory.com/robots.txt")
+        res = download(ROBOTS)
         print(f"    {res[-300:]}")
         check("web_download refuses below the reserve", "free-space reserve" in res, res[-200:])
 

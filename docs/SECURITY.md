@@ -132,11 +132,11 @@ Every capability (the model, search, the browser, …) is an extension in
   it. It exists for `github` (below). `/work` itself is the session's `work/`,
   which the agent cannot replace.
 - **Harness-process-only variables.** An extension's harness env entry with
-  `shell: false` (webfetch's proxy and download URLs for Pi) is unset by the
-  tool wrapper before every shell command, like the secret-shaped names (every
-  enforcer but `none`, which wraps nothing). Not a
-  secret: shell commands have no network to use it on, and seeing it only
-  invites a failing `curl`.
+  `shell: false` (what Pi's webfetch, search and playwright extensions read:
+  their service URLs and settings) is unset by the tool wrapper before every
+  shell command, like the secret-shaped names (every enforcer but `none`,
+  which wraps nothing). Not a secret: shell commands have no network to use it
+  on, and seeing it only invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
@@ -319,6 +319,12 @@ has no server-side switch for it). The controls:
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
   tool, it is not a boundary around the MCP.
+- **Vibe's MCP bridge.** Vibe reaches each extension's HTTP MCP server through
+  `glove-mcp-bridge` (a stdio server, so one MCP session lasts the Vibe
+  process). It is a child of the harness under the same sandbox, talks only to
+  the URL glove rendered, and the hook still checks every `mcp_<server>.<tool>`
+  call: no change in reach. It is not a tool command, so no tool wrapper: tool
+  commands still can't reach the forwarders.
 - **Watching (`novnc`).** VNC and websockify listen on the sidecar's own
   loopback; nothing is published. `glove playwright view` opens a loopback
   listener only while it runs, pipes each connection through `docker|podman

@@ -5,13 +5,25 @@ enable_update_checks = false
 enable_auto_update = false
 enable_telemetry = false
 experimental_bash_tool = false
-mcp_servers = [
-    { name = "webfetch", transport = "http", url = "http://glove-s-webfetch-mcp:8000/mcp" },
-    { name = "webdownload", transport = "http", url = "http://glove-s-webdownload-mcp:8000/mcp" },
-]
 disabled_tools = [
     "re:webfetch_(?!(?:fetch_url)$).*",
     "re:webdownload_(?!(?:web_download|web_download_status)$).*",
+]
+
+[[mcp_servers]]
+name = "webfetch"
+transport = "stdio"
+command = "/opt/glove/bin/glove-mcp-bridge"
+args = [
+    "http://glove-s-webfetch-mcp:8000/mcp",
+]
+
+[[mcp_servers]]
+name = "webdownload"
+transport = "stdio"
+command = "/opt/glove/bin/glove-mcp-bridge"
+args = [
+    "http://glove-s-webdownload-mcp:8000/mcp",
 ]
 
 [[providers]]

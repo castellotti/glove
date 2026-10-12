@@ -224,3 +224,10 @@ def test_the_pi_section_takes_only_extensions(tmp_path, monkeypatch):
 
     with pytest.raises(ExtensionError, match="`pi:` takes"):
         _plan_with(tmp_path, monkeypatch, "  pi: { skills: [code] }\n")
+
+
+def test_the_pi_sections_tools_are_checked_like_an_mcp_servers(tmp_path, monkeypatch):
+    from glove.extensions import ExtensionError
+
+    with pytest.raises(ExtensionError, match=r"harness pi: \['web fetch'\]"):
+        _plan_with(tmp_path, monkeypatch, "  pi: { extensions: [code], tools: 'web_search, web fetch' }\n")

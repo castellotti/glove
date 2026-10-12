@@ -31,7 +31,11 @@
       "*API_KEY*",
       "*CREDENTIAL*",
       "*PASSWORD*",
-      "GLOVE_FETCH_PROXY"
+      "BROWSER_MCP_TOOLS",
+      "BROWSER_MCP_URL",
+      "BROWSER_MODE",
+      "GLOVE_FETCH_PROXY",
+      "SEARXNG_URL"
     ]
   },
   "security": {

@@ -69,6 +69,9 @@ def test_harness_wiring(tmp_path):
     assert env["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
     assert env["BROWSER_MCP_TOOLS"] == "browser_navigate,browser_snapshot"
     assert env["BROWSER_MODE"] == "host"
+    assert {"BROWSER_MCP_URL", "BROWSER_MCP_TOOLS", "BROWSER_MODE"} <= plan.composition.shell_hidden_env
+    _, vibe = _plan(tmp_path, harness="vibe", i_accept_host_rce=True)
+    assert not any(k.startswith("BROWSER_") for k in vibe.environment)  # Vibe has the MCP server instead
     fwd = next(s for s in plan.network.sidecars if s.role == "browser")
     assert fwd.target == f"host.docker.internal:{_ports(cfg)[0]}" and fwd.host_gateway
     assert "/opt/glove/ext/playwright/pi-extension" in plan.command

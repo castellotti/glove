@@ -14,6 +14,7 @@
 #             is allow rules, every other known tool a managed deny
 #   downloads  headless with downloads: work and uploads: work (+ browser_file_upload);
 #             HARNESS=vibe|claude-code for the other harnesses (default pi)
+#             (BIG=1 adds a 2 GB browser download; off by default)
 #   SANDBOX=off … runs any case with `chromium_sandbox: off`
 #
 # A throwaway session dir (llm → the tool-driving stub) runs

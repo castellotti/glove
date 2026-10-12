@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/vibe:0.5.0-75765c9640-8a4d5eaf28-srt-46f57ff955
+    image: glove/vibe:0.5.0-fbc2201932-b78644781d-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "vibe", "--trust", "--yolo", "--workdir", "/work"]
     stdin_open: true
@@ -27,9 +27,6 @@ services:
     environment:
       HOME: "/home/agent"
       VIBE_HOME: "/home/agent/.vibe"
-      BROWSER_MCP_URL: "http://glove-s-browser:8931/mcp"
-      BROWSER_MCP_TOOLS: "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog"
-      BROWSER_MODE: "headless"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
     volumes:
       # the harness home, read-only: its config home is re-bound read-write below

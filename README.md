@@ -521,7 +521,10 @@ harness_config:
 A name glove wraps, holds or denies is refused at plan time. A Vibe MCP tool
 is listed as `mcp_<server>.<tool>`, the name the agent calls from
 `run_typescript`. The rest of Vibe's `harness_config.tools` (its own
-`[tools.<name>]` tables) still goes to its `config.toml`.
+`[tools.<name>]` tables) still goes to its `config.toml`. Your own
+`harness_config.mcp_servers` render as written: one that keeps state per
+session can use glove's bridge (`transport: stdio`, `command:
+/opt/glove/bin/glove-mcp-bridge`, `args: [<url>]`).
 
 Pi 1.x features, as glove renders them:
 
@@ -696,10 +699,19 @@ Core validates all of it:
     `slot.<slot>.<key>`, a list of allowed values, or `{set: true|false}`
     (whether the value is set at all);
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
-    an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
-    with `tools` as an allowlist that also enters the tool inventory as
-    `mcp_<server>.<tool>`, so a server without `tools` is refused; Claude Code: `managed-mcp.json`, `tools` as allow
-    rules and the rest of `all_tools` as deny rules);
+    an MCP server, rendered by harnesses that speak MCP. An item takes only
+    the fields every harness renders alike: `name` (letters, digits, `_`, `-`;
+    one per session), `transport` (`stdio`, the default, or `http`;
+    `streamable-http` means `http`), `url` (http) or `command`, `args` and
+    `env` (stdio), and `tools`/`all_tools` (a list or comma-separated). Anything
+    else (`auth`, `headers`, one harness's timeouts) is refused. Vibe:
+    `config.toml`, with `tools` as an allowlist that also enters the tool
+    inventory as `mcp_<server>.<tool>` (so its server name is `[a-z0-9_]`);
+    an `http` server is rendered as the image's stdio bridge
+    `glove-mcp-bridge <url>`, since Vibe opens a new MCP session for every
+    HTTP call and a server like Playwright keeps its pages per session.
+    Claude Code: `managed-mcp.json`, `tools` as allow rules and the rest of
+    `all_tools` as deny rules;
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);
@@ -1115,7 +1127,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the harness-only vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` and `test_netgate_shutdown.sh` on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
-| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe every MCP call gets a fresh browser context, so a click after a navigate (and so an upload) fails: **known issue**; Podman: **untested** |
+| Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe, glove's stdio bridge keeps one MCP session per server, so a click after a navigate (and so an upload) works: verified live on Docker (`test_playwright.sh vibe` and `downloads`, also across two `run_typescript` calls); the bridge itself on Docker and Podman (`test_mcp_bridge.sh`); the Vibe browser case on Podman: **untested** |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
@@ -1169,6 +1181,7 @@ uv run lint-imports                        # core (glove/) must not import exten
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (19 checks)
 bash tests/integration/test_vibe_nono.sh  # nono / Vibe (12 checks)
+bash tests/integration/test_mcp_bridge.sh  # Vibe's stdio MCP bridge in the Vibe image vs a stand-in (13 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (12 checks)
 bash tests/integration/test_nono_srt.sh pi    # nono+srt in a real session (32 checks; also: vibe 32, claude-code 28)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
@@ -1190,13 +1203,15 @@ bash tests/integration/test_egress.sh tor     # egress + search + webfetch end t
                                               # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
 HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP + WebFetch via the proxy
                                               # (13 checks; also: vibe 16; OBSERVE=1 adds flows)
-bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (20 checks;
+bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (21 checks;
                                               # also: headless, novnc, control, vibe)
 HARNESS=claude-code bash tests/integration/test_playwright.sh downloads  # browser downloads/uploads
-                                              # (28 checks; pi 27, vibe 21 without uploads)
-bash tests/integration/test_downloads.sh direct  # web_download end to end, observe + filter (27 checks
+                                              # (28 checks; pi 27, vibe 27;
+                                              # BIG=1 adds a 2 GB download)
+bash tests/integration/test_downloads.sh direct  # web_download end to end, observe + filter (20 checks
                                               # on macOS with OCR=1; also: vpn with VPN_SETTINGS=…,
-                                              # HARNESS=vibe|claude-code, RT=podman, BIG=dvd)
+                                              # HARNESS=vibe|claude-code, RT=podman; BIG=1 adds a
+                                              # large ISO as a job, BIG=dvd a ~4 GB one)
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))
