@@ -7,12 +7,15 @@ else can happen mid-session, e.g. a VNC click). Prints one line per step.
 """
 
 import json
+import signal
 import sys
 import time
 import urllib.error
 import urllib.request
 
 url, host, steps = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+# PID 1 in its throwaway container: SIGTERM (a driver ending a long `sleep`) needs a handler
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 sid = None
 
 

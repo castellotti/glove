@@ -341,7 +341,8 @@ has no server-side switch for it). The controls:
   `<session>/browser-uploads/`, read-only in the sidecar at
   `/work/browser-uploads/`). **Residual:** the MCP checks an upload's path as a
   string, so a symlink the agent puts in that directory resolves inside the
-  sidecar and can name one of the sidecar's own files: with `profile: session`,
+  sidecar and can name one of the sidecar's own files (reproduced live: a link
+  to `/etc/hostname` uploaded the sidecar's). With `profile: session`,
   the browser profile (cookies of a site the operator logged into) could be
   uploaded to a page the agent chooses. The agent can already act with those
   cookies through the browser; this lets the cookies themselves leave, for use

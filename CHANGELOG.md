@@ -50,6 +50,15 @@ All notable changes to glove are documented here.
   attribute (an approval stays). A no-op off macOS.
 - `tests/integration/egress_live.py`: Pi and Vibe fetch `http://example.com/`
   (with observe the flow must be `proto: http`) and a PNG (the binary note).
+- `tests/integration/test_downloads.sh direct|vpn` (`HARNESS=vibe|claude-code`,
+  `RT=podman`, `OCR=1`, `BIG=dvd`): `web_download` end to end with observe and
+  filter — the binds, a PDF's sha256 (host, shell, tool), a Debian ISO as a job
+  checked against SHA256SUMS with the fetcher's memory sampled, a filter block,
+  a fetcher restart, `glove downloads mark` and `glove down` stamping, the
+  `min_free` refusal. `test_playwright.sh downloads` (`HARNESS=…`): a `.7z` and
+  a 2 GB ISO through the browser, uploads from `/work/browser-uploads` only
+  (not under Vibe: each of its MCP calls gets a fresh browser context, a known
+  issue). `LiveSession.seq` runs Vibe's MCP steps in one `run_typescript`.
 
 - **Vibe: the repo's skills, opt-in** (`harness_config.project_skills: true`).
   The repo's `.vibe/skills/` and `.agents/skills/` are bound read-only inside
