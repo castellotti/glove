@@ -20,8 +20,8 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      refused server-side unless allow_control and the full password; the
      clipboard is off;
   6. `downloads: work`: a .7z download lands in <session>/browser-output (read-only
-     to the shell, `7z l` reads it), and a 2 GB ISO (above the 768 MB /tmp)
-     lands complete; `uploads: work`: browser_file_upload sends a 0600 file
+     to the shell, `7z l` reads it), and with BIG=1 a 2 GB ISO (above the
+     768 MB /tmp) lands complete; `uploads: work`: browser_file_upload sends a 0600 file
      from /work/browser-uploads (read-only to the sidecar), refuses
      /etc/passwd, and the result for a link to a sidecar file is printed
      (SECURITY.md's residual); not under Vibe (a known issue, TODO.md 0t);
@@ -49,12 +49,35 @@ HERE = Path(__file__).parent
 # (archive.org's .7z files, the research case, 500 often enough to make the check flaky)
 SEVENZ = "https://github.com/ip7z/7zip/releases/download/24.08/7z2408-extra.7z"
 SEVENZ_SIZE = 1611651
-BIG = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.7.0-amd64-standard.iso",
+BIG_ISO = ("https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.7.0-amd64-standard.iso",
        2020130816)
 # short: the stub keeps the first 400 characters of each SEQ result, and the page's URL comes first
 UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().then(t=>document.title='GOT:'+t)\">"
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
+
+
+def big_download(rt: str, pw_image: str, s: str, out_dir: Path) -> None:
+    """BIG: a download larger than the sidecar's 768 MB /tmp lands complete (staged on disk, <state>/downloading)."""
+    big, size = BIG_ISO
+    t = time.time()
+
+    def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
+        return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
+
+    # one MCP session held open (its context closes, and the download with it, when the session ends)
+    client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
+                                              f"{s}-browser:8931", [["browser_navigate", {"url": big}],
+                                                                    ["sleep", {"s": 1800}]]),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        got = wait_for(landed, timeout=1800, step=5)
+    finally:
+        client.terminate()
+        out = client.communicate(timeout=30)[0]
+    print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
+    check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
+          ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
 
 
 def main(directory: str) -> int:
@@ -197,26 +220,10 @@ def main(directory: str) -> int:
             if got:
                 out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
                 check("7z l reads it from the shell", "files" in out, out[-160:])
-            # a download larger than the sidecar's 768 MB /tmp: staged on disk (<state>/downloading)
-            big, size = BIG
-            t = time.time()
-
-            def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
-                return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
-
-            # one MCP session held open (its context closes, and the download with it, when the session ends)
-            client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
-                                                      f"{s}-browser:8931", [["browser_navigate", {"url": big}],
-                                                                            ["sleep", {"s": 1800}]]),
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            try:
-                got = wait_for(landed, timeout=1800, step=5)
-            finally:
-                client.terminate()
-                out = client.communicate(timeout=30)[0]
-            print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
-            check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
-                  ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
+            if os.environ.get("BIG"):
+                big_download(rt, pw_image, s, out_dir)
+            else:
+                print("    (BIG=1 adds a 2 GB ISO: a download larger than the sidecar's /tmp)")
         if pws["uploads"] == "work" and cfg.harness == "vibe":
             # Vibe's every MCP call gets a fresh browser context: the file chooser a click opens is gone
             # before browser_file_upload (TODO.md 0t)

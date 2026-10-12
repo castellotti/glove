@@ -5,7 +5,8 @@
 #   HARNESS=vibe|claude-code bash tests/integration/test_downloads.sh direct
 #   VPN_SETTINGS='{…}' [VPN_LOCAL=<dir>] bash … vpn                # as test_egress.sh
 #   OCR=1 …       also the ocr extension: glove-ocr reads the downloaded PDF
-#   BIG=dvd …     the large-file check downloads a Debian DVD (multi-GB), not netinst
+#   BIG=1 …       also a large file as a job: Debian's netinst ISO (~750 MB; BIG=dvd: its first DVD,
+#                 ~4 GB); off by default (no run downloads a large file unless asked)
 #   RT=podman …   Podman
 #
 # A throwaway session dir (llm → the tool-driving stub; observe + filter;

@@ -6,6 +6,11 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- Live drivers: no run downloads a large file unless asked. `BIG=1` adds one:
+  `test_downloads.sh` checks the job path with `robots.txt` (`wait_s: 0`) and
+  adds Debian's netinst ISO (`BIG=dvd`: its first DVD); `test_playwright.sh
+  downloads` adds its 2 GB browser download.
+
 - **`web_download`, for every harness** (`webfetch: {downloads: work}`, off by
   default). The `fetcher` sidecar saves a file of any size to
   `<session>/downloads/`, read-only to the agent at `/work/downloads/`, through

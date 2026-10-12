@@ -1193,10 +1193,12 @@ HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP +
 bash tests/integration/test_playwright.sh claude-code  # the browser sidecar with Claude Code (20 checks;
                                               # also: headless, novnc, control, vibe)
 HARNESS=claude-code bash tests/integration/test_playwright.sh downloads  # browser downloads/uploads
-                                              # (28 checks; pi 27, vibe 21 without uploads)
-bash tests/integration/test_downloads.sh direct  # web_download end to end, observe + filter (27 checks
+                                              # (27 checks; pi 26, vibe 20 without uploads;
+                                              # BIG=1 adds a 2 GB download)
+bash tests/integration/test_downloads.sh direct  # web_download end to end, observe + filter (20 checks
                                               # on macOS with OCR=1; also: vpn with VPN_SETTINGS=…,
-                                              # HARNESS=vibe|claude-code, RT=podman, BIG=dvd)
+                                              # HARNESS=vibe|claude-code, RT=podman; BIG=1 adds a
+                                              # large ISO as a job, BIG=dvd a ~4 GB one)
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))
