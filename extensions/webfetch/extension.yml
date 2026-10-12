@@ -2,11 +2,22 @@ api: 1
 name: webfetch
 summary: Read a URL through the egress provider's proxy — Pi's web_fetch, Claude Code's own WebFetch, a fetch_url MCP server (Vibe).
 requires: [egress]
+settings:
+  # `work`: web_download saves files to <session>/downloads/ (no size cap),
+  # which the harness reads at /work/downloads. The fetcher sidecar writes
+  # them, never the harness process.
+  downloads:   { type: enum, values: [none, work], default: none }
+  # free space a download must leave on the host volume (a reserve, not a cap)
+  min_free:    { type: string, pattern: "^[0-9]+[kmgKMG]?$", default: 2g }
+outputs:
+  downloads: { services: [fetcher], when: { downloads: work } }
 networks:
-  fetchnet: { internal: true, when: { harness: vibe } }   # the fetcher sidecar and its harness forwarder (and, with observe, its gate)
+  # the fetcher sidecar and its harness forwarder (and, with observe, its gates)
+  fetchnet: { internal: true, when: &fetcher { any: [{ harness: vibe }, { downloads: work }] } }
 images:
-  # Vibe gets fetch_url from a sidecar over HTTP (its own web_fetch has no guard)
-  mcp: { build: image, when: { harness: vibe } }
+  # The fetcher sidecar: Vibe's fetch_url (its own web_fetch has no guard), and
+  # every harness's web_download
+  mcp: { build: image, when: *fetcher }
 services: compose/services.yml.j2
 endpoints:
   # Pi and Claude Code: the harness reaches the egress proxy only through this
@@ -23,6 +34,13 @@ endpoints:
     port: 8000
     target: { service: fetcher, network: fetchnet, port: 8000 }
     observe: { tool: web_fetch }
+  # Every harness's web_download: the same fetcher under its own name, so a
+  # gate labels (and a filter rule can tell) downloads apart from fetches
+  webdownload-mcp:
+    when: { downloads: work }
+    port: 8000
+    target: { service: fetcher, network: fetchnet, port: 8000 }
+    observe: { tool: web_download }
   # The fetcher's hop to the egress proxy. Only rendered when a forwarder
   # provider (observe) interposes a gate: then the fetcher leaves the egress
   # network and reaches the proxy only through it. Otherwise it dials the proxy.
@@ -33,19 +51,35 @@ endpoints:
     target: { slot: egress }
     listen_networks: [fetchnet]
     observe: { tool: web_fetch }   # client: webfetch (the default off a harness hop)
+  # The same for web_download (labelled apart, as above).
+  webdownload-egress:
+    when: { downloads: work }
+    harness: false
+    interpose: true
+    target: { slot: egress }
+    listen_networks: [fetchnet]
+    observe: { tool: web_download }
 verify:
-  - { name: fetcher-up, kind: container-healthy, service: fetcher, when: { harness: vibe } }
+  - { name: fetcher-up, kind: container-healthy, service: fetcher, when: *fetcher }
 harness:
   env:
     GLOVE_FETCH_PROXY: { value: "{{ endpoint.proxy.url }}", when: { harness: pi } }
+    # Pi has no MCP: its extension calls the fetcher's web_download over it
+    GLOVE_DOWNLOAD_MCP_URL:
+      value: "{{ endpoint['webdownload-mcp'].url }}/mcp"
+      when: { harness: pi, downloads: work }
     # corporate egress only: its allowlist (private hosts the guard lets through)
     GLOVE_FETCH_ALLOW:
       value: "{{ (slot.egress.guard_hosts + slot.egress.guard_cidrs) | join(',') }}"
       when: { harness: pi, slot.egress.provider: corporate }
-  pi: { extensions: [pi-extension], tools: [web_fetch] }   # Pi's web_fetch tool
+  pi:                                   # Pi's web_fetch (and web_download) tools
+    extensions: [pi-extension]
+    tools: "web_fetch{{ ',web_download,web_download_status' if settings.downloads == 'work' else '' }}"
   claude-code:                          # Claude Code's own WebFetch, through the proxy
     web_fetch: { proxy: "{{ endpoint.proxy.url }}" }
   mcp:                                  # Vibe (its native web_fetch is blocked by its hook)
     - { name: webfetch, transport: http, url: "{{ endpoint['webfetch-mcp'].url }}/mcp",
         tools: fetch_url, when: { harness: vibe } }
+    - { name: webdownload, transport: http, url: "{{ endpoint['webdownload-mcp'].url }}/mcp",
+        tools: "web_download,web_download_status", when: { downloads: work } }
   brief: brief.md

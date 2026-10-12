@@ -141,6 +141,11 @@ def test_when_predicates():
     assert when_matches({"slot.egress.route": "tor"}, ctx)
     assert not when_matches({"slot.egress.route": "vpn"}, ctx)
     assert when_matches(None, ctx)
+    # any-of across keys, ANDed with the rest
+    assert when_matches({"any": [{"harness": "pi"}, {"mode": "host"}]}, ctx)
+    assert not when_matches({"any": [{"harness": "pi"}, {"mode": "headless"}]}, ctx)
+    assert not when_matches({"any": [{"harness": "vibe"}], "n": 2}, ctx)
+    assert not when_matches({"any": []}, ctx) and not when_matches({"any": {"harness": "vibe"}}, ctx)
 
 
 @pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])

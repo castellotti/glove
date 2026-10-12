@@ -36,7 +36,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 from .config import ConfigError, HostService, git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
-from .mounts import WORK_TARGET, host_path
+from .mounts import WORK_TARGET, check_path, host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
@@ -62,6 +62,7 @@ MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
+    "outputs",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
@@ -300,10 +301,14 @@ def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
     context value. Keys are setting names, `harness`, `renders` (the harness's
     contributions, a list: it matches when it holds a wanted one) or dotted
     `slot.<s>.<k>`. `{set: true|false}` asks whether the value is set (not null
-    or empty)."""
+    or empty). `any: [<when>, …]` matches when one of its predicates does."""
     if not when:
         return True
     for key, want in when.items():
+        if key == "any":
+            if not isinstance(want, list) or not any(when_matches(w, ctx) for w in want):
+                return False
+            continue
         have = _lookup(ctx, key) if "." in key else ctx.get("settings", {}).get(key, ctx.get(key))
         if isinstance(want, dict) and set(want) == {"set"}:
             if (have not in (None, "", [], {})) != bool(want["set"]):
@@ -424,6 +429,33 @@ class Channel:
         return scoped(session, f"chan-{self.name}")
 
 
+@dataclass(frozen=True)
+class Output:
+    """A directory beside the session's work dir (`<session>/<name>/`) that
+    some of the extension's sidecars write (at `path`) and the harness reads,
+    read-only, at /work/<name> (`target`; e.g. web_download's files). The agent
+    never holds the host path, so it cannot swap it for a link that the bind
+    would follow when a sidecar restarts — unlike a subdirectory of /work."""
+
+    extension: str
+    name: str
+    host: Path
+    services: tuple[str, ...]
+
+    @property
+    def path(self) -> str:
+        return f"{OUTPUT_ROOT}/{self.name}"
+
+    @property
+    def target(self) -> str:
+        return f"{WORK_TARGET}/{self.name}"
+
+
+# beside the outputs in the session dir
+RESERVED_OUTPUTS = frozenset({"work", "local"})
+OUTPUT_ROOT = "/run/glove-output"  # where an output's sidecars write it
+
+
 @dataclass
 class Active:
     """One selected extension, resolved."""
@@ -462,6 +494,7 @@ class Composition:
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
     briefs: list[tuple[str, str]] = field(default_factory=list)
     channels: list[Channel] = field(default_factory=list)
+    outputs: list[Output] = field(default_factory=list)
     host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
@@ -508,6 +541,9 @@ class Composition:
 
     def state_dir(self, ext: str) -> Path:
         return self.state_root / ext
+
+    def outputs_of(self, ext: str) -> list[Output]:
+        return [o for o in self.outputs if o.extension == ext]
 
     def owner(self, root: str) -> Active | None:
         """The active in-tree owner of an export root."""
@@ -582,6 +618,8 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
                           for e in comp.endpoints if e.extension == a.name},
         "state": str(comp.state_dir(a.name)),
         "mount": dict(a.mounts),
+        # the extension's `outputs:`: where its sidecars write each, and where the harness reads it
+        "output": {o.name: {"path": o.path, "target": o.target} for o in comp.outputs_of(a.name)},
         # /work on the host, and where the `work` privilege binds it in a sidecar
         "work": {"host": str(comp.work_dir or ""), "target": WORK_TARGET},
         "assets": str(a.manifest.path),
@@ -951,6 +989,27 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         comp.harness_mounts.append((a.name, str(host), target))
 
 
+def _outputs(comp: Composition, a: Active, ctx: dict) -> None:
+    """`outputs: {<name>: {services: [<its service>, …], when: …}}` — see
+    `Output`. Core binds it into those services (rw) and the harness (ro). A
+    new edge into the harness, so a privilege: in-tree or trusted extensions only."""
+    for name, spec in (a.manifest.raw.get("outputs") or {}).items():
+        where = f"extension {a.name!r} output {name!r}"
+        if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
+            raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
+        if not when_matches(spec.get("when"), ctx):
+            continue
+        services = spec.get("services") or []
+        if not isinstance(services, list) or not services or not all(isinstance(x, str) for x in services):
+            raise ExtensionError(f"{where}: `services` must name at least one of its services")
+        require_trust(a, f"{where}: a directory the harness reads")
+        if comp.session_dir is None or comp.work_dir is None:
+            raise ExtensionError(f"{where}: needs a session directory (with a work dir)")
+        if name in RESERVED_OUTPUTS or any(o.name == name for o in comp.outputs):
+            raise ExtensionError(f"{where}: the name is taken")
+        comp.outputs.append(Output(a.name, name, comp.session_dir / name, tuple(services)))
+
+
 def _channels(comp: Composition, a: Active, ctx: dict) -> None:
     """`channels: {<name>: {services: [<its service>, …], read_only: <bool>,
     trust: <file>, when: …}}` — a directory shared by the harness and those
@@ -1052,6 +1111,7 @@ def compose(
             for net in (ep.target.network, *ep.listen_networks):
                 if net in CORE_NETWORKS and net != "net":
                     comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
+        _outputs(comp, a, ctx)
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx)
@@ -1135,6 +1195,9 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 
 
 def materialize(comp: Composition) -> None:
+    for o in comp.outputs:
+        check_path(str(comp.session_dir), o.name, "dir")
+        o.host.mkdir(mode=0o755, exist_ok=True)
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "materialize"):
             ensure_dir(comp.state_dir(a.name))

@@ -1,0 +1,50 @@
+{
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true,
+  "disableSideloadFlags": true,
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": [
+    {
+      "serverName": "webdownload"
+    }
+  ],
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Read",
+      "Agent",
+      "WebSearch",
+      "WaitForMcpServers",
+      "WebFetch",
+      "mcp__webdownload__web_download",
+      "mcp__webdownload__web_download_status"
+    ],
+    "deny": [
+      "Read(//home/agent/.claude/**)",
+      "Edit(//home/agent/**)",
+      "Edit(//dev/shm/**)",
+      "EnterWorktree",
+      "ExitWorktree"
+    ]
+  },
+  "enableArtifact": false,
+  "disableClaudeAiConnectors": true,
+  "sandbox": {
+    "enabled": false
+  },
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+    "CLAUDE_CODE_SHELL_PREFIX": "/opt/glove/bin/glove-cc-prefix",
+    "HTTPS_PROXY": "http://glove-s-proxy:8888",
+    "HTTP_PROXY": "http://glove-s-proxy:8888",
+    "NO_PROXY": "localhost,127.0.0.1,::1,glove-s-llm,api.anthropic.com,glove-s-llm-ingress,glove-s-proxy,glove-s-proxy-ingress,glove-s-webdownload-mcp,glove-s-webdownload-mcp-ingress"
+  }
+}

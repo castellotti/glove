@@ -350,7 +350,7 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:bad77f8377
+    image: glove/ext-webfetch-mcp:d75310f711
     environment:
       GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
       GLOVE_FETCH_ALLOW: ''

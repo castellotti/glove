@@ -25,7 +25,7 @@ from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
 from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
-from .mounts import Mount, MountPlan, Protect, compute_mounts, protected_home, protected_paths
+from .mounts import Mount, MountPlan, Protect, check_path, compute_mounts, protected_home, protected_paths
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -246,7 +246,8 @@ def _seccomp_for(cfg: Config) -> tuple[str, bool]:
 
 def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
     """Extensions' read-only harness mounts (`mounts:` in a manifest), under the
-    same rule as the session's own: never a private path."""
+    same rule as the session's own: never a private path; and their `outputs:`
+    at /work/<name>."""
     from .extensions import ExtensionError
     from .sessiondir import exposes_private
 
@@ -261,6 +262,10 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
             raise ExtensionError(f"extension {ext!r}: mount point {target} clashes with another mount")
         taken.add(target)
         out.append(Mount(host_path=host, container_path=target, mode="ro"))
+    for o in comp.outputs:
+        # its mount point is in /work, which the agent writes: never through a link
+        check_path(str(comp.work_dir), o.name, "dir")
+        out.append(Mount(host_path=str(o.host), container_path=o.target, mode="ro"))
     return out
 
 

@@ -1,0 +1,21 @@
+{
+  "shell": [
+    "bash"
+  ],
+  "file_write": [
+    "write",
+    "edit"
+  ],
+  "allow": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "codemode",
+    "web_fetch",
+    "web_download",
+    "web_download_status"
+  ],
+  "ask": [],
+  "deny": []
+}

@@ -264,6 +264,12 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         if c.extension == a.name and short in c.services:
             out.setdefault("volumes", []).append({"type": "volume", "source": c.volume(comp.session),
                                                   "target": c.path})
+    for o in comp.outputs_of(a.name):
+        if short in o.services:
+            bind = {"type": "bind", "source": str(o.host), "target": o.path}
+            if extra.get("bind_selinux"):
+                bind["bind"] = {"selinux": extra["bind_selinux"]}
+            out.setdefault("volumes", []).append(bind)
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)
@@ -380,13 +386,15 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
 
 def _channel_volumes(comp: Composition, extra: dict, volumes: dict[str, Any]) -> None:
     """One session tmpfs volume per channel (owned by the session uid, 0700),
-    and a check that each service it names is one of its extension's."""
-    for c in comp.channels:
-        owner = comp.by_name(c.extension)
-        doc = next((d for x, d in comp.fragments if x is owner), {})
-        missing = [x for x in c.services if x not in (doc.get("services") or {})]
+    and a check that each service a channel or an output names is one of its
+    extension's."""
+    for kind, x in [*(("channel", c) for c in comp.channels), *(("output", o) for o in comp.outputs)]:
+        owner = comp.by_name(x.extension)
+        doc = next((d for e, d in comp.fragments if e is owner), {})
+        missing = [svc for svc in x.services if svc not in (doc.get("services") or {})]
         if missing:
-            raise ExtensionError(f"extension {c.extension!r} channel {c.name!r}: no service(s) {missing}")
+            raise ExtensionError(f"extension {x.extension!r} {kind} {x.name!r}: no service(s) {missing}")
+    for c in comp.channels:
         opts = f"size=4m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"
         name = c.volume(comp.session)
         volumes[name] = {"name": name, "driver": "local",

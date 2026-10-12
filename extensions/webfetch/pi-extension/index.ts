@@ -5,15 +5,22 @@
  * Runs inside the Pi harness process. The proxy is attached PER REQUEST via
  * undici's `dispatcher` option, never with setGlobalDispatcher() — a global
  * dispatcher would hijack all Node traffic including LLM requests.
+ *
+ * With webfetch downloads on (GLOVE_DOWNLOAD_MCP_URL), also web_download and
+ * web_download_status: thin MCP calls to the fetcher sidecar, which fetches and
+ * writes the files. This process never writes a download.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { fetch, ProxyAgent } from "undici";
 import { convert } from "html-to-text";
 import http from "node:http";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { refusal } from "./guard.ts";
 
 const PROXY = process.env.GLOVE_FETCH_PROXY ?? "";
+const DOWNLOAD_MCP_URL = process.env.GLOVE_DOWNLOAD_MCP_URL ?? "";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -49,7 +56,54 @@ function policyRefusal(url: URL, why: string) {
     `route; tell the user if you need this source.` }], details: {} };
 }
 
-export default function (pi: ExtensionAPI) {
+const DOWNLOAD_TOOLS = ["web_download", "web_download_status"];
+
+function text(t: string) {
+  return { content: [{ type: "text" as const, text: t }], details: {} };
+}
+
+/** web_download and web_download_status as the fetcher serves them (names,
+ *  descriptions and schemas from its MCP), over one client for the session. */
+async function registerDownloads(pi: ExtensionAPI) {
+  const client = new Client({ name: "glove-pi-webfetch", version: "0.1.0" });
+  let tools: any[];
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(DOWNLOAD_MCP_URL)));
+    tools = (await client.listTools()).tools.filter((t) => DOWNLOAD_TOOLS.includes(t.name));
+  } catch (err: any) {
+    for (const name of DOWNLOAD_TOOLS) {
+      pi.registerTool({
+        name, label: name, description: "Unavailable: the download sidecar is unreachable.",
+        parameters: { type: "object", properties: {} } as any,
+        async execute() { return text(`${name}: the download sidecar is unreachable (${err?.message}). Tell the user.`); },
+      });
+    }
+    return;
+  }
+  // an open stream keeps Node alive, so `pi -p` would never exit
+  pi.on("session_shutdown", async () => { await client.close().catch(() => {}); });
+  for (const t of tools) {
+    pi.registerTool({
+      name: t.name,
+      label: t.name,
+      description: t.description ?? t.name,
+      parameters: (t.inputSchema ?? { type: "object", properties: {} }) as any,
+      async execute(_toolCallId: string, args: any) {
+        try {
+          // web_download waits at most 45 s server-side
+          const res: any = await client.callTool({ name: t.name, arguments: args ?? {} }, undefined, { timeout: 90000 });
+          return text((res?.content ?? []).map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("\n")
+                      || "(no content)");
+        } catch (err: any) {
+          return text(`${t.name} failed: ${err?.message}. Tell the user if it keeps failing.`);
+        }
+      },
+    });
+  }
+}
+
+export default async function (pi: ExtensionAPI) {
+  if (DOWNLOAD_MCP_URL) await registerDownloads(pi);
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",

@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/opt/glove/bin/glove-pty",
+    "relay",
+    "--",
+    "/opt/glove/srt/node",
+    "/opt/glove/srt/glove-srt.mjs",
+    "/etc/glove/enforcer/srt-harness.json",
+    "--",
+    "/opt/glove/bin/glove-pty",
+    "ctty",
+    "--",
+    "/usr/local/bin/claude"
+  ],
+  "enforcer_env": {},
+  "environment": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_OAUTH_TOKEN": "glove-injected",
+    "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    "DISABLE_AUTOUPDATER": "1",
+    "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
+    "NODE_EXTRA_CA_CERTS": "/run/glove/llm-ca/ca.pem"
+  },
+  "image": "glove/claude-code:0.2.0-91e42d0a0c-srt-46f57ff955",
+  "transcripts": [
+    "<GLOVE_HOME>/observe/s/transcripts",
+    "/home/agent/.claude/projects"
+  ]
+}
