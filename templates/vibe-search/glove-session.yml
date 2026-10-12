@@ -6,6 +6,7 @@ harness: vibe
 # enforcer: nono+srt           # default: nono+srt on docker, nono on podman | nono | srt | none
 runtime: docker                # docker | podman
 mounts: []                     # extra host dirs, e.g. [{path: ~/papers, mode: ro}]; work/ is always /work
+apt_packages: [p7zip-full]     # `7z`, for archives fetched during research
 limits: { pids: 512, memory: 6g, cpus: 4 }
 extensions:
   llm:                         # the model (required): see extensions/llm/README.md
@@ -28,10 +29,12 @@ extensions:
   # tor: {}                    # replace `vpn:` with this for Tor
   # direct: {}                 # or this: no tunnel, no anonymity
   search: {}                   # SearXNG behind the egress (extensions/search/README.md)
-  webfetch: {}                 # Vibe's fetch_url, from a sidecar through the egress
+  webfetch: {downloads: work}  # Vibe's fetch_url, from a sidecar through the egress;
+                               # web_download saves files to downloads/ (extensions/webfetch/README.md)
   ocr: {}                      # tesseract/ocrmypdf/poppler + glove-ocr, for scanned PDFs and images
   media: {}
-  # playwright: {}             # a real Chromium in a sidecar, via the egress (extensions/playwright/README.md)
+  # playwright: {downloads: work}   # a real Chromium in a sidecar, via the egress; its downloads land in
+                                    # browser-output/ (extensions/playwright/README.md)
   # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
   # observe: {exit_identity: via-proxy}
   # filter: {}                 # also let `glove filter …` / Layman block destinations (needs observe)
@@ -53,3 +56,25 @@ brief: |
 
   Put your outputs in `/work`. Input files (e.g. PDFs to analyse) are placed
   there for you.
+
+  ## Working with files
+
+  `7z l`/`7z x` for archives: extract into a new folder under `/work`
+  (`7z x /work/downloads/a.7z -o/work/a`), never over existing files.
+
+  ## Research tips
+
+  - Wayback CDX lists every archived file of a site:
+    `https://web.archive.org/cdx/search/cdx?url=<site>&matchType=domain&output=json&fl=timestamp,original,mimetype&collapse=urlkey`
+    (filters: `&filter=mimetype:application/pdf`, `&filter=original:.*name.*`).
+    Read a capture with `tools.mcp_webfetch.fetch_url` at
+    `https://web.archive.org/web/<timestamp>/<url>`.
+  - archive.org's APIs find items and their files:
+    `https://archive.org/advancedsearch.php?q=<terms>&fl[]=identifier&output=json`,
+    then `https://archive.org/metadata/<identifier>`; a file is at
+    `https://archive.org/download/<identifier>/<file>`.
+  - Reddit blocks datacenter egress; use
+    `https://api.pullpush.io/reddit/search/submission/?ids=<id>` (or `?q=`).
+  - With `browser_*` tools: try a JS- or Cloudflare-walled page's Wayback capture;
+    when a screenshot comes out blank, `browser_snapshot` usually still has
+    the text; in the PDF viewer, jump with a `#page=N` URL fragment.

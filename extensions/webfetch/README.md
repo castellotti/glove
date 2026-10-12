@@ -18,7 +18,10 @@ goes through it. An `http://` URL goes to the proxy as a plain absolute-form
 request, as a browser sends it; only `https://` is tunnelled with CONNECT
 (`proxyTunnel: false`; the fetcher's urllib does the same). The extension and
 its npm dependencies (pinned) are baked into the session image at build time;
-nothing is installed into the harness home.
+nothing is installed into the harness home. `GLOVE_FETCH_PROXY` (and the
+other variables Pi's extension reads) is set for the harness process only: the
+tool wrapper unsets it before every shell command, which has no network to
+use it on (`env: {…, shell: false}` in the manifest).
 
 **Claude Code** keeps its own `WebFetch`: glove allows it and sets
 `HTTPS_PROXY`/`HTTP_PROXY` to the `proxy` endpoint in the read-only managed
@@ -72,3 +75,29 @@ otherwise it tells the agent to ask the operator for the file. A 429 says how
 long the server asked to wait (`Retry-After`, in seconds or as a date).
 `pi-extension/body.ts` and the fetcher share these rules; a test runs both
 on the same cases.
+
+## Downloads (`downloads: work`, off by default)
+
+```yaml
+  webfetch: { downloads: work, min_free: 5g }
+```
+
+Adds `web_download` and `web_download_status` for every harness: Pi
+registers them from the `fetcher` sidecar's MCP (`GLOVE_DOWNLOAD_MCP_URL`),
+Vibe and Claude Code get the `webdownload` MCP server. The fetcher runs for
+any harness with downloads on, and saves files to `<session>/downloads/`; the
+harness sees that directory **read-only** at `/work/downloads/` (a core
+`outputs:` directory), so the agent extracts or converts into a folder of its
+own. Under `observe` the hops are labelled `tool: web_download`, apart from
+`web_fetch`, so a `filter` rule can tell them apart.
+
+| Risk | How it is met |
+|---|---|
+| Writing through a planted symlink into the harness home | The sidecar writes, never the harness process. Its only writable bind is `<session>/downloads/`, outside `/work`, so the agent cannot swap it for a link (a runtime re-resolves a bind source at every restart). Files open `O_EXCL\|O_NOFOLLOW` as `<name>.part`, linked to a free name only when complete; never an overwrite. |
+| Filling the host disk | `min_free` (default `2g`): a download must leave that much free on the host volume, checked against `Content-Length` before it starts and while it runs. A reserve, not a size cap. |
+| Memory | Streamed to disk in chunks, hashed on the way. |
+| Long tool calls | Jobs are asynchronous: `web_download` waits at most `wait_s` (≤ 45 s), then returns a job id; `web_download_status` (or `ls -la /work/downloads`) shows progress. 120 s idle timeout, no total limit. At most 3 at once. |
+| A failed transfer | The `.part` is kept; calling `web_download` again with the URL resumes it (`Range`/`If-Range`; a server that answers 200 or 416 starts over). |
+| A non-public destination | The same guard as `web_fetch`, on every redirect hop, then the egress layer. |
+| Integrity | The result has size, sha256, final URL and content type, to check against a published checksum. |
+| Hostile content | Files are untrusted (the brief says so). Files written through a bind carry no macOS quarantine attribute: be careful opening one from Finder. |

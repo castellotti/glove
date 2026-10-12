@@ -84,7 +84,9 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   there for the agent to write through, and the agent cannot swap it for a
   link. The MCP reads files only from there (its working directory, or the
   `/work` root Claude Code sends) and its output directory. Anything put
-  there can leave through the browser.
+  there can leave through the browser. It checks the path as a string, so a
+  symlink there resolves inside the sidecar and can name a sidecar file: with
+  `profile: session`, the browser profile itself (see `docs/SECURITY.md`).
 - **`browser_evaluate`** (JavaScript in the page, inside the sidecar) is a
   reasonable addition to `tools` for sites that render nothing without it.
   `browser_run_code_unsafe` is not: it runs code in the MCP process.

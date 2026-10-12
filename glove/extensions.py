@@ -485,6 +485,10 @@ class Composition:
     state_root: Path
     endpoints: list[Endpoint] = field(default_factory=list)
     harness_env: dict[str, str] = field(default_factory=dict)
+    # harness env vars the harness process reads and shell commands never see
+    # (`env: {…, shell: false}`; the tool wrapper unsets them, enforcers.base.scrub_argv;
+    # `enforcer: none` has no wrapper)
+    shell_hidden_env: set[str] = field(default_factory=set)
     git_config: list[tuple[str, str]] = field(default_factory=list)  # `harness.git_config` pairs
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
     # Neutral contributions, collected only when the harness renders them
@@ -922,16 +926,22 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                 if layer.get(k):
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
             comp.image_layers.append((a.name, layer))
-    for k, v in (h.get("env") or {}).items():  # a value, or {value:, when:} (unset unless it matches)
+    # a value, or {value:, when:, shell:} (unset unless `when` matches; `shell: false`
+    # hides it from shell commands)
+    for k, v in (h.get("env") or {}).items():
+        shell = True
         if isinstance(v, dict):
-            if set(v) - {"value", "when"} or "value" not in v:
-                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …}}")
+            shell = v.get("shell", True)
+            if set(v) - {"value", "when", "shell"} or "value" not in v or not isinstance(shell, bool):
+                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …, shell: false}}")
             if not when_matches(v.get("when"), ctx):
                 continue
             v = v["value"]
         if v is None:
             raise ExtensionError(f"{where}: env {k!r} has no value (use `when:` to leave it unset)")
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
+        if not shell:
+            comp.shell_hidden_env.add(k)
     comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):

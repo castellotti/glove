@@ -35,6 +35,8 @@ def test_proxy_endpoint_targets_the_egress_proxy(tmp_path):
     fwd = next(s for s in plan.network.sidecars if s.role == "proxy")
     assert fwd.target == "glove-s-privoxy:8118" and fwd.harness and fwd.networks == ("glove-s-egress",)
     assert "/opt/glove/ext/webfetch/pi-extension" in plan.command
+    # Pi reads it in the harness process; shell commands (no network) never see it
+    assert "GLOVE_FETCH_PROXY" in plan.policies["tool-wrapper.argv"].splitlines()
 
 
 def test_requires_egress(tmp_path):

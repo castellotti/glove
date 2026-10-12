@@ -125,7 +125,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     provider: mullvad       # any gluetun provider, or `custom`
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
-  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url)
+  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url); {downloads: work} adds web_download
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
@@ -645,9 +645,9 @@ Core validates all of it:
   sandbox; never the harness's), and a runtime that cannot apply it refuses the
   session rather than dropping it (podman). No extension publishes ports, joins
   the harness network, mounts the docker socket, or binds host paths other
-  than its own session state and, for a trusted extension and a setting the
-  user chose, a named subdirectory of `work/` (all of it only with the `work`
-  privilege: `github`'s sidecar, which pushes the agent's checkout). A
+  than its own session state, its outputs and inputs (below), and all of
+  `work/` only with the `work` privilege (`github`'s sidecar, which pushes the
+  agent's checkout); never a path inside `work/`. A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
   refuses), so it gets one as `llm-auth` gets the LLM key: a `launch_env` hook
   fills an `environment:` key declared without a value, at `compose up`.
@@ -657,6 +657,15 @@ Core validates all of it:
   harness and its commands write (and grants no network for). A relay's client
   leaves requests there as files and FIFOs; glove's seccomp below srt forbids
   Unix sockets, so there is no socket.
+- **Outputs and inputs** (`outputs: {name: {services: [...]}}`, `inputs:` the
+  same; in-tree or trusted only) are directories of the session,
+  `<session>/<name>/`, beside `work/`. An output is written by the listed
+  sidecars (at `/run/glove-output/<name>`) and read-only to the harness at
+  `/work/<name>`; an input is written by the harness at `/work/<name>` and
+  read-only in the sidecars at that same path. Not a subdirectory of `work/`,
+  which the agent could swap for a link the sidecar's bind would follow at its
+  next restart. `glove up` points out an old `work/<name>/` that still holds
+  files the mount now hides.
 - **The harness** only ever gets forwarders on its internal network.
 - **Remote addresses** (`target: {address: host:port}`) are dialled only by the
   inference provider (`via: llm`), the egress provider (`via: wan`), or, for a
@@ -675,8 +684,11 @@ Core validates all of it:
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
-  - `env: {K: value}` or `{K: {value: …, when: …}}`: a value is set as rendered,
-    even when empty; `when:` leaves the variable unset unless it matches. A
+  - `env: {K: value}` or `{K: {value: …, when: …, shell: false}}`: a value is set
+    as rendered, even when empty; `when:` leaves the variable unset unless it
+    matches; `shell: false` keeps it from shell commands (the tool wrapper
+    unsets it; any enforcer but `none`), for a variable only the harness
+    process uses. A
     `when:` (here, on endpoints, services, verify checks and list items) matches
     setting names, `harness`, `renders` (the contributions the harness renders,
     e.g. `renders: mcp` rather than a list of harnesses), dotted
@@ -703,7 +715,9 @@ Core validates all of it:
   `own_endpoints.<name>` (the extension's own, `{host, port}`, e.g. for a
   sidecar dialling its forwarders), `state`, `mount`, `work`
   (`{{ work.host }}` the host dir, `{{ work.target }}` where the `work`
-  privilege binds it), `images`, `slot`, `channel.<name>.path` and `exports`.
+  privilege binds it), `images`, `slot`, `channel.<name>.path`,
+  `output.<name>.path`/`input.<name>.path` (where a sidecar sees it) and
+  `exports`.
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
@@ -761,6 +775,15 @@ sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
 itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which
 reaches the proxy only through its own hop (`webfetch-egress`; with `observe`,
 a gate labelling its flows `client: webfetch`). Both need an egress provider.
+`web_fetch`/`fetch_url` return text only: a PDF, an archive or an image is
+described (`[binary: application/pdf, 812345 bytes] <url>`), never returned. An
+`http://` URL goes to the proxy as a plain request, as a browser sends it
+(only `https://` is tunnelled). With `webfetch: {downloads: work}` every
+harness also gets `web_download`/`web_download_status`: the `fetcher` sidecar
+saves files of any size to `<session>/downloads/` (read-only to the agent at
+`/work/downloads/`) through the same egress and guard, as asynchronous jobs that
+resume, with a `min_free` reserve on the host disk
+([extensions/webfetch/README.md](extensions/webfetch/README.md)).
 The `pi-search` template puts it together: `glove new pi-search <dir>`.
 
 **`corporate`** is a netgate proxy that resolves and dials destinations itself
@@ -956,7 +979,10 @@ gets allow rules for them and a managed deny rule for every other tool the
 pinned MCP has. A private CA
 for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
 `corporate_ca`, so set both when the browser is used. The sidecar's Node trusts it
-through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. Template:
+through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
+`downloads: work` what the browser saves lands in `<session>/browser-output/`
+(read-only at `/work/browser-output/`); with `uploads: work` it uploads from
+`/work/browser-uploads/` (read-only in the sidecar). Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 

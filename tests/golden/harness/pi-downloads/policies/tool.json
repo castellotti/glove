@@ -30,7 +30,9 @@
       "*SECRET*",
       "*API_KEY*",
       "*CREDENTIAL*",
-      "*PASSWORD*"
+      "*PASSWORD*",
+      "GLOVE_DOWNLOAD_MCP_URL",
+      "GLOVE_FETCH_PROXY"
     ]
   },
   "security": {

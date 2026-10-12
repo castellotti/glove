@@ -18,3 +18,9 @@ attaches Pi.
 
 OCR (`glove-ocr`, tesseract, ocrmypdf, poppler) comes from the `ocr`
 extension, offline in the shell like every tool.
+
+`web_download` (from `webfetch: {downloads: work}`) saves files the agent
+needs (PDFs, archives, ISOs) to `downloads/` in the session directory, which
+the agent reads at `/work/downloads/` but cannot change; `7z` comes from
+`apt_packages: [p7zip-full]`. Treat downloaded files as untrusted, and note
+they carry no macOS quarantine attribute.

@@ -106,7 +106,7 @@ class NonoSrtEnforcer:
                 GLOVE_PTY, "ctty", "--", *entry]
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        return nono_policies.tool_wrapper_argv()
+        return nono_policies.tool_wrapper_argv(plan)
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         return {}

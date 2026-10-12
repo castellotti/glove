@@ -14,6 +14,8 @@ GLOVE_LLM_API_KEY
 *CREDENTIAL*
 -u
 *PASSWORD*
+-u
+GLOVE_FETCH_PROXY
 --
 /usr/bin/nono
 wrap

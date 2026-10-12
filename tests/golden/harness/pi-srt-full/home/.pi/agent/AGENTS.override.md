@@ -76,7 +76,7 @@ Directories:
 
 - `web_search` queries a private SearXNG instance. It returns titles, URLs and snippets. Use short keyword queries, and never retry quickly after a rate limit (HTTP 429): the exit IP is shared.
 
-- `web_fetch` fetches one URL and returns its text (HTML converted, no JavaScript). It is your default way to read a page found with `web_search`. Back off on HTTP 429.
+- `web_fetch` fetches one URL and returns its text (HTML converted, no JavaScript). It is your default way to read a page found with `web_search`. Back off on HTTP 429 (the error says how long, when the server does). A file (PDF, archive, image) is not returned: you get a `[binary: …]` note instead.
 
 ---
 

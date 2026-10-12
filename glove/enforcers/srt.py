@@ -104,13 +104,14 @@ def render_settings(plan: SessionPlan) -> dict:
 def denied_env(plan: SessionPlan) -> list[str]:
     """The names srt unsets for tool commands: the LLM key's (a guard: the
     harness holds a placeholder) and each harness env name nono's secret globs
-    match in any case (over-denying is the safe side), by exact name."""
+    match in any case (over-denying is the safe side), by exact name, and the
+    harness-process-only ones."""
     secret = (k for k in plan.environment if any(fnmatchcase(k.upper(), g) for g in SECRET_DENY_VARS))
-    return sorted({LLM_API_KEY_ENV, *secret})
+    return sorted({LLM_API_KEY_ENV, *secret, *plan.composition.shell_hidden_env})
 
 
-def tool_wrapper_argv() -> list[str]:
-    return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+def tool_wrapper_argv(plan: SessionPlan) -> list[str]:
+    return [*scrub_argv(plan), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
 
 class SrtEnforcer:
@@ -120,7 +121,7 @@ class SrtEnforcer:
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
         return {
             SETTINGS_FILE: json.dumps(render_settings(plan), indent=2) + "\n",
-            "tool-wrapper.json": json.dumps({"argv": tool_wrapper_argv()}, indent=2) + "\n",
+            "tool-wrapper.json": json.dumps({"argv": tool_wrapper_argv(plan)}, indent=2) + "\n",
         }
 
     def wrap_harness(self, plan: SessionPlan, entry: list[str]) -> list[str]:
@@ -128,7 +129,7 @@ class SrtEnforcer:
         return list(entry)
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        return tool_wrapper_argv()
+        return tool_wrapper_argv(plan)
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         return {}

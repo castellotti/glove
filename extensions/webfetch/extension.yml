@@ -62,16 +62,21 @@ endpoints:
 verify:
   - { name: fetcher-up, kind: container-healthy, service: fetcher, when: *fetcher }
 harness:
+  # Pi's extension reads these in the harness process. Shell commands have no
+  # network, so they never see them (`shell: false`): a proxy URL there only
+  # invites a curl that fails.
   env:
-    GLOVE_FETCH_PROXY: { value: "{{ endpoint.proxy.url }}", when: { harness: pi } }
+    GLOVE_FETCH_PROXY: { value: "{{ endpoint.proxy.url }}", when: { harness: pi }, shell: false }
     # Pi has no MCP: its extension calls the fetcher's web_download over it
     GLOVE_DOWNLOAD_MCP_URL:
       value: "{{ endpoint['webdownload-mcp'].url }}/mcp"
       when: { harness: pi, downloads: work }
+      shell: false
     # corporate egress only: its allowlist (private hosts the guard lets through)
     GLOVE_FETCH_ALLOW:
       value: "{{ (slot.egress.guard_hosts + slot.egress.guard_cidrs) | join(',') }}"
       when: { harness: pi, slot.egress.provider: corporate }
+      shell: false
   pi:                                   # Pi's web_fetch (and web_download) tools
     extensions: [pi-extension]
     tools: "web_fetch{{ ',web_download,web_download_status' if settings.downloads == 'work' else '' }}"
