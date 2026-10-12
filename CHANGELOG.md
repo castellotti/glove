@@ -511,6 +511,16 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Vibe keeps one MCP session per server.** Vibe 2.26 opens a new MCP session
+  for every call to an HTTP server, so under Vibe each Playwright call started
+  in a fresh browser (a click after a navigate, and so an upload, failed). The
+  Vibe adapter now renders every HTTP server an extension contributes
+  (`playwright`, `searxng`, `webfetch`, `webdownload`) as a stdio server, the
+  image's `glove-mcp-bridge <url>`: one HTTP session for the Vibe process,
+  ended (`DELETE`) when Vibe exits. It is a stdlib relay on the image's python;
+  a failed request is answered with an error and the bridge keeps serving.
+  Server and tool names, the allowlist and the hook's inventory are unchanged;
+  `harness_config.mcp_servers` render as written.
 - **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
   port 80 (undici's `ProxyAgent` default), where answers such as
   web.archive.org's were lost: it goes to the proxy as a plain absolute-form

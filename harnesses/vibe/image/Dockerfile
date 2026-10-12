@@ -54,6 +54,9 @@ RUN if [ -n "$GLOVE_PIP" ]; then uv pip install --system $GLOVE_PIP; fi
 # per-command sandbox (declared in ~/.vibe/hooks.toml by glove). Baked as an
 # executable so hooks.toml can invoke it directly.
 COPY --chmod=0755 vibe_hook.py /opt/glove/vibe-hook
+# Vibe opens an MCP session per call to an HTTP server: glove renders each as this
+# stdio bridge (one session for Vibe's), run by Vibe's own venv python.
+COPY --chmod=0755 mcp_bridge.py /opt/glove/bin/glove-mcp-bridge
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
 # The shared entrypoint (glove/enforcers/entrypoint, the `gloveentry` build context).
 COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh

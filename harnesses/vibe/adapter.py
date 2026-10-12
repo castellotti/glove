@@ -9,6 +9,13 @@ from `run_typescript`, as `mcp_<server>.<tool>`: those names join the session's
 tool inventory, which the pre_tool hook refuses every other tool by. A server
 without an allowlist (`harness_config.mcp_servers`) adds none: its tools need
 `harness_config.tools.allow`.
+
+Vibe (2.26.1; re-check at a bump) opens a new MCP session for every call to
+an HTTP server, so a server that keeps state per session (Playwright's pages)
+forgets it between calls. Each HTTP server from `comp.mcp` is rendered as the
+image's stdio bridge (`glove-mcp-bridge <url>`, one session for Vibe's) under
+the same name, so its tool names don't change. `harness_config.mcp_servers`
+render as written.
 """
 
 from __future__ import annotations
@@ -23,6 +30,8 @@ from glove.harnessconfig import mcp_tool_names, rel_config_home
 
 # Descriptor api → Vibe (backend, api_style).
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
+
+MCP_BRIDGE = "/opt/glove/bin/glove-mcp-bridge"
 
 
 def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
@@ -40,6 +49,11 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
             if not ok:
                 raise ValueError(f"vibe mcp {item['name']!r}: bad tools {names}")
             disabled.append(f"re:{item['name']}_(?!(?:{'|'.join(names) or '(?!)'})$).*")
+        if item.get("transport") == "http":
+            if {"auth", "headers"} & item.keys():  # the bridge takes a URL only: never drop them silently
+                raise ValueError(f"vibe mcp {item['name']!r}: an http server's auth/headers can't pass the bridge")
+            url = item.pop("url")
+            item.update(transport="stdio", command=MCP_BRIDGE, args=[url])
         servers.append(item)
     servers.extend(cfg.harness_config.get("mcp_servers", []))
     return servers, disabled

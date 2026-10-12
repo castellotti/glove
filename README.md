@@ -521,7 +521,10 @@ harness_config:
 A name glove wraps, holds or denies is refused at plan time. A Vibe MCP tool
 is listed as `mcp_<server>.<tool>`, the name the agent calls from
 `run_typescript`. The rest of Vibe's `harness_config.tools` (its own
-`[tools.<name>]` tables) still goes to its `config.toml`.
+`[tools.<name>]` tables) still goes to its `config.toml`. Your own
+`harness_config.mcp_servers` render as written: one that keeps state per
+session can use glove's bridge (`transport: stdio`, `command:
+/opt/glove/bin/glove-mcp-bridge`, `args: [<url>]`).
 
 Pi 1.x features, as glove renders them:
 
@@ -698,8 +701,11 @@ Core validates all of it:
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
     an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
     with `tools` as an allowlist that also enters the tool inventory as
-    `mcp_<server>.<tool>`, so a server without `tools` is refused; Claude Code: `managed-mcp.json`, `tools` as allow
-    rules and the rest of `all_tools` as deny rules);
+    `mcp_<server>.<tool>`, so a server without `tools` is refused; an `http`
+    server is rendered as the image's stdio bridge `glove-mcp-bridge <url>`,
+    since Vibe opens a new MCP session for every HTTP call and a server like
+    Playwright keeps its pages per session; Claude Code: `managed-mcp.json`,
+    `tools` as allow rules and the rest of `all_tools` as deny rules);
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);

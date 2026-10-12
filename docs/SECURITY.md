@@ -319,6 +319,12 @@ has no server-side switch for it). The controls:
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
   tool, it is not a boundary around the MCP.
+- **Vibe's MCP bridge.** Vibe reaches each extension's HTTP MCP server through
+  `glove-mcp-bridge` (a stdio server, so one MCP session lasts the Vibe
+  process). It is a child of the harness under the same sandbox, talks only to
+  the URL glove rendered, and the hook still checks every `mcp_<server>.<tool>`
+  call: no change in reach. It is not a tool command, so no tool wrapper: tool
+  commands still can't reach the forwarders.
 - **Watching (`novnc`).** VNC and websockify listen on the sidecar's own
   loopback; nothing is published. `glove playwright view` opens a loopback
   listener only while it runs, pipes each connection through `docker|podman

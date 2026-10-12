@@ -44,7 +44,9 @@ def test_vibe_config_toml(tmp_path):
     names = {s["name"] for s in doc["mcp_servers"]}
     assert names == {"playwright", "searxng"}
     pw = next(s for s in doc["mcp_servers"] if s["name"] == "playwright")
-    assert pw["url"] == "http://glove-vibe-sess-browser:8931/mcp" and "tools" not in pw
+    # every HTTP server goes through the image's stdio bridge (one MCP session for Vibe's)
+    assert pw == {"name": "playwright", "transport": "stdio", "command": "/opt/glove/bin/glove-mcp-bridge",
+                  "args": ["http://glove-vibe-sess-browser:8931/mcp"]}
     # the playwright allowlist, as a Vibe denylist scoped to that server's tools
     deny, search = doc["disabled_tools"]
     assert search == "re:searxng_(?!(?:web_search)$).*"  # search's own allowlist
@@ -54,7 +56,16 @@ def test_vibe_config_toml(tmp_path):
     assert not hidden.fullmatch("playwright_browser_navigate") and not hidden.fullmatch("bash")
     assert not hidden.fullmatch("searxng_search")
     sx = next(s for s in doc["mcp_servers"] if s["name"] == "searxng")
-    assert sx == {"name": "searxng", "transport": "http", "url": "http://glove-vibe-sess-search-mcp:8000/mcp"}
+    assert sx == {"name": "searxng", "transport": "stdio", "command": "/opt/glove/bin/glove-mcp-bridge",
+                  "args": ["http://glove-vibe-sess-search-mcp:8000/mcp"]}
+
+
+def test_vibe_operator_mcp_servers_render_as_written(tmp_path):
+    own = [{"name": "extra", "transport": "http", "url": "http://x:1/mcp"},
+           {"name": "local", "transport": "stdio", "command": "/usr/bin/true"}]
+    _, _, home = _home("vibe", tmp_path, harness_config={"mcp_servers": own})
+    doc = tomllib.loads((home / ".vibe" / "config.toml").read_text())
+    assert doc["mcp_servers"][-2:] == own  # no bridge: an operator who wants one writes the stdio form
 
 
 def test_vibe_context_file_has_sudo_relay_brief_and_extension_briefs(tmp_path):
@@ -237,3 +248,15 @@ def test_pi_pins_its_session_dir_and_renders_no_credentials(tmp_path):
     assert json.loads((home / ".pi" / "agent" / "auth.json").read_text()) == {}
     auth = next(p for p in plan.protect if p.container_path == "/home/agent/.pi/agent/auth.json")
     assert auth.read_only and auth.host_path == str(home / ".pi" / "agent" / "auth.json")
+
+
+def test_vibe_http_mcp_auth_cant_pass_the_bridge():
+    from types import SimpleNamespace
+
+    from glove.harness import adapter_call, get_profile
+
+    comp = SimpleNamespace(mcp=[("x", {"name": "s", "transport": "http", "url": "http://s/mcp",
+                                       "headers": {"Authorization": "x"}})])
+    cfg = SimpleNamespace(harness_config={})
+    with pytest.raises(ValueError, match="can't pass the bridge"):
+        adapter_call(get_profile("vibe"), "_mcp_servers", cfg, comp)
