@@ -33,12 +33,12 @@ so no value is interpolated from the host's environment.
 | Harness process | srt (bubblewrap) + glove's seccomp | nono (Landlock) | ring 0 only | ring 0 only |
 | Every tool command | nono (Landlock), inside srt | nono (Landlock) | srt (bubblewrap) | unwrapped |
 | Tool network | none | none | none (empty allowlist) | ring 0 (forwarders) |
-| Secrets in a tool's env | stripped (`deny_vars` globs) | stripped (`deny_vars` globs) | stripped (exact names) | **present** |
+| Secrets in a tool's env | unset by glob, any case (`glove-pty notty -u`), then `deny_vars` | same | same, then srt (exact names) | **present** |
 | Harness home / transcripts from a tool | denied | denied | denied | **readable** |
 | Writes outside `/work`, rw mounts, `/tmp` | denied | denied | denied | ring 0 (read-only rootfs) |
 | `.git/hooks`, `.vscode`, `.envrc`, … in `/work` | ring 0 ro binds + srt deny (present at launch) | ring 0 ro binds | ring 0 ro binds | ring 0 ro binds |
 | `.env` files in `/work` | hidden (present at launch) | readable | readable | readable |
-| Keystrokes into the TUI (TIOCSTI) | refused (`glove-pty notty`) | refused (`glove-pty notty`) | refused (bwrap `--new-session`) | **possible** |
+| Keystrokes into the TUI (TIOCSTI) | refused (`glove-pty notty`) | refused (`glove-pty notty`) | refused (`glove-pty notty`, and bwrap `--new-session`) | **possible** |
 | User namespaces / mounts | srt only; denied below it | denied (default seccomp) | srt only; denied below it | denied (default seccomp) |
 | Container seccomp profile | `nested-userns` (relaxed) | default | `nested-userns` (relaxed) | default |
 | Podman | refused | yes | refused | yes |
@@ -54,7 +54,7 @@ remaining gaps for a session.
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | rings 0 + 1 | only the config home is writable to the harness process (see "The harness home" below), and the home is **denied to tool commands** (Landlock omit / srt deny of the home mount) |
 | LLM API key or subscription token | the harness process (a loader bug, a plugin, a prompt-injected agent) | ring 0 | only the `llm-auth` sidecar holds it; the harness's variable holds the public placeholder `glove-injected` (see "Inference: the key in `llm-auth`" below) |
-| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | nono `deny_vars` (glob patterns) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key's variable, a guard, and each harness env name nono's globs match, applied as bwrap `--unsetenv`; a name glove did not set, e.g. from an image layer, is not covered) remove secrets from wrapped commands, so no secret is in a tool's env. glove passes no secret into the harness itself: a key an inference provider doesn't inject is refused at plan time. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
+| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | every enforcer's tool wrapper starts with `glove-pty notty -u <glob>`, which unsets each env name matching a secret glob (the LLM key's variable, `*KEY*`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*CREDENTIAL*`, `*PASSWORD*`) in any case, whoever set it (glove, the operator's `env:`, an image layer), before the command runs; a bad argument runs nothing. A second layer stays: nono `deny_vars` (the same globs, but case-sensitive: measured, `db_password` and `api_key` reached a `nono wrap`ped command) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key's variable and each harness env name the globs match, as bwrap `--unsetenv`). So no secret-shaped name is in a tool's env (`test_tool_confine.sh`, `test_config_protect.sh`, `test_cc_nono.sh` set lower- and mixed-case names and one glove did not set). A secret under a name no glob matches is the operator's to keep out of `env:`. glove passes no secret into the harness itself: a key an inference provider doesn't inject is refused at plan time. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
@@ -391,10 +391,11 @@ runs the real command. What that adds, and what bounds it:
 The session home (`<session>/.glove/home`, `/home/agent`) is bound
 **read-only**. Only the harness's config home (`config_home` in its
 `harness.yml`: Pi's `.pi/agent/`, Vibe's `.vibe/`, Claude Code's `.claude/`)
-is re-bound read-write, and the paths it loads code or config from
-(`protected_home`) are bound read-only again inside it. Anything outside the
-config home is read-only without being listed (a place a new release starts
-loading from included): a kernel `EROFS` before any ring-1 or ring-2 rule.
+is re-bound read-write, and the paths it loads code or config from (the `~/`
+entries of `protect:`) are bound read-only again inside it. Anything outside
+the config home is read-only without being listed (a place a new release
+starts loading from included): a kernel `EROFS` before any ring-1 or ring-2
+rule.
 
 - **Why the whole config home stays writable:** each harness writes only
   there (measured at each release's home audit), but not in a way per-file
@@ -443,7 +444,7 @@ Claude Code from starting (fail closed).
   string: a Bash or `!` string always starts with Claude Code's snapshot
   `source`, and hooks are managed-only. An unknown name exits 126.
 - **Project settings** (`/work/.claude/settings.json`, `settings.local.json`)
-  are bound read-only at ring 0, on every enforcer (`trusted_files` in
+  are bound read-only at ring 0, on every enforcer (`protect:` in
   `harness.yml`; an empty placeholder when missing, created on the host, and
   `.claude` pinned as a mount point so it can't be renamed aside). Claude Code
   applies their `env` to processes it starts itself, outside ring 1: tested,
@@ -465,7 +466,7 @@ Claude Code from starting (fail closed).
   linked from `/opt/glove/cc/.claude/skills` (baked, `--add-dir`), not the
   home, so a skill's files are readable by the path Claude Code shows. Ring 0
   also binds what Claude Code loads from the home read-only
-  (`protected_home`): `settings.json`, `CLAUDE.md` and the `agents/`,
+  (`protect:`): `settings.json`, `CLAUDE.md` and the `agents/`,
   `commands/`, `skills/`, `plugins/`, `output-styles/`, `rules/` and
   `dev-mods/` dirs, so a deny rule Claude Code fails to apply still leaves them
   unwritable. What it writes stays writable: `.claude.json`, `backups/`,
@@ -572,19 +573,32 @@ wrapper and the planted hook ran in the harness.
   trusts `/work` for that run (no trust dialog) and loads the project's
   `.vibe/` (config, hooks, tools, plugins, agents, prompts, skills) and
   `.agents/skills`. Ring 0 binds an empty read-only directory over `.vibe/` and
-  `.agents/` (`masked_files`), whether or not the repo has them: a committed
-  `.vibe/hooks.toml` could shadow glove's hook as well as a planted one. The
-  alternative, running untrusted, shows Vibe's trust dialog at every start in
-  a repo with an `AGENTS.md`, and answering it fails on a read-only trust store.
+  `.agents/` (`protect:`, `source: empty`), whether or not the repo has them: a
+  committed `.vibe/hooks.toml` could shadow glove's hook as well as a planted
+  one. The alternative, running untrusted, shows Vibe's trust dialog at every
+  start in a repo with an `AGENTS.md`, and answering it fails on a read-only
+  trust store.
+- **Vibe's project skills: a documented widening, off by default.**
+  `harness_config.project_skills: true` binds the repo's `.vibe/skills/` and
+  `.agents/skills/` read-only inside the masked placeholders (the placeholder
+  holds their mount points); everything else in `.vibe/` and `.agents/` stays
+  empty. A skill is a prompt plus files the agent can read, loaded as the
+  repo holds it: a repo's skill can tell the agent what to do, as its
+  `AGENTS.md` can, but can't add a hook, tool, plugin or config, and the agent
+  can't write it. `skill.read` (Vibe's skill tool reading a loaded skill by
+  name) is in the inventory's `allow`. `test_vibe_skills.sh` checks it off
+  (both dirs empty, no project skill) and on (only `skills/` shown, read-only,
+  both skills load, a planted hook never ran).
 - **Pi skips the project's resources.** The rendered `settings.json` sets
   `defaultProjectTrust: never` and `trust.json` is empty, both read-only, so
   `.pi/settings.json`, `.pi/extensions`, skills, prompts, themes,
   `SYSTEM.md`/`APPEND_SYSTEM.md` and `.agents/skills` never load, and there is
   no prompt.
-- **The config home's loaders are read-only** (`protected_home`; the rest of
+- **The config home's loaders are read-only** (`protect:`; the rest of
   the home already is, see "The harness home"): the files glove
   renders there (Vibe's `config.toml` and `hooks.toml`, Pi's `settings.json`,
-  `models.json` and `trust.json`), Vibe's `.env` (it sets `VIBE_*` config), and
+  `models.json`, `trust.json` and `auth.json`, rendered `{}` since `llm-auth`
+  holds the key), Vibe's `.env` (it sets `VIBE_*` config), and
   every directory either harness loads code, skills, prompts or themes from,
   including Pi's `bin/` (first on a tool command's PATH, and where Pi looks
   for `rg`/`fd` before the system's) and `npm/`/`git/` (installed packages),
@@ -649,11 +663,16 @@ wrapper and the planted hook ran in the harness.
   is off as Pi ships it; `harness_config.settings.defaultTools: ["+codemode"]`
   turns it on. Its nested calls are wrapped and held like direct ones
   (above; checked live).
-- **Gaps:** Pi's `auth.json` (credentials for other providers) stays
-  writable; context files (`AGENTS.md`) are prompts, re-rendered at each start.
-  An older session home: see "The harness home" above. Pi reads the project's
-  `sessionDir` before it resolves trust, so a planted `.pi/settings.json` can
-  move where sessions are written. Claude Code's home: see its section above.
+- **Pi's session dir is pinned.** Pi reads a `sessionDir` from the project's
+  `.pi/settings.json` before it resolves trust, so a planted one could move
+  where sessions are written (into `/work`, say, where tool commands read
+  them). `PI_CODING_AGENT_SESSION_DIR` is set to Pi's default for `/work`
+  (`~/.pi/agent/sessions/--work--`), and the variable wins over the setting;
+  `test_config_protect.sh pi` plants one and checks no session lands there.
+- **Gaps:** context files (`AGENTS.md`) are prompts, re-rendered at each start.
+  An older session home: see "The harness home" above (its `auth.json` is
+  overwritten with `{}` at launch, so credentials it held are gone).
+  Claude Code's home: see its section above.
 - **Vibe's plugin store** (`~/.vibe/logs/session/plugins/`, sha256-named blobs
   shared by every session) is read without verifying the hashes: an edited
   blob changed the next session's system prompt (measured on 2.25.8 and
@@ -679,13 +698,16 @@ keeps the process group, so an aborted command is still killed with its group.
 As a session leader it runs the command in a new session instead, tied to the
 parent (`PR_SET_PDEATHSIG`). `glove-pty` is a static helper baked into every
 harness image (`glove/enforcers/pty/glove-pty.c`); the entrypoint refuses to
-start if the wrapper names it and it is missing.
+start if the wrapper names it and it is missing. Under srt it adds to bwrap's
+`--new-session`. The same step unsets the
+secret-shaped env names (`-u <glob>`, any case; see "Any other secret in the
+harness env" above).
 
 ## `nono+srt` and `srt`: what srt adds, and what glove changes in it
 
 With `enforcer: nono+srt` the harness runs as
 `glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- <harness>`
-and every shell command as `glove-pty notty -- nono wrap --profile tool.json -- …`
+and every shell command as `glove-pty notty -u <glob> … -- nono wrap --profile tool.json -- …`
 inside it (srt must be outermost: bubblewrap needs mount/pivot_root, which
 Landlock cannot grant).
 
@@ -734,10 +756,11 @@ Landlock cannot grant).
   sandbox) gives srt a fresh pty and forwards resizes; `glove-pty ctty` (inside)
   makes it the harness's terminal. The sandbox never holds an fd to your real
   terminal.
-- **The harness env.** glove passes no secret into it (any other env is the operator's own); nono's
-  `deny_vars` strip secret-shaped names from every command, and Landlock hides
-  `/proc` from them. srt alone would not: an srt-only command can read the
-  harness's `/proc/<pid>/environ` (same sandbox, same uid).
+- **The harness env.** glove passes no secret into it (any other env is the
+  operator's own); `glove-pty notty -u` and nono's `deny_vars` strip
+  secret-shaped names from every command, and Landlock hides `/proc` from
+  them. srt alone would not: an srt-only command can read the harness's
+  `/proc/<pid>/environ` (same sandbox, same uid).
 
 ## Planted host-trusted files (ring 0)
 

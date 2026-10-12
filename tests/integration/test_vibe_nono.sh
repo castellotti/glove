@@ -43,14 +43,18 @@ run_tool 'mkdir -p /home/agent/.vibe; ls /home/agent/.vibe' | grep -qi 'permissi
   && ok "read vibe home -> denied" || bad "vibe home not denied"
 run_tool 'curl -sS -m 4 http://1.1.1.1 >/dev/null 2>&1; echo rc=$?' | grep -q 'rc=[^0]' \
   && ok "network blocked" || bad "network not blocked"
+# nono's own deny_vars (the scrub in front of it: test_tool_confine, test_config_protect)
 run_tool 'env | grep -i -e key -e secret || echo NONE' | grep -q 'NONE' \
   && ok "secrets stripped" || bad "secret leaked"
 
 echo "== baked vibe-hook rewrites a bash tool call =="
 HOOKIN='{"hook_event_name":"pre_tool","tool_name":"bash","tool_input":{"command":"ls /work"}}'
 out="$(echo "$HOOKIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null)"
-echo "$out" | grep -q 'nono wrap .* -- bash -c' && ok "hook rewrites bash command" || bad "hook did not rewrite: $out"
-echo "$out" | grep -q 'tool_input' && ok "hook returns tool_input replacement" || bad "no tool_input in hook output"
+# the command, split as bash would, is exactly the rendered wrapper + bash -c <cmd>
+echo "$out" | uv run --quiet --no-project python -c 'import json,shlex,sys
+cmd = json.load(sys.stdin)["hook_specific_output"]["tool_input"]["command"]
+sys.exit(shlex.split(cmd) != json.load(open(sys.argv[1]))["argv"] + ["bash", "-c", "ls /work"])' "$POLDIR/tool-wrapper.json" \
+  && ok "hook rewrites bash command to the rendered wrapper" || bad "hook did not rewrite: $out"
 
 echo "== baked vibe-hook refuses a tool not in the inventory (web_fetch) =="
 WEBIN='{"hook_event_name":"pre_tool","tool_name":"web_fetch","tool_input":{"url":"http://x"}}'
