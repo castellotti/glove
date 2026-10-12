@@ -518,8 +518,10 @@ All notable changes to glove are documented here.
   (`playwright`, `searxng`, `webfetch`, `webdownload`) as a stdio server, the
   image's `glove-mcp-bridge <url>`: one HTTP session for the Vibe process,
   ended (`DELETE`) when Vibe exits. It is a stdlib relay on the image's python;
-  a failed request is answered with an error and the bridge keeps serving.
-  Server and tool names, the allowlist and the hook's inventory are unchanged;
+  a failed request is answered with an error and the bridge keeps serving, and
+  a session the server lost (a restart) is re-opened. An HTTP entry with
+  settings the bridge can't carry (`auth`, `headers`, `api_key_*`) is refused
+  at render time rather than dropped. Server and tool names, the allowlist and the hook's inventory are unchanged;
   `harness_config.mcp_servers` render as written.
 - **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
   port 80 (undici's `ProxyAgent` default), where answers such as

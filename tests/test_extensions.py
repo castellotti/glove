@@ -233,10 +233,10 @@ def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     assert doc["services"]["glove-s-worker"]["cap_add"] == ["NET_ADMIN"]
 
 
-def _render_with(tmp_path, extensions):
+def _render_with(tmp_path, extensions, **kw):
     tmp_path.mkdir(parents=True, exist_ok=True)
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=extensions)
-    plan, text = render(cfg, tmp_path)
+    plan, text = render(cfg, tmp_path, **kw)
     return plan, yaml.safe_load(text)
 
 
@@ -747,3 +747,67 @@ def test_no_sidecar_joins_the_lan_network(tmp_path, ghome):
     doc["services"]["glove-s-direct-proxy"]["networks"]["glove-s-lan"] = {}
     with pytest.raises(ExtensionError, match="only `via: lan` forwarders may"):
         validate_project(doc, plan, plan.composition)
+
+
+# --- outputs and inputs ------------------------------------------------------------------
+
+_OUTISH = """\
+    services:
+      worker:
+        image: {digest}
+        networks: [egress]{env}
+      reader:
+        image: {digest}
+        networks: [egress]
+    """
+
+
+def _outish(tmp_path, ghome, *, trusted=True, outputs="{ dl: { services: [worker] } }",
+            inputs="{ up: { services: [reader] } }", session_dir=True, env=""):
+    _svc_ext(_oot(tmp_path, ghome, trusted, "outish"), "outish", service=_OUTISH.format(digest=DIGEST, env=env),
+             extra=f"outputs: {outputs}\ninputs: {inputs}\n")
+    return _render_with(tmp_path, {"direct": {}, "outish": {}}, session_dir=str(tmp_path) if session_dir else None)
+
+
+def test_an_output_is_written_by_its_services_and_an_input_read_by_them(tmp_path, ghome):
+    env = '\n        environment: { OUT: "{{ output.dl.path }}", IN: "{{ input.up.path }}" }'
+    plan, doc = _outish(tmp_path, ghome, env=env)
+    svc = doc["services"]
+    dl, up = str(tmp_path / "dl"), str(tmp_path / "up")
+    # the output: rw in its sidecar (beside /work, never in it), ro in the harness at /work/dl
+    assert {"type": "bind", "source": dl, "target": "/run/glove-output/dl"} in svc["glove-s-worker"]["volumes"]
+    # the input: rw in the harness, ro in its sidecar at the harness's path
+    assert {"type": "bind", "source": up, "target": "/work/up", "read_only": True} in svc["glove-s-reader"]["volumes"]
+    assert not any(v.get("source") == up for v in svc["glove-s-worker"]["volumes"])
+    assert not any(v.get("source") == dl for v in svc["glove-s-reader"].get("volumes") or [])
+    mounts = {m.container_path: (m.host_path, m.mode) for m in plan.mounts}
+    assert mounts["/work/dl"] == (dl, "ro") and mounts["/work/up"] == (up, "rw")
+    # a fragment finds each where its sidecars see it
+    assert {"OUT": "/run/glove-output/dl", "IN": "/work/up"}.items() <= svc["glove-s-worker"]["environment"].items()
+
+
+def test_an_output_whose_when_fails_is_not_rendered(tmp_path, ghome):
+    plan, _ = _outish(tmp_path, ghome, outputs="{ dl: { services: [worker], when: { harness: vibe } } }",
+                        inputs="{}")
+    assert [o.name for o in plan.composition.outputs] == []
+    assert "/work/dl" not in {m.container_path for m in plan.mounts}
+
+
+@pytest.mark.parametrize("kw,why", [
+    ({"outputs": "{ Bad_Name: { services: [worker] } }"}, "want"),
+    ({"outputs": "{ dl: [worker] }"}, "want"),
+    ({"outputs": "{ dl: { services: [worker], read_only: true } }"}, "want"),
+    ({"outputs": "{ dl: {} }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: [] } }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: worker } }"}, "`services` must name"),
+    ({"outputs": "{ dl: { services: [nope] } }"}, r"output 'dl': no service\(s\) \['nope'\]"),
+    ({"inputs": "{ up: { services: [nope] } }"}, r"input 'up': no service\(s\) \['nope'\]"),
+    ({"outputs": "{ work: { services: [worker] } }"}, "the name is taken"),
+    ({"outputs": "{ local: { services: [worker] } }"}, "the name is taken"),
+    ({"inputs": "{ dl: { services: [reader] } }"}, "input 'dl': the name is taken"),
+    ({"session_dir": False}, "needs a session directory"),
+    ({"trusted": False}, "a directory shared with the harness is a privilege"),
+])
+def test_output_and_input_rules(tmp_path, ghome, kw, why):
+    with pytest.raises(ExtensionError, match=why):
+        _outish(tmp_path, ghome, **kw)

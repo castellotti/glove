@@ -32,6 +32,9 @@ from glove.harnessconfig import mcp_tool_names, rel_config_home
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
 
 MCP_BRIDGE = "/opt/glove/bin/glove-mcp-bridge"
+# what a bridged http server keeps: Vibe's common MCP fields (2.26.1), not its auth, headers or api_key_*
+BRIDGED_KEYS = frozenset({"name", "transport", "url", "prompt", "startup_timeout_sec", "tool_timeout_sec",
+                          "sampling_enabled", "disabled", "disabled_tools"})
 
 
 def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
@@ -49,9 +52,9 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
             if not ok:
                 raise ValueError(f"vibe mcp {item['name']!r}: bad tools {names}")
             disabled.append(f"re:{item['name']}_(?!(?:{'|'.join(names) or '(?!)'})$).*")
-        if item.get("transport") == "http":
-            if {"auth", "headers"} & item.keys():  # the bridge takes a URL only: never drop them silently
-                raise ValueError(f"vibe mcp {item['name']!r}: an http server's auth/headers can't pass the bridge")
+        if item.get("transport") in ("http", "streamable-http"):
+            if extra := sorted(item.keys() - BRIDGED_KEYS):  # the bridge takes a URL only: never drop auth silently
+                raise ValueError(f"vibe mcp {item['name']!r}: an http server's {extra} can't pass the bridge")
             url = item.pop("url")
             item.update(transport="stdio", command=MCP_BRIDGE, args=[url])
         servers.append(item)

@@ -702,8 +702,8 @@ Core validates all of it:
     an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
     with `tools` as an allowlist that also enters the tool inventory as
     `mcp_<server>.<tool>`, so a server without `tools` is refused; an `http`
-    server is rendered as the image's stdio bridge `glove-mcp-bridge <url>`,
-    since Vibe opens a new MCP session for every HTTP call and a server like
+    server is rendered as the image's stdio bridge `glove-mcp-bridge <url>`
+    (so `auth`/`headers` are refused), since Vibe opens a new MCP session for every HTTP call and a server like
     Playwright keeps its pages per session; Claude Code: `managed-mcp.json`,
     `tools` as allow rules and the rest of `all_tools` as deny rules);
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one

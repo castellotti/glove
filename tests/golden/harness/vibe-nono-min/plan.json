@@ -20,7 +20,7 @@
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "VIBE_HOME": "/home/agent/.vibe"
   },
-  "image": "glove/vibe:0.5.0-91d7bcf577",
+  "image": "glove/vibe:0.5.0-7f39e77636",
   "transcripts": [
     null,
     null

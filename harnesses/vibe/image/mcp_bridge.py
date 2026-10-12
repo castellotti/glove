@@ -39,7 +39,9 @@ def is_request(msg: dict) -> bool:
 class Bridge:
     def __init__(self, url: str) -> None:
         self.url = url
-        self.session: dict[str, str] = {}  # mcp-session-id / mcp-protocol-version, once initialized
+        # mcp-session-id / mcp-protocol-version once initialized: replaced whole, never changed in place,
+        # so a call reads one session and a lost one stays until its replacement is open
+        self.session: dict[str, str] = {}
         self._out, self._reinit = threading.Lock(), threading.Lock()
         self._init: dict = {}  # Vibe's initialize, replayed if the server loses the session
 
@@ -48,23 +50,25 @@ class Bridge:
             sys.stdout.write(json.dumps(msg) + "\n")
             sys.stdout.flush()
 
-    def _request(self, data: bytes | None = None, method: str = "POST") -> urllib.request.Request:
+    def _request(self, data: bytes | None = None, method: str = "POST",
+                 session: dict[str, str] | None = None) -> urllib.request.Request:
         return urllib.request.Request(self.url, data, method=method, headers={
-            "content-type": "application/json", "accept": "application/json, text/event-stream", **self.session})
+            "content-type": "application/json", "accept": "application/json, text/event-stream",
+            **(self.session if session is None else session)})
 
     def _send(self, msg: dict, relay) -> None:
         """POST one message and relay each message of the answer (JSON, or an SSE
         stream until `relay` returns true: the request is answered). An
-        `initialize` answer also opens the session: its id and protocol version."""
-        with _open(self._request(json.dumps(msg).encode()), timeout=TIMEOUT) as r:
-            if msg.get("method") == "initialize":
-                if r.headers.get("mcp-session-id"):
-                    self.session["mcp-session-id"] = r.headers["mcp-session-id"]
-                inner = relay
+        `initialize` opens a session (sent without one): its answer sets it."""
+        opening = msg.get("method") == "initialize"
+        with _open(self._request(json.dumps(msg).encode(), session={} if opening else None), timeout=TIMEOUT) as r:
+            if opening:
+                sid, inner = r.headers.get("mcp-session-id"), relay
 
                 def relay(m: dict) -> bool:
                     if "result" in m:
-                        self.session["mcp-protocol-version"] = m["result"].get("protocolVersion", "")
+                        self.session = {**({"mcp-session-id": sid} if sid else {}),
+                                        "mcp-protocol-version": m["result"].get("protocolVersion", "")}
                     return inner(m)
             if r.headers.get_content_type() == "text/event-stream":
                 data: list[str] = []
@@ -72,10 +76,10 @@ class Bridge:
                     line = raw.decode().rstrip("\r\n")
                     if line.startswith("data:"):
                         data.append(line[5:].removeprefix(" "))
-                    elif not line and data:
-                        if relay(json.loads("\n".join(data))):
+                    elif not line:
+                        event, data = "\n".join(data).strip(), []
+                        if event and relay(json.loads(event)):  # an event may carry no data (a priming id)
                             break
-                        data = []
             elif body := r.read().strip():
                 relay(json.loads(body))
 
@@ -85,8 +89,9 @@ class Bridge:
         with self._reinit:
             if self.session.get("mcp-session-id") != stale:
                 return  # another call already did
-            self.session.clear()
             self._send(self._init, lambda m: True)  # the answer is the bridge's, not Vibe's
+            if self.session.get("mcp-session-id") == stale:
+                raise RuntimeError("the server opened no new session")
             self._send({"jsonrpc": "2.0", "method": "notifications/initialized"}, lambda m: True)
 
     def post(self, msg: dict, retry: bool = True) -> None:

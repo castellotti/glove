@@ -6,9 +6,10 @@ bridge by its baked path and shebang. Speaking MCP over the bridge's stdio as
 Vibe does: one session (one `initialize`, then its session id and protocol
 version on every message), JSON and SSE answers, a slow call that doesn't hold
 up the next, a failed POST answered with an error and the bridge still serving,
-a server's JSON-RPC error relayed, a lost session (the server restarted: 404)
-re-opened with Vibe's `initialize` and the call sent again, only MCP on stdout,
-and stdin's end sends `DELETE` and exits.
+a server's JSON-RPC error relayed, an SSE event without data skipped, a lost
+session (the server restarted: 404) re-opened with Vibe's `initialize` and the
+call sent again (and if that fails, the call answered with an error and the next
+call trying again), only MCP on stdout, and stdin's end sends `DELETE` and exits.
 """
 
 from __future__ import annotations
@@ -28,7 +29,9 @@ VERSION = "2025-03-26"
 class StandIn(BaseHTTPRequestHandler):
     seen: ClassVar[list[tuple[str, str, str | None, str | None]]] = []  # (verb, method, session id, version)
     live: ClassVar[set[str]] = set()  # the sessions it knows: a restart forgets them
+    opened: ClassVar[list[str]] = []  # every session it opened (ids never reused)
     release: ClassVar[threading.Event] = threading.Event()  # holds a call that says `hold`
+    refuse: ClassVar[list[None]] = []  # refuse one initialize (a restarting server) per item
 
     def log_message(self, *_):
         pass
@@ -56,7 +59,11 @@ class StandIn(BaseHTTPRequestHandler):
         msg = json.loads(self.rfile.read(int(self.headers["content-length"])))
         self._note("POST", msg.get("method", ""))
         if msg.get("method") == "initialize":
-            sid = f"sess-{sum(m == 'initialize' for _, m, _, _ in self.seen)}"
+            if self.refuse:
+                self.refuse.pop()
+                return self._reply(500, b"starting", "text/plain")
+            sid = f"sess-{len(self.opened) + 1}"
+            self.opened.append(sid)
             self.live.add(sid)
             return self._reply(200, json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
                 "protocolVersion": VERSION, "capabilities": {"tools": {}},
@@ -75,15 +82,15 @@ class StandIn(BaseHTTPRequestHandler):
             self.release.wait(30)
         answer = {"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text",
                                                                               "text": f"echo:{args.get('n')}"}]}}
-        if args.get("sse"):  # a progress notification first, then the answer
+        if args.get("sse"):  # a priming event (no data), a progress notification, then the answer
             note = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progress": 1}}
-            body = "".join(f"event: message\ndata: {json.dumps(m)}\n\n" for m in (note, answer))
+            body = "id: 0\ndata:\n\n" + "".join(f"event: message\ndata: {json.dumps(m)}\n\n" for m in (note, answer))
             return self._reply(200, body.encode(), "text/event-stream")
         self._reply(200, json.dumps(answer).encode())
 
 
 def exercise(cmd: list[str]) -> list[tuple[str, bool, str]]:
-    StandIn.seen, StandIn.live, StandIn.release = [], set(), threading.Event()
+    StandIn.seen, StandIn.live, StandIn.release, StandIn.refuse, StandIn.opened = [], set(), threading.Event(), [], []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), StandIn)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     p = subprocess.Popen([*cmd, f"http://127.0.0.1:{srv.server_address[1]}/mcp"], stdin=subprocess.PIPE,
@@ -124,9 +131,11 @@ def exercise(cmd: list[str]) -> list[tuple[str, bool, str]]:
     call(6, n=3)
     call(7, bad=True)
     after = answers(5, 6, 7)
-    StandIn.live.clear()  # the server restarts
+    StandIn.live, StandIn.refuse = set(), [None]  # the server restarts, and refuses the first initialize
     call(8, n=4)
-    again = answers(8).get(8, {})
+    refused = answers(8).get(8, {})
+    call(9, n=5)
+    again = answers(9).get(9, {})
     p.stdin.close()
     rc = p.wait()
     timer.cancel()
@@ -136,12 +145,12 @@ def exercise(cmd: list[str]) -> list[tuple[str, bool, str]]:
     seen = StandIn.seen
     posts = [(m, s, v) for verb, m, s, v in seen if verb == "POST"]
     inits = [i for i, (m, _, _) in enumerate(posts) if m == "initialize"]
-    first = [(s, v) for m, s, v in posts[1:inits[-1]]]
+    first = [(s, v) for m, s, v in posts[1:inits[1]]]
     after_restart = [(s, v) for m, s, v in posts[inits[-1] + 1:]]
     return [
         ("initialize is relayed and answered",
          init.get("result", {}).get("serverInfo", {}).get("name") == "stand-in", str(init)[:200]),
-        ("an SSE answer is relayed, with what came before it",
+        ("an SSE answer is relayed, with what came before it (an event without data skipped)",
          "echo:1" in json.dumps(sse) and any("notifications/progress" in x for x in out), str(out)[:300]),
         ("a slow call doesn't hold up the next", "echo:2" in json.dumps(unheld) and "echo:held" in json.dumps(held),
          f"{unheld}; {held}"),
@@ -152,8 +161,10 @@ def exercise(cmd: list[str]) -> list[tuple[str, bool, str]]:
          after.get(7, {}).get("error", {}).get("message") == "bad params", str(after.get(7))[:200]),
         ("one HTTP session serves every call: its id and protocol version on each",
          len(first) > 5 and all(x == ("sess-1", VERSION) for x in first), str(first)),
-        ("a lost session (404) is re-opened with Vibe's initialize and the call answered",
-         len(inits) == 2 and "echo:4" in json.dumps(again)
+        ("a lost session (404) whose new one fails answers the call with an error",
+         "a new one failed" in refused.get("error", {}).get("message", ""), str(refused)[:200]),
+        ("…and the next call re-opens it with Vibe's initialize and is answered",
+         len(inits) == 3 and "echo:5" in json.dumps(again)
          and after_restart and all(x == ("sess-2", VERSION) for x in after_restart), f"{posts[-4:]}; {again}"),
         ("…and the new session's initialize answer isn't passed to Vibe",
          sum(json.loads(x).get("id") == 1 for x in out) == 1, str(out)[-300:]),

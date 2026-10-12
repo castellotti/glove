@@ -199,8 +199,10 @@ def main(directory: str) -> int:
         check("wait_s 0: the call returns a job id", bool(job), res[-200:])
         out = ""
         if job:
+            # the file first (a status call is a harness run); it is renamed into place a moment before
+            # the job says so
             wait_for(lambda: (out_dir / "robots.txt").is_file(), timeout=120, step=2)
-            out = job_status(job)
+            out = wait_for(lambda: saved if "saved:" in (saved := job_status(job)) else "", timeout=15, step=2)
         check(f"{status} says saved, with the host file's sha256", (out_dir / "robots.txt").is_file()
               and sha256(out_dir / "robots.txt") in out, out[-200:])
         if os.environ.get("BIG"):
