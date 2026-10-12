@@ -14,8 +14,11 @@ extensions:
 egress proxy only through the `proxy` endpoint (`glove-<id>-proxy:8888`), set
 as `GLOVE_FETCH_PROXY`. The Pi extension attaches it per request with undici's
 `ProxyAgent`, never as a global dispatcher, so the harness's LLM traffic never
-goes through it. The extension and its npm dependencies (pinned) are baked into
-the session image at build time; nothing is installed into the harness home.
+goes through it. An `http://` URL goes to the proxy as a plain absolute-form
+request, as a browser sends it; only `https://` is tunnelled with CONNECT
+(`proxyTunnel: false`; the fetcher's urllib does the same). The extension and
+its npm dependencies (pinned) are baked into the session image at build time;
+nothing is installed into the harness home.
 
 **Claude Code** keeps its own `WebFetch`: glove allows it and sets
 `HTTPS_PROXY`/`HTTP_PROXY` to the `proxy` endpoint in the read-only managed

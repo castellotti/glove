@@ -26,13 +26,18 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-const dispatcher = PROXY ? new ProxyAgent(PROXY) : undefined;
+// proxyTunnel: false sends an http:// request to the proxy as a plain
+// absolute-form request, as a browser does; https:// still tunnels (CONNECT).
+// A CONNECT to port 80 left web.archive.org's answers lost in the tunnel.
+const dispatcher = PROXY ? new ProxyAgent({ uri: PROXY, proxyTunnel: false }) : undefined;
 
-/** The egress gate's refusal text if it answers a CONNECT for `url` with 403, else null. */
+/** The egress gate's refusal text if it answers a CONNECT for an https `url`
+ *  with 403, else null. (A refused http:// request is not tunnelled: the gate
+ *  answers it with the 403 itself, read by the !res.ok branch.) */
 function tunnelRefusal(url: URL): Promise<string | null> {
-  if (!PROXY) return Promise.resolve(null);
+  if (!PROXY || url.protocol !== "https:") return Promise.resolve(null);
   const proxy = new URL(PROXY);
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  const port = url.port || "443";
   return new Promise((resolve) => {
     const req = http.request({ host: proxy.hostname, port: proxy.port, method: "CONNECT",
                                path: `${url.hostname}:${port}`, timeout: 15000 });

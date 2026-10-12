@@ -159,6 +159,12 @@ def test_npm_dependencies_are_pinned_exactly():
         assert re.fullmatch(r"\d+\.\d+\.\d+", version), (name, version)
 
 
+def test_pi_sends_plain_http_unwrapped():
+    # undici's ProxyAgent tunnels http:// too unless told not to (index.ts says
+    # why); a source check: undici isn't on the host
+    assert "proxyTunnel: false" in (Path(__file__).parents[1] / "pi-extension" / "index.ts").read_text()
+
+
 # --- the fetch_url server (webfetch_mcp.py), without the MCP layer ------------------
 
 
@@ -214,10 +220,13 @@ ZIP = b"PK\x03\x04\x14\x00\x00\x00\x08\x00" + bytes(range(256)) * 40
 class _Proxy(BaseHTTPRequestHandler):
     """A forward proxy stand-in: answers absolute-URI GETs itself."""
 
+    seen: ClassVar[list[str]] = []  # request lines, in order
+
     def log_message(self, *a):
         pass
 
     def do_GET(self):
+        self.seen.append(self.requestline)
         routes = {
             "http://example.com/page": (200, "text/html", "<p>Example Domain</p>", {}),
             "http://example.com/hop": (302, "text/plain", "", {"Location": "/page"}),
@@ -245,6 +254,7 @@ class _Proxy(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_CONNECT(self):
+        self.seen.append(self.requestline)
         # The gate refuses a tunnel with 403 and a reason; anything else is a network failure.
         refused = self.path.startswith("blocked.example:")
         data = b"glove netgate refused: rule tunnel" if refused else b""
@@ -257,6 +267,7 @@ class _Proxy(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server(monkeypatch):
+    _Proxy.seen.clear()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Proxy)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     m = _server()
@@ -279,6 +290,13 @@ def test_fetch_reports_policy_refusals_and_rate_limits(server):
     assert server.fetch("http://example.com/slow").startswith("Rate-limited (HTTP 429)")
     assert server.fetch("http://example.com/missing") == "HTTP 404 for http://example.com/missing"
     assert server.fetch("http://example.com/page", max_chars=5).startswith("Examp\n\n[truncated to 5 chars]")
+
+
+def test_fetch_sends_plain_http_unwrapped(server):
+    # an http:// URL goes to the proxy as an absolute-form request, never a CONNECT
+    # tunnel to port 80, and a refusal of it is the gate's own 403 answer
+    assert server.fetch("http://example.com/blocked").startswith("Refused by this session's network policy")
+    assert _Proxy.seen == ["GET http://example.com/blocked HTTP/1.1"]
 
 
 def test_fetch_tells_the_server_s_retry_after(server):
