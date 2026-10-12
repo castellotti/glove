@@ -618,7 +618,7 @@ def test_an_untrusted_extension_gets_no_channel_and_no_work(tmp_path, ghome):
 
 
 @pytest.mark.parametrize("kw,why", [
-    ({"work": False}, "never binds all of /work"),
+    ({"work": False}, "never binds a path in /work"),
     ({"target": "/data"}, "read-write at /work"),
     ({"ro": ", read_only: true"}, "read-write at /work"),
     ({"services": "[nope]"}, r"no service\(s\) \['nope'\]"),

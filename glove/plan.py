@@ -247,7 +247,7 @@ def _seccomp_for(cfg: Config) -> tuple[str, bool]:
 def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
     """Extensions' read-only harness mounts (`mounts:` in a manifest), under the
     same rule as the session's own: never a private path; and their `outputs:`
-    at /work/<name>."""
+    (read-only) and `inputs:` (read-write) at /work/<name>."""
     from .extensions import ExtensionError
     from .sessiondir import exposes_private
 
@@ -265,7 +265,7 @@ def _extension_mounts(comp: Composition, mounts: list[Mount]) -> list[Mount]:
     for o in comp.outputs:
         # its mount point is in /work, which the agent writes: never through a link
         check_path(str(comp.work_dir), o.name, "dir")
-        out.append(Mount(host_path=str(o.host), container_path=o.target, mode="ro"))
+        out.append(Mount(host_path=str(o.host), container_path=o.target, mode="rw" if o.input else "ro"))
     return out
 
 

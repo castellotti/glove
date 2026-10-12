@@ -20,6 +20,12 @@ services:
       PW_PROFILE: "{{ settings.profile }}"
       PW_ALLOWED_HOST: "{{ endpoint.browser.host }}:8931"
       PW_PROXY: "{{ endpoint['browser-egress'].url }}"
+{% if settings.downloads == "work" %}
+      PW_OUTPUT: "{{ output['browser-output'].path }}"     # the MCP's --output-dir
+{% endif %}
+{% if settings.uploads == "work" %}
+      PW_UPLOADS: "{{ input['browser-uploads'].path }}"    # its cwd: a root browser_file_upload reads
+{% endif %}
 {% if settings.ca %}
       # trust a private CA in addition to the public roots: Node (the MCP)
       # here, Chromium via an NSS import of the same file in glove-pw-start;
@@ -31,11 +37,10 @@ services:
       VNC_CLIPBOARD: "{{ settings.clipboard }}"
 {% endif %}
     volumes:
-{% if settings.downloads == "work" %}
-      - { type: bind, source: "{{ work.host }}/browser-output", target: /data/output }
-{% else %}
+{% if settings.downloads != "work" %}
       - { type: bind, source: "{{ state }}/output", target: /data/output }
 {% endif %}
+      - { type: bind, source: "{{ state }}/downloading", target: /data/staging }  # hooks.py STAGING
       - { type: bind, source: "{{ state }}/mcp.json", target: /etc/glove/playwright/mcp.json, read_only: true }
 {% if settings.ca %}
       - { type: bind, source: "{{ state }}/corporate-ca.pem", target: /etc/glove/playwright/corporate-ca.pem,
@@ -43,9 +48,6 @@ services:
 {% endif %}
 {% if settings.profile == "session" %}
       - { type: bind, source: "{{ state }}/profile", target: /data/profile }
-{% endif %}
-{% if settings.uploads == "work" %}
-      - { type: bind, source: "{{ work.host }}/browser-uploads", target: /data/uploads, read_only: true }
 {% endif %}
     # stated here: the base image is an OCI index, which carries no healthcheck
     healthcheck:

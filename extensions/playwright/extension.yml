@@ -47,6 +47,14 @@ validate:
     error: "allow_control applies to mode: novnc only"
 hooks: hooks.py
 cli: cli.py
+# `downloads: work`: what the browser saves lands in <session>/browser-output/,
+# written by the sidecar and read-only to the harness at /work/browser-output
+outputs:
+  browser-output: { services: [pw], when: { downloads: work, mode: [headless, novnc] } }
+# `uploads: work`: files the agent puts in /work/browser-uploads (<session>/browser-uploads/),
+# which the sidecar reads, read-only, at the same path, and browser_file_upload may send
+inputs:
+  browser-uploads: { services: [pw], when: { uploads: work, mode: [headless, novnc] } }
 networks:
   browser-net: { internal: true }      # the sidecar and its two forwarders; nothing else
 images:
@@ -117,4 +125,4 @@ harness:
         browser_verify_element_visible,browser_verify_list_visible,browser_verify_text_visible,
         browser_verify_value,browser_video_chapter,browser_video_hide_actions,browser_video_show_actions,
         browser_wait_for
-  brief: "brief/{{ settings.mode }}.md"
+  brief: "brief/{{ 'host' if settings.mode == 'host' else 'sidecar' }}.md"

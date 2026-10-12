@@ -89,7 +89,7 @@ def test_host_mode_ignores_ca(tmp_path):
 def test_entrypoint_imports_into_nss_in_both_modes_and_never_bypasses():
     src = (PW / "image" / "glove-pw-start").read_text()
     assert 'certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"' in src
-    assert src.count("    trust_corporate_ca\n") == 2  # headless and novnc
+    assert "\n  trust_corporate_ca\n}" in src and src.count("    prepare\n") == 2  # headless and novnc
     assert "libnss3-tools" in (PW / "image" / "Dockerfile").read_text()
     for path in (PW / "image" / "glove-pw-start", PW / "compose" / "services.yml.j2", PW / "hooks.py"):
         text = path.read_text()

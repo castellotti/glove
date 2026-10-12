@@ -207,6 +207,12 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
         cfg, home_dir=str(sd.home), cwd=str(sd.work),
         resume=want_resume, session_id=resume_id, state_dir=str(sd.ext), session_dir=str(sd.root),
     )
+    for o in plan.composition.outputs:
+        # an older glove kept these in work/<name>/: the new mount hides that directory
+        old = sd.work / o.name
+        if old.is_dir() and not old.is_symlink() and any(old.iterdir()):
+            err.print(f"[yellow]⚠ work/{o.name}/ has files that /work/{o.name} no longer shows: it is now "
+                      f"{o.host}; move them there[/yellow]")
     if prev_cfg is not None:
         from .sessions import widening_warnings
 

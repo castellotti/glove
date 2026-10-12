@@ -626,3 +626,16 @@ def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypa
     assert result.exit_code == 1 and "chrome: absent" in result.output and not started
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
+
+
+def test_files_left_in_an_old_work_subdir_are_pointed_out(home, tmp_path):
+    # downloads: work used to land in work/browser-output/; the output beside
+    # work/ is now mounted over that path, hiding what is left there
+    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work}\n")
+    (d / "work" / "browser-output").mkdir()
+    (d / "work" / "browser-output" / "old.zip").write_text("x")
+    result = runner.invoke(app, ["plan", str(d)])
+    assert result.exit_code == 0, result.output
+    assert "work/browser-output/ has files" in result.output and "move them there" in result.output
+    (d / "work" / "browser-output" / "old.zip").unlink()
+    assert "has files" not in runner.invoke(app, ["plan", str(d)]).output

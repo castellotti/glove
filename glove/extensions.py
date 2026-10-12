@@ -62,7 +62,7 @@ MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
-    "outputs",
+    "outputs", "inputs",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
@@ -433,18 +433,22 @@ class Channel:
 class Output:
     """A directory beside the session's work dir (`<session>/<name>/`) that
     some of the extension's sidecars write (at `path`) and the harness reads,
-    read-only, at /work/<name> (`target`; e.g. web_download's files). The agent
-    never holds the host path, so it cannot swap it for a link that the bind
-    would follow when a sidecar restarts — unlike a subdirectory of /work."""
+    read-only, at /work/<name> (`target`; e.g. web_download's files). An
+    `input` is the reverse (`inputs:`): the harness writes it at /work/<name>
+    and its sidecars read it, read-only, at the same path (e.g. files the
+    browser may upload). The agent never holds the host path, so it cannot swap
+    it for a link that the bind would follow when a sidecar restarts — unlike a
+    subdirectory of /work."""
 
     extension: str
     name: str
     host: Path
     services: tuple[str, ...]
+    input: bool = False
 
     @property
     def path(self) -> str:
-        return f"{OUTPUT_ROOT}/{self.name}"
+        return self.target if self.input else f"{OUTPUT_ROOT}/{self.name}"
 
     @property
     def target(self) -> str:
@@ -503,8 +507,8 @@ class Composition:
     privileges: dict[str, list[dict]] = field(default_factory=dict)  # "ext/service" → exceptions
     # The session directory (hooks only — never a template) and its /24.
     session_dir: Path | None = None
-    # The harness's /work on the host: trusted extensions may bind a named
-    # subdirectory of it into a sidecar (`{{ work.host }}/<dir>`), never all of it.
+    # The harness's /work on the host: a trusted extension's sidecar binds all
+    # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
@@ -618,8 +622,9 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
                           for e in comp.endpoints if e.extension == a.name},
         "state": str(comp.state_dir(a.name)),
         "mount": dict(a.mounts),
-        # the extension's `outputs:`: where its sidecars write each, and where the harness reads it
-        "output": {o.name: {"path": o.path, "target": o.target} for o in comp.outputs_of(a.name)},
+        # the extension's `outputs:`/`inputs:`: where its sidecars see each, and where the harness does
+        **{key: {o.name: {"path": o.path, "target": o.target} for o in comp.outputs_of(a.name) if o.input == inp}
+           for key, inp in (("output", False), ("input", True))},
         # /work on the host, and where the `work` privilege binds it in a sidecar
         "work": {"host": str(comp.work_dir or ""), "target": WORK_TARGET},
         "assets": str(a.manifest.path),
@@ -989,12 +994,13 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
         comp.harness_mounts.append((a.name, str(host), target))
 
 
-def _outputs(comp: Composition, a: Active, ctx: dict) -> None:
+def _outputs(comp: Composition, a: Active, ctx: dict, key: str = "outputs") -> None:
     """`outputs: {<name>: {services: [<its service>, …], when: …}}` — see
-    `Output`. Core binds it into those services (rw) and the harness (ro). A
-    new edge into the harness, so a privilege: in-tree or trusted extensions only."""
-    for name, spec in (a.manifest.raw.get("outputs") or {}).items():
-        where = f"extension {a.name!r} output {name!r}"
+    `Output`. Core binds it into those services (rw) and the harness (ro);
+    `inputs:` (key) the other way round. A new edge into the harness, so a
+    privilege: in-tree or trusted extensions only."""
+    for name, spec in (a.manifest.raw.get(key) or {}).items():
+        where = f"extension {a.name!r} {key[:-1]} {name!r}"
         if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"services", "when"}:
             raise ExtensionError(f"{where}: want {{services: [<service>, …], when: …}}")
         if not when_matches(spec.get("when"), ctx):
@@ -1002,12 +1008,12 @@ def _outputs(comp: Composition, a: Active, ctx: dict) -> None:
         services = spec.get("services") or []
         if not isinstance(services, list) or not services or not all(isinstance(x, str) for x in services):
             raise ExtensionError(f"{where}: `services` must name at least one of its services")
-        require_trust(a, f"{where}: a directory the harness reads")
+        require_trust(a, f"{where}: a directory shared with the harness")
         if comp.session_dir is None or comp.work_dir is None:
             raise ExtensionError(f"{where}: needs a session directory (with a work dir)")
         if name in RESERVED_OUTPUTS or any(o.name == name for o in comp.outputs):
             raise ExtensionError(f"{where}: the name is taken")
-        comp.outputs.append(Output(a.name, name, comp.session_dir / name, tuple(services)))
+        comp.outputs.append(Output(a.name, name, comp.session_dir / name, tuple(services), key == "inputs"))
 
 
 def _channels(comp: Composition, a: Active, ctx: dict) -> None:
@@ -1112,6 +1118,7 @@ def compose(
                 if net in CORE_NETWORKS and net != "net":
                     comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
         _outputs(comp, a, ctx)
+        _outputs(comp, a, ctx, "inputs")
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx)
