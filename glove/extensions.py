@@ -903,6 +903,60 @@ def set_harness_env(comp: Composition, where: str, k: str, v: Any) -> None:
     comp.harness_env[k] = str(v)
 
 
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]+\Z")  # an MCP server's or a tool's name
+# what an `mcp:` item may say: fields every harness renders alike, never one
+# harness's own (auth, headers, timeouts)
+MCP_FIELDS = {"stdio": {"command", "args", "env"}, "http": {"url"}}
+
+
+def tool_names(where: str, tools: Any) -> list[str]:
+    """A list of tool names, or a comma-separated string of them, as names."""
+    if not isinstance(tools, str | list) or not all(isinstance(t, str) for t in tools):
+        raise ExtensionError(f"{where}: want a list of tool names, or a comma-separated string")
+    names = [t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools) if t.strip()]
+    if bad := [n for n in names if not _TOOL_NAME.fullmatch(n)]:
+        raise ExtensionError(f"{where}: {bad}: letters, digits, '_' and '-' only")
+    return names
+
+
+def mcp_server(where: str, item: Any) -> dict[str, Any]:
+    """One rendered `mcp:` item, checked: `transport` set (`stdio` or `http`;
+    `streamable-http` is `http`), `args` strings, `tools`/`all_tools` lists
+    (absent when unset)."""
+    name = item.get("name") if isinstance(item, dict) else None
+    if not isinstance(name, str) or not _TOOL_NAME.fullmatch(name):
+        raise ExtensionError(f"{where}: an mcp item needs a name of letters, digits, '_' and '-', got {item!r}")
+    where = f"{where} mcp {name!r}"
+    server = dict(item)
+    t = item.get("transport", "stdio")
+    transport = server["transport"] = "http" if t == "streamable-http" else t
+    if not isinstance(t, str) or transport not in MCP_FIELDS:
+        raise ExtensionError(f"{where}: transport is stdio or http, got {t!r}")
+    allowed = {"name", "transport", "tools", "all_tools"} | MCP_FIELDS[transport]
+    if extra := sorted(server.keys() - allowed):
+        raise ExtensionError(f"{where}: {extra} aren't {transport} fields every harness renders alike "
+                             f"(it takes {', '.join(sorted(allowed))})")
+    required = "url" if transport == "http" else "command"
+    if not isinstance(server.get(required), str) or not server[required]:
+        raise ExtensionError(f"{where}: needs a {required}")
+    if "args" in server:
+        if not isinstance(args := server["args"], list) or not all(isinstance(x, str | int | float) for x in args):
+            raise ExtensionError(f"{where}: args is a list of strings")
+        server["args"] = [str(x) for x in args]
+    if "env" in server:
+        env = server["env"]
+        if not isinstance(env, dict) or not all(_ENV_VAR.fullmatch(str(k)) and isinstance(v, str | int | float)
+                                                for k, v in env.items()):
+            raise ExtensionError(f"{where}: env maps names ({_ENV_VAR.pattern}) to strings")
+        server["env"] = {k: str(v) for k, v in env.items()}
+    for k in ("tools", "all_tools"):
+        if server.get(k) is None:
+            server.pop(k, None)
+        else:
+            server[k] = tool_names(f"{where} {k}", server[k])
+    return server
+
+
 # `harness:` keys every extension may use; a harness's own name keys a section
 # only its adapter reads (e.g. `pi: {extensions: [...]}`).
 HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief"}) | CONTRIBUTIONS
@@ -961,7 +1015,11 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
                 raise ExtensionError(f"{where}: skill {spec['src']!r} needs a SKILL.md inside the extension")
             comp.skills.append((a.name, src, comp.skill_dest(a.name, src)))
     if profile.renders("mcp"):
-        comp.mcp.extend((a.name, item) for item in render_value(active_items(h.get("mcp"), ctx), ctx, where))
+        for item in render_value(active_items(h.get("mcp"), ctx), ctx, where):
+            server = mcp_server(where, item)
+            if any(s["name"] == server["name"] for _, s in comp.mcp):
+                raise ExtensionError(f"{where}: mcp server {server['name']!r} is already set by another extension")
+            comp.mcp.append((a.name, server))
     if h.get(comp.harness) is not None:
         comp.harness_items.append((a, h[comp.harness], ctx))
     brief = h.get("brief")

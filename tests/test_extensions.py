@@ -567,6 +567,62 @@ def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
                 manifests=discover(tree))
 
 
+# --- mcp: neutral fields only ----------------------------------------------------------------
+
+
+def _mcp(tree, *items: str, harness="vibe", ext="e"):
+    _ext(tree, ext, f"api: 1\nname: {ext}\nsummary: x\nharness:\n  mcp:\n" + "".join(f"    - {i}\n" for i in items))
+    return compose({"llm": STUB_LLM, ext: {}}, harness=harness, session="s", state_root=Path("/x"),
+                   manifests=discover(tree)).mcp
+
+
+def test_an_mcp_item_is_normalized(tree):
+    got = _mcp(tree, "{ name: h, transport: streamable-http, url: 'http://h/mcp', tools: 'a, b', all_tools: [a, c] }",
+               "{ name: s, command: srv, args: [-p, 1], env: { PORT: 1 } }")
+    assert got == [
+        ("e", {"name": "h", "transport": "http", "url": "http://h/mcp", "tools": ["a", "b"], "all_tools": ["a", "c"]}),
+        ("e", {"name": "s", "transport": "stdio", "command": "srv", "args": ["-p", "1"], "env": {"PORT": "1"}})]
+    assert _mcp(tree, "{ name: s, command: srv }", harness="pi", ext="p") == []  # Pi renders no MCP
+
+
+@pytest.mark.parametrize("item,why", [
+    ("{ url: 'http://h' , transport: http }", "needs a name"),
+    ("{ name: 'a b', command: x }", "needs a name"),
+    ("just-a-string", "needs a name"),
+    ("{ name: h, transport: sse, url: 'http://h' }", "transport is stdio or http"),
+    ("{ name: h, transport: http }", "needs a url"),
+    ("{ name: s }", "needs a command"),
+    ("{ name: h, transport: http, url: 'http://h', headers: { Authorization: x } }", r"\['headers'\] aren't http"),
+    ("{ name: h, transport: http, url: 'http://h', auth: { type: static } }", r"\['auth'\] aren't http"),
+    ("{ name: h, transport: [http], url: 'http://h' }", "transport is stdio or http"),
+    ("{ name: h, transport: http, url: 'http://h', tool_timeout_sec: 9 }",
+     "takes all_tools, name, tools, transport, url"),
+    ("{ name: h, transport: http, url: 'http://h', command: x }", r"\['command'\] aren't http"),
+    ("{ name: s, command: x, url: 'http://h' }", r"\['url'\] aren't stdio"),
+    ("{ name: s, command: x, args: '-p 1' }", "args is a list"),
+    ("{ name: s, command: x, args: [{ a: 1 }] }", "args is a list"),
+    ("{ name: s, command: x, env: [A] }", "env maps names"),
+    ("{ name: s, command: x, env: { lower: v } }", "env maps names"),
+    ("{ name: s, command: x, env: { A: [v] } }", "env maps names"),
+    ("{ name: s, command: x, tools: { a: 1 } }", "want a list of tool names"),
+    ("{ name: s, command: x, tools: 'a, b c' }", r"tools: \['b c'\]"),
+    ("{ name: s, command: x, all_tools: ['a.b'] }", r"all_tools: \['a.b'\]"),
+])
+def test_an_mcp_item_takes_neutral_fields_only(tree, item, why):
+    with pytest.raises(ExtensionError, match=why):
+        _mcp(tree, item)
+
+
+def test_an_mcp_server_name_is_set_once(tree):
+    for name in ("a", "b"):
+        _ext(tree, name, f"api: 1\nname: {name}\nsummary: x\nharness:\n  mcp: [{{ name: s, command: x }}]\n")
+    with pytest.raises(ExtensionError, match="extension 'b' harness: mcp server 's' is already set"):
+        compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="vibe", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+    with pytest.raises(ExtensionError, match="'t' is already set"):
+        _mcp(tree, "{ name: t, command: x }", "{ name: t, command: y }", ext="c")
+
+
 def test_endpoint_aliases_must_be_hostnames(tree):
     _egress(tree)
     _ext(tree, "fetch", """\

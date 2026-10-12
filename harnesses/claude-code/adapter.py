@@ -36,7 +36,6 @@ with `--add-dir`), not the config home, whose deny rules would hide their files.
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -45,7 +44,7 @@ from urllib.parse import urlsplit
 from glove.config import ConfigError
 from glove.enforcers.base import TOOLS_FILE, argv_lines, write_roots
 from glove.extensions import ExtensionError, render_value
-from glove.harnessconfig import INJECTED_KEY, mcp_tool_names, rel_config_home
+from glove.harnessconfig import INJECTED_KEY, rel_config_home
 from glove.mounts import CONTAINER_HOME
 from glove.naming import scoped
 
@@ -110,14 +109,11 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[s
     deny: list[str] = []
     argv_files: dict[str, str] = {}
     for _ext, item in comp.mcp if comp is not None else []:
-        item = dict(item)
-        name, transport, tools = item.pop("name"), item.pop("transport", "stdio"), item.pop("tools", None)
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-            raise ConfigError(f"MCP server name {name!r}: letters, digits, '_' and '-' only")
-        if transport == "http":
+        name, tools = item["name"], item.get("tools")  # core checked them
+        if item["transport"] == "http":
             servers[name] = {"type": "http", "url": item["url"]}
         else:
-            argv = [str(item["command"]), *(str(a) for a in item.get("args") or [])]
+            argv = [item["command"], *item.get("args", [])]
             if wrapped:
                 if any("\n" in a for a in argv):
                     raise ConfigError(f"MCP server {name!r}: an argument with a newline")
@@ -128,9 +124,8 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[s
         if tools is None:
             allow.append(f"mcp__{name}")
         else:
-            names = mcp_tool_names(tools)
-            allow += [f"mcp__{name}__{t}" for t in names]
-            deny += [f"mcp__{name}__{t}" for t in mcp_tool_names(item.get("all_tools") or []) if t not in names]
+            allow += [f"mcp__{name}__{t}" for t in tools]
+            deny += [f"mcp__{name}__{t}" for t in item.get("all_tools", []) if t not in tools]
     return servers, allow, deny, argv_files
 
 

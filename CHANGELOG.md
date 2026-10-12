@@ -295,6 +295,16 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Core checks every extension `mcp:` item**, which takes only the fields
+  every harness renders alike: `name` (letters, digits, `_`, `-`; one per
+  session), `transport` (`stdio` or `http`; `streamable-http` means `http`),
+  `url` (http) or `command`, `args` and `env` (stdio), `tools` and
+  `all_tools`. Anything else (`auth`, `headers`, a harness's timeouts) is
+  refused at render time with the extension named. Before, Claude Code dropped
+  an http server's `auth`/`headers` silently, and Vibe passed through its own
+  fields (`prompt`, `*_timeout_sec`, `sampling_enabled`), which no in-tree
+  extension used. The tool names in a `pi: {tools: …}` section are checked
+  the same way.
 - **A sidecar never binds a path inside `/work`**, only all of it with the
   `work` privilege (`github`). A sidecar restarts on its own and the runtime
   re-resolves a bind source each time, so the agent could swap such a
@@ -521,9 +531,8 @@ All notable changes to glove are documented here.
   image's `glove-mcp-bridge <url>`: one HTTP session for the Vibe process,
   ended (`DELETE`) when Vibe exits. It is a stdlib relay on the image's python;
   a failed request is answered with an error and the bridge keeps serving, and
-  a session the server lost (a restart) is re-opened. An HTTP entry with
-  settings the bridge can't carry (`auth`, `headers`, `api_key_*`) is refused
-  at render time rather than dropped. Server and tool names, the allowlist and the hook's inventory are unchanged;
+  a session the server lost (a restart) is re-opened. Server and tool names,
+  the allowlist and the hook's inventory are unchanged;
   `harness_config.mcp_servers` render as written.
 - **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
   port 80 (undici's `ProxyAgent` default), where answers such as

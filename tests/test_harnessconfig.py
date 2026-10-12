@@ -250,23 +250,18 @@ def test_pi_pins_its_session_dir_and_renders_no_credentials(tmp_path):
     assert auth.read_only and auth.host_path == str(home / ".pi" / "agent" / "auth.json")
 
 
-def _vibe_mcp(item: dict):
+def test_vibe_bridges_a_checked_http_mcp_server():
     from types import SimpleNamespace
 
+    from glove.extensions import mcp_server
     from glove.harness import adapter_call, get_profile
 
-    comp = SimpleNamespace(mcp=[("x", {"name": "s", "url": "http://s/mcp", **item})])
-    return adapter_call(get_profile("vibe"), "_mcp_servers", SimpleNamespace(harness_config={}), comp)[0]
+    def servers(item):
+        return adapter_call(get_profile("vibe"), "_mcp_servers", SimpleNamespace(harness_config={}),
+                            SimpleNamespace(mcp=[("x", item)]))
 
-
-@pytest.mark.parametrize("extra", [{"headers": {"Authorization": "x"}}, {"auth": {"type": "static"}},
-                                   {"api_key_env": "TOKEN"}])
-def test_vibe_http_mcp_auth_cant_pass_the_bridge(extra):
-    with pytest.raises(ValueError, match="can't pass the bridge"):
-        _vibe_mcp({"transport": "http", **extra})
-
-
-def test_vibe_streamable_http_mcp_is_bridged_and_keeps_its_common_fields():
-    assert _vibe_mcp({"transport": "streamable-http", "tool_timeout_sec": 120}) == [
-        {"name": "s", "transport": "stdio", "command": "/opt/glove/bin/glove-mcp-bridge", "args": ["http://s/mcp"],
-         "tool_timeout_sec": 120}]
+    item = mcp_server("x", {"name": "s", "transport": "streamable-http", "url": "http://s/mcp", "tools": "a, b"})
+    assert servers(item) == ([{"name": "s", "transport": "stdio", "command": "/opt/glove/bin/glove-mcp-bridge",
+                               "args": ["http://s/mcp"]}], ["re:s_(?!(?:a|b)$).*"])
+    with pytest.raises(ValueError, match=r"\[a-z0-9_\]"):  # Vibe's own rule, for its `<server>_<tool>` names
+        servers({**item, "name": "S-1"})

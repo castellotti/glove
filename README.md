@@ -699,13 +699,19 @@ Core validates all of it:
     `slot.<slot>.<key>`, a list of allowed values, or `{set: true|false}`
     (whether the value is set at all);
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
-    an MCP server, rendered by harnesses that speak MCP (Vibe: `config.toml`,
-    with `tools` as an allowlist that also enters the tool inventory as
-    `mcp_<server>.<tool>`, so a server without `tools` is refused; an `http`
-    server is rendered as the image's stdio bridge `glove-mcp-bridge <url>`
-    (so `auth`/`headers` are refused), since Vibe opens a new MCP session for every HTTP call and a server like
-    Playwright keeps its pages per session; Claude Code: `managed-mcp.json`,
-    `tools` as allow rules and the rest of `all_tools` as deny rules);
+    an MCP server, rendered by harnesses that speak MCP. An item takes only
+    the fields every harness renders alike: `name` (letters, digits, `_`, `-`;
+    one per session), `transport` (`stdio`, the default, or `http`;
+    `streamable-http` means `http`), `url` (http) or `command`, `args` and
+    `env` (stdio), and `tools`/`all_tools` (a list or comma-separated). Anything
+    else (`auth`, `headers`, one harness's timeouts) is refused. Vibe:
+    `config.toml`, with `tools` as an allowlist that also enters the tool
+    inventory as `mcp_<server>.<tool>` (so its server name is `[a-z0-9_]`);
+    an `http` server is rendered as the image's stdio bridge
+    `glove-mcp-bridge <url>`, since Vibe opens a new MCP session for every
+    HTTP call and a server like Playwright keeps its pages per session.
+    Claude Code: `managed-mcp.json`, `tools` as allow rules and the rest of
+    `all_tools` as deny rules;
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
     for harnesses that load skills (Pi: `settings.json`);
