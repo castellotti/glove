@@ -288,9 +288,12 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   redirect hop, the request goes through the same egress (under `observe`,
   labelled `tool: web_download`, so `filter` can block downloads apart from
   fetches), at most 3 run at once, and `min_free` keeps a free-space reserve on
-  the host volume. Downloaded content is untrusted; files written through a
-  bind carry no macOS quarantine attribute, so Gatekeeper never vets one the
-  operator opens from Finder.
+  the host volume. Downloaded content is untrusted. A file written through a
+  bind carries no macOS quarantine attribute, so `glove down` (and
+  `glove downloads mark`, during a session) stamps `com.apple.quarantine` on
+  what is new in every output dir (`downloads/`, `browser-output/`), host-side,
+  never following a link; Gatekeeper then vets one the operator opens from
+  Finder. Until then (a running session) it would not.
 
 ### Browser (`playwright`)
 

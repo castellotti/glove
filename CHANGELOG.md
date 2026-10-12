@@ -41,6 +41,13 @@ All notable changes to glove are documented here.
   and brief notes on `7z` and research tips (Wayback CDX, archive.org's APIs, Reddit through pullpush,
   `#page=N` in the PDF viewer). `browse-watch` documents the new
   downloads/uploads layout.
+- **macOS quarantine for downloads**: `glove down`, and `glove downloads mark`
+  during a session, stamp `com.apple.quarantine` host-side on new files and
+  directories in the session's output dirs (`downloads/`, `browser-output/`),
+  which a bind never carries, so Gatekeeper vets one opened from Finder. Links
+  are never followed, even one a running sidecar swaps in mid-walk (`os.fwalk`,
+  `O_NOFOLLOW`, `fsetxattr` on the open file), and a file already stamped keeps its
+  attribute (an approval stays). A no-op off macOS.
 - `tests/integration/egress_live.py`: Pi and Vibe fetch `http://example.com/`
   (with observe the flow must be `proto: http`) and a PNG (the binary note).
 

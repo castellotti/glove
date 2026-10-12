@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
+import pytest
+
 from glove.config import Config
 
 # Every harness session needs the `inference` slot filled. A host llama.cpp
@@ -78,3 +83,12 @@ def path_rule_cases(tmp) -> tuple[str, list[tuple[str, str | None]]]:
         (tmp / link).symlink_to(target.format(tmp=tmp))
     return str(tmp / "work"), [(c["path"].format(tmp=tmp), c["checked"] and c["checked"].format(tmp=tmp))
                                for c in data["cases"]]
+
+
+def quarantine_attr(p) -> str | None:
+    """`com.apple.quarantine` on `p` itself (never a link's target), or None."""
+    r = subprocess.run(["xattr", "-s", "-p", "com.apple.quarantine", str(p)], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+darwin = pytest.mark.skipif(sys.platform != "darwin", reason="the quarantine attribute is macOS-only")

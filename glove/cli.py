@@ -8,6 +8,7 @@ and otherwise uses the nearest session at or above the cwd:
     glove check | plan | up | down | rm         work with one session
     glove ls | ps | gc                          all sessions (~/.glove/registry.json)
     glove keychain set <service>                store a secret, prompting for it
+    glove downloads mark [dir]                  quarantine what the sidecars saved (macOS)
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from . import __version__
+from . import __version__, quarantine
 from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
@@ -269,6 +270,8 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
     resolved = {k: v for k, v in resolved.items() if k != "extensions"}
     if ext_resolved:
         resolved["extensions"] = ext_resolved
+    # the dirs sidecars write (`glove down` quarantines them without re-planning)
+    resolved["outputs"] = [o.name for o in plan.composition.outputs if not o.input]
     sdm.write_effective(sd.effective, cfg, resolved)
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)
@@ -620,7 +623,7 @@ def check(
 # --- down / rm / ls / ps / gc -----------------------------------------------------------
 
 
-def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool) -> None:
+def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
     from .session import teardown
 
     cfg, _ = sdm.read_effective(sd.effective)
@@ -632,6 +635,8 @@ def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool) -> None
         except Exception as e:
             err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
     teardown(sid, provider=provider, wipe=wipe)
+    if mark:
+        _mark_downloads(sd)
     if wipe:
         # the flow/exit record and status; session.json and transcripts stay
         net = reg.observe_dir(sid) / "net"
@@ -640,6 +645,22 @@ def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool) -> None
             f.unlink()
         if gone:
             console.print(f"[dim]removed {len(gone)} network-observability file(s) from {net}[/dim]")
+
+
+def _mark_downloads(sd: SessionDir) -> quarantine.Marked | None:
+    """Stamp the macOS quarantine attribute on what the session's sidecars
+    saved: its `outputs:` dirs (e.g. <session>/downloads/), as recorded at
+    plan time; see glove/quarantine.py. None off macOS."""
+    if not quarantine.supported():
+        return None
+    _, resolved = sdm.read_effective(sd.effective)
+    names = [n for n in resolved.get("outputs") or [] if isinstance(n, str) and Path(n).name == n]
+    r = quarantine.mark(sd.root / n for n in names)
+    if r.stamped:
+        console.print(f"[dim]quarantined {r.stamped} downloaded file(s)[/dim]")
+    for path, why in r.failed:
+        err.print(f"[yellow]warn:[/yellow] not quarantined: {path}: {why}")
+    return r
 
 
 @app.command()
@@ -686,7 +707,7 @@ def rm(
     if not yes and not typer.confirm(f"Remove session {sid or '(never launched)'}: {what}?", default=False):
         raise typer.Exit(1)
     if sid is not None:
-        _stop(sd, sid, provider, wipe=True)
+        _stop(sd, sid, provider, wipe=True, mark=not all_)  # --all deletes them
         for p in _remove_exports(sid):
             console.print(f"[dim]removed {p}[/dim]")
         try:
@@ -773,6 +794,30 @@ def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> Non
         shutil.rmtree(p)
     reg.remove(dead)
     console.print(f"[green]✓[/green] removed {len(dead)} row(s), {len(orphans)} export dir(s)")
+
+
+downloads_app = typer.Typer(add_completion=False, help="Files the session's sidecars saved (web_download, …).")
+app.add_typer(downloads_app, name="downloads")
+
+
+@downloads_app.command("mark")
+def downloads_mark_cmd(directory: Path | None = _DIR_ARG) -> None:
+    """Stamp the macOS quarantine attribute on new files in the session's
+    download dirs, as `glove down` does (Gatekeeper then vets one opened from Finder)."""
+    if not quarantine.supported():
+        console.print("[dim]nothing to do: the quarantine attribute is macOS-only[/dim]")
+        return
+    try:
+        sd = sdm.find(directory)
+    except SessionError as e:
+        raise _fail(str(e)) from e
+    if not sd.effective.is_file():
+        raise _fail(f"{sd.root} has never been planned (no {sd.effective.name})")
+    r = _mark_downloads(sd)
+    if r is None or r.failed:
+        raise typer.Exit(1)
+    if not r.stamped:
+        console.print(f"[dim]nothing new to quarantine ({r.already} already marked)[/dim]")
 
 
 # --- keychain / build / doctor / policy ---------------------------------------------------

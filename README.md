@@ -316,6 +316,7 @@ glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exp
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove keychain set <service>                 # store a secret, prompting (never in argv)
+glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
 glove observe status [--dir D] [--json]      # (observe) gate health + per-service totals
@@ -783,7 +784,10 @@ harness also gets `web_download`/`web_download_status`: the `fetcher` sidecar
 saves files of any size to `<session>/downloads/` (read-only to the agent at
 `/work/downloads/`) through the same egress and guard, as asynchronous jobs that
 resume, with a `min_free` reserve on the host disk
-([extensions/webfetch/README.md](extensions/webfetch/README.md)).
+([extensions/webfetch/README.md](extensions/webfetch/README.md)). On macOS
+`glove down` (or `glove downloads mark` mid-session) stamps the quarantine
+attribute on new files there and in the browser's `browser-output/`, so
+Gatekeeper vets one opened from Finder.
 The `pi-search` template puts it together: `glove new pi-search <dir>`.
 
 **`corporate`** is a netgate proxy that resolves and dials destinations itself

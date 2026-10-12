@@ -100,4 +100,4 @@ own. Under `observe` the hops are labelled `tool: web_download`, apart from
 | A failed transfer | The `.part` is kept; calling `web_download` again with the URL resumes it (`Range`/`If-Range`; a server that answers 200 or 416 starts over). |
 | A non-public destination | The same guard as `web_fetch`, on every redirect hop, then the egress layer. |
 | Integrity | The result has size, sha256, final URL and content type, to check against a published checksum. |
-| Hostile content | Files are untrusted (the brief says so). Files written through a bind carry no macOS quarantine attribute: be careful opening one from Finder. |
+| Hostile content | Files are untrusted (the brief says so). On macOS `glove down` (or `glove downloads mark` mid-session) stamps the quarantine attribute that a bind doesn't carry, so Gatekeeper vets a file opened from Finder. |
