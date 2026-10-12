@@ -59,3 +59,13 @@ same list.
 the corporate allowlist, the SSRF guard), the tool asks the proxy once for
 the reason and tells the agent it was refused by the session's network policy,
 not that the network failed, so it does not retry or look for a way around.
+
+**Binary bodies and rate limits.** Both tools return text only. A response
+whose content type isn't text (`text/*`, JSON, XML, JavaScript), or an
+unlabelled or text one with a NUL byte in its first 4 KB, is described instead
+(`[binary: application/pdf, 812345 bytes] <url>`) and the rest of its body is
+never read. The note then points to `web_download` when the session has it,
+otherwise it tells the agent to ask the operator for the file. A 429 says how
+long the server asked to wait (`Retry-After`, in seconds or as a date).
+`pi-extension/body.ts` and the fetcher share these rules; a test runs both
+on the same cases.

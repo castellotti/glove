@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -205,6 +207,10 @@ def test_html_to_text():
     assert _server().html_to_text(html) == "Title\n\nOne & two\n\na\n\nb"
 
 
+PDF = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n" + b"1 0 obj << >> endobj\n" * 400
+ZIP = b"PK\x03\x04\x14\x00\x00\x00\x08\x00" + bytes(range(256)) * 40
+
+
 class _Proxy(BaseHTTPRequestHandler):
     """A forward proxy stand-in: answers absolute-URI GETs itself."""
 
@@ -219,10 +225,17 @@ class _Proxy(BaseHTTPRequestHandler):
             "http://example.com/loop": (302, "text/plain", "", {"Location": "/loop"}),
             "http://example.com/blocked": (403, "text/plain", "glove netgate refused: rule example", {}),
             "http://example.com/slow": (429, "text/plain", "", {}),
+            "http://example.com/slower": (429, "text/plain", "", {"Retry-After": "120"}),
+            "http://example.com/paper.pdf": (200, "application/pdf", PDF, {}),
+            "http://example.com/a.zip": (200, "application/zip", ZIP, {}),
+            "http://example.com/blob": (200, "application/octet-stream", ZIP, {}),
+            "http://example.com/mislabelled": (200, "application/octet-stream", "<p>Plain page</p>", {}),
+            "http://example.com/data.json": (200, "application/json", '{"a": 1}', {}),
+            "http://example.com/nul.txt": (200, "text/plain", "a\0b", {}),
             "http://example.com/bogus-charset": (200, "text/html; charset=no-such-codec", "<p>café</p>", {}),
         }
         status, ctype, body, headers = routes.get(self.path, (404, "text/plain", "", {}))
-        data = body.encode()
+        data = body if isinstance(body, bytes) else body.encode()
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
@@ -266,6 +279,83 @@ def test_fetch_reports_policy_refusals_and_rate_limits(server):
     assert server.fetch("http://example.com/slow").startswith("Rate-limited (HTTP 429)")
     assert server.fetch("http://example.com/missing") == "HTTP 404 for http://example.com/missing"
     assert server.fetch("http://example.com/page", max_chars=5).startswith("Examp\n\n[truncated to 5 chars]")
+
+
+def test_fetch_tells_the_server_s_retry_after(server):
+    assert server.fetch("http://example.com/slower") == \
+        "Rate-limited (HTTP 429). Back off; the server asks to wait 120 s before retrying."
+    assert server.rate_limited("Wed, 21 Oct 2015 07:28:00 GMT", now=1445412420) == \
+        "Rate-limited (HTTP 429). Back off; the server asks to wait 60 s before retrying."
+    assert server.rate_limited("soon").endswith("do not retry immediately.")
+
+
+def test_fetch_returns_no_binary_body(server, monkeypatch):
+    out = server.fetch("http://example.com/paper.pdf", raw=True)
+    assert out == (f"[binary: application/pdf, {len(PDF)} bytes] http://example.com/paper.pdf\n"
+                   "fetch_url returns text only. This session has no web_download: ask the operator to provide "
+                   "this file.")
+    assert server.fetch("http://example.com/a.zip").startswith(f"[binary: application/zip, {len(ZIP)} bytes]")
+    # unlabelled: decided by a NUL in the first bytes, either way
+    assert server.fetch("http://example.com/blob").startswith("[binary: application/octet-stream,")
+    assert server.fetch("http://example.com/mislabelled").startswith(
+        "[content-type: application/octet-stream]\n\n<p>Plain page</p>")
+    assert server.fetch("http://example.com/nul.txt").startswith("[binary: text/plain, 3 bytes]")
+    assert server.fetch("http://example.com/data.json").startswith('[content-type: application/json]\n\n{"a": 1}')
+    monkeypatch.setattr(server, "DOWNLOADS", "/run/glove-output/downloads")
+    assert server.fetch("http://example.com/a.zip").endswith(
+        "fetch_url returns text only. Use web_download to save the file, then open it with a shell tool the "
+        "session has (e.g. pdftotext, 7z).")
+
+
+# the same cases through pi-extension/body.ts and its Python port
+BODY_CASES = [
+    ("text/html; charset=utf-8", b"<p>x</p>"), ("application/json", b"{}"), ("application/ld+json", b"{}"),
+    ("image/svg+xml", b"<svg/>"), ("text/xml", b"<a/>"), ("application/javascript", b"x"),
+    ("application/pdf", b"%PDF"), ("application/zip", b"PK"), ("image/png", b""), ("", b"plain"),
+    ("", b"a\0b"), ("application/octet-stream", b"<html>"), ("APPLICATION/OCTET-STREAM", PDF[:10] + b"\0"),
+    ("text/plain", b"x" * 4096 + b"\0"), ("text/plain", b"x" * 4095 + b"\0"), ("video/mp4", b"x"),
+    ("application/yaml", b"a: 1"), ("application/x-ndjson", b"{}"), ("application/vnd.oai.openapi+yaml", b"a"),
+    ("application/x-sh", b"echo"), ("application/x-tar", b"x"),
+]
+RETRY_CASES = [None, "", "0", "120", "-5", "1.5", "soon", "2015", "Wed, 21 Oct 2015 07:28:00 GMT",
+               "Wed, 21 Oct 2015 07:26:00 GMT", "Wed, 32 Oct 2015 07:28:00 GMT", "21 Oct 2015 07:28:00 GMT",
+               "Sat, 31 Feb 2015 07:28:00 GMT", "Thu, 21 Oct 2015 07:28:00 GMT"]
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_pi_body_rules_match_the_python_port():
+    m = _server()
+    body = Path(__file__).parents[1] / "pi-extension" / "body.ts"
+    script = f"""
+import {{ isBinary, binaryNotice, rateLimited }} from {json.dumps(str(body))};
+const cases = {json.dumps([[c, list(h)] for c, h in BODY_CASES])};
+const retries = {json.dumps(RETRY_CASES)};
+console.log(JSON.stringify({{
+  binary: cases.map(([c, h]) => isBinary(c, Uint8Array.from(h))),
+  notices: [binaryNotice("t", "u", "application/pdf; q=1", "12", 3, true),
+            binaryNotice("t", "u", "", null, 3, false), binaryNotice("t", "u", "image/png", "1e3", 0, false)],
+  retries: retries.map((r) => rateLimited(r, 1445412420000)),
+}}));
+"""
+    res = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == {
+        "binary": [m.is_binary(c, h) for c, h in BODY_CASES],
+        "notices": [m.binary_notice("t", "u", "application/pdf; q=1", "12", 3, True),
+                    m.binary_notice("t", "u", "", None, 3, False),
+                    m.binary_notice("t", "u", "image/png", "1e3", 0, False)],
+        "retries": [m.rate_limited(r, now=1445412420) for r in RETRY_CASES],
+    }
+    assert [m.is_binary(c, h) for c, h in BODY_CASES] == [
+        False, False, False, False, False, False, True, True, True, False,
+        True, False, True, False, True, True, False, False, False, False, True]
+    assert m.binary_notice("t", "u", "image/png", None, 0, False).startswith("[binary: image/png, size unknown] u")
+
+    def wait(n):
+        return "do not retry immediately." if n is None else f"the server asks to wait {n} s before retrying."
+
+    assert [m.rate_limited(r, now=1445412420).split("; ")[1] for r in RETRY_CASES] == \
+        [wait(n) for n in (None, None, 0, 120, None, None, None, 2015, 60, 0, None, None, None, None)]
 
 
 def test_fetch_asks_the_proxy_why_only_when_a_tunnel_is_refused(server, monkeypatch):

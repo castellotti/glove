@@ -270,7 +270,7 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:d75310f711
+    image: glove/ext-webfetch-mcp:f55f6be389
     environment:
       GLOVE_FETCH_ALLOW: ''
       MCP_ALLOWED_HOST: glove-s-webdownload-mcp:8000

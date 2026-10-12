@@ -18,6 +18,7 @@ import http from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { refusal } from "./guard.ts";
+import { binaryNotice, isBinary, rateLimited, SNIFF } from "./body.ts";
 
 const PROXY = process.env.GLOVE_FETCH_PROXY ?? "";
 const DOWNLOAD_MCP_URL = process.env.GLOVE_DOWNLOAD_MCP_URL ?? "";
@@ -195,8 +196,8 @@ export default async function (pi: ExtensionAPI) {
       }
 
       if (res.status === 429) {
-        return { content: [{ type: "text", text:
-          "Rate-limited (HTTP 429). Back off; do not retry immediately." }], details: {} };
+        await res.body?.cancel().catch(() => {});
+        return text(rateLimited(res.headers.get("retry-after")));
       }
       if (!res.ok) {
         if (res.status === 403 && res.headers.get("content-type")?.startsWith("text/plain")) {
@@ -208,20 +209,31 @@ export default async function (pi: ExtensionAPI) {
 
       const ctype = res.headers.get("content-type") ?? "";
 
+      // Read SNIFF bytes, decide text or binary, and only then the rest: a
+      // binary body is never read further, nor returned.
       const MAX_BODY = 5 * 1024 * 1024;
-      let body: string;
-      if (!res.body) {
-        body = "";
-      } else {
-        const chunks: Buffer[] = [];
-        let bytes = 0;
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      let binary = isBinary(ctype, new Uint8Array());
+      if (res.body && !binary) {
         for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
           chunks.push(Buffer.from(chunk));
           bytes += chunk.byteLength;
+          // the first time SNIFF bytes are in
+          if (bytes >= SNIFF && bytes - chunk.byteLength < SNIFF && isBinary(ctype, Buffer.concat(chunks, SNIFF))) {
+            binary = true;
+            break;
+          }
           if (bytes >= MAX_BODY) break;
         }
-        body = Buffer.concat(chunks, Math.min(bytes, MAX_BODY)).toString("utf-8");
       }
+      const buf = Buffer.concat(chunks, Math.min(bytes, MAX_BODY));
+      if (binary || isBinary(ctype, buf)) {
+        await res.body?.cancel().catch(() => {});
+        return text(binaryNotice("web_fetch", url.toString(), ctype, res.headers.get("content-length"), bytes,
+                                 !!DOWNLOAD_MCP_URL));
+      }
+      const body = buf.toString("utf-8");
 
       const isHtml = /html|xml/i.test(ctype);
       let out: string;
@@ -243,13 +255,13 @@ export default async function (pi: ExtensionAPI) {
       }
 
       const finalUrl = url.toString();
-      let text = out.trim();
+      let page = out.trim();
       let footer = `\n\n[fetched: ${finalUrl} | ${ctype.split(";")[0] || "?"} | via egress]`;
-      if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+      if (page.length > maxChars) {
+        page = page.slice(0, maxChars);
         footer = `\n\n[truncated to ${maxChars} chars]` + footer;
       }
-      return { content: [{ type: "text", text: text + footer }], details: { url: finalUrl } };
+      return { content: [{ type: "text", text: page + footer }], details: { url: finalUrl } };
     },
   });
 }

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import email.utils
 import fnmatch
 import hashlib
 import http.client
@@ -49,6 +50,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 MAX_BODY = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
 TIMEOUT = 45
+SNIFF = 4096  # bytes of the body read to look for NUL before deciding text or binary
 
 # --- the destination guard (guard.ts) -------------------------------------------
 
@@ -235,6 +237,51 @@ def _policy(url: str, why: str) -> str:
             "route; tell the user if you need this source.")
 
 
+# --- what a fetch makes of a response it won't read as text (pi-extension/body.ts) --
+
+TEXT = re.compile(r"(text/.+|[^/]+/([^/]+\+)?(json|xml|yaml)|"
+                  r"application/(x-)?(javascript|ecmascript|yaml|toml|ndjson|sql|graphql|sh|shellscript))")
+UNKNOWN = ("", "application/octet-stream", "binary/octet-stream")
+
+
+def is_binary(ctype: str, head: bytes) -> bool:
+    """Whether a response is binary: by its content type, or for a text or
+    unlabelled one by a NUL in the first SNIFF bytes of `head`."""
+    mime = ctype.split(";")[0].strip().lower()
+    if mime not in UNKNOWN and not TEXT.fullmatch(mime):
+        return True
+    return b"\0" in head[:SNIFF]
+
+
+def binary_notice(tool: str, url: str, ctype: str, length: str | None, read: int, can_download: bool) -> str:
+    """The agent's text for a binary response (`length`: Content-Length, else
+    the bytes read, as a lower bound)."""
+    size = (f"{length} bytes" if re.fullmatch(r"[0-9]+", length or "")
+            else f"≥{read} bytes" if read else "size unknown")
+    return (f"[binary: {ctype.split(';')[0].strip() or 'unknown type'}, {size}] {url}\n"
+            f"{tool} returns text only. "
+            + ("Use web_download to save the file, then open it with a shell tool the session has "
+               "(e.g. pdftotext, 7z)." if can_download
+               else "This session has no web_download: ask the operator to provide this file."))
+
+
+def rate_limited(retry_after: str | None, now: float | None = None) -> str:
+    """The agent's text for a 429, with the server's Retry-After (seconds or an
+    HTTP date) when it sent one."""
+    v = (retry_after or "").strip()
+    s = None
+    if re.fullmatch(r"[0-9]+", v):
+        s = int(v)
+    elif v:
+        # a date counts only in RFC 9110's one form (IMF-fixdate), as it reads back
+        with contextlib.suppress(TypeError, ValueError):
+            date = email.utils.parsedate_to_datetime(v)
+            if email.utils.format_datetime(date, usegmt=True) == v:
+                s = round(date.timestamp() - (time.time() if now is None else now))
+    return "Rate-limited (HTTP 429). Back off; " + (
+        f"the server asks to wait {max(0, s)} s before retrying." if s is not None else "do not retry immediately.")
+
+
 class Refusal(Exception):
     """A fetch that ends in a message for the agent instead of a response
     (`status`: the HTTP status that caused it, if any)."""
@@ -263,7 +310,7 @@ def open_url(url: str, headers: dict[str, str], proxy: str, timeout: float):
                 url = nxt
                 continue
             if e.code == 429:
-                raise Refusal("Rate-limited (HTTP 429). Back off; do not retry immediately.") from None
+                raise Refusal(rate_limited(e.headers.get("Retry-After")), e.code) from None
             if e.code == 403 and (e.headers.get("Content-Type") or "").startswith("text/plain"):
                 text = e.read(4096).decode("utf-8", "replace")
                 if text.startswith("glove netgate refused"):
@@ -299,12 +346,22 @@ def fetch(url: str, max_chars: int = 20000, raw: bool = False) -> str:
     except Refusal as e:
         return str(e)
     with res:
-        data = res.read(MAX_BODY)
+        # read SNIFF bytes, decide text or binary, and only then the rest: a
+        # binary body is never read further, nor returned
+        ctype = res.headers.get("Content-Type") or ""
+        data = b""
+        binary = is_binary(ctype, data)
+        if not binary:
+            data = res.read(SNIFF)
+            binary = is_binary(ctype, data)
+        if binary:
+            return binary_notice("fetch_url", url, ctype, res.headers.get("Content-Length"), len(data),
+                                 bool(DOWNLOADS))
+        data += res.read(MAX_BODY - len(data))
         try:
             body = data.decode(res.headers.get_content_charset() or "utf-8", "replace")
         except LookupError:  # a charset Python does not know
             body = data.decode("utf-8", "replace")
-        ctype = res.headers.get("Content-Type") or ""
     if raw:
         out = body
     elif not re.search(r"html|xml", ctype, re.I):

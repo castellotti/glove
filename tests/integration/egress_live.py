@@ -127,6 +127,8 @@ def main(directory: str) -> int:
             # …not even through a public redirect (needs httpbin.org reachable via the egress)
             calls.append((fetch_tool, {"url": "https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F",
                                        **extra}, "Refused a redirect"))
+            if not cc:  # a binary body is described, never returned (Claude Code's WebFetch is its own)
+                calls.append((fetch_tool, {"url": "https://httpbin.org/image/png"}, "[binary: image/png, "))
         for tool, args, want in calls:
             answer = live.call(tool, args, timeout=240).strip()
             print(f"    {tool}: {answer[-400:]}")
