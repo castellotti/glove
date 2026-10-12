@@ -34,8 +34,10 @@ All notable changes to glove are documented here.
 - **`env: {…, shell: false}`** for an extension's harness env var the harness
   process reads and shell commands never need: the tool wrapper unsets it.
   webfetch's `GLOVE_FETCH_PROXY`, `GLOVE_DOWNLOAD_MCP_URL` and
-  `GLOVE_FETCH_ALLOW` use it (a proxy URL in the shell only invited a `curl`
-  that fails).
+  `GLOVE_FETCH_ALLOW`, search's `SEARXNG_URL` and playwright's
+  `BROWSER_MCP_URL`, `BROWSER_MCP_TOOLS` and `BROWSER_MODE` use it (a proxy
+  or service URL in the shell only invited a `curl` that fails). Playwright's
+  are now set for Pi only: Vibe and Claude Code use its MCP server.
 - `web_fetch`/`fetch_url` **describe a binary body** instead of returning it: a
   response whose content type isn't text, or an unlabelled one with a NUL in
   its first 4 KB, becomes `[binary: <type>, <size>] <url>` and the rest is

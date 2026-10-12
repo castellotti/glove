@@ -29,6 +29,7 @@ def test_requires_an_egress_provider(tmp_path):
 def test_pi_wiring(tmp_path):
     plan = _plan(tmp_path)
     assert plan.environment["SEARXNG_URL"] == "http://glove-s-search:8080"
+    assert "SEARXNG_URL" in plan.composition.shell_hidden_env
     assert "/opt/glove/ext/search/pi-extension" in plan.command
     fwd = next(s for s in plan.network.sidecars if s.role == "search")
     assert fwd.target == "glove-s-searxng:8080" and fwd.listen_port == 8080

@@ -132,11 +132,11 @@ Every capability (the model, search, the browser, …) is an extension in
   it. It exists for `github` (below). `/work` itself is the session's `work/`,
   which the agent cannot replace.
 - **Harness-process-only variables.** An extension's harness env entry with
-  `shell: false` (webfetch's proxy and download URLs for Pi) is unset by the
-  tool wrapper before every shell command, like the secret-shaped names (every
-  enforcer but `none`, which wraps nothing). Not a
-  secret: shell commands have no network to use it on, and seeing it only
-  invites a failing `curl`.
+  `shell: false` (what Pi's webfetch, search and playwright extensions read:
+  their service URLs and settings) is unset by the tool wrapper before every
+  shell command, like the secret-shaped names (every enforcer but `none`,
+  which wraps nothing). Not a secret: shell commands have no network to use it
+  on, and seeing it only invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions, host ports or host services unless trusted.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).

@@ -18,9 +18,6 @@
   ],
   "enforcer_env": {},
   "environment": {
-    "BROWSER_MCP_TOOLS": "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog",
-    "BROWSER_MCP_URL": "http://glove-s-browser:8931/mcp",
-    "BROWSER_MODE": "headless",
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "VIBE_HOME": "/home/agent/.vibe"
   },
