@@ -5,8 +5,8 @@ enforcer and runtime (driven by test_config_protect.sh).
 
 With the project config an agent could plant in /work already there (a Vibe
 hook shadowing glove's, a Pi project extension: each would touch a marker):
-  1. in the harness service, every read-only ring-0 bind (`protected_home`,
-     `trusted_files`, `masked_files`, the /work paths the host trusts) refuses
+  1. in the harness service, every read-only ring-0 bind (`protect:` in
+     harness.yml, the /work paths the host trusts) refuses
      a write, and the config home cannot be renamed away; Vibe's masked
      project dirs are empty though the host's are not; the home outside the
      config home is read-only (EROFS: a new file or dir at its top level, in
@@ -14,9 +14,11 @@ hook shadowing glove's, a Pi project extension: each would touch a marker):
      config home itself is writable;
   2. the agent's own file-write tool cannot overwrite a config file glove
      rendered;
-  3. a tool call still runs, wrapped (no secret-shaped env), and the planted
-     code never ran; Claude Code still writes its own state (.claude.json);
-  4. the harness's own writes: its sessions dir holds the turns, and
+  3. a tool call still runs, wrapped (no secret-shaped env in any case, set by
+     the session or not by glove, a plain name kept), and the planted code
+     never ran; Claude Code still writes its own state (.claude.json);
+  4. the harness's own writes: its sessions dir holds the turns (Pi: not the
+     project's planted sessionDir; its auth.json is a read-only bind), and
      `--continue` resumes the latest session (a session file grows);
   5. Vibe's TUI: a command its pre_tool hook denies (strict) shows the denial.
 Prints PASS/FAIL per check; exits non-zero on any failure.
@@ -30,7 +32,7 @@ import sys
 from pathlib import Path
 
 from live_common import check, live_session, summary, tool_result
-from nono_srt_live import PLANTED, PLANTS, lines
+from nono_srt_live import PLANTED, PLANTED_SESSIONS, PLANTS, lines
 
 from glove.mounts import CONTAINER_HOME
 from glove.sessions import sessions_dir
@@ -57,7 +59,7 @@ def main(directory: str) -> int:
     with live_session(directory) as s:
         plan, h = s.plan, s.cfg.harness
         work, home = s.sd.root / "work", plan.profile.config_home_path
-        masked = [m.rstrip("/") for m in plan.profile.masked_files]
+        masked = [e.path.rstrip("/") for e in plan.profile.protect if not e.home and e.source == "empty"]
         plants = {**PLANTS.get(h, {}), "AGENTS.md": "# project notes\n", **{f"{m}/.glove-probe": "x\n" for m in masked}}
         for rel, text in plants.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -99,9 +101,9 @@ def main(directory: str) -> int:
         tail = tool_result(s.call(tool, {path_arg: rendered.container_path, content_arg: "{}\n"}), 300)
         check(f"{tool} cannot overwrite {rendered.container_path}",
               Path(rendered.host_path).read_text() == before, tail)
-        ans = s.sh("echo tool-ran-$((6*7)); echo key=$(env | grep -c '^FAKE_API_KEY=')")
+        ans = s.sh(f"echo tool-ran-$((6*7)); {s.secret_probe()}")
         check("a tool call runs with the project config planted", "tool-ran-42" in ans, ans[-300:])
-        check("still wrapped (no secret-shaped env)", "key=0" in ans, ans[-300:])
+        check("still wrapped (no secret-shaped env in any case, a plain name kept)", s.secret_free(ans), ans[-300:])
         check("the planted code never ran", not (work / PLANTED).exists())
         if h == "claude-code":
             check("Claude Code still writes its state (.claude.json)",
@@ -112,6 +114,10 @@ def main(directory: str) -> int:
                     else sessions_dir(plan.profile, s.sd.home))
         seen = files(sessions)
         check(f"the turns are in its sessions dir ({sessions.name}/)", bool(seen), str(sessions))
+        if h == "pi":
+            check("not in the project's planted sessionDir", not (work / PLANTED_SESSIONS).exists())
+            check("auth.json is a read-only bind",
+                  any(p.container_path == f"{home}/auth.json" and p.read_only for p in ro))
         r = s.run(*plan.harness_command, *plan.profile.resume_args(None), "-p", "again")
         after = files(sessions)
         check("--continue answers", r.returncode == 0 and REPLY in r.stdout, (r.stdout + r.stderr)[-300:])

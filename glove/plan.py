@@ -136,6 +136,18 @@ def home_mount(home_dir: str) -> Mount:
     return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="ro")
 
 
+def _opt_ins(cfg: Config, profile: HarnessProfile) -> set[str]:
+    """The harness's `protect:` opt-ins the session turns on
+    (`harness_config.<key>: true`)."""
+    on = set()
+    for key in sorted(profile.opt_ins & set(cfg.harness_config)):
+        if not isinstance(cfg.harness_config[key], bool):
+            raise ConfigError(f"harness_config.{key} must be true or false")
+        if cfg.harness_config[key]:
+            on.add(key)
+    return on
+
+
 def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
     """Merge profile defaults with config env, dropping null (== unset)."""
     merged: dict[str, str] = dict(profile.default_env)
@@ -308,14 +320,13 @@ def build_session_plan(
     )
     session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    def in_working_dir(files: tuple[str, ...]) -> list[str]:
-        return [posixpath.join(mount_plan.working_dir, f) for f in files]
-
+    opted = _opt_ins(cfg, profile)
+    files = [(posixpath.join(mount_plan.working_dir, e.path), e.source) for e in profile.protect
+             if not e.home and (e.opt_in is None or e.opt_in in opted)]
     home = home_mount(home_dir)
     mount_plan = replace(mount_plan, protect=protected_paths(
-        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files,
-        trusted=in_working_dir(profile.trusted_files), masked=in_working_dir(profile.masked_files),
-    ) + protected_home(home, profile.config_home_path, profile.protected_home))
+        mount_plan.mounts, protect_ide_files=cfg.protect_ide_files, files=files,
+    ) + protected_home(home, profile.config_home_path, [e.path for e in profile.protect if e.home]))
     network = build_network_plan(cfg, session, comp)
 
     # glove alone sets git's config env vars (GIT_CONFIG_PARAMETERS, below)

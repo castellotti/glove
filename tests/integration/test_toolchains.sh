@@ -55,15 +55,14 @@ crun() {  # [compose-run flags… --] command…; compose's own progress lines (
   "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T ${flags[@]+"${flags[@]}"} \
     "glove-$S_ID-harness" "$@" 2>&1 | grep -v -E '^ (Container|Network|Volume) '
 }
-tool_wrapper() {  # its argv has no spaces (bash 3.2 on macOS has no mapfile)
+tool_wrapper() {  # shell-quoted: the scrub's globs must not expand (bash 3.2 on macOS has no mapfile)
   uv run --quiet --project "$ROOT" python -c \
-    'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json"
+    'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json"
 }
 tool() {
   local w
   w="$(tool_wrapper)"
-  # shellcheck disable=SC2086
-  crun $w bash -c "$1"
+  eval "crun $w bash -c $(printf %q "$1")"
 }
 cleanup() { "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" down -v >/dev/null 2>&1; }
 

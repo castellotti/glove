@@ -89,7 +89,7 @@ def test_protected_binds_render_read_only_after_work(tmp_path):
         assert targets.index(t) > targets.index("/work"), t  # nested bind overlays /work
     git = vols[targets.index("/work/.git")]
     assert not git.get("read_only") and targets.index("/work/.git") < targets.index("/work/.git/hooks")
-    assert vols[targets.index("/work/.envrc")]["source"] == str(tmp_path / "ph" / ".envrc")
+    assert vols[targets.index("/work/.envrc")]["source"] == str(tmp_path / "ph" / "work" / ".envrc")
 
 
 def test_home_is_read_only_and_only_the_config_home_rebound_writable(tmp_path):

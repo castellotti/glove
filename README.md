@@ -431,37 +431,63 @@ nono's state on tmpfs: `docs/SECURITY.md`, "The harness home").
 
 **What a harness loads is not the agent's to write.** The agent's file tools
 run inside the harness process, which can write `/work` and its config home, so
-ring 0 binds read-only what the harness would load from either (each listed in
-`harness.yml`; a trailing `/` marks a directory, and the directories above one
-are pinned so they can't be renamed aside):
+ring 0 binds read-only what the harness would load from either. Each harness
+lists them in one `protect:` list in its `harness.yml` (a trailing `/` marks a
+directory, and the directories above one are pinned so they can't be renamed
+aside):
 
-- `trusted_files`: in the working dir, bound read-only as the repo holds them
-  (an empty placeholder when missing). Claude Code's `.claude/settings*.json`.
-- `masked_files`: in the working dir, always the empty placeholder. Vibe's
-  `.vibe/` and `.agents/`: a project hook runs before glove's and shadows one of
-  the same name, so a repo's own Vibe config is not loaded under glove (put it
-  in `harness_config`).
-- `protected_home`: in the config home, the home's own copy (glove renders the
-  files; a missing one is created empty). Pi: `settings.json`, `models.json`,
-  `trust.json`, glove's brief `AGENTS.override.md` (an override there replaces
+```yaml
+protect:
+  - .claude/settings.json                     # the working dir: the repo's copy, read-only
+                                              # (an empty placeholder when missing)
+  - {path: .vibe/, source: empty}             # the working dir: always the empty placeholder
+  - ~/.claude/settings.json                   # the home: its own copy (glove renders it)
+  - {path: .vibe/skills/, opt_in: project_skills}  # the repo's copy, if that harness_config key is true
+```
+
+- **The working dir.** Claude Code's `.claude/settings*.json`, as the repo
+  holds them. Vibe's `.vibe/` and `.agents/` are always the empty placeholder:
+  a project hook runs before glove's and shadows one of the same name, so a
+  repo's own Vibe config is not loaded under glove (put it in
+  `harness_config`).
+- **The home** (`~/`): its own copy (glove renders the files; a missing one
+  is created empty). Pi: `settings.json`, `models.json`, `trust.json`,
+  `auth.json` (rendered `{}`: `llm-auth` holds the key, and `/login` can't
+  save), glove's brief `AGENTS.override.md` (an override there replaces
   `AGENTS.md`/`CLAUDE.md`, even an empty one), the empty `SYSTEM.md`,
   `APPEND_SYSTEM.md`, `mcp.json` and `keybindings.json` (Pi ignores an empty
-  one), and `extensions/`, `skills/`, `prompts/`, `themes/`, `bin/`,
-  `npm/`, `git/`. Vibe: `config.toml`, `hooks.toml`, `.env` and `tools/`,
-  `plugins/`, `agents/`, `prompts/`, `skills/`. Both: `~/.agents` (outside the config home: read-only with the home). Sessions,
-  logs and caches stay writable. glove re-renders the files at each start, so
-  a choice the harness saves there (Pi's `/model` default, Vibe's `/theme`)
-  never outlived a session; now the save fails silently (Pi even reports it as
-  saved). A lasting choice goes in the session file (`harness_config`, or
-  `llm`'s `model`). Claude Code: `settings.json`, `CLAUDE.md` and `agents/`,
-  `commands/`, `skills/`, `plugins/`, `output-styles/`, `rules/`; it still
-  writes `.claude.json`, `projects/`, `sessions/` and its history, and
-  `/model`'s "set as default" reports that it can't save.
+  one), and `extensions/`, `skills/`, `prompts/`, `themes/`, `bin/`, `npm/`,
+  `git/`. Vibe: `config.toml`, `hooks.toml`, `.env` and `tools/`, `plugins/`,
+  `agents/`, `prompts/`, `skills/`. Both: `~/.agents` (outside the config
+  home: read-only with the home). Sessions, logs and caches stay writable.
+  glove re-renders the files at each start, so a choice the harness saves
+  there (Pi's `/model` default, Vibe's `/theme`) never outlived a session; now
+  the save fails silently (Pi even reports it as saved). A lasting choice goes
+  in the session file (`harness_config`, or `llm`'s `model`). Claude Code:
+  `settings.json`, `CLAUDE.md` and `agents/`, `commands/`, `skills/`,
+  `plugins/`, `output-styles/`, `rules/`, `dev-mods/`; it still writes
+  `.claude.json`, `projects/`, `sessions/` and its history, and `/model`'s
+  "set as default" reports that it can't save.
 
 Pi also skips the project's `.pi/` and `.agents/skills` (rendered
 `defaultProjectTrust: never` and an empty trust store; a session may set
 `harness_config.settings.defaultProjectTrust` to relax it). Its `AGENTS.md`
 and Vibe's still load: they are prompts, like any file the agent reads.
+
+Pi's session dir is pinned to its default (`PI_CODING_AGENT_SESSION_DIR`), so
+a repo's `.pi/settings.json` can't move where sessions are written (see
+[SECURITY.md](docs/SECURITY.md)).
+
+**Vibe: the repo's skills, opt-in.** With
+
+```yaml
+harness_config:
+  project_skills: true
+```
+
+the repo's `.vibe/skills/` and `.agents/skills/` show through the masked
+`.vibe/` and `.agents/`, read-only; the rest of both stays empty. Off by
+default: a documented widening (see [SECURITY.md](docs/SECURITY.md)).
 
 The agent's file-write tools run in the harness process, so the hooks hold
 them to the write roots (`/work`, rw mounts, `/tmp`, writable extension
@@ -554,7 +580,7 @@ extensions:
     write under `nono+srt` but a tool command may not: Write and Edit reach what
     a shell command reaches;
   - the project's `.claude/settings.json` and `settings.local.json` are bound
-    read-only (ring 0, `trusted_files` in `harness.yml`; an empty placeholder
+    read-only (ring 0, `protect:` in `harness.yml`; an empty placeholder
     when missing, and `.claude` pinned so it can't be moved aside): Claude Code
     applies their `env` and commands to processes it starts itself, outside
     the tool wrapper, so the agent must not write them;
@@ -986,6 +1012,9 @@ must each be defeated:
   shell commands only. A prompt-injected
   command can only write `/work` + exposed rw dirs, cannot read the harness
   home / secrets, has **no network** and no terminal to type into the harness.
+  Every secret-shaped env name (`*KEY*`, `*TOKEN*`, …, in any case, whoever
+  set it; the list: [SECURITY.md](docs/SECURITY.md)) is unset before a command
+  runs (`glove-pty notty -u <glob>`), and nono or srt strip them again.
 - **Ring 2 - Harness integration**: a Pi extension / Vibe `pre_tool` hook routes
   every `bash`/`!` command through ring 1 (nested calls too), holds the
   file-write tools to the same write roots as ring 1, and refuses every tool not
@@ -1003,7 +1032,7 @@ enforcer: nono+srt    # what a session gets on Docker when it names no enforcer;
 
 ```
 glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- pi …
-  every shell command: glove-pty notty -- nono wrap --profile tool.json -- bash -c <cmd>
+  every shell command: glove-pty notty -u '*KEY*' … -- nono wrap --profile tool.json -- bash -c <cmd>
 ```
 
 srt (bubblewrap) wraps the harness process, nono (Landlock) wraps every shell
@@ -1042,9 +1071,9 @@ Refused on podman: its compose provider can't apply the profile.
 | Component | Option | Status |
 |---|---|---|
 | Runtime | docker | hardened + doctor probes |
-| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_teardown`; srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
+| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`; srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
-| Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi and Vibe verified (`test_pi_nono`, `test_vibe_nono`, `test_config_protect`, `test_tool_confine`) |
+| Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi and Vibe verified (`test_pi_nono`, `test_vibe_nono`, `test_config_protect`, `test_tool_confine`, `test_vibe_skills`) |
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi, Vibe and Claude Code (`test_nono_srt.sh`, `test_config_protect.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi verified (`test_pi_srt.sh`: env/`/proc` key leaks, no user namespaces); `test_config_protect.sh` with Pi, Vibe and Claude Code; tool commands only |
 | Enforcer | none (ring 0 only) | debug |
@@ -1108,20 +1137,24 @@ uv run pytest -q                           # unit suite (includes the layering c
 uv run lint-imports                        # core (glove/) must not import extensions/
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (19 checks)
-bash tests/integration/test_vibe_nono.sh  # nono / Vibe (13 checks)
+bash tests/integration/test_vibe_nono.sh  # nono / Vibe (12 checks)
 bash tests/integration/test_pi_srt.sh     # srt  / Pi  (12 checks)
 bash tests/integration/test_nono_srt.sh pi    # nono+srt in a real session (32 checks; also: vibe 32, claude-code 28)
 bash tests/integration/test_ring0_protect.sh  # ring-0 ro binds over .git/hooks etc. (15 checks)
 bash tests/integration/test_config_protect.sh vibe nono  # the harness's config vs the agent, the home
-                                              # read-only outside the config home, --continue
-                                              # (14 checks; also: pi 11, claude-code 12; any enforcer)
+                                              # read-only outside the config home, --continue, secret
+                                              # env, Pi's session dir (14 checks; also: pi 13,
+                                              # claude-code 12; any enforcer)
+bash tests/integration/test_vibe_skills.sh nono  # Vibe's project_skills off, then on: only skills/
+                                              # shown, read-only, a project hook never runs (8 checks)
 bash tests/integration/test_tool_confine.sh pi  # the hooks' tool names by effect: shell wrapped, file
                                               # writes held to the roots, Pi's MCP off, the tool
                                               # inventory fails closed, a checked call
-                                              # can't be changed after the check (26; vibe 19)
+                                              # can't be changed after the check, secret env
+                                              # (any case, set by glove or not) gone (26; vibe 19)
 bash tests/integration/test_teardown.sh pi nono   # one harness per session, git config, `glove down` (9 checks)
 bash tests/integration/test_session_dir.sh    # session dir lifecycle vs a stub llm (12 checks)
-bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (28 checks per enforcer)
+bash tests/integration/test_cc_nono.sh        # Claude Code's guard rails vs a stub (29 checks per enforcer)
 bash tests/integration/test_egress.sh tor     # egress + search + webfetch end to end (also: direct;
                                               # vpn with VPN_SETTINGS=… [VPN_LOCAL=<hook dir>]) (11 checks)
 HARNESS=claude-code bash tests/integration/test_egress.sh direct  # search MCP + WebFetch via the proxy

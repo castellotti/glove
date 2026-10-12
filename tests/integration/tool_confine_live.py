@@ -9,7 +9,8 @@ extension, Vibe's pre_tool hook), by the tool names each harness uses today
   2. every shell path runs wrapped (Pi: bash, codemode's `tools.bash`; Vibe:
      bash, run_typescript's `tools.file_system.bash` and `tools.process.start`):
      a probe only the tool profile refuses (the harness's own config, which the
-     container and the harness process can read) and no secret-shaped env;
+     container and the harness process can read); no secret-shaped env, in any
+     case, set by the session or not by glove at all, while a plain name stays;
   3. the file-write tool writes /work and /tmp and refuses the home, `~`, a
      symlink and `..` out of /work (Pi: `@path` too), nested (codemode,
      run_typescript) as well;
@@ -40,7 +41,7 @@ from nono_srt_live import lines
 
 CONFIG = {"pi": "/home/agent/.pi/agent/settings.json", "vibe": "/home/agent/.vibe/config.toml"}
 # A home file the harness process may write (ring 0 allows it): only the hook refuses the agent.
-TARGET = {"pi": "/home/agent/.pi/agent/auth.json", "vibe": "/home/agent/.vibe/logs/session/plugins/planted"}
+TARGET = {"pi": "/home/agent/.pi/agent/sessions/planted", "vibe": "/home/agent/.vibe/logs/session/plugins/planted"}
 DENIED = "glove enforcer"
 # Vibe's tools that never reach its hook, only the calls they make (measured, Vibe 2.26)
 VIBE_UNHOOKED = {"run_typescript", "search_tool_functions", "skill"}
@@ -64,10 +65,10 @@ PROBE_EXT = """export default function (pi: any) {
 """
 
 
-def probe(config: str, out: str) -> str:
-    """A command that records, in /work/<out>, whether it ran under the tool profile."""
+def probe(config: str, out: str, env: str) -> str:
+    """A command that records, in /work/<out>, whether it ran under the tool profile (`env`: a secret_probe)."""
     return (f"{{ cat {config} >/dev/null 2>&1 && echo CONFIG=readable || echo CONFIG=denied; "
-            f"echo KEYS=$(env | grep -c '^FAKE_API_KEY='); }} > /work/{out} 2>&1")
+            f"{env}; }} > /work/{out} 2>&1")
 
 
 @contextmanager
@@ -115,10 +116,11 @@ def main(directory: str) -> int:
         print("== every shell path runs wrapped (a probe only the tool profile refuses)")
         # one run in the container, unwrapped: the control, and (Pi) a write to the rendered mcp.json
         mcp = next((p for p in s.plan.protect if p.container_path.endswith("/.pi/agent/mcp.json")), None)
-        ctl = s.run("-c", probe(CONFIG[h], "base.out") + (
+        ctl = s.run("-c", probe(CONFIG[h], "base.out", s.secret_probe()) + (
             f"; : >> {mcp.container_path} 2>/dev/null; echo MCP_W=$?" if mcp else ""), entry="bash")
-        check(f"control: {CONFIG[h]} is readable in the container",
-              lines((work / "base.out").read_text()).get("CONFIG") == "readable")
+        base = lines((work / "base.out").read_text())
+        check(f"control: {CONFIG[h]} and the secret-shaped env are in the container",
+              base.get("CONFIG") == "readable" and base.get("KEYS") == str(len(s.secret_names)), str(base))
         paths = {"bash": lambda p: s.call(s.bash_tool, {"command": p})}
         if h == "pi":
             paths["codemode tools.bash"] = nested_bash("bash")
@@ -127,10 +129,11 @@ def main(directory: str) -> int:
             paths["run_typescript tools.process.start"] = nested_bash(
                 "process.start", "await tools.self.sleep({seconds: 2}).catch(() => 0); ")
         for i, (label, run) in enumerate(paths.items()):
-            out = run(probe(CONFIG[h], f"p{i}.out"))
+            out = run(probe(CONFIG[h], f"p{i}.out", s.secret_probe()))
             got = (work / f"p{i}.out").read_text() if (work / f"p{i}.out").exists() else "(never ran)"
-            check(f"{label}: wrapped (config denied, no secret-shaped env)",
-                  lines(got) == {"CONFIG": "denied", "KEYS": "0"}, f"{' '.join(got.split())} | {tool_result(out, 300)}")
+            check(f"{label}: wrapped (config denied, no secret-shaped env, a plain name kept)",
+                  lines(got).get("CONFIG") == "denied" and s.secret_free(got),
+                  f"{' '.join(got.split())} | {tool_result(out, 300)}")
 
         print("== the file-write tool is held to the write roots")
         tool, key, content = s.tools["write"]
@@ -217,9 +220,7 @@ def main(directory: str) -> int:
             r = tool_result(s.call(s.bash_tool, {"command": "echo SHELL-RAN"}), 300)
         check("no tools.json: every tool refused (the shell too)", "SHELL-RAN" not in r and "inventory" in r, r)
         if h == "pi":
-            session = s.sd.root / "glove-session.yml"
-            session.write_text(session.read_text() + "harness_config: {tools: {allow: [glove_probe]}}\n")
-            s.relaunch()
+            s.reconfigure("harness_config: {tools: {allow: [glove_probe]}}")
             check("… listed in harness_config.tools.allow, it runs",
                   "glove_probe" in json.loads(inventory.read_text())["allow"]
                   and "PROBE-RAN" in tool_result(s.call("glove_probe", {}), 300))

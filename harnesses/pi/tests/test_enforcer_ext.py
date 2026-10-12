@@ -90,7 +90,7 @@ console.log(JSON.stringify({{
   unknown: call("mcp", {{ server: "x" }}),
   renamed: call("bash2", {{ command: "ls" }}),
 }}));""")
-    assert got["bash"]["r"] is None and got["bash"]["input"]["command"] == "nono wrap -- bash -c 'ls'"
+    assert got["bash"]["r"] is None and got["bash"]["input"]["command"] == "'nono' 'wrap' '--' bash -c 'ls'"
     assert got["write"]["r"] is None and got["write"]["input"]["path"] == f"{work}/a.py"
     assert got["write_out"]["r"]["block"] and got["read"]["r"] is None
     for k in ("unknown", "renamed"):  # a tool glove hasn't classed: blocked, its input untouched

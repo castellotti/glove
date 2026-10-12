@@ -15,28 +15,35 @@
  *   glove-pty ctty -- <cmd...>    inside the sandbox: become a session leader
  *                                 and take stdin (the relay's pty) as the
  *                                 controlling terminal.
- *   glove-pty notty -- <cmd...>   before a tool command: give up the
- *                                 controlling terminal (TIOCNOTTY), keeping the
- *                                 process group, so the command cannot open
- *                                 /dev/tty and inject keystrokes into the
- *                                 harness (TIOCSTI). As a session leader it
- *                                 runs the command in a new session instead.
+ *   glove-pty notty [-u <glob>]... -- <cmd...>
+ *                                 before a tool command: unset every env var
+ *                                 whose name matches a glob (any case), then
+ *                                 give up the controlling terminal
+ *                                 (TIOCNOTTY), keeping the process group, so
+ *                                 the command cannot open /dev/tty and inject
+ *                                 keystrokes into the harness (TIOCSTI). As a
+ *                                 session leader it runs the command in a new
+ *                                 session instead.
  *
  * Without a terminal (tests, print mode) relay and ctty just exec <cmd>.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <poll.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+
+extern char **environ;
 
 static volatile sig_atomic_t winch = 1, chld = 0;
 static pid_t child = -1;
@@ -187,14 +194,55 @@ static int notty(char **argv) {
     return status_of(st);
 }
 
+/* Unset every env var whose name matches one of the globs, case-insensitively
+ * (nono's deny_vars and srt's envVars match by case). -1 if one can't be. */
+static int scrub(char **globs, int n) {
+    for (char **e = environ; *e;) {
+        char *eq = strchr(*e, '=');
+        char name[1024];
+        size_t len = eq ? (size_t)(eq - *e) : 0;
+        if (len >= sizeof name) return -1;
+        memcpy(name, *e, len);
+        name[len] = 0;
+        int hit = 0;
+        for (int i = 0; i < n && !hit; i++) hit = len && fnmatch(globs[i], name, FNM_CASEFOLD) == 0;
+        if (!hit) {
+            e++;
+            continue;
+        }
+        if (unsetenv(name) < 0) return -1;
+        e = environ; /* environ changed: start over */
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && !strcmp(argv[1], "notty")) {
+        char *globs[64];
+        int n = 0, i = 2;
+        for (; i + 1 < argc && !strcmp(argv[i], "-u"); i += 2) {
+            if (n == 64) {
+                fprintf(stderr, "glove-pty: too many -u\n");
+                return 2;
+            }
+            globs[n++] = argv[i + 1];
+        }
+        if (i + 1 >= argc || strcmp(argv[i], "--") != 0) {
+            fprintf(stderr, "usage: glove-pty notty [-u <glob>]... -- <cmd...>\n");
+            return 2;
+        }
+        if (scrub(globs, n) < 0) { /* fail closed: never run the command with a secret left */
+            fprintf(stderr, "glove-pty: cannot scrub the environment\n");
+            return 2;
+        }
+        return notty(argv + i + 1);
+    }
     if (argc < 4 || strcmp(argv[2], "--") != 0) {
-        fprintf(stderr, "usage: glove-pty relay|ctty|notty -- <cmd...>\n");
+        fprintf(stderr, "usage: glove-pty relay|ctty -- <cmd...>\n");
         return 2;
     }
     if (!strcmp(argv[1], "relay")) return relay(argv + 3);
     if (!strcmp(argv[1], "ctty")) return ctty(argv + 3);
-    if (!strcmp(argv[1], "notty")) return notty(argv + 3);
     fprintf(stderr, "glove-pty: unknown mode %s\n", argv[1]);
     return 2;
 }

@@ -6,7 +6,15 @@ import os
 
 import pytest
 
-from glove.mounts import Mount, MountError, compute_mounts, make_bind_sources, protected_home, protected_paths
+from glove.mounts import (
+    Mount,
+    MountError,
+    compute_mounts,
+    make_bind_sources,
+    protected_home,
+    protected_paths,
+    write_placeholders,
+)
 
 
 def _by_container(plan):
@@ -183,7 +191,7 @@ def test_ide_files_opt_in_with_placeholders(tmp_path):
     assert got["/work/.mcp.json"].host_path is None and got["/work/.mcp.json"].kind == "file"
 
 
-TRUSTED = ["/work/.claude/settings.json", "/work/.claude/settings.local.json"]
+TRUSTED = [("/work/.claude/settings.json", "auto"), ("/work/.claude/settings.local.json", "auto")]
 
 
 def test_trusted_files_always_protected_with_their_dir_pinned(tmp_path):
@@ -191,7 +199,7 @@ def test_trusted_files_always_protected_with_their_dir_pinned(tmp_path):
     (work / ".claude").mkdir(parents=True)
     (work / ".claude" / "settings.json").write_text("{}")
     got = [(p.container_path, p.host_path, p.kind, p.read_only)
-           for p in protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)]
+           for p in protected_paths(compute_mounts(str(work)).mounts, files=TRUSTED)]
     real = os.path.realpath(work)
     assert got == [
         ("/work/.claude", f"{real}/.claude", "dir", False),  # pinned: `mv .claude x` fails
@@ -203,7 +211,7 @@ def test_trusted_files_always_protected_with_their_dir_pinned(tmp_path):
 def test_trusted_dir_missing_is_still_pinned(tmp_path):
     work = tmp_path / "w"
     work.mkdir()
-    got = {p.container_path: p.host_path for p in protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)}
+    got = {p.container_path: p.host_path for p in protected_paths(compute_mounts(str(work)).mounts, files=TRUSTED)}
     assert got["/work/.claude"] == f"{os.path.realpath(work)}/.claude"  # created at launch
     assert got["/work/.claude/settings.json"] is None
 
@@ -220,7 +228,7 @@ def test_trusted_path_that_cannot_be_protected_is_refused(tmp_path, plant):
         target = work / ".claude" / "settings.json"
         target.symlink_to(tmp_path / "elsewhere") if plant == "file-link" else target.mkdir()
     with pytest.raises(MountError, match="glove protects it"):
-        protected_paths(compute_mounts(str(work)).mounts, trusted=TRUSTED)
+        protected_paths(compute_mounts(str(work)).mounts, files=TRUSTED)
 
 
 def test_masked_paths_always_get_the_placeholder(tmp_path):
@@ -228,8 +236,8 @@ def test_masked_paths_always_get_the_placeholder(tmp_path):
     (work / ".vibe").mkdir(parents=True)
     (work / ".vibe" / "hooks.toml").write_text("[[hooks]]\n")
     got = [(p.container_path, p.host_path, p.kind, p.read_only)
-           for p in protected_paths(compute_mounts(str(work)).mounts, trusted=["/work/.claude/"],
-                                    masked=["/work/.vibe/", "/work/.agents/"])]
+           for p in protected_paths(compute_mounts(str(work)).mounts, files=[
+               ("/work/.claude/", "auto"), ("/work/.vibe/", "empty"), ("/work/.agents/", "empty")])]
     real = os.path.realpath(work)
     assert got == [
         ("/work/.claude", None, "dir", True),  # a trusted dir: the placeholder only while missing
@@ -238,14 +246,34 @@ def test_masked_paths_always_get_the_placeholder(tmp_path):
     ]
     (work / ".claude").mkdir()
     got = {p.container_path: p.host_path for p in protected_paths(compute_mounts(str(work)).mounts,
-                                                                   trusted=["/work/.claude/"])}
+                                                                   files=[("/work/.claude/", "auto")])}
     assert got == {"/work/.claude": f"{real}/.claude"}
 
 
 def test_trusted_files_outside_a_rw_mount_are_skipped(tmp_path):
     work = tmp_path / "w"
     work.mkdir()
-    assert protected_paths(compute_mounts(str(work)).mounts, trusted=["/opt/x/settings.json"]) == ()
+    assert protected_paths(compute_mounts(str(work)).mounts, files=[("/opt/x/settings.json", "auto")]) == ()
+
+
+def test_a_path_inside_a_masked_dir_binds_inside_its_placeholder(tmp_path):
+    # Vibe's project_skills: the repo's .vibe/skills/ through the masked .vibe/,
+    # whatever the order; the placeholder gets its mount point.
+    work = tmp_path / "w"
+    (work / ".vibe" / "skills").mkdir(parents=True)
+    protect = protected_paths(compute_mounts(str(work)).mounts, files=[
+        ("/work/.vibe/skills/", "auto"), ("/work/.agents/skills/", "auto"),
+        ("/work/.vibe/", "empty"), ("/work/.agents/", "empty")])
+    real = os.path.realpath(work)
+    assert [(p.container_path, p.host_path, p.read_only) for p in protect] == [
+        ("/work/.vibe", None, True),  # no pin over the placeholder
+        ("/work/.agents", None, True),
+        ("/work/.vibe/skills", f"{real}/.vibe/skills", True),  # the repo's own, read-only
+        ("/work/.agents/skills", None, True),  # missing: a placeholder
+    ]
+    holders = write_placeholders(tmp_path / "ph", protect)
+    assert sorted(str(p.relative_to(holders)) for p in holders.rglob("*")) == [
+        "work", "work/.agents", "work/.agents/skills", "work/.vibe", "work/.vibe/skills"]
 
 
 HOME_PROTECTED = [".vibe/hooks.toml", ".vibe/tools/", ".agents/"]

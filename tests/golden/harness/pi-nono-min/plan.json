@@ -18,9 +18,10 @@
   "environment": {
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "PI_CODING_AGENT_DIR": "/home/agent/.pi/agent",
+    "PI_CODING_AGENT_SESSION_DIR": "/home/agent/.pi/agent/sessions/--work--",
     "PI_OFFLINE": "1"
   },
-  "image": "glove/pi:0.5.0-faf71f952c",
+  "image": "glove/pi:0.5.0-5782abbef9",
   "transcripts": [
     null,
     null

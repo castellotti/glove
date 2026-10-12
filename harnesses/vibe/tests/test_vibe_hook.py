@@ -43,8 +43,22 @@ def test_bash_command_rewritten():
     payload = {"tool_name": "bash", "tool_input": {"command": "ls /work", "timeout": 30}}
     out = run(payload)
     ti = out["hook_specific_output"]["tool_input"]
-    assert ti["command"] == "nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c 'ls /work'"
+    assert ti["command"] == ("'nono' 'wrap' '-s' '--allow-cwd' '--profile' '/etc/glove/enforcer/tool.json' '--' "
+                             "bash -c 'ls /work'")
     assert ti["timeout"] == 30  # other fields preserved (full replacement)
+
+
+def test_wrapper_argv_is_quoted_so_its_globs_never_expand(tmp_path):
+    # the scrub's `-u '*KEY*'` must reach glove-pty as written, whatever /work holds
+    import subprocess
+
+    from glove.enforcers.base import scrub_argv
+
+    for name in ("API_KEY.md", "KEY1", "KEY2"):
+        (tmp_path / name).write_text("")
+    cmd = hook.wrap_command(["printf", "%s\\n", *scrub_argv()], "x")  # prints each argument
+    out = subprocess.run(["bash", "-c", cmd], cwd=tmp_path, capture_output=True, text=True, check=True).stdout
+    assert out.splitlines() == [*scrub_argv(), "bash", "-c", "x"]
 
 
 def test_single_quotes_escaped():
@@ -153,7 +167,7 @@ def test_bash_without_command_fails_closed():
 def test_unified_harness_shell_tools_wrapped(name):
     # Vibe 2.26's unified harness names tools by group; a background start is a shell command too
     out = run({"tool_name": name, "tool_input": {"command": "ls"}})
-    assert out["hook_specific_output"]["tool_input"]["command"].startswith("nono wrap")
+    assert out["hook_specific_output"]["tool_input"]["command"].startswith("'nono' 'wrap'")
 
 
 def test_shell_cwd_and_env_held(tmp_path):
@@ -195,7 +209,7 @@ def test_main_stdin_rewrite(tmp_path):
     proc = subprocess.run([sys.executable, "-c", script], input=payload, capture_output=True, text=True)
     assert proc.returncode == 0
     out = json.loads(proc.stdout)
-    assert out["hook_specific_output"]["tool_input"]["command"].startswith("nono wrap")
+    assert out["hook_specific_output"]["tool_input"]["command"].startswith("'nono' 'wrap'")
 
 
 def test_main_bad_stdin_fails_closed():

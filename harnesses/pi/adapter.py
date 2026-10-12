@@ -160,6 +160,9 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         ("models.json", models_json),
         ("settings.json", settings_json),
         ("trust.json", {}),
+        # no credentials: llm-auth holds the key (read-only, so /login can't
+        # store one where the agent's next start would use it)
+        ("auth.json", {}),
     ):
         p = cfg_dir / name
         p.write_text(json.dumps(data, indent=2) + "\n")
@@ -167,7 +170,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
 
     # Files Pi loads that glove has nothing for: its system prompt (in place of,
     # or after, its own), MCP servers and keybindings. glove renders them empty
-    # (Pi 1.x ignores an empty one) and protected_home binds them read-only, so
+    # (Pi 1.x ignores an empty one) and `protect` binds them read-only, so
     # whatever an earlier run left there (before they were protected) goes. Not
     # deleted: a bind source must exist, or the runtime makes it a directory.
     for name in ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json"):

@@ -32,7 +32,7 @@ if [ "$#" -ne 1 ]; then
   exit 126
 fi
 # Claude Code's settings `env` reaches this process; project settings are
-# read-only (ring 0, harness.yml trusted_files), so it is the operator's.
+# read-only (ring 0, harness.yml protect), so it is the operator's.
 # Drop anything aimed at the enforcers themselves.
 for name in $(compgen -e); do
   case "$name" in NONO_*|SRT_*) unset "$name" ;; esac

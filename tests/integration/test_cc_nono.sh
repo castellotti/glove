@@ -30,6 +30,7 @@ template: test
 runtime: $RT
 harness: claude-code
 enforcer: $enf
+env: $SESSION_ENV
 harness_config:
   # the attack: the agent's own settings blank the shell prefix
   settings: {env: {CLAUDE_CODE_SHELL_PREFIX: ""}}

@@ -22,6 +22,7 @@
     "process.stop",
     "process.write",
     "self.sleep",
+    "skill.read",
     "vibe.todo",
     "vibe.cron",
     "vibe.unified_harness_scratchpad"

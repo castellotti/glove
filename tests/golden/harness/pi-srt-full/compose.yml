@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-faf71f952c-5aed97a86b-srt-46f57ff955
+    image: glove/pi:0.5.0-5782abbef9-6108bf3950-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer", "-e", "/opt/glove/ext/playwright/pi-extension", "-e", "/opt/glove/ext/search/pi-extension", "-e", "/opt/glove/ext/webfetch/pi-extension"]
     stdin_open: true
@@ -27,6 +27,7 @@ services:
     environment:
       HOME: "/home/agent"
       PI_CODING_AGENT_DIR: "/home/agent/.pi/agent"
+      PI_CODING_AGENT_SESSION_DIR: "/home/agent/.pi/agent/sessions/--work--"
       PI_OFFLINE: "1"
       BROWSER_MCP_URL: "http://glove-s-browser:8931/mcp"
       BROWSER_MCP_TOOLS: "browser_navigate,browser_navigate_back,browser_snapshot,browser_take_screenshot,browser_click,browser_type,browser_hover,browser_select_option,browser_press_key,browser_wait_for,browser_tabs,browser_handle_dialog"
@@ -74,6 +75,12 @@ services:
       - type: bind
         source: "<TMP>/home/.pi/agent/trust.json"
         target: "/home/agent/.pi/agent/trust.json"
+        read_only: true
+      # ring 0: read-only over a path the host or the harness later runs or trusts
+      # (after the bind it sits in, so it overlays it)
+      - type: bind
+        source: "<TMP>/home/.pi/agent/auth.json"
+        target: "/home/agent/.pi/agent/auth.json"
         read_only: true
       # ring 0: read-only over a path the host or the harness later runs or trusts
       # (after the bind it sits in, so it overlays it)

@@ -6,6 +6,14 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Vibe: the repo's skills, opt-in** (`harness_config.project_skills: true`).
+  The repo's `.vibe/skills/` and `.agents/skills/` are bound read-only inside
+  the masked `.vibe/` and `.agents/`; everything else there stays empty (no
+  project hooks, config, prompts, tools or plugins). Off by default: a skill is
+  a prompt the repo supplies. `skill.read` joins Vibe's `allow` inventory.
+  `tests/integration/test_vibe_skills.sh` checks it off and on (8 checks,
+  Docker and Podman).
+
 - **Pi: a checked call can't be changed after the check.** The enforcer
   deep-freezes a shell or file-write call's input once it passes, so an
   extension's `tool_call` handler that runs later can't rewrite it; a change
@@ -225,6 +233,34 @@ All notable changes to glove are documented here.
   root-owned inside the harness, so git refused it as "dubious ownership".
 
 ### Changed
+
+- **Secret env is unset by glob, in any case, before every tool command.**
+  nono's `deny_vars` is case-sensitive (measured: `db_password`, `api_key`,
+  `My_Api_Key` reached a wrapped command) and srt unsets only the exact names
+  glove set, so a lower-case name or one an image layer set reached tool
+  commands. `glove-pty notty` takes `-u <glob>` (case-insensitive; a bad
+  argument runs nothing) and every enforcer's tool wrapper now starts with it,
+  unsetting each matching name; srt's wrapper gains `glove-pty` too. nono's
+  `deny_vars` and srt's `envVars` stay as a second layer. The images rebuild. `test_tool_confine.sh`,
+  `test_config_protect.sh` and `test_cc_nono.sh` (now 29 checks) set
+  lower- and mixed-case names and one glove did not set.
+- **`harness.yml`: one `protect:` list** replaces `trusted_files`,
+  `masked_files` and `protected_home` (now refused as unknown keys). An entry
+  is a working-dir path (the repo's copy, or an empty placeholder when
+  missing), `{path, source: empty}` (always the placeholder), `~/<path>` (the
+  home's own copy) or `{path, opt_in: <harness_config key>}` inside a masked
+  directory. The three manifests are rewritten; what they protect is
+  unchanged but for Pi's `auth.json`.
+- **Pi: the session dir is pinned and `auth.json` is read-only.** Pi read a
+  `sessionDir` from the project's `.pi/settings.json` before it resolved
+  trust, so a repo could move where sessions are written;
+  `PI_CODING_AGENT_SESSION_DIR` now holds Pi's default for `/work`, and the
+  variable wins. `auth.json` (credentials for other providers) is rendered
+  `{}` and bound read-only (`llm-auth` holds the key; `/login` can't save).
+  `test_config_protect.sh pi` plants a `sessionDir` and checks both (13
+  checks). glove writes `{}` at every start, so an older session home's
+  `auth.json` (a `/login` for another provider) is emptied at its next
+  launch.
 
 - **The harness home is read-only (ring 0).** It was bound read-write with
   the paths each `harness.yml` lists in `protected_home` re-bound read-only on

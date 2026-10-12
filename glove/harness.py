@@ -27,9 +27,14 @@ HARNESSES_DIR = Path(__file__).resolve().parent.parent / "harnesses"
 MANIFEST = "harness.yml"
 MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "image", "entry", "config_home", "context_file", "env", "sessions_subdir",
-    "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "trusted_files",
-    "masked_files", "protected_home", "version", "audited_version", "brief", "tools",
+    "transcript_subdir", "runtime_paths", "pip", "resume", "contributions", "protect", "version",
+    "audited_version", "brief", "tools",
 })
+# Where a working-dir `protect:` entry's bind comes from: the working dir's own
+# copy, else an empty placeholder (auto); always the placeholder (empty). A
+# `~/` entry is always the home's own copy (own).
+PROTECT_SOURCES = ("auto", "empty")
+OPT_IN = re.compile(r"[a-z][a-z0-9_]*")
 REQUIRED_KEYS = ("name", "image", "version", "audited_version", "entry", "config_home", "context_file", "tools")
 # Harness-neutral extension contributions a harness may render (`harness.<key>`
 # in an extension manifest); see glove/extensions.py `_harness_contrib`.
@@ -44,6 +49,23 @@ TOOL_CLASSES = ("shell", "file_write", "allow", "ask", "deny")
 # wraps, holds or refuses.
 TOOL_FIXED = ("shell", "file_write", "deny")
 TOOL_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+@dataclass(frozen=True)
+class ProtectEntry:
+    """A path ring 0 binds read-only (`protect:` in harness.yml).
+
+    `path` is relative to the working dir, or to the home when `home`; a
+    trailing `/` marks a directory. `source` is one of PROTECT_SOURCES, or
+    "own" in the home.
+    `opt_in` names a `harness_config` boolean: the entry (inside a masked
+    directory) is bound only when it is true, so the working dir's own copy
+    shows through the placeholder, read-only."""
+
+    path: str
+    home: bool = False
+    source: str = "auto"
+    opt_in: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,22 +103,18 @@ class HarnessProfile:
     resume_session: tuple[str, ...] | None = None
     # Neutral extension contributions it renders (subset of CONTRIBUTIONS).
     contributions: frozenset[str] = frozenset()
-    # Files under its working dir the harness loads its own config from (e.g.
-    # Claude Code's project settings, whose `env` and commands it applies
-    # outside ring 1), a trailing `/` marking a directory: ring 0 binds them
-    # read-only (an empty placeholder when missing), so the agent cannot plant one.
-    trusted_files: tuple[str, ...] = ()
-    # Like trusted_files, but the harness never sees the working dir's own copy
-    # (always the empty placeholder): config a repo could use against glove,
-    # e.g. Vibe's project hooks, which run before glove's and can shadow it.
-    masked_files: tuple[str, ...] = ()
-    # What it loads from its home, relative to the home; a trailing `/` marks a
-    # directory: its settings, hooks and trust store, and the dirs it loads code
-    # from. Ring 0 binds the home read-only and its config home read-write (the
-    # one place it writes), and these read-only over that, so the agent cannot
+    # What the harness loads its config or code from, bound read-only by ring 0
+    # (`protect:`). In the working dir: files like Claude Code's project
+    # settings, whose `env` and commands it applies outside ring 1 (the repo's
+    # copy, or an empty placeholder when missing, so the agent cannot plant
+    # one), or config a repo could use against glove, e.g. Vibe's project
+    # hooks, which run before glove's (always the placeholder). In the home:
+    # its settings, hooks and trust store, and the dirs it loads code from;
+    # ring 0 binds the home read-only and its config home read-write (the one
+    # place it writes), and these read-only over that, so the agent cannot
     # reconfigure the harness or plant code in it for the next start (an entry
     # outside the config home is read-only with the home).
-    protected_home: tuple[str, ...] = ()
+    protect: tuple[ProtectEntry, ...] = ()
     # The harness release its image installs (the HARNESS_VERSION build arg).
     version: str = ""
     # What the agent should know about this harness under glove (`brief:`, a
@@ -106,6 +124,11 @@ class HarnessProfile:
     tools: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # The plugin directory; None for a profile built in code (tests).
     path: Path | None = None
+
+    @property
+    def opt_ins(self) -> frozenset[str]:
+        """The `harness_config` keys that open a `protect:` entry."""
+        return frozenset(e.opt_in for e in self.protect if e.opt_in)
 
     @property
     def dockerfile(self) -> Path:
@@ -136,6 +159,43 @@ def _strs(v: object, where: str) -> tuple[str, ...]:
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise ConfigError(f"{where}: want a list of strings")
     return tuple(v)
+
+
+def _protect(raw: object, where: str) -> tuple[ProtectEntry, ...]:
+    """`protect:`: a path (the working dir's, or `~/` the home's), or
+    `{path, source, opt_in}`. Relative, a trailing `/` marking a directory,
+    no other empty, `.` or `..` part."""
+    if not isinstance(raw, list):
+        raise ConfigError(f"{where}: protect wants a list")
+    out = []
+    for item in raw:
+        entry = {"path": item} if isinstance(item, str) else item
+        if not isinstance(entry, dict) or set(entry) - {"path", "source", "opt_in"} \
+                or not isinstance(entry.get("path"), str):
+            raise ConfigError(f"{where}: a protect entry is a path or {{path, source, opt_in}}, got {item!r}")
+        path, source, opt_in = entry["path"], entry.get("source"), entry.get("opt_in")
+        home = path.startswith("~/")
+        path = path.removeprefix("~/")
+        if path.startswith("/") or {"", ".", ".."} & set(path.removesuffix("/").split("/")):
+            raise ConfigError(f"{where}: protect {item!r}: a path is relative to the working dir (or `~/` the "
+                              "home), without '.' or '..'")
+        if (home and source is not None) or source not in (None, *PROTECT_SOURCES):
+            raise ConfigError(f"{where}: protect {item!r}: source is auto (the default) or empty, in the "
+                              "working dir only (the home's is its own)")
+        source = "own" if home else source or "auto"
+        if opt_in is not None and (not isinstance(opt_in, str) or not OPT_IN.fullmatch(opt_in)
+                                   or source != "auto"):
+            raise ConfigError(f"{where}: protect {item!r}: opt_in names a harness_config key, on a "
+                              "working-dir entry (source auto)")
+        out.append(ProtectEntry(path=path, home=home, source=source, opt_in=opt_in))
+    # an opt-in entry is bound only when opted in: inside a masked dir, which
+    # hides it otherwise
+    masked = [e.path for e in out if e.source == "empty" and e.path.endswith("/")]
+    for e in out:
+        if e.opt_in and not any(e.path.startswith(m) and e.path != m for m in masked):
+            raise ConfigError(f"{where}: protect {e.path!r}: an opt_in entry must be inside a "
+                              "{path: <dir>/, source: empty} entry")
+    return tuple(out)
 
 
 def _tool_classes(raw: object, where: str) -> dict[str, tuple[str, ...]]:
@@ -182,7 +242,7 @@ def load_profile(path: Path) -> HarnessProfile:
     if str(raw["audited_version"]) != version:
         raise ConfigError(f"{where}: version {version} has not been audited (audited_version: "
                           f"{raw['audited_version']}); a new release can add a dir it loads code or config "
-                          "from — re-audit protected_home, trusted_files and masked_files, then set audited_version")
+                          "from — re-audit protect, then set audited_version")
     home = raw["config_home"]
     pip = raw.get("pip") or {}
     resume = raw.get("resume") or {}
@@ -197,12 +257,8 @@ def load_profile(path: Path) -> HarnessProfile:
         opt["transcript_subdir"] = raw["transcript_subdir"]
     if "runtime_paths" in raw:
         opt["runtime_paths"] = _strs(raw["runtime_paths"], f"{where} runtime_paths")
-    for key, base in (("trusted_files", "working dir"), ("masked_files", "working dir"), ("protected_home", "home")):
-        if key in raw:
-            opt[key] = _strs(raw[key], f"{where} {key}")
-            # a trailing `/` marks a directory; no other empty, `.` or `..` part
-            if any(f.startswith("/") or {"", ".", ".."} & set(f.removesuffix("/").split("/")) for f in opt[key]):
-                raise ConfigError(f"{where}: {key} are relative to the {base}, without '.' or '..'")
+    if "protect" in raw:
+        opt["protect"] = _protect(raw["protect"], where)
     if "brief" in raw:
         brief = (path / str(raw["brief"])).resolve()
         if not brief.is_relative_to(path.resolve()) or not brief.is_file():
