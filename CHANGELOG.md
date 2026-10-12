@@ -536,7 +536,9 @@ All notable changes to glove are documented here.
   a failed request is answered with an error and the bridge keeps serving, and
   a session the server lost (a restart) is re-opened. Server and tool names,
   the allowlist and the hook's inventory are unchanged;
-  `harness_config.mcp_servers` render as written.
+  `harness_config.mcp_servers` render as written. Verified live on Docker
+  (`test_playwright.sh vibe` and `downloads`); `test_mcp_bridge.sh` (new, 13
+  checks) runs the bridge in the Vibe image on Docker and Podman.
 - **Pi's `web_fetch` of an `http://` URL** no longer tunnels it with CONNECT to
   port 80 (undici's `ProxyAgent` default), where answers such as
   web.archive.org's were lost: it goes to the proxy as a plain absolute-form
