@@ -238,9 +238,14 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     for `glove check` (which verifies they exist without reading them)."""
     # every secret-type setting that is set (the LLM key, compose secrets, and
     # ones only a launch hook reads, e.g. vpn.register_user)
-    return [(f"{a.name}.{name}", str(value)) for a in plan.composition.active
-            for name, spec in a.manifest.settings_schema.items()
-            if spec.get("type") == "secret" and (value := a.settings.get(name)) not in (None, "", "generate")]
+    # ones nested deeper (a list of hosts, a plugin's relay) come from the
+    # extension's contribute hook (`secret_refs`: label → reference)
+    out = []
+    for a in plan.composition.active:
+        out += [(f"{a.name}.{name}", str(value)) for name, spec in a.manifest.settings_schema.items()
+                if spec.get("type") == "secret" and (value := a.settings.get(name)) not in (None, "", "generate")]
+        out += [(f"{a.name}.{label}", str(ref)) for label, ref in (a.contributed.get("secret_refs") or {}).items()]
+    return out
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:

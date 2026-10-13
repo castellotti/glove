@@ -131,6 +131,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
+  #   (GitHub Enterprise: hosts: [{host: <name>, token: keychain:<service>}]; read-only git: git: [fetch, clone, ls-remote])
   # ssh: { key: keychain:my-ssh, hosts: [{name: build, to: "build.lan:22", user: me}], known_hosts: local/known_hosts }
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
@@ -738,8 +739,12 @@ Core validates all of it:
   `env`, `skills` (container paths in the image) and `mcp` items, taken as
   given; and, for services its fragment renders from settings (`vars`, below),
   `channels`, `privileges` and `trust_corporate_ca` entries, checked like the
-  manifest's (the manifest's own entry for a name wins), plus `endpoints` and
-  `verify` checks. Only its layers may `copy_host` (host paths it checked; the `skills`
+  manifest's (the manifest's own entry for a name wins), plus `endpoints`,
+  `verify` checks, `secret_refs` (label → `keychain:`/`env:` reference: the
+  secrets nested deeper than a `secret` setting, which `glove check` verifies
+  exist like the others) and `egress_hosts` (the names its sidecars reach, `*.x`
+  for subdomains: `glove check` warns when an egress that filters by name, such
+  as `corporate`, doesn't admit one). Only its layers may `copy_host` (host paths it checked; the `skills`
   extension's plugins): core renders those last, after the toolchains, so an
   edit to a checkout rebuilds nothing else, and refuses a source an agent can
   write (a read-write mount, `/work` included, or another session's `work/`)
@@ -1115,16 +1120,25 @@ through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
 
 `gh`, and `git push`/`fetch`/`pull`/`clone`/`ls-remote`, work from the agent's
 shell, with every other shell command still offline. Shims in the harness image
-relay each call over a channel to a sidecar holding the token (`token:
-keychain:<service>`), which runs the real command under a policy:
+relay each call over a channel to a sidecar holding the tokens, which runs the
+real command under a policy. The hosts it serves are github.com (`token:
+keychain:<service>`) and each GitHub Enterprise host named in `hosts: [{host,
+token}]`, a token each (`token`, `hosts` or both):
 
 - **gh:** an allowlist of subcommands; `auth`/`secret`/`extension`/… never
-  (`gh auth token` is refused); `gh api` GET only; github.com only.
-- **git:** network verbs to `https://github.com/<owner>/<repo>` remotes only, with
-  the repo's own config defanged (no hooks, helpers, fsmonitor, other protocols).
+  (`gh auth token` is refused); `gh api` GET only; served hosts only. With
+  Enterprise hosts only, the first is gh's default host.
+- **git:** the network verbs in `git:` (default `push`, `fetch`, `clone`,
+  `ls-remote`; `[fetch, clone, ls-remote]` for a read-only session) to
+  `https://<served host>/<owner>/<repo>` remotes only, with the repo's own config
+  defanged (no hooks, helpers, fsmonitor, other protocols); one credential helper
+  per host, each with that host's token.
 - **Files:** file arguments are opened inside `/work` only.
-- **Network:** traffic reaches GitHub's hosts only, through an in-process fence
-  and then the egress (with `observe`, a gate: `client: github`).
+- **Network:** traffic reaches the served hosts only (an Enterprise host and its
+  subdomains), through an in-process fence and then the egress (with `observe`,
+  a gate: `client: github`). Behind the `corporate` egress, `glove check` warns
+  about a served host `allow_domains` doesn't admit; one on a private address
+  needs `allow_cidrs` (or `from_interface`) to cover it too.
 
 The sidecar binds `/work` read-write (the `work` privilege) so pushes and PRs
 work on the agent's checkout. The token never enters the harness. Use a
@@ -1238,7 +1252,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv; skills through `skill_paths`, as `skills`) |
 | Plugins | `skills` (Claude Code plugins and skill dirs, baked) | verified live on Docker (nono+srt) and Podman (nono) with Pi, Claude Code and Vibe, against the stub with the fixture plugin (`test_skills.sh`): scripts by the paths the skill names (stdlib, a dependency, a compiled dependency, an explicit `uv run --script`), `bin/` on PATH, paths resolved in the baked skill, the unselected skill absent, the plugin read-only and its data dir writable, the skill loaded (Pi's prompt, Claude Code's Skill tool, Vibe's `skill` tool), the plugin's stdio MCP server under the tool wrapper (Claude Code, Vibe: it answers and can't reach the llm forwarder), no network. Real-world plugins (an MCP server with compiled dependencies): built and their commands run by hand in the image; in a session **untested** |
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe, glove's stdio bridge keeps one MCP session per server, so a click after a navigate (and so an upload) works: verified live on Docker (`test_playwright.sh vibe` and `downloads`, also across two `run_typescript` calls); the bridge itself on Docker and Podman (`test_mcp_bridge.sh`); the Vibe browser case on Podman: **untested** |
-| Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
+| Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts. GitHub Enterprise hosts (`test_github_ghes.sh`): two stand-in hosts with a token each, behind `corporate`, over a private CA (`corporate_ca`), `git: [fetch, clone, ls-remote]` — Pi on Docker (nono+srt) and Podman (nono), Claude Code on Docker; a real GHES: **untested**; Vibe, `srt`, behind tor/vpn: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
 
@@ -1325,6 +1339,9 @@ bash tests/integration/test_downloads.sh direct  # web_download end to end, obse
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))
+bash tests/integration/test_github_ghes.sh    # GitHub Enterprise hosts vs a stand-in (two hosts, a token each,
+                                              # corporate egress, a private CA, read-only git) (16 checks;
+                                              # also: claude-code, RT=podman)
 SSH_TEST_HOST=… SSH_TEST_USER=… SSH_KEYCHAIN=… bash tests/integration/test_ssh.sh  # the ssh relay vs a LAN
                                               # host you name, nono + nono+srt (22 checks each; OBSERVE=1: 23)
 bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (28 checks with direct)

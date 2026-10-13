@@ -189,6 +189,11 @@ def _relay_contrib(relays: list[Relay]) -> dict[str, Any]:
                "argv": r.check_argv(argv), "timeout": CHECK_TIMEOUT + 10, "warn": not required}
               for r in relays for i, (argv, required) in enumerate(r.checks, 1)),
         ],
+        # for `glove check`: every reference a relay resolves at `glove up`, and
+        # the hosts its fences reach (a filtering egress must admit them)
+        "secret_refs": {f"plugins.{r.name}.relay ({ref})": ref for r in relays for ref in r.refresh},
+        "egress_hosts": sorted({h for r in relays for spec in r.settings["commands"].values()
+                                for h in spec.get("hosts") or ()}),
         "vars": {"relays": [{"name": r.name, "service": r.service, "timeout": r.timeout, "work": r.work,
                              "settings": r.settings, "secrets": sorted(r.secrets), "policy": RELAY_POLICY}
                             for r in relays]},

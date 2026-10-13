@@ -180,6 +180,13 @@ def test_launch_resolves_the_secrets_and_renders_a_file_in_memory(tmp_path, plug
     commands["scripts/api.py"]["files"] = {"~/.config/ws.json": {"template": "local/ws.json.j2", "secrets": {
         "tok": {"secret": "keychain:test-ws", "refresh": "local/mint.sh"}}}}
     plan, doc = _render(tmp_path, {"commands": commands})
+    from glove.plan import secret_refs
+
+    assert {(lbl, ref) for lbl, ref in secret_refs(plan) if lbl.startswith("skills.")} == {  # for `glove check`
+        ("skills.plugins.demo.relay (keychain:test-api-pat)", "keychain:test-api-pat"),
+        ("skills.plugins.demo.relay (keychain:test-ws)", "keychain:test-ws")}
+    skills = next(a for a in plan.composition.active if a.name == "skills")
+    assert skills.contributed["egress_hosts"] == ["*.files.example.test", "api.example.test"]
     secrets = {"keychain:test-api-pat": "pat-1", "keychain:test-ws": "xo-2"}
     monkeypatch.setattr("glove.config.resolve_secret", lambda ref: secrets[ref])
     env = launch_env(plan.composition)

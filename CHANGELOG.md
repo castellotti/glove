@@ -36,6 +36,23 @@ All notable changes to glove are documented here.
   store new values (from a secret's `refresh:` hook on the host, or a prompt)
   and recreate only that relay's sidecar while the harness keeps running.
   Verified live (`test_skills_relay.sh`).
+- **`github`: GitHub Enterprise hosts, a token each.** `github: {hosts:
+  [{host, token: keychain:<service>}]}`, with or without github.com's `token`;
+  the relay serves exactly those hosts (gh's `--hostname`/`-R`, git remotes, the
+  fence: each Enterprise host with its subdomains). gh reads an Enterprise
+  host's token from a `hosts.yml` on the sidecar's tmpfs; git gets one
+  credential helper per host. With Enterprise hosts only, the first is gh's
+  default host. **`github.git`** names the relayed git verbs (default `push`,
+  `fetch`, `clone`, `ls-remote`; `[fetch, clone, ls-remote]` refuses pushes).
+  `glove check` warns when a filtering egress (`corporate`) does not admit a
+  served host or its subdomains. Verified live against a two-host stand-in behind `corporate` with
+  a private CA (`test_github_ghes.sh`: Pi on Docker and Podman, Claude Code on
+  Docker); a real GHES is untested.
+- A `contribute` hook may return `secret_refs` (label → reference) for secrets
+  nested deeper than a `secret` setting; `glove check` checks they exist
+  (`github.hosts`, the `skills` relays' secrets). And `egress_hosts` (the names
+  its sidecars reach): `glove check` warns when an egress that filters by name
+  (`corporate`) doesn't admit one (`github`, the `skills` relays).
 - **Verify kind `exec-ok`** (a command exits 0 inside a sidecar, output
   withheld) and **`warn: true`** on any check (a failure warns; the session
   starts).

@@ -4,22 +4,27 @@ for the harness, and how (loaded by path by relay's relayd.py).
 The sidecar holds the token and mounts the harness's /work read-write, so this
 file is the boundary of that trust edge:
 
+- the hosts it serves (settings, from `github.token`/`github.hosts`):
+  github.com, and each GitHub Enterprise host with its own token. Nothing
+  else is named anywhere: not by gh, not in a git remote, not at the fence.
 - `gh`: only subcommands in `github.allow` (settings), never the ones that
   touch credentials or run code (`ALWAYS_REFUSED`); `gh api` is GET only,
-  never GraphQL, never a full URL; every host named is github.com; file
+  never GraphQL, never a full URL; every host named is a served one; file
   arguments are opened here, inside /work only, and handed over as /dev/fd/N.
-- `git`: only the network verbs (push, fetch, clone, ls-remote; the harness's
-  `git pull` is a relayed fetch plus a local merge), to https://github.com
-  remotes only, with options that run programs or read outside /work refused,
-  and the agent's repo config defanged (`GIT_HARDENING`: no hooks, fsmonitor,
-  helpers, askpass, editors, submodules, other protocols; ours is the only
-  credential helper and it answers for https://github.com alone).
-- every child's traffic goes through relayd's fence, which tunnels to GitHub's
-  hosts (`HOSTS`) and nothing else.
+- `git`: only the network verbs in `github.git` (of push, fetch, clone,
+  ls-remote; the harness's `git pull` is a relayed fetch plus a local merge),
+  to https://<served host>/<owner>/<repo> remotes only, with options that run
+  programs or read outside /work refused, and the agent's repo config
+  defanged (`git_hardening`: no hooks, fsmonitor, helpers, askpass, editors,
+  submodules, other protocols; ours are the only credential helpers, one per
+  served host, each answering with that host's token alone).
+- every child's traffic goes through relayd's fence, which tunnels to the
+  served hosts (`HOSTS`) and nothing else.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -30,7 +35,24 @@ class Refused(Exception):
 
 
 COMMANDS = frozenset({"gh", "git"})
-HOSTS = ("github.com", "api.github.com", "uploads.github.com", "codeload.github.com", ".githubusercontent.com")
+GITHUB = "github.com"
+GITHUB_HOSTS = (GITHUB, "api.github.com", "uploads.github.com", "codeload.github.com", ".githubusercontent.com")
+GIT_NET = ("push", "fetch", "clone", "ls-remote")
+
+
+def served(settings: dict) -> dict[str, str]:
+    """host → the env var its token arrives in (hooks.py: github.com and each
+    Enterprise host)."""
+    return settings["hosts"]
+
+
+def fence_hosts(settings: dict) -> tuple[str, ...]:
+    """What relayd's fence tunnels to: github.com's names, and each Enterprise
+    host with its subdomains (subdomain isolation: api., uploads., media., …)."""
+    return tuple(x for h in served(settings) for x in (GITHUB_HOSTS if h == GITHUB else (h, f".{h}")))
+
+
+HOSTS = fence_hosts(json.loads(os.environ.get("RELAY_SETTINGS") or '{"hosts": {}}'))
 
 # never runnable, whatever `allow` says: credentials, code that runs in the
 # sidecar, account keys
@@ -49,10 +71,12 @@ DEFAULT_ALLOW = (
     "api", "browse", "status", "search",
 )
 
-HELPER = '!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; }; f'
+def helper(var: str) -> str:
+    """A git credential helper that answers with one host's token ($var)."""
+    return f'!f() {{ test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" "${var}"; }}; f'
 
 
-def git_hardening(proxy: str) -> list[tuple[str, str]]:
+def git_hardening(proxy: str, helpers: dict[str, str]) -> list[tuple[str, str]]:
     """Command-scope git config (GIT_CONFIG_COUNT): read after the repo's own,
     so it wins for every key it names."""
     return [
@@ -65,7 +89,7 @@ def git_hardening(proxy: str) -> list[tuple[str, str]]:
         ("sequence.editor", "/bin/false"),
         ("diff.external", ""),
         ("credential.helper", ""),  # an empty value drops every helper configured before it
-        ("credential.https://github.com.helper", HELPER),
+        *((f"credential.https://{h}.helper", helper(var)) for h, var in helpers.items()),
         ("protocol.allow", "never"),
         ("protocol.https.allow", "always"),
         ("http.proxy", proxy),
@@ -84,16 +108,31 @@ def git_hardening(proxy: str) -> list[tuple[str, str]]:
 
 
 def setup(ctx: dict) -> dict[str, str]:
-    """The children's environment (built from nothing: no sidecar env leaks)."""
-    token = os.environ.get("RELAY_GITHUB_TOKEN", "").strip()
-    if not token:
-        raise SystemExit("relayd: the github token is empty")
+    """The children's environment (built from nothing: no sidecar env leaks).
+
+    gh takes github.com's token from GH_TOKEN, and an Enterprise host's from
+    its config dir's hosts.yml (GH_ENTERPRISE_TOKEN holds one token, for every
+    host), written here on this sidecar's tmpfs, 0600. With Enterprise hosts
+    only, the first is gh's default host (GH_HOST), so `-R OWNER/REPO` and a
+    bare `gh search` reach it rather than github.com."""
+    hosts = served(ctx["settings"])
+    tokens = {}
+    for host, var in hosts.items():
+        tokens[host] = os.environ.get(var, "").strip()
+        if not tokens[host]:
+            raise SystemExit(f"relayd: the token for {host} ({var}) is empty")
+    # each host's token under its own name; github.com's is gh's GH_TOKEN
+    helpers = {h: "GH_TOKEN" if h == GITHUB else var for h, var in hosts.items()}
     proxy = ctx["proxy"]
     home = "/tmp/relay-home"
     os.makedirs(f"{home}/gh", mode=0o700, exist_ok=True)
+    enterprise = [h for h in hosts if h != GITHUB]
+    _gh_config(f"{home}/gh", {h: tokens[h] for h in enterprise})
     env = {
         "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8",
-        "GH_TOKEN": token, "GH_CONFIG_DIR": f"{home}/gh",
+        **{helpers[h]: tokens[h] for h in hosts},
+        **({} if GITHUB in hosts else {"GH_HOST": enterprise[0]}),
+        "GH_CONFIG_DIR": f"{home}/gh",
         "HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "https_proxy": proxy, "http_proxy": proxy, "NO_PROXY": "",
         "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
         "GH_SPINNER_DISABLED": "1", "GH_PAGER": "cat", "PAGER": "cat", "GIT_PAGER": "cat",
@@ -102,12 +141,27 @@ def setup(ctx: dict) -> dict[str, str]:
         "SSH_ASKPASS": "/bin/false", "GIT_SSH_COMMAND": "/bin/false",
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
     }
-    pairs = git_hardening(proxy)
+    pairs = git_hardening(proxy, helpers)
     env["GIT_CONFIG_COUNT"] = str(len(pairs))
     for i, (k, v) in enumerate(pairs):
         env[f"GIT_CONFIG_KEY_{i}"] = k
         env[f"GIT_CONFIG_VALUE_{i}"] = v
     return env
+
+
+def _gh_config(path: str, tokens: dict[str, str]) -> None:
+    """gh's config for the Enterprise hosts, in its current (multi-account)
+    layout, so gh never migrates it (a migration asks each host who the user
+    is). Written with no follow and 0600, on this sidecar's tmpfs only."""
+    files = {"config.yml": 'version: "1"\ngit_protocol: https\nprompt: disabled\n',
+             "hosts.yml": "".join(f"{json.dumps(h)}:\n    git_protocol: https\n    user: x-access-token\n"
+                                  f"    oauth_token: {json.dumps(t)}\n"
+                                  f"    users:\n        x-access-token:\n            oauth_token: {json.dumps(t)}\n"
+                                  for h, t in tokens.items())}
+    for name, text in files.items():
+        fd = os.open(f"{path}/{name}", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
 
 
 def prepare(req, env: dict[str, str]) -> list[str]:
@@ -119,7 +173,17 @@ def prepare(req, env: dict[str, str]) -> list[str]:
 
 # --- gh ----------------------------------------------------------------------------
 
-REPO_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(\.git)?/?")
+REPO_URL = re.compile(r"https://([^/]+)/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(\.git)?/?")
+
+
+def _repo_url(value: str, settings: dict) -> bool:
+    """`https://<served host>/<owner>/<repo>[.git][/]`."""
+    m = REPO_URL.fullmatch(value)
+    return bool(m) and m[1].lower() in served(settings)
+
+
+def _names(settings: dict) -> str:
+    return ", ".join(served(settings))
 
 
 def _split(tok: str) -> tuple[str, str | None]:
@@ -130,20 +194,21 @@ def _split(tok: str) -> tuple[str, str | None]:
     return tok, None
 
 
-def _host_ok(value: str, what: str) -> None:
-    if value.lower().rstrip(".") != "github.com":
-        raise Refused(f"{what} {value!r}: this relay serves github.com only")
+def _host_ok(value: str, what: str, settings: dict) -> None:
+    if value.lower().rstrip(".") not in served(settings):
+        raise Refused(f"{what} {value!r}: this relay serves {_names(settings)} only")
 
 
-def _repo_ok(value: str) -> None:
-    """`-R [HOST/]OWNER/REPO` or a URL: github.com only."""
+def _repo_ok(value: str, settings: dict) -> None:
+    """`-R [HOST/]OWNER/REPO` or a URL: a served host only."""
     if "://" in value:
-        if not REPO_URL.fullmatch(value):
-            raise Refused(f"repository {value!r}: an https://github.com/<owner>/<repo> URL only")
+        if not _repo_url(value, settings):
+            raise Refused(f"repository {value!r}: an https://<host>/<owner>/<repo> URL only, the host one of "
+                          f"{_names(settings)}")
     elif value.count("/") == 2:
-        _host_ok(value.split("/", 1)[0], "repository host")
+        _host_ok(value.split("/", 1)[0], "repository host", settings)
     elif value.count("/") > 2 or value.startswith(("git@", "ssh:")):
-        raise Refused(f"repository {value!r}: use OWNER/REPO")
+        raise Refused(f"repository {value!r}: use OWNER/REPO (or HOST/OWNER/REPO)")
 
 
 # Flags whose value is checked or replaced. Every token is judged on its own
@@ -178,11 +243,11 @@ def _gh(req, args: list[str]) -> list[str]:
         raise Refused(f"`gh {joined}` is not in this session's github.allow")
     rest = args[len(words):]
     if words[0] == "api":
-        return [*words, *_gh_api(rest)]
+        return [*words, *_gh_api(rest, req.settings)]
     if joined == "repo clone":  # `gh repo clone <repo> [<dir>]`, nothing else (extra git args run code)
         if not 1 <= len(rest) <= 2 or any(t.startswith("-") for t in rest):
             raise Refused("relayed as `gh repo clone OWNER/REPO [<dir under /work>]` only")
-        _repo_ok(rest[0])
+        _repo_ok(rest[0], req.settings)
         return [*words, rest[0], *([req.directory(rest[1])] if len(rest) > 1 else [])]
     out: list[str] = [*words]
     i = 0
@@ -209,9 +274,9 @@ def _gh(req, args: list[str]) -> list[str]:
         elif name in GH_DIR_FLAGS:
             value = req.directory(value)
         elif name in GH_HOST_FLAGS:
-            _host_ok(value, name)
+            _host_ok(value, name, req.settings)
         else:
-            _repo_ok(value)
+            _repo_ok(value, req.settings)
         out += [name, value]
     if words[0] == "browse" and "--no-browser" not in out and "-n" not in out:
         out.append("--no-browser")
@@ -222,7 +287,7 @@ GH_API_VALUE = frozenset({"-X", "--method", "-H", "--header", "-f", "--raw-field
                           "--hostname", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview"})
 
 
-def _gh_api(args: list[str]) -> list[str]:
+def _gh_api(args: list[str], settings: dict) -> list[str]:
     method, explicit, fields, endpoint = "GET", False, False, None
     out: list[str] = []
     i = 0
@@ -241,7 +306,7 @@ def _gh_api(args: list[str]) -> list[str]:
         elif name in ("-H", "--header") and "method-override" in (v or "").lower():
             raise Refused("gh api: method-override headers are not relayed")
         elif name == "--hostname":
-            _host_ok(v or "", "--hostname")
+            _host_ok(v or "", "--hostname", settings)
         elif not name.startswith("-") and endpoint is None:
             endpoint = name
         elif name.startswith("-") and not name.startswith("--") and len(name) > 2:
@@ -251,7 +316,7 @@ def _gh_api(args: list[str]) -> list[str]:
     if endpoint is None:
         raise Refused("gh api needs an endpoint (e.g. repos/OWNER/REPO)")
     if "://" in endpoint or endpoint.lstrip("/").split("?")[0] == "graphql":
-        raise Refused("gh api: a REST path on api.github.com only (no URL, no graphql)")
+        raise Refused("gh api: a REST path only (no URL, no graphql; --hostname for another served host)")
     if method != "GET":
         raise Refused(f"gh api is relayed for GET only (got {method})")
     if fields and not explicit:
@@ -261,7 +326,6 @@ def _gh_api(args: list[str]) -> list[str]:
 
 # --- git ---------------------------------------------------------------------------
 
-GIT_NET = ("push", "fetch", "clone", "ls-remote")
 GIT_REFUSED = frozenset({
     "--upload-pack", "--receive-pack", "--exec", "--template", "--config", "-c", "--reference",
     "--reference-if-able", "--separate-git-dir", "--signed", "--recurse-submodules", "--recursive",
@@ -277,10 +341,12 @@ GIT_VALUE = {
 }
 
 
-def _url_ok(url: str) -> None:
-    if not REPO_URL.fullmatch(url):
-        raise Refused(f"remote {url!r}: this relay pushes and fetches https://github.com/<owner>/<repo> only "
-                      "(switch the remote with `git remote set-url origin https://github.com/OWNER/REPO.git`)")
+def _url_ok(url: str, settings: dict) -> None:
+    if not _repo_url(url, settings):
+        host = next(iter(served(settings)))
+        raise Refused(f"remote {url!r}: this relay pushes and fetches https://<host>/<owner>/<repo> only, the host "
+                      f"one of {_names(settings)} (switch the remote with `git remote set-url origin "
+                      f"https://{host}/OWNER/REPO.git`)")
 
 
 def _git_out(req, env: dict[str, str], *args: str) -> str:
@@ -315,8 +381,11 @@ def _default_remote(req, env, push: bool) -> str:
 
 
 def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
-    if not args or args[0] not in GIT_NET:
-        raise Refused(f"only git {', '.join(GIT_NET)} (and pull) are relayed; everything else is local")
+    verbs = [v for v in GIT_NET if v in req.settings["git"]]
+    if not args or args[0] not in verbs:
+        pull = " (and pull)" if "fetch" in verbs else ""
+        raise Refused(f"only git {', '.join(verbs) or 'nothing'}{pull} are relayed in this session; everything else "
+                      "is local")
     sub, rest = args[0], args[1:]
     value_flags = GIT_VALUE[sub]
     known = GIT_REFUSED | value_flags
@@ -353,7 +422,7 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
     if sub == "clone":
         if not positionals:
             raise Refused("git clone needs a URL")
-        _url_ok(positionals[0])
+        _url_ok(positionals[0], req.settings)
         if len(positionals) > 1:
             out[pos_at[1]] = req.directory(positionals[1])
         return out
@@ -371,5 +440,5 @@ def _git(req, args: list[str], env: dict[str, str]) -> list[str]:
         raise Refused("this repository rewrites URLs (url.*.insteadOf): push and fetch by remote name")
     for r in remotes:
         for url in _remote_urls(req, env, r, push):
-            _url_ok(url)
+            _url_ok(url, req.settings)
     return out

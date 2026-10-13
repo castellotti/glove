@@ -445,12 +445,14 @@ Shell commands have no network, under every enforcer, and that stays true.
 in the harness image hand each invocation to a sidecar that holds the token and
 runs the real command. What that adds, and what bounds it:
 
-- **The token never enters the harness.** It is resolved from the Keychain in
-  memory at `glove up` and reaches relayd's environment for that `compose up`
-  (as the LLM key reaches `llm-auth`). relayd passes it only to gh
-  and git. The live test finds it in neither the harness's environment, its
-  pid 1, nor any file under `/run`, `/tmp` or the home, and a wrapped command's
-  `env` has no `GH_TOKEN`.
+- **The tokens never enter the harness.** github.com's and each GitHub
+  Enterprise host's (`hosts:`) are resolved from the Keychain in memory at
+  `glove up` and reach relayd's environment for that `compose up` (as the LLM
+  key reaches `llm-auth`). relayd passes them only to gh and git. The live test
+  finds the token in neither the harness's environment, its pid 1, nor any file
+  under `/run`, `/tmp` or the home, and a wrapped command's `env` has no
+  `GH_TOKEN`; the Enterprise test finds neither host's token in a shell
+  command's environment or a session file.
 - **No socket, no route.** The shims talk over the `github` channel (files and
   FIFOs; glove's seccomp below srt forbids Unix sockets, which stays). A relayed
   command is not a network grant: the agent gets exactly what the policy runs.
@@ -459,9 +461,12 @@ runs the real command. What that adds, and what bounds it:
     `config`, `codespace`, `secret`, `variable`, `ssh-key` and `gpg-key` are
     never relayed (no `gh auth token`).
   - `gh api` is GET only: no GraphQL, no full URLs.
-  - Every host named must be github.com.
-  - git relays only `push`, `fetch`, `clone` and `ls-remote`, to
-    `https://github.com/<owner>/<repo>` remotes, judged by the URLs they resolve
+  - Every host named must be a served one: github.com (with `token`) or a
+    listed Enterprise host. gh reads an Enterprise host's token from a
+    `hosts.yml` relayd writes on the sidecar's tmpfs (0600, never on disk).
+  - git relays only the verbs in `github.git` (of `push`, `fetch`, `clone` and
+    `ls-remote`; drop `push` for a session that must not write), to
+    `https://<served host>/<owner>/<repo>` remotes, judged by the URLs they resolve
     to (`insteadOf` included). Options that run programs or read outside `/work`
     are refused, and so are their abbreviations.
   - The policy judges every argument token on its own: a parser that misread a
@@ -470,7 +475,8 @@ runs the real command. What that adds, and what bounds it:
   controls everything in it, including `.git/config`, so:
   - git runs with command-scope config that overrides the repo's: no hooks, no
     fsmonitor, no SSH command, askpass, editor or pager, and no credential
-    helper but ours, which answers for `https://github.com` only. Only https,
+    helpers but ours, one per served host, each answering with that host's
+    token only. Only https,
     with no submodule recursion, signing or gc. The unit tests run a hostile
     repo config against real git; none of its helpers run.
   - Every file argument (`--body-file`, …) is opened by relayd, inside `/work`
@@ -481,17 +487,18 @@ runs the real command. What that adds, and what bounds it:
     would check out the agent's files in the sidecar, where `.gitattributes`
     filters could run. `git pull` is a relayed fetch plus a *local* merge.
 - **Egress fence.** Whatever got past the policy, gh and git reach the network
-  only through relayd's in-process CONNECT proxy, which tunnels to GitHub's
-  hosts and refuses the rest. With `observe` the sidecar's only way out is its
-  own gate (`client: github`), so each GitHub host is a flow and
+  only through relayd's in-process CONNECT proxy, which tunnels to the served
+  hosts (an Enterprise host with its subdomains) and refuses the rest. With
+  `observe` the sidecar's only way out is its own gate (`client: github`), so
+  each GitHub host is a flow and
   `glove filter` can block it. The relayed command line itself is not network
   traffic; it is visible in the transcript's shell call.
-- **Residual risk.** The token can do whatever its scopes allow within the
+- **Residual risk.** A token can do whatever its scopes allow within the
   allowlist (push to any branch it can reach, comment, merge, close). Use a
-  fine-grained token limited to the session's repositories, and narrow `allow`.
-  A prompt-injected agent can push the contents of `/work` to a repository the
-  token can write. The fence keeps that on GitHub; it cannot tell your
-  repositories apart.
+  fine-grained token limited to the session's repositories, and narrow `allow`
+  (and `git`: without `push`, nothing is pushed). A prompt-injected agent can
+  push the contents of `/work` to a repository a token can write. The fence
+  keeps that on the served hosts; it cannot tell your repositories apart.
 
 ### `ssh`: the same relay, to named LAN hosts
 
