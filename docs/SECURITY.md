@@ -318,7 +318,12 @@ has no server-side switch for it). The controls:
   `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
-  tool, it is not a boundary around the MCP.
+  tool, it is not a boundary around the MCP. A `javascript:` URL passed to
+  `browser_navigate` would run in the current page like `browser_evaluate`
+  (verified), so unless that tool is allowed the sidecar's Chromium blocks
+  typed `javascript:` URLs by managed policy (`URLBlocklist`; verified live:
+  the page's title, which the MCP returns, is unchanged). A page's own
+  handlers still run.
 - **Vibe's MCP bridge.** Vibe reaches each extension's HTTP MCP server through
   `glove-mcp-bridge` (a stdio server, so one MCP session lasts the Vibe
   process). It is a child of the harness under the same sandbox, talks only to
@@ -355,6 +360,30 @@ has no server-side switch for it). The controls:
   outside the session. The sidecar holds no glove secret (the VNC passwords
   guard a loopback listener; a CA is public). Keep `uploads: work` off with a
   persistent profile you have logged in with.
+- **A stored session (`storage_state`, `glove playwright login`).** The
+  operator signs in with a dedicated Chrome on the host: a fresh profile under
+  `.glove/` (deleted afterwards), driven over CDP on a pipe, so no debugging
+  port exists for another local process to reach, and never wired to the
+  harness. It is outside the gate, but only the operator drives it. glove
+  reads its cookies and open tabs' localStorage, keeps only `login.domains`'
+  hosts and the named `login.capture` values, and writes each to the Keychain
+  on stdin (a long value in parts, checksummed); nothing is printed, in argv
+  or on disk. At `glove up` the state reaches the sidecar gzipped in its
+  environment (like a relay's token: `inspect` on the host shows it), is
+  written 0600 to its tmpfs and unset before the MCP and Chromium start
+  (verified live: only the container's init keeps it). **What widens:** the
+  agent browses as the operator on those hosts until the cookies expire, as
+  with `profile: session`. **What stays out of the model's reach:** the values
+  themselves. With `storage_state` set, `glove check` refuses the tools that
+  return or replace cookies and storage, run code in the page or the MCP, show
+  a request's headers, record a trace or serve a page of the agent's own on a
+  signed-in origin (`browser_cookie_*`,
+  `browser_*storage*`, `browser_evaluate`, `browser_run_code_unsafe`,
+  `browser_network_request`, `browser_start_tracing`, `browser_route`), and `uploads: work`
+  (the symlink residual above would reach the state file); the MCP refuses
+  `file:` URLs (verified live). A page on one of those hosts can still show
+  whatever the site itself puts in it. Captured values go only to the
+  Keychain, for relays that hold them in their own sidecars.
 - **Host mode** runs the browser and the MCP as the operator, on the desktop,
   with the host's network: refused when the egress is anonymising (vpn, tor),
   and with Vibe unless `i_accept_host_rce: true`. Its CDP and MCP ports are

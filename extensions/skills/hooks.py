@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from glove.image import STAGE_IGNORE
+from glove.naming import HOST_GLOB
 
 ROOT = "/opt/glove/plugins"
 DATA = "/work/.glove-plugin-data"
@@ -77,7 +78,6 @@ _CREDENTIAL_NAMES = (".env", ".env.*", ".netrc", ".npmrc", ".pypirc", ".git-cred
                      "*.jks", "*.keystore", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*")
 _NOT_CREDENTIALS = (".env.example", ".env.sample", ".env.template")
 _SCAN_LIMIT = 4 << 20  # bytes of one file searched (a key sits near the start; scripts are small)
-_HOST = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\Z")
 _HOME_PART = re.compile(r"^(?!\.\.?\Z)[A-Za-z0-9._-]+\Z")  # a dot file too (~/.config), never . or ..
 _FLAG = re.compile(r"^--?[A-Za-z0-9][A-Za-z0-9-]*\Z")
 _SUB = re.compile(r"^(\*|[A-Za-z0-9][A-Za-z0-9._:-]*)\Z")
@@ -444,7 +444,7 @@ def _relay(ctx: dict[str, Any], where: str, name: str, root: Path, raw: Any,
         if not isinstance(spec, dict) or (extra := sorted(set(spec) - COMMAND_KEYS)):
             raise SkillsError(f"{w}: want {{hosts, allow, out_flags, in_flags, env, files}}"
                               + (f"; unknown keys {extra}" if isinstance(spec, dict) else ""))
-        hosts = _strings(w, spec, "hosts", _HOST, "a host name, or *.<domain>")
+        hosts = _strings(w, spec, "hosts", HOST_GLOB, "a host name, or *.<domain>")
         allow = _strings(w, spec, "allow", _SUB, "a subcommand, or *")
         if not allow:
             raise SkillsError(f"{w}: allow lists the subcommands it may run (`*`: any)")

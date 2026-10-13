@@ -94,3 +94,25 @@ def quarantine_attr(p) -> str | None:
 
 
 darwin = pytest.mark.skipif(sys.platform != "darwin", reason="the quarantine attribute is macOS-only")
+
+
+def plan_pw(tmp_path, **settings):
+    """A pi session with `direct` and `playwright: settings`, planned."""
+    from glove.plan import build_session_plan
+
+    work = tmp_path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), subnet="172.31.4.0/24",
+                   extensions={"direct": {}, "playwright": settings})
+    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"),
+                              session_dir=str(tmp_path))
+
+
+def pw_service(tmp_path, plan) -> tuple[dict, str]:
+    """(the rendered playwright sidecar, the whole compose text)."""
+    import yaml
+
+    from glove.runtimes.docker import DockerRuntime
+
+    text = DockerRuntime().render(plan, tmp_path).compose_yaml
+    return yaml.safe_load(text)["services"]["glove-s-pw"], text

@@ -25,6 +25,7 @@ import ipaddress
 import re
 import secrets as pysecrets
 import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -191,7 +192,12 @@ def load_module(path: Path, name: str) -> ModuleType:
     if spec is None or spec.loader is None:
         raise ExtensionError(f"extension {name!r}: cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module  # dataclasses look their module up there
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

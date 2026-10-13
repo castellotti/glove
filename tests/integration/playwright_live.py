@@ -146,7 +146,7 @@ def main(directory: str) -> int:
         print(f"== the agent ({cfg.harness}) browses")
         log = Path(os.environ["STUB_LOG"]) if os.environ.get("STUB_LOG") else None
         mark = len(log.read_text()) if log else 0
-        prefix = {"vibe": "mcp_playwright.", "claude-code": "mcp__playwright__"}.get(cfg.harness, "")
+        prefix = live.tools["browser"]
         ans = live.call(f"{prefix}browser_navigate", {"url": "https://example.com"})
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))

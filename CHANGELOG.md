@@ -48,6 +48,30 @@ All notable changes to glove are documented here.
   served host or its subdomains. Verified live against a two-host stand-in behind `corporate` with
   a private CA (`test_github_ghes.sh`: Pi on Docker and Podman, Claude Code on
   Docker); a real GHES is untested.
+- **`glove playwright login`: sign in on the host, hand only the session to
+  the browser sidecar.** It starts a dedicated Chrome (a fresh profile, deleted
+  afterwards; CDP over a pipe, so no debugging port) at `login.start_url`; you
+  sign in (a Keychain client certificate works as in your own Chrome), press
+  Enter, and glove stores the cookies and open tabs' localStorage of the hosts
+  in `login.domains` as a Playwright storage state (`storage_state:
+  keychain:<service>`), plus each `login.capture` value (a cookie, or a
+  localStorage key narrowed by a regex) for plugin relays, all in the Keychain
+  on stdin, never printed or on disk. `playwright: {storage_state}` seeds every
+  new browser context of the sidecar (`profile: ephemeral`; refused with
+  `session` and `mode: host`): gzipped in its environment at `compose up`,
+  written 0600 to its tmpfs and unset before the MCP starts. With it, the tools
+  that would hand the session to the model are refused (`browser_cookie_*`,
+  `browser_*storage*`, `browser_evaluate`, `browser_network_request`,
+  `browser_start_tracing`, `browser_route`, …), and so is `uploads: work` (a link there could
+  name the state file). **`glove playwright reload`** recreates the
+  sidecar from the stored session; `status` shows the first cookie expiry.
+  Verified live (`test_playwright_login.sh`: a real host Chrome against a
+  stand-in sign-on site, the sidecar seeded through `corporate`; Pi and Claude
+  Code on Docker, Pi on Podman); a real IdP's client-certificate handshake is
+  untested.
+- Core `recreate_sidecar()` (glove/session.py): one sidecar recreated with a
+  fresh launch env while the harness keeps running (`glove skills reload`,
+  `glove playwright reload`).
 - A `contribute` hook may return `secret_refs` (label → reference) for secrets
   nested deeper than a `secret` setting; `glove check` checks they exist
   (`github.hosts`, the `skills` relays' secrets). And `egress_hosts` (the names
@@ -611,6 +635,21 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **`playwright`: a `javascript:` URL no longer stands in for
+  `browser_evaluate`.** `browser_navigate` to one ran the agent's script in
+  the current page, whose title the MCP returns, even with `browser_evaluate`
+  left out of `tools`. The sidecar's Chromium now blocks typed `javascript:`
+  URLs by managed policy unless `browser_evaluate` is allowed; a page's own
+  handlers and links are unaffected.
+- **`glove keychain set --stdin` with a long secret.** `security -i` reads at
+  most ~4 KB of a line and ran the rest as commands of its own, echoing parts
+  of the secret to the terminal and storing it truncated. A value that doesn't
+  fit one line is now stored in parts (`<service>.part<n>`, under a head
+  holding their count and SHA-256; a torn set is refused when read), with
+  `security`'s stderr withheld; a shorter value removes the old parts. A
+  non-ASCII secret is refused (`security -w` reads it back hex-encoded).
+- Extension modules loaded by path are registered in `sys.modules`, so a
+  dataclass in one works.
 - **Vibe keeps one MCP session per server.** Vibe 2.26 opens a new MCP session
   for every call to an HTTP server, so under Vibe each Playwright call started
   in a fresh browser (a click after a navigate, and so an upload, failed). The

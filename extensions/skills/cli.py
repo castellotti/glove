@@ -17,7 +17,6 @@ import functools
 import json
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -127,9 +126,7 @@ def reload(plugin: str = PLUGIN, directory: Path | None = DIR_OPT) -> None:
 
 def _reload(s: _Session, relay) -> None:
     from glove.config import ConfigError, resolve_secret
-    from glove.naming import project_name
-    from glove.session import _compose_base, compose_process_env
-    from glove.verify import _health
+    from glove.session import recreate_sidecar
 
     if not s.sd.compose.is_file() or not s.running(relay):
         raise _fail(f"{s.container(relay)} is not running; `glove up` starts it with the current secrets")
@@ -140,17 +137,9 @@ def _reload(s: _Session, relay) -> None:
         env = _hooks().relay_env(relay, resolve_secret)
     except (ConfigError, ValueError) as e:
         raise _fail(str(e)) from e
-    base = _compose_base(s.runtime, project_name(s.sid), s.sd.compose)
-    r = subprocess.run([*base, "up", "-d", "--no-deps", "--force-recreate", s.container(relay)],
-                       env=compose_process_env(s.runtime, env), check=False)
-    if r.returncode != 0:
-        raise _fail(f"recreating {s.container(relay)} failed (exit {r.returncode})")
-    for _ in range(30):
-        if _health(s.runtime, s.container(relay)) == "healthy":
-            console.print(f"[green]✓[/green] {s.container(relay)} reloaded")
-            return
-        time.sleep(1)
-    raise _fail(f"{s.container(relay)} did not become healthy; `{s.runtime} logs {s.container(relay)}`")
+    if (why := recreate_sidecar(s.runtime, s.sid, s.sd.compose, s.container(relay), env)) is not None:
+        raise _fail(why)
+    console.print(f"[green]✓[/green] {s.container(relay)} reloaded")
 
 
 def rendered_as(compose: dict, container: str, relay) -> bool:
@@ -171,11 +160,11 @@ def refresh(
 ) -> None:
     """Store new values for the relay's Keychain secrets (its refresh hooks,
     else a prompt), then reload it."""
-    from glove.config import ConfigError, keychain_set
+    from glove.config import ConfigError, keychain_service, keychain_set
 
     s = _Session(directory)
     relay = s.relays(plugin)[0]
-    refs = {ref: hook for ref, hook in relay.refresh.items() if ref.startswith("keychain:")}
+    refs = {ref: hook for ref, hook in relay.refresh.items() if keychain_service(ref)}
     if secret is not None:
         if f"keychain:{secret}" not in refs:
             raise _fail(f"{plugin}'s relay has no secret keychain:{secret} (it has {', '.join(sorted(refs))})")
@@ -183,7 +172,7 @@ def refresh(
     if not refs:
         raise _fail(f"{plugin}'s relay has no keychain: secret to refresh")
     for ref, hook in sorted(refs.items()):
-        service = ref.removeprefix("keychain:")
+        service = keychain_service(ref)
         if hook is None:
             if not sys.stdin.isatty():
                 raise _fail(f"{service} has no refresh hook; run this in a terminal to type it")

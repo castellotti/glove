@@ -323,7 +323,8 @@ glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow r
 glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
-glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv)
+glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv; a long
+                                             # one in parts, <service>.part<n>; ASCII only)
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
@@ -334,7 +335,10 @@ glove filter unblock <rule-id|target>        # (filter) only with the filter gra
 glove filter rules  [--json]                 # rules + the gates' load result
 glove filter validate <file|-> [--env ID] [--session ID] [--json]   # the gate's validator; pure
 glove playwright view [--dir D] [--control] [--no-open]   # (playwright novnc) watch/drive the browser
-glove playwright status [--dir D]
+glove playwright status [--dir D]            # also the stored session's first cookie expiry
+glove playwright login  [--dir D] [--keep-profile] [--no-reload]   # sign in with a dedicated host Chrome;
+                                             # the session and captures to the Keychain
+glove playwright reload [--dir D]            # recreate the browser sidecar from the stored session
 ```
 
 An extension with a `cli:` in its manifest is mounted at `glove <name> …`.
@@ -1112,7 +1116,14 @@ for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
 through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
 `downloads: work` what the browser saves lands in `<session>/browser-output/`
 (read-only at `/work/browser-output/`); with `uploads: work` it uploads from
-`/work/browser-uploads/` (read-only in the sidecar). Template:
+`/work/browser-uploads/` (read-only in the sidecar). For single sign-on,
+`glove playwright login` opens a dedicated Chrome on your machine (a fresh
+profile, CDP over a pipe, no port): you sign in, with your Keychain identity
+if the IdP asks for one, and glove stores only the cookies and localStorage of
+the hosts in `login.domains` (`storage_state`) and the named `login.capture`
+values (for plugin relays), each in the Keychain, never printed or on disk. The
+sidecar starts from the stored session (`profile: ephemeral`), and the tools
+that would hand it to the model are refused. Template:
 `glove new browse-watch <dir>`; details in
 [extensions/playwright/README.md](extensions/playwright/README.md).
 
@@ -1254,6 +1265,7 @@ Refused on podman: its compose provider can't apply the profile.
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe, glove's stdio bridge keeps one MCP session per server, so a click after a navigate (and so an upload) works: verified live on Docker (`test_playwright.sh vibe` and `downloads`, also across two `run_typescript` calls); the bridge itself on Docker and Podman (`test_mcp_bridge.sh`); the Vibe browser case on Podman: **untested** |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts. GitHub Enterprise hosts (`test_github_ghes.sh`): two stand-in hosts with a token each, behind `corporate`, over a private CA (`corporate_ca`), `git: [fetch, clone, ls-remote]` — Pi on Docker (nono+srt) and Podman (nono), Claude Code on Docker; a real GHES: **untested**; Vibe, `srt`, behind tor/vpn: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
+| Browser | `playwright login` + `storage_state` (sign in on the host, the sidecar seeded) | verified live (`test_playwright_login.sh`): a headless host Chrome (CDP over a pipe) signs in to a stand-in site; only `login.domains`' cookies kept (a parent-domain HttpOnly SSO cookie included), a cookie and a localStorage token captured, each in the Keychain; the sidecar signed in only after `glove playwright reload`, through the `corporate` gate; a typed `javascript:` URL runs nothing in the signed-in page (Chromium policy); the state file 0600 on its tmpfs, out of the MCP's and Chromium's environment, `file:` refused; no value in a session file or in what the model saw — Pi and Claude Code on Docker (nono+srt), Pi on Podman (nono, `chromium_sandbox: "off"`). A real IdP with a client certificate from the Keychain, a headed login, Vibe: **untested** |
 | Browser | `playwright` `mode: host` | implemented; MCP pinned (`playwright-core@1.63.0 mcp`); per-session Chrome profile and ports; refused behind vpn/tor, and with Vibe or Claude Code unless `i_accept_host_rce: true`; host-side start **untested** |
 
 The sidecar modes need nothing on the host. Host mode needs Node/npx and a
@@ -1336,6 +1348,10 @@ bash tests/integration/test_downloads.sh direct  # web_download end to end, obse
                                               # on macOS with OCR=1; also: vpn with VPN_SETTINGS=…,
                                               # HARNESS=vibe|claude-code, RT=podman; BIG=1 adds a
                                               # large ISO as a job, BIG=dvd a ~4 GB one)
+bash tests/integration/test_playwright_login.sh  # `glove playwright login` + storage_state: a headless
+                                              # host Chrome signs in to a stand-in site, the sidecar is
+                                              # seeded through corporate (20 checks; also: claude-code,
+                                              # RT=podman SANDBOX=off)
 bash tests/integration/test_github.sh         # the github relay vs a stub, nono + nono+srt (27 checks each;
                                               # OBSERVE=1 adds flows; GH_KEYCHAIN=… a real token, read-only
                                               # (30 with OBSERVE=1); GH_SCRATCH_REPO=owner/repo also a push (35))

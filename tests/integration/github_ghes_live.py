@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from live_common import check, container_log, glove, live_session, summary
+from live_common import check, glove, live_session, stand_in, summary
 
 STUB = Path(__file__).resolve().parent / "stubs" / "ghes_stub.py"
 
@@ -49,26 +49,14 @@ def main(directory: str) -> int:
             print(f"    $ {cmd[:100]}\n      {out[-300:]}", flush=True)
             return out
 
-        name = f"glove-test-ghes-{s.sid}"
-        image = yaml.safe_load(s.sd.compose.read_text())["services"][f"glove-{s.sid}-gh"]["image"]
-        try:
-            subprocess.run([s.rt, "network", "create", "--subnet", os.environ["GHES_SUBNET"], name], check=True,
-                           capture_output=True)
-            subprocess.run([s.rt, "run", "-d", "--name", name, "--network", name, "--network-alias", "ghes.test",
-                            "--network-alias", "ghes2.test", "-e", "GHES_TOKENS=" + json.dumps(tokens),
-                            "-e", "GIT_CONFIG_PARAMETERS='safe.directory=*'", "-v", f"{STUB}:/stub.py:ro",
-                            "-v", f"{fixture}:/fx:ro", "--entrypoint", "python3", image, "/stub.py", "443",
-                            "/fx/stub.pem", "/fx/stub.key", "/fx/repo.git"], check=True, capture_output=True)
-            subprocess.run([s.rt, "network", "connect", name, f"glove-{s.sid}-corporate-proxy"], check=True,
-                           capture_output=True)
+        image = yaml.safe_load(s.sd.compose.read_text())["services"][f"{s.prefix}-gh"]["image"]
+        with stand_in(s, image, ["python3", "/stub.py", "443", "/fx/stub.pem", "/fx/stub.key", "/fx/repo.git"],
+                      subnet=os.environ["GHES_SUBNET"], aliases=["ghes.test", "ghes2.test"],
+                      mounts=[(str(STUB), "/stub.py"), (fixture, "/fx")],
+                      extra=["-e", "GHES_TOKENS=" + json.dumps(tokens),
+                             "-e", "GIT_CONFIG_PARAMETERS='safe.directory=*'"]) as stub:
             _checks(s, sh, tokens)
-        finally:
-            stub_log = container_log(s.rt, name)
-            print("== the stand-in's log\n" + "".join(f"    {ln}\n" for ln in stub_log.splitlines()))
-            subprocess.run([s.rt, "network", "disconnect", "-f", name, f"glove-{s.sid}-corporate-proxy"],
-                           capture_output=True)
-            subprocess.run([s.rt, "rm", "-f", name], capture_output=True)
-            subprocess.run([s.rt, "network", "rm", name], capture_output=True)
+        stub_log = stub.log
         print("== what the stand-in saw")
         for line in ("GET ghes.test /api/v3/user auth=ok", "GET ghes2.test /api/v3/user auth=ok",
                      "GET ghes2.test /o/r.git/info/refs auth=ok", "POST ghes.test /o/r.git/git-upload-pack auth=ok"):

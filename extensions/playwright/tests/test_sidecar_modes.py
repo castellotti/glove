@@ -56,8 +56,10 @@ def test_headless_sidecar_is_hardened_and_alone_on_its_network(tmp_path):
     assert pw["healthcheck"]["test"][-1] == "exec 3<>/dev/tcp/127.0.0.1/8931"
     # its binds: the output dir, the download staging dir and the MCP config, all in its own state
     binds = {v["target"]: v for v in pw["volumes"]}
-    assert set(binds) == {"/data/output", "/data/staging", "/etc/glove/playwright/mcp.json"}
+    policy = "/etc/opt/chrome_for_testing/policies/managed/glove.json"
+    assert set(binds) == {"/data/output", "/data/staging", "/etc/glove/playwright/mcp.json", policy}
     assert binds["/etc/glove/playwright/mcp.json"]["read_only"] is True
+    assert binds[policy]["read_only"] is True
     assert all(v["source"].startswith(str(tmp_path / "ext" / "playwright")) for v in binds.values())
     # invariant 1: nothing published, anywhere
     assert not any("ports" in s for s in svcs.values())

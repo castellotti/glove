@@ -268,7 +268,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:4b2d814a01
+    image: glove/ext-playwright-pw:7959884162
     init: true
     command:
     - glove-pw-start
@@ -307,6 +307,10 @@ services:
     - type: bind
       source: <TMP>/ext/playwright/mcp.json
       target: /etc/glove/playwright/mcp.json
+      read_only: true
+    - type: bind
+      source: <TMP>/ext/playwright/chromium-policy.json
+      target: /etc/opt/chrome_for_testing/policies/managed/glove.json
       read_only: true
     restart: unless-stopped
     user: '501:20'

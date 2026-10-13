@@ -5,12 +5,9 @@ Chromium. Never a verification bypass; absent, nothing changes."""
 from __future__ import annotations
 
 import pytest
-import yaml
-from helpers import PEM, make_cfg
+from helpers import PEM, plan_pw, pw_service
 
 from glove.extensions import IN_TREE_DIR, ExtensionError, materialize
-from glove.plan import build_session_plan
-from glove.runtimes.docker import DockerRuntime
 
 PW = IN_TREE_DIR / "playwright"
 KEY = "-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n"
@@ -19,18 +16,7 @@ BYPASS = ("--ignore-certificate-errors", "ignoreHTTPSErrors", "NODE_TLS_REJECT_U
           "--ignore-https-errors", "--disable-web-security")
 
 
-def _plan(tmp_path, **settings):
-    work = tmp_path / "work"
-    work.mkdir(parents=True, exist_ok=True)
-    cfg = make_cfg(harness="pi", name="s", workdir=str(work), subnet="172.31.4.0/24",
-                   extensions={"direct": {}, "playwright": settings})
-    return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"),
-                              session_dir=str(tmp_path))
-
-
-def _pw(tmp_path, plan) -> tuple[dict, str]:
-    text = DockerRuntime().render(plan, tmp_path).compose_yaml
-    return yaml.safe_load(text)["services"]["glove-s-pw"], text
+_plan, _pw = plan_pw, pw_service
 
 
 def test_unset_renders_no_ca(tmp_path):
@@ -88,7 +74,8 @@ def test_host_mode_ignores_ca(tmp_path):
 def test_entrypoint_imports_into_nss_in_both_modes_and_never_bypasses():
     src = (PW / "image" / "glove-pw-start").read_text()
     assert 'certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"' in src
-    assert "\n  trust_corporate_ca\n}" in src and src.count("    prepare\n") == 2  # headless and novnc
+    assert "\n  trust_corporate_ca\n" in src.split("prepare() {")[1].split("}")[0]
+    assert src.count("    prepare\n") == 2  # headless and novnc
     assert "libnss3-tools" in (PW / "image" / "Dockerfile").read_text()
     for path in (PW / "image" / "glove-pw-start", PW / "compose" / "services.yml.j2", PW / "hooks.py"):
         text = path.read_text()
