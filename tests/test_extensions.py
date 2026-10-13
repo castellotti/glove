@@ -148,6 +148,17 @@ def test_when_predicates():
     assert not when_matches({"any": []}, ctx) and not when_matches({"any": {"harness": "vibe"}}, ctx)
 
 
+def test_when_a_star_matches_any_key_and_gives_what_it_found():
+    ctx = {"settings": {"plugins": {"a": {"relay": {"commands": {}}}, "b": {"path": "x"}, "c": {"relay": None}}}}
+    assert when_matches({"settings.plugins.*.relay": {"set": True}}, ctx)
+    assert not when_matches({"settings.plugins.*.mcp": {"set": True}}, ctx)
+    assert when_matches({"settings.plugins.*.mcp": {"set": False}}, ctx)
+    assert when_matches({"settings.plugins.*.path": "x"}, ctx)
+    assert not when_matches({"settings.plugins.*.path": "y"}, ctx)
+    assert not when_matches({"settings.plugins.*.relay": {"set": True}}, {"settings": {"plugins": {}}})
+    assert not when_matches({"settings.plugins.*.relay": {"set": True}}, {"settings": {}})
+
+
 @pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])
 def test_when_renders_follows_the_harness_contributions(harness, mcp):
     from glove.extensions import when_context

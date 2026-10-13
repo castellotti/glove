@@ -288,20 +288,25 @@ def validate_settings(m: Manifest, given: dict[str, Any] | None) -> dict[str, An
 
 
 def _lookup(ctx: dict[str, Any], dotted: str) -> Any:
-    cur: Any = ctx
-    for part in dotted.split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
-            return None
-    return cur
+    """The value at `dotted`, or None. A `*` part matches every key of a
+    mapping, and the result is then the list of what was found below it
+    (`settings.plugins.*.relay`: the plugins' relays)."""
+    parts = dotted.split(".")
+    found: list[Any] = [ctx]
+    for part in parts:
+        found = [v for cur in found if isinstance(cur, dict)
+                 for v in (cur.values() if part == "*" else [cur[part]] if part in cur else [])]
+    if "*" in parts:
+        return [v for v in found if v not in (None, "", [], {})]
+    return found[0] if found else None
 
 
 def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
     """Minimal predicate: every key's value equals (or is in, for a list) the
     context value. Keys are setting names, `harness`, `renders` (the harness's
     contributions, a list: it matches when it holds a wanted one) or dotted
-    `slot.<s>.<k>`. `{set: true|false}` asks whether the value is set (not null
+    (`slot.<s>.<k>`; a `*` part matches any key, as in `settings.plugins.*.relay`,
+    and gives the list of values found). `{set: true|false}` asks whether the value is set (not null
     or empty). `any: [<when>, …]` matches when one of its predicates does."""
     if not when:
         return True
@@ -471,10 +476,26 @@ class Active:
     exports: dict[str, Any] = field(default_factory=dict)
     hooks: ModuleType | None = None
     mounts: dict[str, str] = field(default_factory=dict)  # mount name → container path
+    # what its `contribute` hook returned (plan time), for the keys core reads
+    # beside the manifest's (`spec`)
+    contributed: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
         return self.manifest.name
+
+    def spec(self, key: str) -> Any:
+        """A manifest key that a `contribute` hook may extend: `privileges` and
+        `channels` (mappings, by service or channel name; the manifest's entry
+        wins) or `trust_corporate_ca` (a list of services)."""
+        mine, more = self.manifest.raw.get(key), self.contributed.get(key)
+        if key == "trust_corporate_ca":
+            if more is not None and (not isinstance(more, list) or not all(isinstance(x, str) for x in more)):
+                raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a list of its services")
+            return [*(mine or []), *(more or [])]
+        if more is not None and not isinstance(more, dict):
+            raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a mapping")
+        return {**(more or {}), **(mine or {})}
 
 
 @dataclass
@@ -1126,7 +1147,7 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
     trust: <file>, when: …}}` — a directory shared by the harness and those
     sidecars (`Channel`). A new edge into the harness, so a privilege: in-tree
     or trusted extensions only."""
-    for name, spec in (a.manifest.raw.get("channels") or {}).items():
+    for name, spec in a.spec("channels").items():
         where = f"extension {a.name!r} channel {name!r}"
         if (not _NAME.fullmatch(str(name)) or not isinstance(spec, dict)
                 or set(spec) - {"services", "read_only", "trust", "when"}
@@ -1199,6 +1220,9 @@ def compose(
                 raise
             except ValueError as e:
                 raise ExtensionError(f"extension {a.name!r}: {e}") from e
+        a.contributed = contributed
+        for key in ("channels", "privileges", "trust_corporate_ca"):
+            a.spec(key)  # well formed, or refused now
         a.exports = {**render_value(a.manifest.raw.get("exports") or {}, ctx, f"extension {a.name!r} exports"),
                      **(contributed.get("exports") or {})}
         for s in a.manifest.provides:
@@ -1240,6 +1264,7 @@ def compose(
                 comp.secrets[f"{a.name}-{sname}"] = (a.name, str(spec["from"]))
         _channels(comp, a, ctx)
         ctx["channel"] = {c.name: {"path": c.path} for c in comp.channels}  # for services fragments
+        ctx["vars"] = contributed.get("vars") or {}  # what its contribute hook computed for them
         frag = a.manifest.raw.get("services")
         if frag:
             path = a.manifest.path / frag
@@ -1256,7 +1281,21 @@ def compose(
                         comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
             if any(doc.values()):  # a fragment whose `{% if %}` left nothing adds nothing
                 comp.fragments.append((a, doc))
+        _check_exec(a, comp.verify, set((doc.get("services") or {}) if frag else ()))
     return comp
+
+
+def _check_exec(a: Active, checks: list[tuple[str, dict]], services: set[str]) -> None:
+    """An `exec-ok` check runs a command in one of the extension's own sidecars
+    (never the harness, never another extension's: it may hold a credential)."""
+    for ext, item in checks:
+        if ext != a.name or item.get("kind") != "exec-ok":
+            continue
+        argv = item.get("argv")
+        if item.get("service") not in services or not isinstance(argv, list) or not argv or not all(
+                isinstance(x, str) for x in argv):
+            raise ExtensionError(f"extension {a.name!r}: verify {item.get('name')!r}: exec-ok needs `service`, one "
+                                 f"of its own ({sorted(services)}), and `argv`, a list of strings")
 
 
 # Where compose secrets appear in a sidecar. Not /run/secrets: podman's default

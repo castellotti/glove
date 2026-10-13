@@ -171,3 +171,34 @@ def test_relay_is_a_library(tmp_path):
     cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), extensions={"direct": {}, "relay": {}})
     with pytest.raises(ExtensionError, match="library extension"):
         build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+
+
+def test_the_call_client_speaks_the_protocol(tmp_path, capfd):
+    """`relayd.py --call`: the request glove-relay makes (argv NUL-terminated,
+    cwd, FIFOs 1/2/rc, the id on the door), its output and exit code relayed."""
+    chan = tmp_path / "chan"
+    (chan / "req").mkdir(parents=True)
+    os.mkfifo(chan / "door")
+    seen = {}
+
+    def server():
+        with open(chan / "door") as door:
+            rid = door.readline().strip()
+        d = chan / "req" / rid
+        seen["argv"] = (d / "argv").read_bytes()
+        seen["cwd"] = (d / "cwd").read_text()
+        with open(d / "1", "w") as out, open(d / "2", "w") as err, open(d / "rc", "w") as rc:
+            out.write("hello\n")
+            err.write("warn\n")
+            out.flush()
+            err.flush()
+            rc.write("3\n")
+
+    t = threading.Thread(target=server, daemon=True)
+    t.start()
+    assert relayd.call(str(chan), ["scripts/x.py", "status", "a b"], timeout=10) == 3
+    t.join(5)
+    assert seen == {"argv": b"scripts/x.py\0status\0a b\0", "cwd": "/tmp"}
+    out, err = capfd.readouterr()
+    assert out == "hello\n" and err == "warn\n"
+    assert list((chan / "req").iterdir()) == []  # its request dir is gone

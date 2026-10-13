@@ -706,8 +706,9 @@ Core validates all of it:
     `when:` (here, on endpoints, services, verify checks and list items) matches
     setting names, `harness`, `renders` (the contributions the harness renders,
     e.g. `renders: mcp` rather than a list of harnesses), dotted
-    `slot.<slot>.<key>`, a list of allowed values, or `{set: true|false}`
-    (whether the value is set at all);
+    `slot.<slot>.<key>` (a `*` part matches any key, e.g.
+    `settings.plugins.*.relay`, and gives what it found below), a list of
+    allowed values, or `{set: true|false}` (whether the value is set at all);
   - `mcp: [{name, transport: stdio|http, …, tools: [...], all_tools: [...]}]`:
     an MCP server, rendered by harnesses that speak MCP. An item takes only
     the fields every harness renders alike: `name` (letters, digits, `_`, `-`;
@@ -735,7 +736,10 @@ Core validates all of it:
 
   Any other key is an error. A `contribute` hook may add `image` layers,
   `env`, `skills` (container paths in the image) and `mcp` items, taken as
-  given. Only its layers may `copy_host` (host paths it checked; the `skills`
+  given; and, for services its fragment renders from settings (`vars`, below),
+  `channels`, `privileges` and `trust_corporate_ca` entries, checked like the
+  manifest's (the manifest's own entry for a name wins), plus `endpoints` and
+  `verify` checks. Only its layers may `copy_host` (host paths it checked; the `skills`
   extension's plugins): core renders those last, after the toolchains, so an
   edit to a checkout rebuilds nothing else, and refuses a source an agent can
   write (a read-write mount, `/work` included, or another session's `work/`)
@@ -747,8 +751,9 @@ Core validates all of it:
   sidecar dialling its forwarders), `state`, `mount`, `work`
   (`{{ work.host }}` the host dir, `{{ work.target }}` where the `work`
   privilege binds it), `images`, `slot`, `channel.<name>.path`,
-  `output.<name>.path`/`input.<name>.path` (where a sidecar sees it) and
-  `exports`.
+  `output.<name>.path`/`input.<name>.path` (where a sidecar sees it),
+  `exports` and `vars` (what the extension's `contribute` hook computed for
+  it, e.g. one relay sidecar per plugin).
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
@@ -783,13 +788,16 @@ So only the tunnel container can reach the internet. If its proxy fails,
 consumers have no other route out (egress fails closed by topology).
 
 Before the harness starts, `glove up` runs each extension's **verify** checks:
-`container-healthy`, `tcp-open`, `http-ok`, `http-refused` and
-`exit-ip-differs`. `exit-ip-differs` requires the exit IP seen through the proxy
+`container-healthy`, `tcp-open`, `http-ok`, `http-refused`,
+`exit-ip-differs` and `exec-ok`. `exit-ip-differs` requires the exit IP seen through the proxy
 to differ from this machine's IP, and fails if either is unknown;
 `http-refused` requires the proxy to refuse a URL (corporate: the general
-internet). They run from throwaway hardened containers on
+internet); `exec-ok` runs a command inside a sidecar and requires exit 0 (its
+output withheld; `skills` checks a relay's credentials this way). The network
+checks run from throwaway hardened containers on
 the session's networks. A failing check shows the sidecar's last log lines (key
-and password lines withheld) and stops the session's sidecars. VPN secrets are
+and password lines withheld) and stops the session's sidecars, unless it is a
+`warn: true` check: then it is a warning and the session starts. VPN secrets are
 Keychain references handed to gluetun as compose secrets. An optional
 **register hook** in the session's `local/` can mint a fresh WireGuard key at
 every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
@@ -1036,7 +1044,44 @@ could edit what the next session bakes) or in glove's state, a symlink leaving t
 and a secret-shaped name or a `keychain:`/`env:` reference in `env`. A plugin's
 stdio MCP server runs under the tool wrapper (`glove-confine`: the per-command
 sandbox, no network), never with the harness's own network, which reaches the
-session's forwarders. Plugin hooks, commands and agents are not loaded. Details in
+session's forwarders. Plugin hooks, commands and agents are not loaded.
+
+Scripts that need a service and its credential run in a **relay** instead: a
+sidecar of the plugin's own (`skill-<name>`), which holds the secrets and the
+only route to the service's hosts. In the baked copy each such script is a shim
+to it, at the path the skill names, so the skill is unchanged:
+
+```yaml
+      connectors:
+        path: skills/connectors-repo/plugins/connectors
+        relay:
+          commands:
+            scripts/wiki_query.py:
+              hosts: [wiki.corp.example]                # its egress fence: port 443 to these only
+              allow: [search, fetch, children]          # its first non-flag argument; `*`: any
+              out_flags: [-o, --output]                 # a value must be a path under /work
+              env: { WIKI_PAT: keychain:corp-wiki-pat } # or {secret: keychain:…, refresh: local/mint.sh}
+            scripts/chat.py:
+              hosts: [chat.example.com, "*.chat.example.com"]
+              allow: [read, history, search]
+              files:                                    # rendered into the script's own home, 0600
+                ~/.config/chat/auth.json:
+                  template: local/chat-auth.json.j2     # {{ secrets.token }}
+                  secrets: { token: keychain:corp-chat-token }
+          check: ["scripts/wiki_query.py search glove -n 1"]   # at `glove up` (a warning) and in `glove skills status`
+```
+
+Each relayed command gets its own environment, home and fence; its secrets are
+resolved at `glove up`, in memory (a `files:` template too: written only in the
+sidecar's tmpfs), and never enter the harness. A subcommand not listed is
+refused, so a script's minting or posting commands run only when you list them.
+Relayed scripts run on the relay's Python (standard library only) with no
+stdin, and any argument that names a path must be under `/work`. When a token
+expires: `glove skills status` runs the checks, `glove skills refresh <plugin>`
+stores a new value (printed by the secret's `refresh:` hook, run on this machine
+with the Keychain service name, or typed at a prompt) and `glove skills reload
+<plugin>` recreates only that relay's sidecar, with the harness and the agent's
+conversation left running. Details in
 [extensions/skills/README.md](extensions/skills/README.md).
 
 ### Browser: `playwright`
@@ -1293,6 +1338,8 @@ bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chro
                                               # 40 with RT=podman: no srt session)
 bash tests/integration/test_skills.sh pi      # a Claude Code plugin baked and used (11 checks; also:
                                               # claude-code 14, vibe 13: its stdio MCP server)
+bash tests/integration/test_skills_relay.sh pi  # a plugin relay: token expiry, refresh, reload (14 checks;
+                                              # a throwaway Keychain item, deleted; a public echo host)
 # RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal);
 # KEEP=1 leaves a driver's session running
 # (images are per runtime: `glove build pi --provider podman`)

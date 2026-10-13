@@ -77,6 +77,34 @@ def test_container_healthy(tmp_path, monkeypatch):
         run_check("docker", plan, "vpn", {"kind": "container-healthy", "service": "gluetun"}, _quiet, sleep_scale=0)
 
 
+def test_exec_ok_runs_in_the_sidecar_and_withholds_its_output(tmp_path, monkeypatch):
+    plan = _plan(tmp_path)
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0 if cmd[-1] == "good" else 3, stdout=b"user@corp", stderr=b"")
+
+    monkeypatch.setattr(verify.subprocess, "run", fake)
+    item = {"kind": "exec-ok", "service": "relay", "argv": ["check", "good"]}
+    assert run_check("docker", plan, "x", item, _quiet) == "relay: exit 0"
+    assert calls[-1] == ["docker", "exec", "glove-s-relay", "check", "good"]
+    with pytest.raises(VerifyError, match=r"`check bad` exited 3 in relay \(output withheld\)") as e:
+        run_check("docker", plan, "x", {**item, "argv": ["check", "bad"]}, _quiet)
+    assert "user@corp" not in str(e.value)
+
+
+def test_a_warn_check_that_fails_lets_the_session_start(tmp_path, monkeypatch):
+    plan = _plan(tmp_path)
+    plan.composition.verify = [("x", {"name": "soft", "kind": "exec-ok", "service": "r", "argv": ["c"], "warn": True}),
+                               ("x", {"name": "hard", "kind": "exec-ok", "service": "r", "argv": ["c"]})]
+    monkeypatch.setattr(verify.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
+    said: list[str] = []
+    with pytest.raises(VerifyError, match="exited 1"):
+        run_verify("docker", plan, said.append)
+    assert any("⚠" in m and "a warning: the session starts anyway" in m for m in said)  # soft, then hard
+
+
 def test_unknown_kind_is_refused_at_compose_time(tmp_path):
     from glove.extensions import Manifest, compose
 

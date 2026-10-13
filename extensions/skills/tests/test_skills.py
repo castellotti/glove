@@ -259,7 +259,8 @@ def test_never_a_plugin_the_agent_can_write(tmp_path, plugin):
 @pytest.mark.parametrize("plugins, err", [
     ({"Demo": {"path": "skills"}}, "a plugin name is"),
     ({"demo": {}}, "want {path:"),
-    ({"demo": {"path": "skills/demo-repo/demo", "relay": {}}}, r"unknown keys \['relay'\]"),
+    ({"demo": {"path": "skills/demo-repo/demo", "relay": {}}}, r"relay: want \{commands"),
+    ({"demo": {"path": "skills/demo-repo/demo", "x": 1}}, r"unknown keys \['x'\]"),
     ({"demo": {"path": "skills/missing"}}, "does not exist"),
     ({"demo": {"path": "skills/demo-repo/demo/scripts"}}, "neither a Claude Code plugin"),
 ])
@@ -277,7 +278,7 @@ def test_materialize_creates_each_plugins_data_dir(tmp_path, plugin):
 def test_the_brief_names_each_plugin(tmp_path, plugin):
     brief = dict(_plan(tmp_path, skills=["greet"]).composition.rendered_briefs())["skills"]
     assert "Plugin **demo** is installed read-only at `/opt/glove/plugins/demo` (skills: greet)" in brief
-    assert "never try to obtain or store a credential yourself" in brief
+    assert "never try to obtain, mint or store a credential yourself" in brief
     brief = dict(_plan(tmp_path).composition.rendered_briefs())["skills"]  # every skill: none named
     assert "at `/opt/glove/plugins/demo`; its writable data directory" in brief
 

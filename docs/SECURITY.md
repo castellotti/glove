@@ -384,7 +384,7 @@ does not vet it.
   (`.env`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, keystores, SSH
   keys, a PEM private key anywhere) fails the plan.
 - **Build-time network only.** uv, a Python and each script's dependencies
-  (wheels, pinned by `uv export`, hash-checked by pip) are fetched when the
+  (wheels, pinned by `uv pip compile --generate-hashes`, hash-checked by pip) are fetched when the
   image is built; at run time scripts are offline. The harness's `/tmp` stays
   noexec: dependencies are installed into read-only per-dependency-set
   environments instead of a writable cache.
@@ -397,6 +397,46 @@ does not vet it.
   inventory fails closed.
 - **Not loaded:** plugin hooks, commands, agents, output styles; Claude Code
   still refuses plugins as such (the skills come in through `--add-dir`).
+
+**Relayed scripts (`relay:`)** give some of a plugin's scripts a credential and
+a route, in a sidecar of the plugin's own (`skill-<name>`, the `relay`
+library's `relayd`), never in the harness:
+- **What widens.** A script the operator listed reaches the hosts the operator
+  listed with a credential, on arguments the agent chooses. That is an
+  exfiltration path to those hosts, bounded per script: its `allow`ed
+  subcommands only (a script's minting, posting or saving subcommands are
+  refused unless listed; the default for corporate tools is read-only), its own
+  egress fence (only its `hosts`, port 443, through the session's egress
+  provider, which applies its own allowlist too; with `observe` the flows are
+  labelled `client: skill-<name>`), and paths under `/work` only (an input is
+  opened by the relay and checked through the opened file; any other argument
+  that names a path, or an existing file or link, must resolve under `/work`
+  too, so a positional file argument can't read the sidecar's own files, even
+  through a link the agent made in `/work`). Residual: a plain positional
+  argument is checked, then opened by the script, so the agent could swap the
+  file for a link in between; list such a flag under `in_flags`, whose file the
+  relay opens itself, to close that race.
+- **Secrets never enter the harness.** They are Keychain (or environment)
+  references resolved at `glove up` in memory and passed in the sidecar's
+  environment at `compose up` (a read-only container can't take an
+  environment-sourced compose secret), like `github`'s token; a `files:`
+  template is rendered in memory too and written only in the sidecar's tmpfs,
+  mode 0600. The compose file holds neither a secret nor its reference. A
+  shell command in the harness reaches the relay only through its channel, as
+  files and FIFOs, and gets the script's output, never its environment.
+- **Isolation inside the relay.** Each command's environment is built from
+  nothing, with its own `HOME`, files and fence; a script can still read its
+  own sidecar's process environment (the same uid), which holds that plugin's
+  secrets, so the boundary between credentials is the plugin: one sidecar each.
+- **Hardened like every sidecar**: the relay image (pinned base, pinned `gh`),
+  non-root, `cap_drop: ALL`, read-only rootfs, an internal network whose only
+  way out is the egress provider; `/work` read-write (the `work` privilege) only
+  when a command has file flags. The plugin's staged copy is bound read-only.
+- **Refresh hooks run on the host** (`glove skills refresh`): an operator's
+  script in the session directory (never `work/`), given only the Keychain
+  service name; its stdout is stored with `glove keychain set` and never
+  written to a file. `glove skills status` reports a check's exit code only
+  (output withheld: it may carry identifiers).
 
 ## Relays: gh and git from shell commands (`relay`, `github`)
 

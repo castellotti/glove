@@ -24,6 +24,28 @@ All notable changes to glove are documented here.
   `/work`, a read-write mount or another session's `work/`) or in `.glove/`, a
   symlink leaving it, a file that looks like a credential, a secret in `env`. Verified live with Pi, Claude
   Code and Vibe on Docker and Podman (`test_skills.sh`).
+- **Plugin relays: scripts with credentials, in a sidecar of the plugin's own.**
+  `skills.plugins.<name>.relay: {commands: {<script>: {hosts, allow, out_flags,
+  in_flags, env, files}}, check, timeout}`. Each relayed script is a shim in the
+  baked copy (`glove-relay skill-<name> <script>`); the sidecar runs the real
+  one with that command's own environment, home and egress fence (only its
+  hosts), its secrets resolved from the Keychain at `glove up` and a `files:`
+  template rendered in memory into its tmpfs. Unlisted subcommands are refused;
+  file flags and path arguments stay under `/work`. Checks run at `glove up` (a
+  warning by default). `glove skills status|refresh|reload`: run the checks,
+  store new values (from a secret's `refresh:` hook on the host, or a prompt)
+  and recreate only that relay's sidecar while the harness keeps running.
+  Verified live (`test_skills_relay.sh`).
+- **Verify kind `exec-ok`** (a command exits 0 inside a sidecar, output
+  withheld) and **`warn: true`** on any check (a failure warns; the session
+  starts).
+- **`relay`: one fence per command** (`HOSTS` as a mapping), a per-command
+  environment from `prepare`, and a client (`relayd.py --call`) for checks.
+- A `when:` may use `*` in a dotted key (`settings.plugins.*.relay`): any key,
+  the list of what it found.
+- A `contribute` hook may also return `channels`, `privileges`,
+  `trust_corporate_ca`, `endpoints` and `verify` checks, and `vars` for its
+  services fragment, for sidecars it renders per setting.
 - **Vibe loads contributed skills** (`skill_paths`, links under
   `/opt/glove/vibe/skills`), so `rag`'s skills now reach Vibe too.
 - A `contribute` hook may return `image` layers, `skills` and `mcp` items. Its

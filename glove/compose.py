@@ -67,7 +67,7 @@ def seccomp_profiles() -> set[str]:
 
 
 def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
-    raw = (a.manifest.raw.get("privileges") or {}).get(short)
+    raw = a.spec("privileges").get(short)
     items = raw if isinstance(raw, list) else [raw] if raw else []
     merged: dict[str, Any] = {}
     for p in _active_items(items, _ctx(comp, a)):
@@ -271,7 +271,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
             if extra.get("bind_selinux"):
                 bind["bind"] = {"selinux": extra["bind_selinux"]}
             out.setdefault("volumes", []).append(bind)
-    if comp.corporate_ca is not None and short in (a.manifest.raw.get("trust_corporate_ca") or []):
+    if comp.corporate_ca is not None and short in a.spec("trust_corporate_ca"):
         # read-only and never relabelled (SELinux `z` would relabel the
         # operator's own file, maybe a system trust anchor), as in the harness;
         # the image builds its bundle from it (GLOVE_CORPORATE_CA)
