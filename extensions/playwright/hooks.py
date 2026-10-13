@@ -17,6 +17,7 @@ import shutil
 import socket
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).parent
 # The one Playwright pin: the sidecar image installs it from its lockfile and
@@ -142,11 +143,15 @@ def corporate_ca(ctx: dict[str, Any]) -> Path | None:
 
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     s = ctx["settings"]
-    login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
+    login = login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
     check_storage_state(s)
     if s["mode"] != "host":
         corporate_ca(ctx)
-        return {}
+        if not s.get("storage_state") or login is None:
+            return {}
+        # the signed-in hosts, for `glove check` against a filtering egress
+        start = urlsplit(login.start_url).hostname or ""
+        return {"egress_hosts": sorted({start, *login.domains} - {""})}
     ports = host_ports(ctx)
     state = Path(ctx["state"])
     chrome = host_module("chrome")

@@ -68,7 +68,16 @@ All notable changes to glove are documented here.
   Verified live (`test_playwright_login.sh`: a real host Chrome against a
   stand-in sign-on site, the sidecar seeded through `corporate`; Pi and Claude
   Code on Docker, Pi on Podman); a real IdP's client-certificate handshake is
-  untested.
+  untested. With a stored session the browser's brief tells the agent it is
+  signed in as the operator, to change nothing there the task doesn't ask for,
+  and to ask for `glove playwright login` when a page wants a new sign-in;
+  behind `corporate`, `glove check` warns about a `login` host (`start_url`'s,
+  `domains`) the allowlist doesn't admit.
+- **Docs for credentialed corporate tools:** README "Credentials: store,
+  check, renew", SECURITY.md "Credentials for corporate tools: what each
+  widens", and a commented credentialed block in the `corporate` template (a
+  plugin with a relay, GitHub Enterprise hosts, a signed-in browser), tested to
+  plan once uncommented.
 - Core `recreate_sidecar()` (glove/session.py): one sidecar recreated with a
   fresh launch env while the harness keeps running (`glove skills reload`,
   `glove playwright reload`).

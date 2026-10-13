@@ -172,6 +172,12 @@ browser and the SSO session live. The agent's brief tells it to ask for
 `glove skills refresh <plugin>` on a 401 or `invalid_auth`, never to mint or
 store a credential itself.
 
+A value that only a signed-in browser holds (a chat app's session cookie or a
+token in its localStorage) can come from `glove playwright login` instead: name
+it under the playwright extension's `login.capture`, with the same Keychain
+service this relay's `env` references, sign in, then `glove skills reload
+<plugin>` ([../playwright/README.md](../playwright/README.md#signing-in-on-the-host-glove-playwright-login-and-storage_state)).
+
 ## Refused at plan time
 
 - a symlink that leaves the plugin (absolute, or resolving outside it);

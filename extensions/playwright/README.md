@@ -201,6 +201,9 @@ glove playwright status    # also: how many cookies, and when the first expires 
   before the MCP and Chromium start, and passes `--storage-state`: every new
   browser context starts signed in. A persistent profile ignores a storage
   state, so `profile: session` is refused with it, and so is `mode: host`.
+- **Behind `corporate`:** the browser must reach `start_url`'s host and every
+  host in `domains`, so `glove check` warns about one `allow_domains` doesn't
+  admit (a host on a private address needs `allow_cidrs` too).
 - **Expiry:** SSO cookies are short-lived. `glove playwright status` shows the
   earliest cookie expiry; run `login` again when it passes. `login` reloads the
   sidecar itself when it is running (`--no-reload` doesn't); a plugin relay

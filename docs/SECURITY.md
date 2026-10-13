@@ -61,6 +61,21 @@ remaining gaps for a session.
 | Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
 | Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
 
+## Credentials for corporate tools: what each widens
+
+Each credential below is a Keychain (or environment) reference, resolved in
+memory at `glove up` and held by one sidecar, never by the harness. What the
+agent gains is the use of the credential within a bound, never its value.
+
+| Change | What widens | Bound |
+|---|---|---|
+| a plugin's skills baked (`skills`) | the agent reads the plugin's skill text (prompts) and runs its scripts | the operator's trust in the plugin; scripts under the tool sandbox (no network); credential files and agent-writable sources refused ([below](#plugins-and-skills-skills)) |
+| a plugin relay (`skills…relay`) | a listed script reaches listed hosts with a credential, on arguments the agent chooses: a path out to those hosts | per script: an `allow`ed-subcommand list (read-only by default), its own host fence plus the egress allowlist, file arguments under `/work` only; one sidecar per plugin; flows labelled `client: skill-<name>` under `observe` |
+| GitHub Enterprise hosts (`github.hosts`) | `gh` and git to each named host, with its own token | github.com's policy per host; git verbs listed (`git: [fetch, clone, ls-remote]` drops push); `*.ghe.com` refused ([relays](#relays-gh-and-git-from-shell-commands-relay-github)) |
+| a corporate CA for every TLS client (`corporate_ca`) | none: trust is added, verification is never turned off | a public certificate only, validated at plan time |
+| `glove playwright login` | a Chrome on the host, outside the gate, while the operator signs in | a fresh profile, deleted after; CDP over a pipe (no port); never wired to the harness; only `login.domains`' and `login.capture`'s values kept, to the Keychain on stdin |
+| a stored browser session (`storage_state`) | the agent browses as the operator on those hosts until the cookies expire (as with `profile: session`) | the values never reach the model: the tools that return cookies, storage or headers, run code, trace or route are refused, so are `uploads: work` and typed `javascript:` URLs ([browser](#browser-playwright)) |
+
 ## Extensions (what a capability pack may and may not do)
 
 Every capability (the model, search, the browser, …) is an extension in

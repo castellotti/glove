@@ -216,6 +216,31 @@ def test_without_storage_state_nothing_is_seeded(tmp_path):
     plan = _plan(tmp_path)
     _, text = pw_service(tmp_path, plan)
     assert "PW_STORAGE_STATE" not in text and launch_env(plan.composition) == {}
+    assert "signed in as the operator" not in dict(plan.composition.rendered_briefs())["playwright"]
+
+
+def test_check_warns_when_corporate_does_not_admit_the_signed_in_hosts(tmp_path):
+    from glove.doctor import extension_checks
+
+    def egress_check(allow, **pw):
+        requested = {"llm": {"provider": "llama.cpp", "location": "host", "endpoint": "127.0.0.1:1"},
+                     "corporate": {"allow_domains": allow}, "playwright": pw}
+        return [c for c in extension_checks(requested, harness="pi", session_dir=tmp_path)
+                if c.name == "playwright egress"]
+
+    login = {"start_url": "https://wiki.corp.example/", "domains": ["corp.example", "*.corp.example"]}
+    c, = egress_check(["*.corp.example"], storage_state="keychain:s", login=login)
+    assert c.status == "warn" and "add 'corp.example' to" in c.detail  # the parent domain's cookies
+    c, = egress_check(["corp.example", "*.corp.example"], storage_state="keychain:s", login=login)
+    assert c.status == "ok" and c.detail.startswith("corporate admits *.corp.example, corp.example, wiki.corp.example")
+    assert egress_check([], login={"start_url": "https://wiki.corp.example/", "capture": {
+        "x": {"cookie": {"domain": "corp.example", "name": "d"}}}}) == []  # no stored session: nothing to reach
+
+
+def test_the_brief_says_the_browser_is_signed_in_and_how_to_renew(tmp_path):
+    brief = dict(_plan(tmp_path, storage_state="keychain:pw-state").composition.rendered_briefs())["playwright"]
+    assert "signed in as the operator" in brief and "`glove playwright login`" in brief
+    assert "pw-state" not in brief  # not even the reference
 
 
 @pytest.mark.parametrize(("value", "match"), [

@@ -18,3 +18,10 @@ glove check && glove up
 answers). `observe` is on: `glove observe flows` shows every destination the
 session tried, allowed or refused. Add `filter: {}` to block more at run time
 (`glove filter block …`); the allowlist itself only ever comes from this file.
+
+The session file ends with a commented block for credentialed tools: a Claude
+Code plugin whose API scripts run in a relay with a Keychain token, gh and git
+against GitHub Enterprise hosts (read-only git), and a browser you sign in to
+on this machine (`glove playwright login`). Uncomment what you use and fill its
+`<set-me>`s; the README's "Credentials: store, check, renew" has the order and
+what `glove check` checks.

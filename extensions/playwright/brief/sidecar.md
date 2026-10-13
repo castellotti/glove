@@ -3,5 +3,6 @@
 {% else %}- Downloads are kept outside /work, so you cannot open them from a shell.
 {% endif %}{% if settings.uploads == "work" %}- `browser_file_upload` can send only files you put in `/work/browser-uploads/` (give it the full path, e.g. `/work/browser-uploads/report.pdf`). Anything you put there can leave through the browser.
 {% endif %}- It is not a stealth browser: sites may detect automation. Do not log into personal accounts.
-{% if settings.mode == "novnc" %}- A human operator may be watching this browser live{% if settings.allow_control %} and may take control{% endif %}. If you hit a CAPTCHA or a login wall, stop and ask the operator; do not keep retrying. Never ask the operator to type secrets into the browser unless the task requires it: whatever they type, you can see.
+{% if settings.storage_state %}- The browser starts signed in as the operator on the sites they signed in to. Act as them only as far as the task needs: do not post, send, buy or change anything there unless the task says so. If a page asks you to sign in again, the stored session has expired: stop and ask the operator to run `glove playwright login`. Never type a password or code yourself.
+{% endif %}{% if settings.mode == "novnc" %}- A human operator may be watching this browser live{% if settings.allow_control %} and may take control{% endif %}. If you hit a CAPTCHA or a login wall, stop and ask the operator; do not keep retrying. Never ask the operator to type secrets into the browser unless the task requires it: whatever they type, you can see.
 {% endif %}

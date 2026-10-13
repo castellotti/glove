@@ -25,6 +25,42 @@ extensions:
   webfetch: {}                 # Pi's web_fetch, through the corporate gate
   observe: {}                  # record every flow (and transcripts) for review
   # filter: {}                 # let `glove filter …` / Layman block destinations too
+  #
+  # Credentialed tools (each secret a Keychain reference, never a value; every
+  # host below must also be in corporate.allow_domains, a GitHub host with
+  # "*.<host>", and a private address in allow_cidrs). Uncomment what you use;
+  # README "Credentials" has the order and what `glove check` checks.
+  #
+  # A Claude Code plugin cloned into skills/ (never mounted), its API scripts
+  # relayed with a token, read-only subcommands only:
+  # skills:
+  #   plugins:
+  #     <set-me>:                                  # your name for it ([a-z0-9-])
+  #       path: skills/<set-me>                    # the dir with .claude-plugin/plugin.json
+  #       # skills: [<set-me>]                     # default: all of them
+  #       relay:
+  #         commands:
+  #           scripts/<set-me>.py:
+  #             hosts: [<set-me>]                  # e.g. wiki.corp.example
+  #             allow: [<set-me>]                  # e.g. [search, fetch]: no posting subcommand
+  #             out_flags: [-o, --output]          # a value must be a path under /work
+  #             env: { <SET_ME>_TOKEN: keychain:<set-me> }   # or {secret: …, refresh: local/<hook>.sh}
+  #         check: ["scripts/<set-me>.py <set-me>"]          # at `glove up`, and `glove skills status`
+  #
+  # gh and git against GitHub Enterprise hosts, a token each, no push:
+  # github:
+  #   hosts: [{host: <set-me>, token: "keychain:<set-me>"}]  # e.g. git.corp.example
+  #   git: [fetch, clone, ls-remote]
+  #
+  # A browser signed in on this machine (`glove playwright login`), its session
+  # handed to the sidecar; `capture` stores single values a relay's env names:
+  # playwright:
+  #   profile: ephemeral                         # required with storage_state
+  #   storage_state: keychain:<set-me>
+  #   login:
+  #     start_url: https://<set-me>/             # a page behind your single sign-on
+  #     domains: [<set-me>, "*.<set-me>"]        # whose cookies and localStorage are kept
+  #     # capture: { <set-me>: {cookie: {domain: <set-me>, name: <set-me>}} }
 brief: |
   # corporate — session brief
 
