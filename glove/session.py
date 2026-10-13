@@ -172,6 +172,27 @@ def _compose_base(provider: str, project: str, compose_file: Path) -> list[str]:
     return [provider, "compose", "-p", project, "-f", str(compose_file)]
 
 
+def recreate_sidecar(provider: str, sid: str, compose_file: Path, container: str, env: dict[str, str],
+                     *, wait: int = 30) -> str | None:
+    """Recreate one sidecar of a running session with a fresh launch env (its
+    secrets resolved again) and nothing else: the harness and the agent's
+    conversation keep running. None once it is healthy again, else why not."""
+    import time
+
+    from .verify import _health
+
+    base = _compose_base(provider, project_name(sid), compose_file)
+    r = subprocess.run([*base, "up", "-d", "--no-deps", "--force-recreate", container],
+                       env=compose_process_env(provider, env), check=False)
+    if r.returncode != 0:
+        return f"recreating {container} failed (exit {r.returncode})"
+    for _ in range(wait):
+        if _health(provider, container) == "healthy":
+            return None
+        time.sleep(1)
+    return f"{container} did not become healthy; `{provider} logs {container}`"
+
+
 _SENSITIVE = re.compile(r"private.?key|password|passwd|secret|token", re.I)
 
 

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "demo": {
+      "command": "uv",
+      "args": ["run", "--script", "${CLAUDE_PLUGIN_ROOT}/mcp/server.py"],
+      "env": {"DEMO_DATA": "${CLAUDE_PLUGIN_DATA}"}
+    }
+  }
+}

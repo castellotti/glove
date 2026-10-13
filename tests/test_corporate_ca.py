@@ -5,19 +5,19 @@ from __future__ import annotations
 
 import pytest
 import yaml
-from helpers import make_cfg, make_session, render
+from helpers import PEM, make_cfg, make_session, render
 
 from glove import sessiondir as sdm
+from glove.cafile import CA_BUNDLE_ENV, CA_BUNDLE_PATH, SYSTEM_ROOTS
 from glove.config import ConfigError, _coerce
 from glove.enforcers.nono.policies import GLOVE_READ
 from glove.plan import CORPORATE_CA_PATH, build_session_plan
 
-PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
 KEYS = [f"-----BEGIN {kind}PRIVATE KEY-----\nMIIEfake\n-----END {kind}PRIVATE KEY-----\n"
         for kind in ("", "RSA ", "EC ", "ENCRYPTED ", "OPENSSH ")]
 # Tokens that would disable TLS verification; none may ever be rendered.
 BYPASS = ("NODE_TLS_REJECT_UNAUTHORIZED", "--ignore-certificate-errors", "ignoreHTTPSErrors",
-          "PYTHONHTTPSVERIFY", "GIT_SSL_NO_VERIFY", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+          "PYTHONHTTPSVERIFY", "GIT_SSL_NO_VERIFY", "http.sslVerify")
 
 
 def _cfg(tmp_path, **kw):
@@ -55,8 +55,9 @@ def test_session_file_accepts_the_key_and_still_refuses_bogus_ones(tmp_path):
 def test_unset_leaves_plan_and_render_untouched(tmp_path):
     plan, text = render(_cfg(tmp_path), tmp_path)
     assert plan.corporate_ca_host_path is None
-    assert "NODE_EXTRA_CA_CERTS" not in plan.environment
+    assert "NODE_EXTRA_CA_CERTS" not in plan.environment and not set(CA_BUNDLE_ENV) & set(plan.environment)
     assert "corporate" not in text and CORPORATE_CA_PATH not in text
+    assert plan.derived_dockerfile is None  # pi alone: the base image, no bundle layer
 
 
 def test_set_resolves_relative_to_the_session_dir_and_binds_read_only(tmp_path):
@@ -75,8 +76,32 @@ def test_set_resolves_relative_to_the_session_dir_and_binds_read_only(tmp_path):
     assert binds == [{"type": "bind", "source": plan.corporate_ca_host_path,
                       "target": CORPORATE_CA_PATH, "read_only": True}]
     assert harness["environment"]["NODE_EXTRA_CA_CERTS"] == CORPORATE_CA_PATH
-    # trust is only added: no verification-disabling or root-replacing var
+    # trust is only added: no verification-disabling var, and the store-replacing
+    # ones name the baked bundle (the image's roots first, then the CA)
     assert not any(tok in text for tok in BYPASS)
+    assert {k: harness["environment"][k] for k in CA_BUNDLE_ENV} == dict.fromkeys(CA_BUNDLE_ENV, CA_BUNDLE_PATH)
+
+
+def test_set_bakes_the_bundle_into_a_derived_image(tmp_path):
+    (tmp_path / "ca.pem").write_text(PEM)
+    plan = _plan(tmp_path, corporate_ca="ca.pem")
+    df = plan.derived_dockerfile
+    assert ("corporate_ca", tmp_path.resolve() / "ca.pem") in plan.derived_staged
+    assert "COPY corporate_ca/ca.pem /tmp/glove-corporate-ca.pem" in df
+    # fails the build if the image has no roots: a bundle of the CA alone would
+    # replace the public roots for every client that reads it
+    assert f"test -s {SYSTEM_ROOTS} &&" in df
+    assert f"cat {SYSTEM_ROOTS} /tmp/glove-corporate-ca.pem > {CA_BUNDLE_PATH}" in df
+    # a changed CA is a new image (content-addressed)
+    (tmp_path / "ca.pem").write_text(PEM + PEM)
+    assert _plan(tmp_path, corporate_ca="ca.pem").image != plan.image
+
+
+def test_an_explicit_env_entry_wins_for_the_bundle_vars_too(tmp_path):
+    (tmp_path / "ca.pem").write_text(PEM)
+    plan = _plan(tmp_path, corporate_ca="ca.pem", env={"SSL_CERT_FILE": "/work/mine.pem"})
+    assert plan.environment["SSL_CERT_FILE"] == "/work/mine.pem"
+    assert plan.environment["GIT_SSL_CAINFO"] == CA_BUNDLE_PATH
 
 
 def test_an_explicit_env_entry_wins(tmp_path):

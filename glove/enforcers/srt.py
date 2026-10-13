@@ -40,13 +40,12 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING
 
 from ..harnessconfig import LLM_API_KEY_ENV
 from ..mounts import CONTAINER_HOME
 from ..runtimes.base import Check
-from .base import ENFORCER_DIR, SECRET_DENY_VARS, SRT, scrub_argv, write_roots
+from .base import ENFORCER_DIR, SRT, is_secret_env_name, scrub_argv, write_roots
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -106,7 +105,7 @@ def denied_env(plan: SessionPlan) -> list[str]:
     harness holds a placeholder) and each harness env name nono's secret globs
     match in any case (over-denying is the safe side), by exact name, and the
     harness-process-only ones."""
-    secret = (k for k in plan.environment if any(fnmatchcase(k.upper(), g) for g in SECRET_DENY_VARS))
+    secret = (k for k in plan.environment if is_secret_env_name(k))
     return sorted({LLM_API_KEY_ENV, *secret, *plan.composition.shell_hidden_env})
 
 

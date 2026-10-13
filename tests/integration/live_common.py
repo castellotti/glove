@@ -54,15 +54,17 @@ def _secret(name: str) -> bool:
 # from run_typescript, the only place Vibe 2.26 offers them).
 TOOLS = {
     "pi": {"bash": "bash", "write": ("write", "path", "content"), "search": "web_search", "fetch": "web_fetch",
-           "download": "web_download", "download_status": "web_download_status", "cli": "/usr/local/bin/pi"},
+           "download": "web_download", "download_status": "web_download_status", "cli": "/usr/local/bin/pi",
+           "browser": ""},
     "vibe": {"bash": "bash", "write": ("write_file", "path", "content"),
              "search": "mcp_searxng.web_search", "fetch": "mcp_webfetch.fetch_url",
              "download": "mcp_webdownload.web_download", "download_status": "mcp_webdownload.web_download_status",
-             "cli": "vibe"},
+             "cli": "vibe", "browser": "mcp_playwright."},
     "claude-code": {"bash": "Bash", "write": ("Write", "file_path", "content"),
                     "search": "mcp__searxng__web_search", "fetch": "WebFetch",
                     "download": "mcp__webdownload__web_download",
-                    "download_status": "mcp__webdownload__web_download_status", "cli": "/usr/local/bin/claude"},
+                    "download_status": "mcp__webdownload__web_download_status", "cli": "/usr/local/bin/claude",
+                    "browser": "mcp__playwright__"},
 }
 
 
@@ -341,6 +343,38 @@ def live_session(directory: str, *, logs: str | None = None,
             teardown(sid, provider=s.rt, wipe=True)
     if not started:  # nothing to run the block against: the driver ends here
         raise SystemExit(summary())
+
+
+@dataclass
+class StandIn:
+    name: str
+    log: str = ""
+
+
+@contextmanager
+def stand_in(s: LiveSession, image: str, argv: list[str], *, subnet: str, aliases: list[str],
+             mounts: list[tuple[str, str]] = (), extra: list[str] = ()) -> Iterator[StandIn]:
+    """A stand-in server for a session behind `corporate`: `image` running
+    `argv` on a network of its own (`subnet`, which the session's
+    `allow_cidrs` must hold: the gate checks the resolved address), known by
+    `aliases`, with the corporate proxy joined to it. On the way out its log
+    is kept (`.log`) and printed, and the container and network go."""
+    si = StandIn(f"glove-test-standin-{s.sid}")
+    proxy = f"{s.prefix}-corporate-proxy"
+    try:
+        subprocess.run([s.rt, "network", "create", "--subnet", subnet, si.name], check=True, capture_output=True)
+        subprocess.run([s.rt, "run", "-d", "--name", si.name, "--network", si.name,
+                        *[a for h in aliases for a in ("--network-alias", h)],
+                        *[a for src, dst in mounts for a in ("-v", f"{src}:{dst}:ro")], *extra,
+                        "--entrypoint", argv[0], image, *argv[1:]], check=True, capture_output=True)
+        subprocess.run([s.rt, "network", "connect", si.name, proxy], check=True, capture_output=True)
+        yield si
+    finally:
+        si.log = container_log(s.rt, si.name)
+        print("== the stand-in's log\n" + "".join(f"    {ln}\n" for ln in si.log.splitlines()))
+        subprocess.run([s.rt, "network", "disconnect", "-f", si.name, proxy], capture_output=True)
+        subprocess.run([s.rt, "rm", "-f", si.name], capture_output=True)
+        subprocess.run([s.rt, "network", "rm", si.name], capture_output=True)
 
 
 def mcp_client_argv(rt: str, image: str, network: str, url: str, host: str, steps: list) -> list[str]:

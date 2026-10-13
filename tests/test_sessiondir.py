@@ -186,26 +186,50 @@ def test_browse_watch_template_plans_once_filled(tmp_path, monkeypatch):
     assert [e.name for e in comp.endpoints] == ["llm", "browser", "browser-egress"]
 
 
-def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
-    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
-    assert "corporate" in sdm.list_templates()
-    sd, sid = sdm.materialize("corporate", tmp_path / "corp")
-    text = sd.file.read_text()
-    filled = (text.replace("provider: <set-me>", "provider: llama.cpp").replace("location: <set-me>", "location: host")
-              .replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
-              .replace("allow_domains: [<set-me>]", 'allow_domains: ["*.corp.example"]'))
-    sd.file.write_text(filled)
-    raw = sdm.load_file(sd)
-    assert sdm.placeholders_left(raw) == []
-    from glove.plan import build_session_plan
+_CORPORATE = (("provider: <set-me>", "provider: llama.cpp"), ("location: <set-me>", "location: host"),
+              ("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"'),
+              ("allow_domains: [<set-me>]", 'allow_domains: ["*.corp.example"]'))
 
-    cfg = sdm.to_config(sd, raw, sid, subnet="172.31.9.0/24")
-    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
-                              session_dir=str(sd.root))
+
+def _replace(text, pairs):
+    for old, new in pairs:
+        text = text.replace(old, new)
+    return text
+
+
+def test_corporate_template_plans_once_filled(tmp_path, monkeypatch):
+    _, plan = _plan_template(tmp_path, monkeypatch, "corporate", lambda text: _replace(text, _CORPORATE))
     comp = plan.composition
     assert {a.name for a in comp.active} == {"llm", "gate", "corporate", "webfetch", "observe"}
     assert comp.slot_exports("egress")["route"] == "corporate"
     assert comp.slots["forwarder"].name == "observe"
+
+
+def test_corporate_templates_credentialed_block_plans_once_uncommented(tmp_path, monkeypatch):
+    """The commented skills/github/playwright block is a valid session once
+    uncommented and filled (its prose stays comments)."""
+    code = re.compile(r"^  # ( *([\w<>./-]+:|- ).*)$")
+    block = (("<set-me>:  ", "wiki:  "), ("skills/<set-me>", "skills/wiki"),
+             ("scripts/<set-me>.py <set-me>", "scripts/wiki.py search"), ("scripts/<set-me>.py", "scripts/wiki.py"),
+             ("hosts: [<set-me>]", "hosts: [wiki.corp.example]"), ("allow: [<set-me>]", "allow: [search]"),
+             ("<SET_ME>_TOKEN", "WIKI_TOKEN"), ("host: <set-me>", "host: git.corp.example"),
+             ("https://<set-me>/", "https://wiki.corp.example/"),
+             ('[<set-me>, "*.<set-me>"]', '[corp.example, "*.corp.example"]'), ("keychain:<set-me>", "keychain:svc"))
+    root = tmp_path / "corporate" / "skills" / "wiki"  # where _plan_template materializes the session
+    for rel, body in ((".claude-plugin/plugin.json", '{"name": "wiki"}'), ("skills/wiki/SKILL.md", "Wiki.\n"),
+                      ("scripts/wiki.py", "#!/usr/bin/env python3\nprint('ok')\n")):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(body)
+
+    def fill(text):
+        text = "\n".join(f"  {m.group(1)}" if (m := code.match(ln)) else ln for ln in text.splitlines()) + "\n"
+        return _replace(text, block + _CORPORATE)
+
+    _, plan = _plan_template(tmp_path, monkeypatch, "corporate", fill)
+    comp = plan.composition
+    assert {"skills", "github", "playwright"} <= {a.name for a in comp.active}
+    assert comp.by_name("playwright").settings["storage_state"] == "keychain:svc"
+    assert comp.by_name("github").settings["git"] == ["fetch", "clone", "ls-remote"]
 
 
 def _plan_template(tmp_path, monkeypatch, name, fill):

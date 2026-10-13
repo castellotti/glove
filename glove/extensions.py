@@ -24,6 +24,8 @@ import importlib.util
 import ipaddress
 import re
 import secrets as pysecrets
+import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -62,7 +64,7 @@ MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
-    "outputs", "inputs",
+    "outputs", "inputs", "trust_corporate_ca",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
@@ -143,7 +145,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     unknown = set(raw) - MANIFEST_KEYS
     if unknown:
         raise ExtensionError(f"extension {name!r}: unknown manifest keys {sorted(unknown)}")
-    for k in ("provides", "requires", "conflicts"):
+    for k in ("provides", "requires", "conflicts", "trust_corporate_ca"):
         if not isinstance(raw.get(k) or [], list):
             raise ExtensionError(f"extension {name!r}: `{k}` must be a list")
     bad_slots = [s for s in raw.get("provides") or [] if s not in SLOTS]
@@ -190,7 +192,12 @@ def load_module(path: Path, name: str) -> ModuleType:
     if spec is None or spec.loader is None:
         raise ExtensionError(f"extension {name!r}: cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module  # dataclasses look their module up there
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
@@ -287,20 +294,25 @@ def validate_settings(m: Manifest, given: dict[str, Any] | None) -> dict[str, An
 
 
 def _lookup(ctx: dict[str, Any], dotted: str) -> Any:
-    cur: Any = ctx
-    for part in dotted.split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
-            return None
-    return cur
+    """The value at `dotted`, or None. A `*` part matches every key of a
+    mapping, and the result is then the list of what was found below it
+    (`settings.plugins.*.relay`: the plugins' relays)."""
+    parts = dotted.split(".")
+    found: list[Any] = [ctx]
+    for part in parts:
+        found = [v for cur in found if isinstance(cur, dict)
+                 for v in (cur.values() if part == "*" else [cur[part]] if part in cur else [])]
+    if "*" in parts:
+        return [v for v in found if v not in (None, "", [], {})]
+    return found[0] if found else None
 
 
 def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
     """Minimal predicate: every key's value equals (or is in, for a list) the
     context value. Keys are setting names, `harness`, `renders` (the harness's
     contributions, a list: it matches when it holds a wanted one) or dotted
-    `slot.<s>.<k>`. `{set: true|false}` asks whether the value is set (not null
+    (`slot.<s>.<k>`; a `*` part matches any key, as in `settings.plugins.*.relay`,
+    and gives the list of values found). `{set: true|false}` asks whether the value is set (not null
     or empty). `any: [<when>, …]` matches when one of its predicates does."""
     if not when:
         return True
@@ -470,10 +482,26 @@ class Active:
     exports: dict[str, Any] = field(default_factory=dict)
     hooks: ModuleType | None = None
     mounts: dict[str, str] = field(default_factory=dict)  # mount name → container path
+    # what its `contribute` hook returned (plan time), for the keys core reads
+    # beside the manifest's (`spec`)
+    contributed: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
         return self.manifest.name
+
+    def spec(self, key: str) -> Any:
+        """A manifest key that a `contribute` hook may extend: `privileges` and
+        `channels` (mappings, by service or channel name; the manifest's entry
+        wins) or `trust_corporate_ca` (a list of services)."""
+        mine, more = self.manifest.raw.get(key), self.contributed.get(key)
+        if key == "trust_corporate_ca":
+            if more is not None and (not isinstance(more, list) or not all(isinstance(x, str) for x in more)):
+                raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a list of its services")
+            return [*(mine or []), *(more or [])]
+        if more is not None and not isinstance(more, dict):
+            raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a mapping")
+        return {**(more or {}), **(mine or {})}
 
 
 @dataclass
@@ -514,6 +542,10 @@ class Composition:
     # The harness's /work on the host: a trusted extension's sidecar binds all
     # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
+    # The session's validated `corporate_ca` PEM on the host (symlinks
+    # resolved): core binds it into the sidecars a manifest's
+    # `trust_corporate_ca:` names.
+    corporate_ca: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
     # Export root → this session's host dir (created by the CLI, never here).
@@ -572,6 +604,28 @@ class Composition:
 
     def skill_dest(self, ext: str, src: Path) -> str:
         return f"/opt/glove/skills/{ext}/{src.name}"
+
+    def skill_links(self) -> list[tuple[str, str]]:
+        """(link name, container path) per contributed skill, for a harness
+        that loads skills from one directory of links; a name taken by an
+        earlier skill gets its extension's prefix (and a number, if need be)."""
+        out: dict[str, str] = {}
+        for ext, _src, dest in self.skills:
+            name = base = Path(dest).name
+            n = 1
+            while name in out:  # never overwrite one: `<ext>-<name>`, then `<ext>-<name>-2`, …
+                name = f"{ext}-{base}" + (f"-{n}" if n > 1 else "")
+                n += 1
+            out[name] = dest
+        return list(out.items())
+
+    def skill_link_lines(self, directory: str) -> list[str]:
+        """Dockerfile lines baking `skill_links` into `directory` (none without skills)."""
+        links = self.skill_links()
+        if not links:
+            return []
+        ln = " && ".join(f"ln -s {shlex.quote(dest)} {shlex.quote(f'{directory}/{name}')}" for name, dest in links)
+        return [f"RUN mkdir -p {directory} && {ln}"]
 
     def rendered_briefs(self) -> list[tuple[str, str]]:
         out = []
@@ -962,7 +1016,11 @@ def mcp_server(where: str, item: Any) -> dict[str, Any]:
 HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief"}) | CONTRIBUTIONS
 
 
-def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
+def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[str, Any]) -> None:
+    """The manifest's `harness:` section, plus what a `contribute` hook
+    returned for it: `image` layers (only these may `copy_host`: host paths
+    the hook checked), `env`, `skills` (container paths of SKILL.md dirs in the
+    image) and `mcp` items, each taken as is (never rendered)."""
     h = a.manifest.raw.get("harness") or {}
     where = f"extension {a.name!r} harness"
     allowed = HARNESS_KEYS | set(known_harnesses())
@@ -979,7 +1037,10 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             for k in ("apt", "pip", "npm"):
                 if layer.get(k):
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
+            if "copy_host" in layer:
+                raise ExtensionError(f"{where}: image `copy_host` comes only from a contribute hook")
             comp.image_layers.append((a.name, layer))
+    comp.image_layers += [(a.name, layer) for layer in contributed.get("image") or []]
     # a value, or {value:, when:, shell:} (unset unless `when` matches; `shell: false`
     # hides it from shell commands)
     for k, v in (h.get("env") or {}).items():
@@ -996,6 +1057,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
         if not shell:
             comp.shell_hidden_env.add(k)
+    for k, v in (contributed.get("env") or {}).items():
+        set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
     comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
@@ -1014,8 +1077,9 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             if not (src / "SKILL.md").is_file() or not src.is_relative_to(a.manifest.path.resolve()):
                 raise ExtensionError(f"{where}: skill {spec['src']!r} needs a SKILL.md inside the extension")
             comp.skills.append((a.name, src, comp.skill_dest(a.name, src)))
+        comp.skills += [(a.name, None, str(dest)) for dest in contributed.get("skills") or []]
     if profile.renders("mcp"):
-        for item in render_value(active_items(h.get("mcp"), ctx), ctx, where):
+        for item in [*render_value(active_items(h.get("mcp"), ctx), ctx, where), *(contributed.get("mcp") or [])]:
             server = mcp_server(where, item)
             if any(s["name"] == server["name"] for _, s in comp.mcp):
                 raise ExtensionError(f"{where}: mcp server {server['name']!r} is already set by another extension")
@@ -1089,7 +1153,7 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
     trust: <file>, when: …}}` — a directory shared by the harness and those
     sidecars (`Channel`). A new edge into the harness, so a privilege: in-tree
     or trusted extensions only."""
-    for name, spec in (a.manifest.raw.get("channels") or {}).items():
+    for name, spec in a.spec("channels").items():
         where = f"extension {a.name!r} channel {name!r}"
         if (not _NAME.fullmatch(str(name)) or not isinstance(spec, dict)
                 or set(spec) - {"services", "read_only", "trust", "when"}
@@ -1141,11 +1205,12 @@ def compose(
     subnet: str | None = None,
     export_dirs: dict[str, Path] | None = None,
     work_dir: Path | None = None,
+    corporate_ca: Path | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, work_dir=work_dir, subnet=subnet,
+                       session_dir=session_dir, work_dir=work_dir, corporate_ca=corporate_ca, subnet=subnet,
                        export_dirs=dict(export_dirs or {}),
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
@@ -1161,6 +1226,9 @@ def compose(
                 raise
             except ValueError as e:
                 raise ExtensionError(f"extension {a.name!r}: {e}") from e
+        a.contributed = contributed
+        for key in ("channels", "privileges", "trust_corporate_ca"):
+            a.spec(key)  # well formed, or refused now
         a.exports = {**render_value(a.manifest.raw.get("exports") or {}, ctx, f"extension {a.name!r} exports"),
                      **(contributed.get("exports") or {})}
         for s in a.manifest.provides:
@@ -1189,9 +1257,7 @@ def compose(
         _outputs(comp, a, ctx, "inputs")
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
-        _harness_contrib(comp, a, ctx)
-        for k, v in (contributed.get("env") or {}).items():
-            set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
+        _harness_contrib(comp, a, ctx, contributed)
         _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
                                       *(contributed.get("host_services") or [])])
         for item in active_items([*(a.manifest.raw.get("verify") or []), *(contributed.get("verify") or [])], ctx):
@@ -1204,6 +1270,7 @@ def compose(
                 comp.secrets[f"{a.name}-{sname}"] = (a.name, str(spec["from"]))
         _channels(comp, a, ctx)
         ctx["channel"] = {c.name: {"path": c.path} for c in comp.channels}  # for services fragments
+        ctx["vars"] = contributed.get("vars") or {}  # what its contribute hook computed for them
         frag = a.manifest.raw.get("services")
         if frag:
             path = a.manifest.path / frag
@@ -1220,7 +1287,21 @@ def compose(
                         comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
             if any(doc.values()):  # a fragment whose `{% if %}` left nothing adds nothing
                 comp.fragments.append((a, doc))
+        _check_exec(a, comp.verify, set((doc.get("services") or {}) if frag else ()))
     return comp
+
+
+def _check_exec(a: Active, checks: list[tuple[str, dict]], services: set[str]) -> None:
+    """An `exec-ok` check runs a command in one of the extension's own sidecars
+    (never the harness, never another extension's: it may hold a credential)."""
+    for ext, item in checks:
+        if ext != a.name or item.get("kind") != "exec-ok":
+            continue
+        argv = item.get("argv")
+        if item.get("service") not in services or not isinstance(argv, list) or not argv or not all(
+                isinstance(x, str) for x in argv):
+            raise ExtensionError(f"extension {a.name!r}: verify {item.get('name')!r}: exec-ok needs `service`, one "
+                                 f"of its own ({sorted(services)}), and `argv`, a list of strings")
 
 
 # Where compose secrets appear in a sidecar. Not /run/secrets: podman's default

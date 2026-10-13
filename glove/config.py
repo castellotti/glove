@@ -8,6 +8,7 @@ session is reproducible.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -148,6 +149,12 @@ def is_secret_ref(value: str) -> bool:
     return str(value).startswith(SECRET_REF_PREFIXES)
 
 
+def keychain_service(ref: str) -> str | None:
+    """The service of a `keychain:<service>` reference, else None."""
+    ref = str(ref)
+    return (ref.removeprefix("keychain:") or None) if ref.startswith("keychain:") else None
+
+
 def resolve_secret(value: str) -> str:
     """Resolve a secret setting to its value, in memory only.
 
@@ -163,14 +170,17 @@ def resolve_secret(value: str) -> str:
             raise ConfigError("keychain: reference needs a service name (keychain:<service>)")
         if not shutil.which("security"):
             raise ConfigError(f"{value}: the macOS `security` tool is not available on this host")
-        r = subprocess.run(
-            ["security", "find-generic-password", "-s", service, "-w"],
-            capture_output=True, text=True, check=False,
-        )
-        secret = r.stdout.rstrip("\n")
-        if r.returncode != 0 or not secret:
+        secret = _keychain_read(service)
+        if secret is None:
             raise ConfigError(f"{value}: no Keychain generic password for service {service!r}")
-        return secret
+        if not secret.startswith(PARTS):
+            return secret
+        n, _, digest = secret.removeprefix(PARTS).partition(":")
+        parts = [_keychain_read(_part(service, i)) for i in range(1, int(n) + 1)] if n.isdigit() else [None]
+        joined = "".join(p or "" for p in parts)
+        if None in parts or hashlib.sha256(joined.encode()).hexdigest() != digest:
+            raise ConfigError(f"{value}: its parts ({service}.part<n>) are missing or don't match; store it again")
+        return joined
     if value.startswith("env:"):
         var = value.removeprefix("env:")
         secret = os.environ.get(var, "")
@@ -199,16 +209,84 @@ def secret_exists(value: str) -> tuple[bool, str]:
     return False, "not a reference (keychain:<service> | env:<VAR>)"
 
 
-def keychain_set(service: str) -> int:
-    """Store a secret in the login Keychain, prompting for it: `-w` as the last
-    option makes `security` read it from the terminal, so it is never in argv."""
+# `security -i` reads a line of at most ~4 KB and runs the overflow as
+# commands of its own, echoing them (the secret's tail included). A value
+# that doesn't fit one line is stored in parts (`<service>.part<i>`), with a
+# head `glove-parts:<n>:<sha256>` under the service itself.
+_LINE_MAX = 3800
+PARTS = "glove-parts:"
+_VALUE_MAX = 4 << 20
+
+
+def _keychain_read(service: str) -> str | None:
+    r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                       capture_output=True, text=True, check=False)
+    secret = r.stdout.rstrip("\n")
+    return secret if r.returncode == 0 and secret else None
+
+
+def _part(service: str, i: int) -> str:
+    return f"{service}.part{i}"
+
+
+def _quote(word: str) -> str:
+    return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def keychain_set(service: str, secret: str | None = None) -> int:
+    """Store a secret in the login Keychain. Prompted for (None): `-w` as the
+    last option makes `security` read it from the terminal. Given: it goes to
+    `security -i` on stdin, quoted, in parts if it is long. Never in argv
+    either way."""
     if not service or service.startswith("-"):
         raise ConfigError(f"invalid Keychain service name {service!r}")
     if not shutil.which("security"):
         raise ConfigError("the macOS `security` tool is not available on this host")
     user = os.environ.get("USER") or "glove"
-    return subprocess.run(["security", "add-generic-password", "-U", "-a", user, "-s", service, "-w"],
-                          check=False).returncode
+
+    def cmd(svc: str) -> list[str]:
+        return ["add-generic-password", "-U", "-a", user, "-s", svc, "-w"]
+
+    if secret is None:
+        return subprocess.run(["security", *cmd(service)], check=False).returncode
+    if not secret or any(c in w for w in (secret, service, user) for c in "\n\r\0"):
+        raise ConfigError("the secret (and the service name) must be one non-empty line")
+    if not secret.isascii():  # `security -w` would read it back hex-encoded
+        raise ConfigError("the secret must be ASCII")
+    if secret.startswith(PARTS) or len(secret) > _VALUE_MAX:
+        raise ConfigError(f"the secret must not start with {PARTS!r} and is at most {_VALUE_MAX >> 20} MB")
+
+    def store(svc: str, value: str) -> int:
+        line = " ".join(_quote(w) for w in [*cmd(svc), value])
+        # stderr withheld: security echoes a command it could not run
+        return subprocess.run(["security", "-i"], input=line + "\n", text=True, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, check=False).returncode
+
+    budget = _LINE_MAX - len(" ".join(_quote(w) for w in cmd(_part(service, 1 << 20)))) - 3
+    parts, start, size = [], 0, 0
+    for i, c in enumerate(secret):
+        n = 2 if c in '"\\' else 1  # quoted width (ASCII)
+        if size + n > budget:
+            parts.append(secret[start:i])
+            start, size = i, 0
+        size += n
+    parts.append(secret[start:])
+    if len(parts) > 1:
+        for i, part in enumerate(parts, 1):
+            if rc := store(_part(service, i), part):
+                return rc
+        head = f"{PARTS}{len(parts)}:{hashlib.sha256(secret.encode()).hexdigest()}"
+        if rc := store(service, head):
+            return rc
+    elif rc := store(service, secret):
+        return rc
+    # a shorter value leaves no stale parts behind (bounded: never more parts
+    # than the largest value has)
+    for i in range(len(parts) + 1 if len(parts) > 1 else 1, _VALUE_MAX // budget + 2):
+        if subprocess.run(["security", "delete-generic-password", "-s", _part(service, i)],
+                          capture_output=True, check=False).returncode != 0:
+            break
+    return 0
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:

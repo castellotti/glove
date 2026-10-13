@@ -8,7 +8,8 @@ WebFetch summariser, title generation) → "ECHO: <the user text, from the
 first `---`>". Everything else → a fixed sentence. Logs each
 request path, the auth header names present and which key arrived (never
 values: `key=`, see llm_stub.key_kind) and the tool names offered
-(`tools=a,b`, as llm_stub; live_common.offered_tools). With GLOVE_TEST_LLM_KEY
+(`tools=a,b`, as llm_stub; live_common.offered_tools) and the skills it lists
+for its Skill tool (`skills=a,b`). With GLOVE_TEST_LLM_KEY
 set, a request without that key (`x-api-key`, or `Authorization: Bearer`) gets
 a 401, as Anthropic's API would. Its account API answers `{}` (`/api/oauth/...`)
 or 404, "none" (`/api/claude_code/...`, remote settings and policy limits: a
@@ -62,6 +63,14 @@ def _reply(result, text: str, tools: list) -> list[dict]:
     if not tools:
         return [{"type": "text", "text": "ECHO: " + text[text.find("---"):][:1200]}]
     return [{"type": "text", "text": REPLY}]
+
+
+def _skills(req) -> list[str]:
+    """The skill names Claude Code lists for its Skill tool (a system reminder)."""
+    for text in [_text(req.get("system")), *(_text(m.get("content")) for m in req.get("messages") or [])]:
+        if (i := text.find("skills are available for use with the Skill tool:")) >= 0:
+            return re.findall(r"(?m)^- ([\w:.-]+): ", text[i:])
+    return []
 
 
 def _last_user(msgs):
@@ -121,6 +130,9 @@ class H(BaseHTTPRequestHandler):
             return self._json({}, 404)
         tools = [t.get("name") for t in req.get("tools") or []]
         print(f"stub: tools={','.join(tools)}", flush=True)
+        listed = _skills(req)
+        if listed:
+            print(f"stub: skills={','.join(listed)}", flush=True)
         content = _last_user(req.get("messages") or [])
         blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
         result = next((b for b in blocks if b.get("type") == "tool_result"), None)

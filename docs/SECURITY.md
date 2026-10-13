@@ -54,12 +54,27 @@ remaining gaps for a session.
 | Host source outside the allow-list | prompt-injected shell cmd | rings 0 + 1 | only exposed dirs are bind-mounted; ring 1 denies the rest even inside the container |
 | The harness's own config / extensions / session transcripts | shell cmd | rings 0 + 1 | only the config home is writable to the harness process (see "The harness home" below), and the home is **denied to tool commands** (Landlock omit / srt deny of the home mount) |
 | LLM API key or subscription token | the harness process (a loader bug, a plugin, a prompt-injected agent) | ring 0 | only the `llm-auth` sidecar holds it; the harness's variable holds the public placeholder `glove-injected` (see "Inference: the key in `llm-auth`" below) |
-| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | every enforcer's tool wrapper starts with `glove-pty notty -u <glob>`, which unsets each env name matching a secret glob (the LLM key's variable, `*KEY*`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*CREDENTIAL*`, `*PASSWORD*`) in any case, whoever set it (glove, the operator's `env:`, an image layer), before the command runs; a bad argument runs nothing. A second layer stays: nono `deny_vars` (the same globs, but case-sensitive: measured, `db_password` and `api_key` reached a `nono wrap`ped command) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key's variable and each harness env name the globs match, as bwrap `--unsetenv`). So no secret-shaped name is in a tool's env (`test_tool_confine.sh`, `test_config_protect.sh`, `test_cc_nono.sh` set lower- and mixed-case names and one glove did not set). A secret under a name no glob matches is the operator's to keep out of `env:`. glove passes no secret into the harness itself: a key an inference provider doesn't inject is refused at plan time. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
+| Any other secret in the harness env | shell cmd (`env`, reading config, `/proc/<harness>/environ`) | ring 1 | every enforcer's tool wrapper starts with `glove-pty notty -u <glob>`, which unsets each env name matching a secret glob (the LLM key's variable, `*KEY*`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*CREDENTIAL*`, `*PASSWORD*`, `*COOKIE*`, and a personal access token's `*_PAT`, `PAT_*`, `*_PAT_*`, which never match `PATH`) in any case, whoever set it (glove, the operator's `env:`, an image layer), before the command runs; a bad argument runs nothing. A second layer stays: nono `deny_vars` (the same globs, but case-sensitive: measured, `db_password` and `api_key` reached a `nono wrap`ped command) and srt `credentials.envVars` `mode: deny` (exact names: the LLM key's variable and each harness env name the globs match, as bwrap `--unsetenv`). So no secret-shaped name is in a tool's env (`test_tool_confine.sh`, `test_config_protect.sh`, `test_cc_nono.sh` set lower- and mixed-case names and one glove did not set). A secret under a name no glob matches is the operator's to keep out of `env:`. glove passes no secret into the harness itself: a key an inference provider doesn't inject is refused at plan time. A tool command cannot read the harness's `/proc/<pid>/environ`: Landlock scoping denies it under nono, and under srt the kernel refuses it across bwrap's user namespace (weak mode; verified on Docker Desktop's 7.0 kernel, re-checked by `tests/integration/test_pi_srt.sh`), while strong mode has a separate PID namespace. Weak mode still shows the harness's PIDs and process names. With `enforcer_options: {nono: {browsers: true}}` (for Chromium in shell commands) the tool profile reads all of `/proc`; Landlock still refuses another domain's `environ`, `mem`, fd links and `root` (verified under nono+srt on Docker and plain nono on Podman, with the key in a harness-side process: readable from the harness, denied to a wrapped command; `tests/integration/test_toolchains.sh`), while command lines, `status`, `/proc/net` and `/proc/sys` become readable. |
 | The network (LAN, host loopback, arbitrary internet) | shell cmd | rings 0 + 1 | harness is on an internal-only bridge; only single-purpose forwarder sidecars are routable; tool commands are `--block-net` |
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 | Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
 | Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
+
+## Credentials for corporate tools: what each widens
+
+Each credential below is a Keychain (or environment) reference, resolved in
+memory at `glove up` and held by one sidecar, never by the harness. What the
+agent gains is the use of the credential within a bound, never its value.
+
+| Change | What widens | Bound |
+|---|---|---|
+| a plugin's skills baked (`skills`) | the agent reads the plugin's skill text (prompts) and runs its scripts | the operator's trust in the plugin; scripts under the tool sandbox (no network); credential files and agent-writable sources refused ([below](#plugins-and-skills-skills)) |
+| a plugin relay (`skills…relay`) | a listed script reaches listed hosts with a credential, on arguments the agent chooses: a path out to those hosts | per script: an `allow`ed-subcommand list (read-only by default), its own host fence plus the egress allowlist, file arguments under `/work` only; one sidecar per plugin; flows labelled `client: skill-<name>` under `observe` |
+| GitHub Enterprise hosts (`github.hosts`) | `gh` and git to each named host, with its own token | github.com's policy per host; git verbs listed (`git: [fetch, clone, ls-remote]` drops push); `*.ghe.com` refused ([relays](#relays-gh-and-git-from-shell-commands-relay-github)) |
+| a corporate CA for every TLS client (`corporate_ca`) | none: trust is added, verification is never turned off | a public certificate only, validated at plan time |
+| `glove playwright login` | a Chrome on the host, outside the gate, while the operator signs in | a fresh profile, deleted after; CDP over a pipe (no port); never wired to the harness; only `login.domains`' and `login.capture`'s values kept, to the Keychain on stdin |
+| a stored browser session (`storage_state`) | the agent browses as the operator on those hosts until the cookies expire (as with `profile: session`) | the values never reach the model: the tools that return cookies, storage or headers, run code, trace or route are refused, so are `uploads: work` and typed `javascript:` URLs ([browser](#browser-playwright)) |
 
 ## Extensions (what a capability pack may and may not do)
 
@@ -318,7 +333,12 @@ has no server-side switch for it). The controls:
   `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
-  tool, it is not a boundary around the MCP.
+  tool, it is not a boundary around the MCP. A `javascript:` URL passed to
+  `browser_navigate` would run in the current page like `browser_evaluate`
+  (verified), so unless that tool is allowed the sidecar's Chromium blocks
+  typed `javascript:` URLs by managed policy (`URLBlocklist`; verified live:
+  the page's title, which the MCP returns, is unchanged). A page's own
+  handlers still run.
 - **Vibe's MCP bridge.** Vibe reaches each extension's HTTP MCP server through
   `glove-mcp-bridge` (a stdio server, so one MCP session lasts the Vibe
   process). It is a child of the harness under the same sandbox, talks only to
@@ -355,6 +375,30 @@ has no server-side switch for it). The controls:
   outside the session. The sidecar holds no glove secret (the VNC passwords
   guard a loopback listener; a CA is public). Keep `uploads: work` off with a
   persistent profile you have logged in with.
+- **A stored session (`storage_state`, `glove playwright login`).** The
+  operator signs in with a dedicated Chrome on the host: a fresh profile under
+  `.glove/` (deleted afterwards), driven over CDP on a pipe, so no debugging
+  port exists for another local process to reach, and never wired to the
+  harness. It is outside the gate, but only the operator drives it. glove
+  reads its cookies and open tabs' localStorage, keeps only `login.domains`'
+  hosts and the named `login.capture` values, and writes each to the Keychain
+  on stdin (a long value in parts, checksummed); nothing is printed, in argv
+  or on disk. At `glove up` the state reaches the sidecar gzipped in its
+  environment (like a relay's token: `inspect` on the host shows it), is
+  written 0600 to its tmpfs and unset before the MCP and Chromium start
+  (verified live: only the container's init keeps it). **What widens:** the
+  agent browses as the operator on those hosts until the cookies expire, as
+  with `profile: session`. **What stays out of the model's reach:** the values
+  themselves. With `storage_state` set, `glove check` refuses the tools that
+  return or replace cookies and storage, run code in the page or the MCP, show
+  a request's headers, record a trace or serve a page of the agent's own on a
+  signed-in origin (`browser_cookie_*`,
+  `browser_*storage*`, `browser_evaluate`, `browser_run_code_unsafe`,
+  `browser_network_request`, `browser_start_tracing`, `browser_route`), and `uploads: work`
+  (the symlink residual above would reach the state file); the MCP refuses
+  `file:` URLs (verified live). A page on one of those hosts can still show
+  whatever the site itself puts in it. Captured values go only to the
+  Keychain, for relays that hold them in their own sidecars.
 - **Host mode** runs the browser and the MCP as the operator, on the desktop,
   with the host's network: refused when the egress is anonymising (vpn, tor),
   and with Vibe unless `i_accept_host_rce: true`. Its CDP and MCP ports are
@@ -363,6 +407,81 @@ has no server-side switch for it). The controls:
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
 
+### Plugins and skills (`skills`)
+
+A plugin is code and prompts the operator chose to trust; glove bakes it, it
+does not vet it.
+- **What widens.** The agent reads the plugin's skill text (prompts) and runs
+  its scripts and `bin/` commands as shell commands: the same tool sandbox as
+  any command (`/work`, `/tmp`, rw mounts, no network). `env` values are plain
+  and visible to shell commands; a secret-shaped name or a `keychain:`/`env:`
+  reference is refused.
+- **Never the host checkout.** The plugin is baked into the image (read-only
+  rootfs), not bind-mounted. The session's `skills/` is never mounted and is
+  refused as a mount source or toolchain project. Core refuses any host tree a
+  hook bakes that an agent can write (`/work`, a read-write mount, another
+  registered session's `work/`): the agent could rewrite what the next session
+  bakes and runs, nor glove's state. A symlink leaving the plugin is refused.
+  Only the selected skills (and the plugin's other files) are staged, so an
+  unselected skill never reaches an image layer.
+- **Image layers are not secret storage.** A file that looks like a credential
+  (`.env`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, keystores, SSH
+  keys, a PEM private key anywhere) fails the plan.
+- **Build-time network only.** uv, a Python and each script's dependencies
+  (wheels, pinned by `uv pip compile --generate-hashes`, hash-checked by pip) are fetched when the
+  image is built; at run time scripts are offline. The harness's `/tmp` stays
+  noexec: dependencies are installed into read-only per-dependency-set
+  environments instead of a writable cache.
+- **MCP servers run under the tool wrapper.** A plugin's stdio server is
+  started through `glove-confine`, which execs the enforcer's tool wrapper
+  (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
+  not even the forwarders the harness process reaches (glove's own stdio MCP
+  servers on Claude Code run under the harness sandbox instead). With no
+  wrapper it refuses to start. Each server's tools must be listed; the
+  inventory fails closed.
+- **Not loaded:** plugin hooks, commands, agents, output styles; Claude Code
+  still refuses plugins as such (the skills come in through `--add-dir`).
+
+**Relayed scripts (`relay:`)** give some of a plugin's scripts a credential and
+a route, in a sidecar of the plugin's own (`skill-<name>`, the `relay`
+library's `relayd`), never in the harness:
+- **What widens.** A script the operator listed reaches the hosts the operator
+  listed with a credential, on arguments the agent chooses. That is an
+  exfiltration path to those hosts, bounded per script: its `allow`ed
+  subcommands only (a script's minting, posting or saving subcommands are
+  refused unless listed; the default for corporate tools is read-only), its own
+  egress fence (only its `hosts`, port 443, through the session's egress
+  provider, which applies its own allowlist too; with `observe` the flows are
+  labelled `client: skill-<name>`), and paths under `/work` only (an input is
+  opened by the relay and checked through the opened file; any other argument
+  that names a path, or an existing file or link, must resolve under `/work`
+  too, so a positional file argument can't read the sidecar's own files, even
+  through a link the agent made in `/work`). Residual: a plain positional
+  argument is checked, then opened by the script, so the agent could swap the
+  file for a link in between; list such a flag under `in_flags`, whose file the
+  relay opens itself, to close that race.
+- **Secrets never enter the harness.** They are Keychain (or environment)
+  references resolved at `glove up` in memory and passed in the sidecar's
+  environment at `compose up` (a read-only container can't take an
+  environment-sourced compose secret), like `github`'s token; a `files:`
+  template is rendered in memory too and written only in the sidecar's tmpfs,
+  mode 0600. The compose file holds neither a secret nor its reference. A
+  shell command in the harness reaches the relay only through its channel, as
+  files and FIFOs, and gets the script's output, never its environment.
+- **Isolation inside the relay.** Each command's environment is built from
+  nothing, with its own `HOME`, files and fence; a script can still read its
+  own sidecar's process environment (the same uid), which holds that plugin's
+  secrets, so the boundary between credentials is the plugin: one sidecar each.
+- **Hardened like every sidecar**: the relay image (pinned base, pinned `gh`),
+  non-root, `cap_drop: ALL`, read-only rootfs, an internal network whose only
+  way out is the egress provider; `/work` read-write (the `work` privilege) only
+  when a command has file flags. The plugin's staged copy is bound read-only.
+- **Refresh hooks run on the host** (`glove skills refresh`): an operator's
+  script in the session directory (never `work/`), given only the Keychain
+  service name; its stdout is stored with `glove keychain set` and never
+  written to a file. `glove skills status` reports a check's exit code only
+  (output withheld: it may carry identifiers).
+
 ## Relays: gh and git from shell commands (`relay`, `github`)
 
 Shell commands have no network, under every enforcer, and that stays true.
@@ -370,12 +489,14 @@ Shell commands have no network, under every enforcer, and that stays true.
 in the harness image hand each invocation to a sidecar that holds the token and
 runs the real command. What that adds, and what bounds it:
 
-- **The token never enters the harness.** It is resolved from the Keychain in
-  memory at `glove up` and reaches relayd's environment for that `compose up`
-  (as the LLM key reaches `llm-auth`). relayd passes it only to gh
-  and git. The live test finds it in neither the harness's environment, its
-  pid 1, nor any file under `/run`, `/tmp` or the home, and a wrapped command's
-  `env` has no `GH_TOKEN`.
+- **The tokens never enter the harness.** github.com's and each GitHub
+  Enterprise host's (`hosts:`) are resolved from the Keychain in memory at
+  `glove up` and reach relayd's environment for that `compose up` (as the LLM
+  key reaches `llm-auth`). relayd passes them only to gh and git. The live test
+  finds the token in neither the harness's environment, its pid 1, nor any file
+  under `/run`, `/tmp` or the home, and a wrapped command's `env` has no
+  `GH_TOKEN`; the Enterprise test finds neither host's token in a shell
+  command's environment or a session file.
 - **No socket, no route.** The shims talk over the `github` channel (files and
   FIFOs; glove's seccomp below srt forbids Unix sockets, which stays). A relayed
   command is not a network grant: the agent gets exactly what the policy runs.
@@ -384,9 +505,12 @@ runs the real command. What that adds, and what bounds it:
     `config`, `codespace`, `secret`, `variable`, `ssh-key` and `gpg-key` are
     never relayed (no `gh auth token`).
   - `gh api` is GET only: no GraphQL, no full URLs.
-  - Every host named must be github.com.
-  - git relays only `push`, `fetch`, `clone` and `ls-remote`, to
-    `https://github.com/<owner>/<repo>` remotes, judged by the URLs they resolve
+  - Every host named must be a served one: github.com (with `token`) or a
+    listed Enterprise host. gh reads an Enterprise host's token from a
+    `hosts.yml` relayd writes on the sidecar's tmpfs (0600, never on disk).
+  - git relays only the verbs in `github.git` (of `push`, `fetch`, `clone` and
+    `ls-remote`; drop `push` for a session that must not write), to
+    `https://<served host>/<owner>/<repo>` remotes, judged by the URLs they resolve
     to (`insteadOf` included). Options that run programs or read outside `/work`
     are refused, and so are their abbreviations.
   - The policy judges every argument token on its own: a parser that misread a
@@ -395,7 +519,8 @@ runs the real command. What that adds, and what bounds it:
   controls everything in it, including `.git/config`, so:
   - git runs with command-scope config that overrides the repo's: no hooks, no
     fsmonitor, no SSH command, askpass, editor or pager, and no credential
-    helper but ours, which answers for `https://github.com` only. Only https,
+    helpers but ours, one per served host, each answering with that host's
+    token only. Only https,
     with no submodule recursion, signing or gc. The unit tests run a hostile
     repo config against real git; none of its helpers run.
   - Every file argument (`--body-file`, …) is opened by relayd, inside `/work`
@@ -406,17 +531,18 @@ runs the real command. What that adds, and what bounds it:
     would check out the agent's files in the sidecar, where `.gitattributes`
     filters could run. `git pull` is a relayed fetch plus a *local* merge.
 - **Egress fence.** Whatever got past the policy, gh and git reach the network
-  only through relayd's in-process CONNECT proxy, which tunnels to GitHub's
-  hosts and refuses the rest. With `observe` the sidecar's only way out is its
-  own gate (`client: github`), so each GitHub host is a flow and
+  only through relayd's in-process CONNECT proxy, which tunnels to the served
+  hosts (an Enterprise host with its subdomains) and refuses the rest. With
+  `observe` the sidecar's only way out is its own gate (`client: github`), so
+  each GitHub host is a flow and
   `glove filter` can block it. The relayed command line itself is not network
   traffic; it is visible in the transcript's shell call.
-- **Residual risk.** The token can do whatever its scopes allow within the
+- **Residual risk.** A token can do whatever its scopes allow within the
   allowlist (push to any branch it can reach, comment, merge, close). Use a
-  fine-grained token limited to the session's repositories, and narrow `allow`.
-  A prompt-injected agent can push the contents of `/work` to a repository the
-  token can write. The fence keeps that on GitHub; it cannot tell your
-  repositories apart.
+  fine-grained token limited to the session's repositories, and narrow `allow`
+  (and `git`: without `push`, nothing is pushed). A prompt-injected agent can
+  push the contents of `/work` to a repository a token can write. The fence
+  keeps that on the served hosts; it cannot tell your repositories apart.
 
 ### `ssh`: the same relay, to named LAN hosts
 

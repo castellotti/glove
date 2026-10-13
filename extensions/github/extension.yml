@@ -1,17 +1,23 @@
 api: 1
 name: github
-summary: gh, and git push/fetch/pull/clone, from shell commands — relayed to a sidecar that holds the token; the sandbox never sees it or gets a route.
+summary: gh, and git push/fetch/pull/clone, from shell commands — relayed to a sidecar that holds the tokens (github.com, GitHub Enterprise hosts); the sandbox never sees them or gets a route.
 requires: [relay, egress]
 settings:
-  token: { type: secret, required: true }   # keychain:<service> | env:<VAR>: a GitHub token (fine-grained, the repos you name)
+  token: { type: secret }   # keychain:<service> | env:<VAR>: a github.com token (fine-grained, the repos you name)
+  # GitHub Enterprise hosts, a token each: [{host: github.corp.example, token:
+  # keychain:<service>}]. `token`, `hosts` or both; the relay serves only these.
+  hosts: { type: list, default: [] }
   # gh subcommands relayed ("pr", "pr create", …); unset: the README's default
   # set. `auth`, `extension`, `alias`, `config`, `codespace`, `secret`,
   # `variable`, `ssh-key` and `gpg-key` are refused whatever this says.
   allow: { type: list, pattern: "^[a-z][a-z-]*( [a-z][a-z-]*)?$" }
+  # git verbs relayed (`git pull` is a relayed fetch); drop `push` for a
+  # read-only session
+  git: { type: list, pattern: "^(push|fetch|clone|ls-remote)$", default: [push, fetch, clone, ls-remote] }
   timeout: { type: int, default: 600 }      # seconds one relayed command may run
 networks:
   ghnet: { internal: true }                 # the relay sidecar (and, with observe, its gate)
-hooks: hooks.py                             # launch_env: the token, in memory, for the sidecar
+hooks: hooks.py                             # the relay's settings; launch_env: the tokens, in memory; doctor
 services: compose/services.yml.j2
 endpoints:
   # The relay's hop to the egress proxy. Only rendered when a forwarder provider
@@ -35,6 +41,8 @@ privileges:
   gh: { work: true }
 limits:
   gh: { pids: 256, memory: 1g }
+# gh and git trust the session's corporate_ca too (relayd: ca_bundle_env)
+trust_corporate_ca: [gh]
 verify:
   - { name: github-relay-up, kind: container-healthy, service: gh }
 harness:

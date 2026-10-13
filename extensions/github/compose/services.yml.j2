@@ -1,7 +1,7 @@
 services:
   # The github relay: relayd runs the harness's gh and network git commands
   # (requests left in the `github` channel) under relay_policy.py, with the
-  # token in its environment (hooks.py). Children reach only GitHub's hosts,
+  # tokens in its environment (hooks.py). Children reach only the hosts served,
   # through relayd's fence and then
   # {{ endpoint['github-egress'].url }} — the egress provider's proxy, or (with
   # observe) a gate in front of it, and then this sidecar is not on the egress
@@ -18,8 +18,11 @@ services:
     environment:
       RELAY_UPSTREAM: "{{ endpoint['github-egress'].url }}"
       RELAY_TIMEOUT: "{{ settings.timeout }}"
-      RELAY_SETTINGS: {{ {"allow": settings.allow or []} | tojson | tojson }}
-      RELAY_GITHUB_TOKEN:    # from glove's environment at `compose up` (hooks.py); never stored here
+      RELAY_SETTINGS: {{ vars.settings | tojson | tojson }}
+      # from glove's environment at `compose up` (hooks.py); never stored here
+{% for var in vars.tokens %}
+      {{ var }}:
+{% endfor %}
     working_dir: {{ work.target }}
     volumes:
       - { type: bind, source: "{{ work.host }}", target: "{{ work.target }}" }

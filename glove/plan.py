@@ -8,6 +8,7 @@ Built from a resolved ``Config`` plus the mount and network plans.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import posixpath
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .cafile import CA_BUNDLE_ENV, CA_BUNDLE_PATH, CORPORATE_CA_PATH, resolve_ca_file
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
 from .enforcers.base import TOOLS_FILE, WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
@@ -25,7 +27,16 @@ from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
 from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
-from .mounts import Mount, MountPlan, Protect, check_path, compute_mounts, protected_home, protected_paths
+from .mounts import (
+    Mount,
+    MountPlan,
+    Protect,
+    check_path,
+    compute_mounts,
+    overlaps,
+    protected_home,
+    protected_paths,
+)
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -42,10 +53,6 @@ def forwarder_image() -> str:
     from .image import content_hash
 
     return f"glove/forwarder:0.2.0-{content_hash('', [('forwarder', FORWARDER_DIR)])}"
-# `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
-# already lets the harness and its commands read (nono: GLOVE_READ; srt: the
-# whole rootfs is readable), so trusting it needs no policy change.
-CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
 
 
 @dataclass
@@ -231,9 +238,14 @@ def secret_refs(plan: SessionPlan) -> list[tuple[str, str]]:
     for `glove check` (which verifies they exist without reading them)."""
     # every secret-type setting that is set (the LLM key, compose secrets, and
     # ones only a launch hook reads, e.g. vpn.register_user)
-    return [(f"{a.name}.{name}", str(value)) for a in plan.composition.active
-            for name, spec in a.manifest.settings_schema.items()
-            if spec.get("type") == "secret" and (value := a.settings.get(name)) not in (None, "", "generate")]
+    # ones nested deeper (a list of hosts, a plugin's relay) come from the
+    # extension's contribute hook (`secret_refs`: label → reference)
+    out = []
+    for a in plan.composition.active:
+        out += [(f"{a.name}.{name}", str(value)) for name, spec in a.manifest.settings_schema.items()
+                if spec.get("type") == "secret" and (value := a.settings.get(name)) not in (None, "", "generate")]
+        out += [(f"{a.name}.{label}", str(ref)) for label, ref in (a.contributed.get("secret_refs") or {}).items()]
+    return out
 
 
 def _seccomp_for(cfg: Config) -> tuple[str, bool]:
@@ -277,6 +289,30 @@ def git_config_parameters(pairs: list[tuple[str, str]]) -> str:
     return " ".join(f"{q(k)}={q(v)}" for k, v in pairs)
 
 
+def _check_baked_sources(comp: Composition, mounts: list[Mount]) -> None:
+    """A host tree a `contribute` hook bakes into the image (`copy_host`) is
+    never one an agent can write (this session's rw mounts, `/work` included,
+    or another registered session's `work/`: it would change what the next
+    session bakes and runs), nor glove's state (a session's `.glove/`, its
+    session file, glove's home)."""
+    from .registry import RegistryError, glove_home, load_registry
+    from .sessiondir import SESSION_FILE, STATE_DIR
+
+    guarded = [(Path(m.host_path), "writable by an agent") for m in mounts if not m.read_only]
+    guarded.append((glove_home(), "glove's home"))
+    if comp.session_dir is not None:
+        guarded += [(comp.session_dir / STATE_DIR, "glove state"), (comp.session_dir / SESSION_FILE, "glove state")]
+    with contextlib.suppress(RegistryError):
+        for e in load_registry():
+            guarded += [(Path(e.dir) / "work", "writable by an agent"), (Path(e.dir) / STATE_DIR, "glove state")]
+    for ext, layer in comp.image_layers:
+        for src, _dst in layer.get("copy_host") or []:
+            for g, what in guarded:
+                if overlaps(Path(src), g):
+                    raise ConfigError(f"extension {ext!r}: {src} is {what} (it overlaps {os.path.realpath(g)}); "
+                                      "what is baked into the image must not be")
+
+
 def build_session_plan(
     cfg: Config,
     *,
@@ -307,12 +343,15 @@ def build_session_plan(
     # Compose the selected extensions first: their endpoints, env, host services
     # and image layers feed the network plan, env and image below.
     sd_path = Path(session_dir) if session_dir else None
+    # checked at plan time, so `glove check` fails early; sidecars may trust it too
+    ca = resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path) if cfg.corporate_ca else None
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
+        corporate_ca=ca,
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
@@ -323,6 +362,7 @@ def build_session_plan(
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
     )
+    _check_baked_sources(comp, mount_plan.mounts)
     session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
     opted = _opt_ins(cfg, profile)
@@ -369,21 +409,19 @@ def build_session_plan(
     if cfg.enforcer_options["nono"]["browsers"] and not any(tc.browsers for tc in toolchains):
         raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "
                           "`toolchains` block bakes `browsers:`; drop the option or add the browsers")
-    corporate_ca = None
+    corporate_ca = str(comp.corporate_ca) if comp.corporate_ca else None
     trusted_cas = list(comp.trusted_cas)
-    if cfg.corporate_ca:
-        from .cafile import resolve_ca_file
-
-        # checked at plan time, so `glove check` fails early
-        corporate_ca = str(resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path))
+    if corporate_ca:
         trusted_cas.append(CORPORATE_CA_PATH)
+        for k in CA_BUNDLE_ENV:  # Python, curl, git, gh (Go): the baked bundle
+            environment.setdefault(k, CA_BUNDLE_PATH)
     if len(trusted_cas) > 1:  # Node takes one extra bundle (TODO: one built at harness start)
         raise ConfigError(f"the harness would trust {len(trusted_cas)} extra CAs ({', '.join(trusted_cas)}; "
                           "e.g. corporate_ca and llm `auth: oauth`'s session CA): not supported together yet")
     if trusted_cas:
         # Node *adds* these to its built-in roots: trust is widened, never
-        # replaced, and verification is never turned off. Non-Node tools
-        # (curl, python) keep the image's store (README: corporate_ca).
+        # replaced, and verification is never turned off. Other tools get
+        # corporate_ca's baked bundle (cafile.CA_BUNDLE_ENV), a channel's CA only Node.
         environment.setdefault("NODE_EXTRA_CA_CERTS", trusted_cas[0])
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)

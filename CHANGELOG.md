@@ -6,6 +6,111 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **The `skills` extension: Claude Code plugins (and plain skill directories)
+  for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
+  tools}}}`; plugins are cloned into the session's new `skills/` directory
+  (never mounted, like `local/`). Each is checked and baked into the harness
+  image at `/opt/glove/plugins/<name>/` (content-addressed, the last layer; only
+  the selected skills are staged): `${CLAUDE_PLUGIN_ROOT}` and
+  `${CLAUDE_PLUGIN_DATA}` are resolved in its Markdown, `bin/` is linked into `/usr/local/bin` (never over an existing
+  command). PEP 723 scripts run offline on a baked Python, each set of
+  dependencies in its own read-only environment that the `uv run --script`
+  shebang points at (the harness's `/tmp` is noexec, so compiled extensions
+  could not load from a uv cache there); an explicit `uv run --script` uses the
+  baked wheelhouse. `mcp: true` makes its `.mcp.json` servers MCP servers for
+  Claude Code and Vibe, each with its tools listed; a stdio server runs under
+  the tool wrapper (`glove-confine`: no network), never the harness's sandbox.
+  Refused: a plugin an agent can write (core refuses any baked host tree in
+  `/work`, a read-write mount or another session's `work/`) or in `.glove/`, a
+  symlink leaving it, a file that looks like a credential, a secret in `env`. Verified live with Pi, Claude
+  Code and Vibe on Docker and Podman (`test_skills.sh`).
+- **Plugin relays: scripts with credentials, in a sidecar of the plugin's own.**
+  `skills.plugins.<name>.relay: {commands: {<script>: {hosts, allow, out_flags,
+  in_flags, env, files}}, check, timeout}`. Each relayed script is a shim in the
+  baked copy (`glove-relay skill-<name> <script>`); the sidecar runs the real
+  one with that command's own environment, home and egress fence (only its
+  hosts), its secrets resolved from the Keychain at `glove up` and a `files:`
+  template rendered in memory into its tmpfs. Unlisted subcommands are refused;
+  file flags and path arguments stay under `/work`. Checks run at `glove up` (a
+  warning by default). `glove skills status|refresh|reload`: run the checks,
+  store new values (from a secret's `refresh:` hook on the host, or a prompt)
+  and recreate only that relay's sidecar while the harness keeps running.
+  Verified live (`test_skills_relay.sh`; with `CORPORATE=1` behind `corporate`
+  with a `corporate_ca`, on every harness).
+- **`github`: GitHub Enterprise hosts, a token each.** `github: {hosts:
+  [{host, token: keychain:<service>}]}`, with or without github.com's `token`;
+  the relay serves exactly those hosts (gh's `--hostname`/`-R`, git remotes, the
+  fence: each Enterprise host with its subdomains). gh reads an Enterprise
+  host's token from a `hosts.yml` on the sidecar's tmpfs; git gets one
+  credential helper per host. With Enterprise hosts only, the first is gh's
+  default host. **`github.git`** names the relayed git verbs (default `push`,
+  `fetch`, `clone`, `ls-remote`; `[fetch, clone, ls-remote]` refuses pushes).
+  `glove check` warns when a filtering egress (`corporate`) does not admit a
+  served host or its subdomains. Verified live against a two-host stand-in behind `corporate` with
+  a private CA (`test_github_ghes.sh`: Pi on Docker and Podman, Claude Code and
+  Vibe on Docker); a real GHES is untested.
+- **`glove playwright login`: sign in on the host, hand only the session to
+  the browser sidecar.** It starts a dedicated Chrome (a fresh profile, deleted
+  afterwards; CDP over a pipe, so no debugging port) at `login.start_url`; you
+  sign in (a Keychain client certificate works as in your own Chrome), press
+  Enter, and glove stores the cookies and open tabs' localStorage of the hosts
+  in `login.domains` as a Playwright storage state (`storage_state:
+  keychain:<service>`), plus each `login.capture` value (a cookie, or a
+  localStorage key narrowed by a regex) for plugin relays, all in the Keychain
+  on stdin, never printed or on disk. `playwright: {storage_state}` seeds every
+  new browser context of the sidecar (`profile: ephemeral`; refused with
+  `session` and `mode: host`): gzipped in its environment at `compose up`,
+  written 0600 to its tmpfs and unset before the MCP starts. With it, the tools
+  that would hand the session to the model are refused (`browser_cookie_*`,
+  `browser_*storage*`, `browser_evaluate`, `browser_network_request`,
+  `browser_start_tracing`, `browser_route`, …), and so is `uploads: work` (a link there could
+  name the state file). **`glove playwright reload`** recreates the
+  sidecar from the stored session; `status` shows the first cookie expiry.
+  Verified live (`test_playwright_login.sh`: a real host Chrome against a
+  stand-in sign-on site, the sidecar seeded through `corporate`; Pi, Claude
+  Code and Vibe on Docker, Pi on Podman); a real IdP's client-certificate handshake is
+  untested. With a stored session the browser's brief tells the agent it is
+  signed in as the operator, to change nothing there the task doesn't ask for,
+  and to ask for `glove playwright login` when a page wants a new sign-in;
+  behind `corporate`, `glove check` warns about a `login` host (`start_url`'s,
+  `domains`) the allowlist doesn't admit.
+- **Docs for credentialed corporate tools:** README "Credentials: store,
+  check, renew", SECURITY.md "Credentials for corporate tools: what each
+  widens", and a commented credentialed block in the `corporate` template (a
+  plugin with a relay, GitHub Enterprise hosts, a signed-in browser), tested to
+  plan once uncommented.
+- Core `recreate_sidecar()` (glove/session.py): one sidecar recreated with a
+  fresh launch env while the harness keeps running (`glove skills reload`,
+  `glove playwright reload`).
+- A `contribute` hook may return `secret_refs` (label → reference) for secrets
+  nested deeper than a `secret` setting; `glove check` checks they exist
+  (`github.hosts`, the `skills` relays' secrets). And `egress_hosts` (the names
+  its sidecars reach): `glove check` warns when an egress that filters by name
+  (`corporate`) doesn't admit one (`github`, the `skills` relays).
+- **Verify kind `exec-ok`** (a command exits 0 inside a sidecar, output
+  withheld) and **`warn: true`** on any check (a failure warns; the session
+  starts).
+- **`relay`: one fence per command** (`HOSTS` as a mapping), a per-command
+  environment from `prepare`, and a client (`relayd.py --call`) for checks.
+- A `when:` may use `*` in a dotted key (`settings.plugins.*.relay`): any key,
+  the list of what it found.
+- A `contribute` hook may also return `channels`, `privileges`,
+  `trust_corporate_ca`, `endpoints` and `verify` checks, and `vars` for its
+  services fragment, for sidecars it renders per setting.
+- **Vibe loads contributed skills** (`skill_paths`, links under
+  `/opt/glove/vibe/skills`), so `rag`'s skills now reach Vibe too.
+- A `contribute` hook may return `image` layers, `skills` and `mcp` items. Its
+  layers alone may `copy_host` (host paths it checked): core renders them
+  after the toolchains and refuses a source an agent can write or glove's
+  state.
+
+- `glove --help` ends with the common commands: `glove check && glove up`,
+  `glove playwright view --control` (watch and drive the session's browser) and
+  `glove down`.
+- `glove keychain set <service> --stdin` reads the secret from a pipe (one
+  line), for scripts that mint a token. It goes to `security -i` on stdin,
+  quoted, never into argv. A terminal on stdin is refused.
+
 - Live drivers: no run downloads a large file unless asked. `BIG=1` adds one:
   `test_downloads.sh` checks the job path with `robots.txt` (`wait_s: 0`) and
   adds Debian's netinst ISO (`BIG=dvd`: its first DVD); `test_playwright.sh
@@ -298,6 +403,20 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`corporate_ca` reaches every TLS client, not only Node.** The session's
+  derived image bakes `/etc/glove/ca-bundle.pem` (the image's roots, then the
+  CA). `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+  `GIT_SSL_CAINFO` name it unless `env:` sets them, so curl, git, gh and Python
+  (Vibe included) trust the CA. Trust is only added; verification stays on.
+  The `github` relay sidecar and `webfetch`'s fetcher trust it too: a new
+  manifest key, `trust_corporate_ca: [<service>…]`, has core bind the CA
+  read-only (never SELinux-relabelled) into those sidecars with
+  `GLOVE_CORPORATE_CA` naming it. Verified live: curl, Python,
+  git and gh against a test-CA server, public hosts still verified.
+- More env names count as secrets and are unset before every shell command:
+  `*COOKIE*`, and a personal access token's `*_PAT`, `PAT_*`, `*_PAT_*` (never
+  `PATH`).
+
 - **Core checks every extension `mcp:` item**, which takes only the fields
   every harness renders alike: `name` (letters, digits, `_`, `-`; one per
   session), `transport` (`stdio` or `http`; `streamable-http` means `http`),
@@ -526,6 +645,21 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **`playwright`: a `javascript:` URL no longer stands in for
+  `browser_evaluate`.** `browser_navigate` to one ran the agent's script in
+  the current page, whose title the MCP returns, even with `browser_evaluate`
+  left out of `tools`. The sidecar's Chromium now blocks typed `javascript:`
+  URLs by managed policy unless `browser_evaluate` is allowed; a page's own
+  handlers and links are unaffected.
+- **`glove keychain set --stdin` with a long secret.** `security -i` reads at
+  most ~4 KB of a line and ran the rest as commands of its own, echoing parts
+  of the secret to the terminal and storing it truncated. A value that doesn't
+  fit one line is now stored in parts (`<service>.part<n>`, under a head
+  holding their count and SHA-256; a torn set is refused when read), with
+  `security`'s stderr withheld; a shorter value removes the old parts. A
+  non-ASCII secret is refused (`security -w` reads it back hex-encoded).
+- Extension modules loaded by path are registered in `sys.modules`, so a
+  dataclass in one works.
 - **Vibe keeps one MCP session per server.** Vibe 2.26 opens a new MCP session
   for every call to an HTTP server, so under Vibe each Playwright call started
   in a fresh browser (a click after a navigate, and so an upload, failed). The

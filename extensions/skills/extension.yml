@@ -1,0 +1,25 @@
+api: 1
+name: skills
+summary: Claude Code plugins (and plain directories of skills) for every harness — baked into the harness image, `${CLAUDE_PLUGIN_ROOT}` resolved, `bin/` on PATH, PEP 723 scripts offline through a wheelhouse, opt-in stdio MCP.
+settings:
+  # <name>: {path, skills, env, mcp, tools, relay} — see README.md. The name is yours
+  # ([a-z0-9-]); `path` is a plugin directory (.claude-plugin/plugin.json) or a
+  # directory of SKILL.md dirs, usually a checkout in the session's skills/.
+  plugins: { type: map, default: {} }
+  # the Python that PEP 723 scripts (`uv run --script`) run on, installed by uv
+  python:  { type: string, default: "3.12", pattern: "^3\\.[0-9]+$" }
+# A plugin with `relay:` runs those scripts in a sidecar of its own (relayd, from
+# the relay library), reaching the network only through the egress provider
+requires:
+  - { extension: relay, when: { "settings.plugins.*.relay": { set: true } } }
+  - { slot: egress, when: { "settings.plugins.*.relay": { set: true } } }
+# contribute: check each plugin, bake it, and each relay's channel, privileges,
+# hop and checks; materialize: its data dir, a relayed plugin's copy; launch_env:
+# the relays' secrets, in memory
+hooks: hooks.py
+networks:
+  skillnet: { internal: true, when: { "settings.plugins.*.relay": { set: true } } }
+services: compose/services.yml.j2
+cli: cli.py                     # glove skills status|refresh|reload — the relays' credentials
+harness:
+  brief: brief.md

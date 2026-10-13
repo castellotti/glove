@@ -91,9 +91,13 @@ def test_a_missing_mounted_skill_fails_at_plan_time(tmp_path, models, obsidian):
         _plan(tmp_path, models_dir=str(models), obsidian_dir=str(obsidian))
 
 
-def test_vibe_gets_kstore_but_no_skills(tmp_path, models):
+def test_vibe_gets_kstore_and_the_skills_through_skill_paths(tmp_path, models):
     _, plan = _plan(tmp_path, harness="vibe", models_dir=str(models))
-    assert "uv pip install --system" in plan.derived_dockerfile and not plan.composition.skills
+    df = plan.derived_dockerfile
+    assert "uv pip install --system" in df
+    assert [d for _, _, d in plan.composition.skills] == ["/opt/glove/skills/rag/rag-parse",
+                                                          "/opt/glove/skills/rag/rag-query"]
+    assert "ln -s /opt/glove/skills/rag/rag-parse /opt/glove/vibe/skills/rag-parse" in df
 
 
 @pytest.mark.parametrize(("rag", "match"), [

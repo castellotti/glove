@@ -1,0 +1,43 @@
+services:
+{% for r in vars.get("relays", []) %}
+{% set hop = endpoint[r.service ~ '-egress'] %}
+  # Plugin {{ r.name }}'s relay: relayd runs its relayed scripts (requests left in
+  # the `{{ r.service }}` channel by their shims) under relay_policy.py, each
+  # with its own environment, secrets (from glove's environment at `compose
+  # up`, hooks.py) and egress fence: only its hosts, through
+  # {{ hop.url }} (the egress provider's proxy, or
+  # with observe a gate in front of it; then this sidecar is not on the egress
+  # network at all). Either network is internal, so it has no other way out.
+  {{ r.service }}:
+    image: "{{ libs.relay.images.relayd }}"
+    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel[r.service].path }}",
+              "--policy", "{{ r.policy }}"{% if r.work %}, "--work", "{{ work.target }}"{% endif %}]
+{% if hop.interposed %}
+    networks: [skillnet]
+{% else %}
+    networks: [egress, skillnet]
+{% endif %}
+    environment:
+      RELAY_UPSTREAM: "{{ hop.url }}"
+      RELAY_TIMEOUT: "{{ r.timeout }}"
+      RELAY_SETTINGS: {{ r.settings | tojson | tojson }}
+{% for var in r.secrets %}
+      {{ var }}:    # from glove's environment at `compose up` (hooks.py); never stored here
+{% endfor %}
+{% if r.work %}
+    working_dir: {{ work.target }}
+{% endif %}
+    volumes:
+{% if r.work %}
+      - { type: bind, source: "{{ work.host }}", target: "{{ work.target }}" }
+{% endif %}
+      - { type: bind, source: "{{ assets }}/relay_policy.py", target: "{{ r.policy }}", read_only: true }
+      - { type: bind, source: "{{ state }}/relay/{{ r.name }}", target: "{{ r.settings.root }}", read_only: true }
+    tmpfs: ["/tmp"]
+    healthcheck:
+      test: ["CMD", "test", "-p", "{{ channel[r.service].path }}/door"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+{% endfor %}

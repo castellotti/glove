@@ -1,9 +1,10 @@
 # github
 
 Lets the agent run `gh`, and git's network commands (`git push`, `fetch`,
-`pull`, `clone`, `ls-remote`), from its shell. The commands are relayed (see
-[`relay`](../relay/README.md)) to a sidecar that holds the GitHub token. The
-token never enters the harness: not its environment, not a file, not a command's
+`pull`, `clone`, `ls-remote`), from its shell, against github.com, GitHub
+Enterprise hosts, or both. The commands are relayed (see
+[`relay`](../relay/README.md)) to a sidecar that holds the tokens. A token
+never enters the harness: not its environment, not a file, not a command's
 output. The sandbox still gets no route out. Works with every harness (Pi, Vibe,
 Claude Code) and every enforcer.
 
@@ -11,13 +12,43 @@ Claude Code) and every enforcer.
 extensions:
   direct: {}                         # any egress provider
   github:
-    token: keychain:<service>        # a GitHub token; a reference, never the value
+    token: keychain:<service>        # a github.com token; a reference, never the value
+    # hosts:                         # GitHub Enterprise hosts, a token each
+    #   - {host: github.example.internal, token: keychain:<service>}
     # allow: ["pr list", "pr view", "api"]   # gh subcommands relayed (default below)
+    # git: [fetch, clone, ls-remote] # git verbs relayed (default: these and push)
     # timeout: 600                   # seconds one relayed command may run
 ```
 
-Use a **fine-grained token** limited to the repositories the session works on.
-The sidecar can do whatever the token allows, within the policy below.
+`token`, `hosts` or both: the relay serves exactly those hosts. Use
+**fine-grained tokens** limited to the repositories the session works on. The
+sidecar can do whatever a token allows, within the policy below.
+
+### GitHub Enterprise hosts
+
+- **A token per host.** gh takes github.com's from `GH_TOKEN`; an Enterprise
+  host's from a `hosts.yml` relayd writes into gh's config dir on the sidecar's
+  tmpfs (0600; `GH_ENTERPRISE_TOKEN` holds one token for every host, so it is
+  not used). git has one credential helper per host, each answering with that
+  host's token only.
+- **The default host.** With Enterprise hosts only (no `token`), the first is
+  gh's default (`GH_HOST`), so `gh api user` and `-R OWNER/REPO` reach it.
+  Another is named by `--hostname`, `-R HOST/OWNER/REPO` or the repository's
+  remote. The harness's own `GH_HOST` never reaches the sidecar.
+- **Network.** The fence admits each host and its subdomains (`api.`,
+  `uploads.`, … under subdomain isolation). Behind the `corporate` egress each
+  must be in `allow_domains` too, subdomains included (`'*.<host>'`; for
+  github.com also `'*.githubusercontent.com'`), and `glove check` warns when
+  one isn't. The
+  gate also checks the address a name resolves to: a host on a private address
+  passes only when `allow_cidrs` (or `from_interface`'s routes) cover it.
+- **A private CA.** The sidecar trusts the session's `corporate_ca`.
+- **GitHub Enterprise Server only.** A GitHub Enterprise Cloud tenant
+  (`*.ghe.com`) is refused: gh treats it like github.com and would send it
+  `GH_TOKEN`, github.com's token, rather than its own.
+- **Read-only git.** `git: [fetch, clone, ls-remote]` refuses `git push`
+  (`git pull` is a fetch). gh writes (`pr create`, `issue comment`, …) are
+  `allow`'s to leave out.
 
 ## What the agent sees
 
@@ -57,8 +88,8 @@ The sidecar can do whatever the token allows, within the policy below.
   - Refused: `-X` with any other method, `-F`, `--input`, GraphQL, a full URL,
     and method-override headers.
   - `-f` fields need `-X GET`; without it, gh would send a POST.
-- **github.com only.** `--hostname`, `-R HOST/OWNER/REPO` and repository URLs
-  must all name github.com.
+- **Served hosts only.** `--hostname`, `-R HOST/OWNER/REPO` and repository URLs
+  must all name github.com (with `token`) or a listed Enterprise host.
 - **File and directory arguments stay inside `/work`.** This covers
   `--body-file`/`-F`, `-D`/`--dir` and `gh repo clone`'s directory. relayd
   opens each file itself and passes `/dev/fd/N`, so a symlink to `/proc/*/environ`
@@ -68,8 +99,9 @@ The sidecar can do whatever the token allows, within the policy below.
 
 **git**
 
-- **Only `push`, `fetch`, `clone` and `ls-remote` are relayed**, and only to
-  `https://github.com/<owner>/<repo>` remotes. For a remote name, the check uses
+- **Only the verbs in `git` are relayed** (of `push`, `fetch`, `clone` and
+  `ls-remote`; all four by default), and only to
+  `https://<served host>/<owner>/<repo>` remotes. For a remote name, the check uses
   the URLs that remote actually resolves to, including any `url.*.insteadOf`
   rewrite. For push it uses the push URL; with no remote given, the branch's
   default.
@@ -82,16 +114,17 @@ The sidecar can do whatever the token allows, within the policy below.
   repo sets:
   - no hooks (`core.hooksPath=/dev/null`) and no fsmonitor;
   - no SSH command, askpass, editors or pager;
-  - no other credential helpers: ours answers for `https://github.com` only;
+  - no other credential helpers: ours answer one served host each, with its token;
   - https as the only protocol;
   - no submodule recursion, no signing, no gc or maintenance;
   - `safe.bareRepository=explicit`.
 
 **Network**
 
-Every child's traffic goes through relayd's fence, which tunnels only to
-github.com, api.github.com, uploads.github.com, codeload.github.com and
-`*.githubusercontent.com`. From there it goes through the egress proxy.
+Every child's traffic goes through relayd's fence, which tunnels only to the
+served hosts: for github.com, github.com, api.github.com, uploads.github.com,
+codeload.github.com and `*.githubusercontent.com`; for an Enterprise host, the
+host and its subdomains. From there it goes through the egress proxy.
 
 ## The sidecar (`gh`)
 
@@ -107,8 +140,10 @@ github.com, api.github.com, uploads.github.com, codeload.github.com and
   `/work`. `gh pr create`, `git push` and `git clone` work on the agent's
   checkout. This is a new trust edge, listed in `glove policy` and in
   [docs/SECURITY.md](../../docs/SECURITY.md#relays-gh-and-git-from-shell-commands-relay-github).
-- **The token** reaches relayd's environment at `compose up`, from `launch_env`
-  in `hooks.py`, resolved in memory. It is not a compose secret, because Docker
+- **The tokens** reach relayd's environment at `compose up`
+  (`RELAY_GITHUB_TOKEN`, and `RELAY_GITHUB_TOKEN_<n>` for the n-th of `hosts`),
+  from `launch_env` in `hooks.py`, resolved in memory. `glove check` checks that
+  each reference exists. It is not a compose secret, because Docker
   can't put an environment-sourced secret file into a read-only container. relayd
   passes it only to gh and git.
 
@@ -129,3 +164,12 @@ github.com, api.github.com, uploads.github.com, codeload.github.com and
 - Adding `GH_SCRATCH_REPO=<owner/repo>` also pushes a throwaway branch and
   deletes it again. This passed live, 35/35 under nono+srt. The repository
   needs at least one branch; otherwise the push is skipped.
+- `tests/integration/test_github_ghes.sh` serves two stand-in Enterprise hosts
+  (`stubs/ghes_stub.py`, in the relay image: gh's REST user endpoint and git
+  smart HTTP, a token per host, HTTPS from a throwaway CA given as
+  `corporate_ca`) behind the `corporate` egress, with `git: [fetch, clone,
+  ls-remote]`. gh reaches the default host and the other by `--hostname`, each
+  with its own token; `git ls-remote`, `clone` and `pull` work; push, github.com
+  and a github.com remote are refused; no token is in a shell command's
+  environment or a session file. 16/16 with Pi on Docker (nono+srt) and Podman
+  (nono), and with Claude Code on Docker. A real GHES is **untested**.

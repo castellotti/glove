@@ -15,6 +15,11 @@ Kinds:
                      a negative check: the proxy is up and does NOT pass it
   exit-ip-differs    the IP an echo service sees through the egress proxy differs
                      from this machine's public IP (both must be known)
+  exec-ok            `argv` exits 0 inside the sidecar `service` (its output is
+                     withheld: it may carry identifiers), within `timeout`
+
+`warn: true` makes a failed check a warning: the session starts anyway (e.g. a
+credential that has expired, which the operator can refresh while it runs).
 
 Network probes run in a throwaway, hardened container on the named session
 network (never on the host), so the host never resolves or contacts a
@@ -40,7 +45,7 @@ if TYPE_CHECKING:
 PROBE_IMAGE = ("docker.io/curlimages/curl:8.22.0"
                "@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777")
 ECHO_URL = "https://am.i.mullvad.net/ip"
-KINDS = frozenset({"container-healthy", "tcp-open", "http-ok", "http-refused", "exit-ip-differs"})
+KINDS = frozenset({"container-healthy", "tcp-open", "http-ok", "http-refused", "exit-ip-differs", "exec-ok"})
 
 
 class VerifyError(ConfigError):
@@ -119,6 +124,19 @@ def run_check(provider: str, plan: SessionPlan, ext: str, item: dict[str, Any],
         if not ok:
             raise VerifyError(f"verify {name}: {container} is {st!r}, not healthy", service=svc)
         return f"{container} healthy"
+
+    if kind == "exec-ok":
+        svc, argv = str(item["service"]), [str(x) for x in item["argv"]]
+        timeout = int(item.get("timeout", 120))
+        try:
+            r = subprocess.run([provider, "exec", scoped(plan.session, svc), *argv], capture_output=True,
+                               timeout=timeout, check=False)
+            rc = r.returncode
+        except subprocess.TimeoutExpired:
+            rc = 124
+        if rc != 0:
+            raise VerifyError(f"verify {name}: `{' '.join(argv)}` exited {rc} in {svc} (output withheld)")
+        return f"{svc}: exit 0"
 
     if kind == "tcp-open":
         host, port = str(item["host"]), str(item["port"])
@@ -214,5 +232,8 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
 
                 hint = a.hooks.diagnose(_hook_ctx(comp, a), item, run)
                 if hint:
-                    raise VerifyError(f"{e}\n{hint}", service=e.service) from e
-            raise
+                    e = VerifyError(f"{e}\n{hint}", service=e.service)
+            if item.get("warn") is True:
+                say(f"    ⚠ {e} (a warning: the session starts anyway)")
+                continue
+            raise e from None

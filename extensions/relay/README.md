@@ -55,15 +55,23 @@ The consumer supplies the policy, a Python file that relayd loads by path:
 
 - `COMMANDS`: the command names it serves.
 - `HOSTS`: the hosts its commands may reach, either exact (`github.com`) or a
-  suffix (`.githubusercontent.com`).
-- `setup(ctx)`: builds the children's environment from nothing.
-- `prepare(req, env)`: returns the argv to run (with `setup`'s environment) or
-  raises its `Refused`.
+  suffix (`.githubusercontent.com`); or a mapping of command → hosts, for one
+  fence per command, each reaching only its own (`skills`' relays).
+- `setup(ctx)`: builds the children's environment from nothing (`ctx`:
+  `proxy`, the fence's URL; `proxies`, each command's, with a mapping;
+  `settings`; `work`).
+- `prepare(req, env)`: returns the argv to run (with `setup`'s environment),
+  or `(argv, env)` for a command with an environment of its own, or raises its
+  `Refused`. With `corporate_ca`, either environment gets the CA bundle.
 
 `req.file(path)` opens a file argument inside `/work` and returns `/dev/fd/<n>`
 for the child. It checks the file it actually opened, through that file's
 `/proc` link, so swapping in a symlink afterwards doesn't help. `req.directory`
 validates a destination under `/work`.
+
+`relayd.py --call <channel> <command> args…` is a client of the same
+protocol, for a check run inside the sidecar (`docker exec`): the request goes
+through the policy and the fences like the agent's.
 
 ## The egress fence
 

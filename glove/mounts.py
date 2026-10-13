@@ -39,6 +39,12 @@ def host_path(root: Path | None, value: str) -> Path:
     return Path(os.path.realpath(p))
 
 
+def overlaps(a: Path, b: Path) -> bool:
+    """`a` and `b` (symlinks resolved) are one directory, or one holds the other."""
+    a, b = Path(os.path.realpath(a)), Path(os.path.realpath(b))
+    return a.is_relative_to(b) or b.is_relative_to(a)
+
+
 def existing_host_path(root: Path | None, value: str, kind: str) -> Path:
     """`host_path`, which must exist as a `kind` ("file": regular file, or
     "dir"). Raises ValueError naming `value`."""

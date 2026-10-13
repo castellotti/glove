@@ -8,6 +8,7 @@ tests can assert structure without scraping Rich output.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import shutil
@@ -99,7 +100,28 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "doctor"):
             checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(base_context(comp, a))]
+        checks += egress_host_checks(comp, a)
     return checks
+
+
+def egress_host_checks(comp: Composition, a) -> list[Check]:
+    """An egress that admits only listed names (`guard_hosts`, e.g.
+    `corporate.allow_domains`) must admit every name an extension's sidecars
+    reach (its contributed `egress_hosts`: names, or `*.x` for x's
+    subdomains). The gate also checks the address a name resolves to: a
+    private one passes only inside an allowed CIDR (`guard_cidrs`)."""
+    wanted = a.contributed.get("egress_hosts") or []
+    egress = comp.slots.get("egress")
+    guard = egress.exports.get("guard_hosts") if egress is not None else None
+    if not wanted or not guard:  # nothing named, or an egress that does not filter by name
+        return []
+    missing = [h for h in wanted if not any(fnmatch.fnmatchcase(h.replace("*", "sub", 1), g) for g in guard)]
+    if missing:
+        return [Check(f"{a.name} egress", "warn", f"{egress.name} does not admit all it reaches: add "
+                      f"{', '.join(repr(h) for h in missing)} to the hosts {egress.name} allows")]
+    cidrs = "" if egress.exports.get("guard_cidrs") else (
+        f"; a name that resolves to a private address needs {egress.name} to allow it by CIDR too")
+    return [Check(f"{a.name} egress", "ok", f"{egress.name} admits {', '.join(wanted)}{cidrs}")]
 
 
 def run_doctor(

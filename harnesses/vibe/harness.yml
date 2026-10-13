@@ -55,7 +55,7 @@ pip: { install: [uv, pip, install, --system] }
 # `--resume` opens an interactive picker (and errors in programmatic mode), so
 # continue-last must map to --continue, not --resume. A specific id is `--resume <id>`.
 resume: { continue: [--continue], session: [--resume, "{id}"] }
-contributions: [mcp]
+contributions: [mcp, skills]
 # The tool inventory, by the names the pre_tool hook sees (measured on the
 # audited version: grouped, `file_system.bash`; the top-level names Vibe also
 # offers): the hook wraps `shell`, holds `file_write` to the write roots, passes

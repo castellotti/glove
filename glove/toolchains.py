@@ -191,22 +191,25 @@ class Handler:
         return f"{cmd} {_q(tc.install_flags)}" if tc.install_flags else cmd
 
 
-def _run(tc: Toolchain, *steps: str) -> str:
-    """A build step that leaves everything it wrote under the block's prefix
-    readable by the (non-root) harness, touching only what needs it (a blanket
-    `chmod -R` would copy every file of earlier layers up into this one)."""
-    readable = (f"find {tc.prefix} \\( ! -perm -a+r -o -perm /a+x ! -perm -a+x \\) "
+def run_step(prefix: str, *steps: str) -> str:
+    """A build step that leaves everything it wrote under `prefix` readable by
+    the (non-root) harness, touching only what needs it (a blanket `chmod -R`
+    would copy every file of earlier layers up into this one)."""
+    return "RUN " + run_body(prefix, *steps)
+
+
+def run_body(prefix: str, *steps: str) -> str:
+    """`run_step` without the `RUN` (an extension image layer's `run` item)."""
+    readable = (f"find {prefix} \\( ! -perm -a+r -o -perm /a+x ! -perm -a+x \\) "
                 "-exec chmod a+rX {} +")
-    return "RUN " + " \\\n    && ".join([*steps, readable])
+    return " \\\n    && ".join([*steps, readable])
 
 
-def _fetch(tc: Toolchain, arch: dict[str, str], name: str, url: str, verify: str, dest: str,
-           member: str = "") -> str:
+def _fetch_steps(arch: dict[str, str], name: str, url: str, verify: str, dest: str, member: str = "") -> list[str]:
     """Download tarball `name` (`$a`/`$t`/`$s` set per dpkg arch by `arch`)
     from `url`, check it with `verify`, and unpack it (or one `member`) into `dest`."""
     cases = " ".join(f"{d}) {v};;" for d, v in arch.items())
-    return _run(
-        tc,
+    return [
         f'case "$(dpkg --print-architecture)" in {cases} '
         '*) echo "glove toolchains: unsupported architecture" >&2; exit 1;; esac',
         f'f="{name}" && cd /tmp',
@@ -215,7 +218,15 @@ def _fetch(tc: Toolchain, arch: dict[str, str], name: str, url: str, verify: str
         f"mkdir -p {dest}",
         f'tar -xzf "$f" -C {dest} --strip-components=1 --no-same-owner' + (f' "{member}"' if member else ""),
         'rm "$f"',
-    )
+    ]
+
+
+def uv_steps(prefix: str) -> list[str]:
+    """Build steps: the pinned uv (checksum-verified) into `<prefix>/bin`."""
+    return _fetch_steps({d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
+                        "uv-$t-unknown-linux-gnu.tar.gz",
+                        f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
+                        'echo "$s  $f" | sha256sum -c -', f"{prefix}/bin", member="uv-$t-unknown-linux-gnu/uv")
 
 
 def _copy_project(tc: Toolchain) -> str:
@@ -262,30 +273,29 @@ class NodeHandler(Handler):
         v = tc.version
         rt = self.runtime(tc)
         path = f"export PATH={rt}/bin:$PATH"
-        runtime = [_fetch(tc, {"amd64": "a=x64", "arm64": "a=arm64"}, f"node-v{v}-linux-$a.tar.gz",
-                          f"https://nodejs.org/dist/v{v}",
-                          f'curl -fsSL "https://nodejs.org/dist/v{v}/SHASUMS256.txt" | grep " $f\\$" | sha256sum -c -',
-                          rt)]
+        runtime = [run_step(tc.prefix, *_fetch_steps(
+            {"amd64": "a=x64", "arm64": "a=arm64"}, f"node-v{v}-linux-$a.tar.gz", f"https://nodejs.org/dist/v{v}",
+            f'curl -fsSL "https://nodejs.org/dist/v{v}/SHASUMS256.txt" | grep " $f\\$" | sha256sum -c -', rt))]
         globals_ = ([f"{tc.manager}@{tc.manager_version or 'latest'}"] if tc.manager != "npm" else []) \
             + list(tc.packages)
         # `<prefix>/lib/node` is in the pinned node's global require path, so `require`
         # finds what it links from any directory: the project's deps, else the global packages
         link = [] if tc.project_spec or not tc.packages else [f"ln -s {rt}/lib/node_modules {rt}/lib/node"]
-        tools = [_run(tc, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache", *link)] \
-            if globals_ else []
+        tools = [run_step(tc.prefix, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache",
+                          *link)] if globals_ else []
         project = []
         if tc.project_spec:
-            project += [_copy_project(tc), _run(tc, path, f"cd {tc.project_dir}",
-                                                self.install(tc),
-                                                "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
-                                                f"ln -s {tc.project_dir}/node_modules {rt}/lib/node")]
+            project += [_copy_project(tc), run_step(tc.prefix, path, f"cd {tc.project_dir}",
+                                                    self.install(tc),
+                                                    "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
+                                                    f"ln -s {tc.project_dir}/node_modules {rt}/lib/node")]
         if tc.browsers:
             # --with-deps apt-installs the engines' shared libraries (build runs as root)
             # the project's own playwright when it has one, else the global from `packages`
             cli = f"{tc.project_dir}/node_modules/.bin/playwright" if tc.project_playwright else "playwright"
-            project.append(_run(tc, path, f"PLAYWRIGHT_BROWSERS_PATH={self.browsers_dir(tc)} "
-                                          f"{cli} install --with-deps {_q(tc.browsers)}",
-                                "rm -rf /var/lib/apt/lists/*"))
+            project.append(run_step(tc.prefix, path, f"PLAYWRIGHT_BROWSERS_PATH={self.browsers_dir(tc)} "
+                                                     f"{cli} install --with-deps {_q(tc.browsers)}",
+                                    "rm -rf /var/lib/apt/lists/*"))
         return runtime, tools, project
 
     def path(self, tc: Toolchain) -> list[str]:
@@ -351,19 +361,17 @@ class PythonHandler(Handler):
         env = (f"export UV_PYTHON_INSTALL_DIR={p}/runtime UV_PYTHON_PREFERENCE=only-managed "
                f"UV_NO_CACHE=1 UV_PROJECT_ENVIRONMENT={venv}")
         runtime = [
-            _fetch(tc, {d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
-                   "uv-$t-unknown-linux-gnu.tar.gz", f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
-                   'echo "$s  $f" | sha256sum -c -', f"{p}/bin", member="uv-$t-unknown-linux-gnu/uv"),
+            run_step(p, *uv_steps(p)),
             # seeded in every mode (`uv sync` keeps the seed packages), so the brief's `pip` is the venv's
-            _run(tc, env, "{uv} python install --no-bin {v}".format(**fields),
-                 f"{fields['uv']} venv --seed --python {fields['v']} {venv}"),
+            run_step(p, env, "{uv} python install --no-bin {v}".format(**fields),
+                     f"{fields['uv']} venv --seed --python {fields['v']} {venv}"),
         ]
         manager = self.managers[tc.manager]
         project = []
         if tc.project_files:
-            project += [_copy_project(tc), _run(tc, env, f"cd {tc.project_dir}", self.install(tc, **fields))]
+            project += [_copy_project(tc), run_step(p, env, f"cd {tc.project_dir}", self.install(tc, **fields))]
         if tc.packages:  # after the project: `uv sync` is exact and would remove them
-            project.append(_run(tc, env, manager.add.format(**fields, pkgs=_q(tc.packages))))
+            project.append(run_step(p, env, manager.add.format(**fields, pkgs=_q(tc.packages))))
         return runtime, [], project
 
     def path(self, tc: Toolchain) -> list[str]:

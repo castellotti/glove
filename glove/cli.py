@@ -7,7 +7,7 @@ and otherwise uses the nearest session at or above the cwd:
     glove new <template|path|git-url> [dir]    materialize a session
     glove check | plan | up | down | rm         work with one session
     glove ls | ps | gc                          all sessions (~/.glove/registry.json)
-    glove keychain set <service>                store a secret, prompting for it
+    glove keychain set <service> [--stdin]      store a secret, prompting for it (or piped)
     glove downloads mark [dir]                  quarantine what the sidecars saved (macOS)
 """
 
@@ -39,6 +39,14 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help="Run agentic harnesses inside constrained Docker/Podman sandboxes. A session is a directory.",
+    # Rich collapses single newlines, so each line is its own paragraph.
+    epilog="\n\n".join([
+        "[bold]Common[/bold] (in the session directory, or pass it; each command takes --help):",
+        "[cyan]glove check && glove up[/cyan]  start the session, or reattach to it",
+        "[cyan]glove playwright view --control[/cyan]  watch and drive its browser "
+        "(playwright mode: novnc, allow_control: true); without --control, watch only",
+        "[cyan]glove down[/cyan]  stop it",
+    ]),
 )
 console = Console()
 err = Console(stderr=True)
@@ -828,12 +836,22 @@ app.add_typer(keychain_app, name="keychain")
 
 
 @keychain_app.command("set")
-def keychain_set_cmd(service: str = typer.Argument(..., help="Keychain service name")) -> None:
+def keychain_set_cmd(
+    service: str = typer.Argument(..., help="Keychain service name"),
+    stdin: bool = typer.Option(False, "--stdin", help="read the secret from stdin (one line; for scripts)"),
+) -> None:
     """Store (or replace) a secret, prompting for it — it never appears in argv or a file."""
+    import sys
+
     from .config import keychain_set
 
+    secret = None
+    if stdin:
+        if sys.stdin.isatty():
+            raise _fail("--stdin reads a piped secret; without it, glove prompts (and hides what you type)")
+        secret = sys.stdin.read().removesuffix("\n").removesuffix("\r")
     try:
-        rc = keychain_set(service)
+        rc = keychain_set(service, secret)
     except ConfigError as e:
         raise _fail(str(e)) from e
     if rc != 0:

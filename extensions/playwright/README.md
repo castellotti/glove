@@ -29,6 +29,8 @@ extensions:
     # uploads: none            # work: browser_file_upload may send files from /work/browser-uploads/ (<session>/browser-uploads/)
     # resources: {memory: 2g, cpus: 2, pids: 2048}
     # ca: local/corporate-ca.pem   # a private CA's PEM the sidecar trusts too (no default)
+    # storage_state: keychain:<service>   # a signed-in session the browser starts with (below)
+    # login: {start_url, domains, capture}  # what `glove playwright login` stores (below)
     # novnc only:
     # allow_control: false     # true: `glove playwright view --control` may click and type
     # clipboard: "off"         # off | to-browser | both
@@ -89,6 +91,12 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   `profile: session`, the browser profile itself (see `docs/SECURITY.md`).
 - **`browser_evaluate`** (JavaScript in the page, inside the sidecar) is a
   reasonable addition to `tools` for sites that render nothing without it.
+  Without it, a `javascript:` URL the agent navigates to would do the same
+  (Chromium runs it in the current page, and the MCP returns the page title),
+  so the sidecar's Chromium blocks typed `javascript:` URLs by managed policy
+  (`URLBlocklist`, rendered to `.glove/ext/playwright/chromium-policy.json`,
+  bound read-only where this Chromium build reads policies). A page's own
+  handlers and `javascript:` links still work.
   `browser_run_code_unsafe` is not: it runs code in the MCP process.
 - **Chromium phones home** even with Playwright's switches: in live runs the
   flows showed `accounts.google.com`, `clients2.google.com`,
@@ -115,8 +123,11 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   the sidecar modes it would reach only the sidecar anyway.
 - **Moving the MCP pin:** re-list `all_tools` from the new release, bump the
   `playwright-core` version in its comment (a unit test holds it to
-  `image/package-lock.json`), then run `test_playwright.sh claude-code`, which
-  compares the list with the built image's tools. The unit test alone passes
+  `image/package-lock.json`), place each new tool for a stored session
+  (`test_login.py` fails until you do), then run `test_playwright.sh
+  claude-code`, which compares the list with the built image's tools, and
+  `test_playwright_login.sh`, which checks the Chromium policy path still
+  holds. The unit test alone passes
   a bumped comment over a stale list.
 
 ### Watching: `glove playwright view` (`novnc`)
@@ -140,6 +151,84 @@ View-only is **enforced by the VNC server**: without `allow_control` it
 accepts no pointer or key input from anyone, and the view-only password never
 can. The clipboard is off server-side unless `clipboard: to-browser|both`.
 Anything you type while in control is visible to the agent.
+
+### Signing in on the host: `glove playwright login` and `storage_state`
+
+For sites behind single sign-on, especially SSO that needs your machine's
+identity (a client certificate in your Keychain, MDM enrolment), you sign in
+on the host and only the resulting session crosses into the sidecar.
+
+```yaml
+  playwright:
+    profile: ephemeral                         # required with storage_state
+    storage_state: keychain:corp-browser       # what `login` writes; the sidecar starts from it
+    login:
+      start_url: https://wiki.corp.example/
+      domains: [corp.example, "*.corp.example"]  # the hosts whose cookies and localStorage are kept
+      capture:                                 # single values for plugin relays, each to its own Keychain item
+        chat-d:    {cookie: {domain: chat.example, name: d}}
+        chat-xoxc: {storage: {origin: "https://app.chat.example", key: localConfig_v2, match: "xoxc-[A-Za-z0-9-]+"}}
+```
+
+```sh
+glove playwright login     # sign in, press Enter: stores the state and the captures, then reloads the sidecar
+glove playwright reload    # recreate the sidecar from the stored session (the agent's conversation keeps going)
+glove playwright status    # also: how many cookies, and when the first expires (never a value)
+```
+
+- **`login`** starts a **dedicated** Chrome on your machine: a fresh profile
+  under `.glove/playwright-login/`, deleted afterwards (`--keep-profile` keeps
+  it for the next login). Your own Chrome and its profile are never touched.
+  glove drives it over **CDP on a pipe** (`--remote-debugging-pipe`), so it
+  opens no debugging port that another local process could reach. Sign in, and
+  Chrome offers your Keychain identity if the IdP asks for one (as your own
+  Chrome does; untested here, see below). Leave open the
+  tabs whose localStorage you need (CDP reads an origin's storage only through
+  a tab of it), then press Enter. If something named is missing, `login` says
+  what (never a value) and waits for Enter again; Ctrl-C stores nothing.
+- **What is stored:** the cookies (HttpOnly ones included) and open tabs'
+  localStorage of the hosts in `domains` only (`x` is x itself, `*.x` its
+  subdomains: list both for a cookie set on the parent domain), as a Playwright
+  storage state; and each `capture` value (a cookie by domain and name, or a
+  localStorage key, optionally narrowed by a regex). Each goes to the Keychain
+  on stdin. Nothing is printed, put in argv or written to a file. `login`
+  lists what it left out by host and count. A long value is stored in parts
+  (`<service>.part<n>`, see `glove keychain set`).
+- **Seeding:** `storage_state` (a `keychain:` reference when `login` writes it)
+  is read at `glove up` and handed to the sidecar in its environment, gzipped
+  (an env string tops out at 128 KB: `login.domains` narrows a larger one).
+  `glove-pw-start` writes it 0600 to the sidecar's tmpfs, unsets the variable
+  before the MCP and Chromium start, and passes `--storage-state`: every new
+  browser context starts signed in. A persistent profile ignores a storage
+  state, so `profile: session` is refused with it, and so is `mode: host`.
+- **Behind `corporate`:** the browser must reach `start_url`'s host and every
+  host in `domains`, so `glove check` warns about one `allow_domains` doesn't
+  admit (a host on a private address needs `allow_cidrs` too).
+- **Expiry:** SSO cookies are short-lived. `glove playwright status` shows the
+  earliest cookie expiry; run `login` again when it passes. `login` reloads the
+  sidecar itself when it is running (`--no-reload` doesn't); a plugin relay
+  using a captured value needs `glove skills reload <plugin>`.
+- **What the agent can and can't do:** it browses as you on those hosts, as
+  with `profile: session`. It never sees a value: the tools that would hand
+  over the stored session are refused in `tools` while `storage_state` is set
+  (`browser_cookie_*`, `browser_localstorage_*`, `browser_sessionstorage_*`,
+  `browser_storage_state`, `browser_set_storage_state`, `browser_evaluate`,
+  `browser_run_code_unsafe`, `browser_network_request` (a request's headers),
+  `browser_start_tracing` (a trace holds every request's headers) and
+  `browser_route` (a body the agent writes would run as the signed-in page)), so is
+  `uploads: work` (a link in `/work/browser-uploads/` resolves inside the
+  sidecar, where it could name the stored state); typed `javascript:` URLs are
+  blocked (above), and the MCP refuses `file:` URLs. A page on one of those hosts can still show
+  what the site itself puts in it.
+- **Tested:** `tests/integration/test_playwright_login.sh`: a stand-in sign-on
+  site (a parent-domain HttpOnly SSO cookie, a tracker's cookie, a chat app's
+  cookie and localStorage token) behind the `corporate` egress, a real host
+  Chrome (headless) signing in through `login`, then the agent's browser
+  signed in only after `reload`, through the gate; a `javascript:` probe in
+  the signed-in page reads nothing. 20/20 with Pi and Claude
+  Code on Docker (nono+srt), and Pi on Podman (nono, `SANDBOX=off`). The
+  client-certificate handshake against a real IdP is **untested** here (it
+  needs an MDM-enrolled identity).
 
 ## Host mode
 

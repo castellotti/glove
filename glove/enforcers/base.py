@@ -11,6 +11,7 @@ never writable by the agent.
 
 from __future__ import annotations
 
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -60,7 +61,17 @@ SECRET_DENY_VARS = (
     "*API_KEY*",
     "*CREDENTIAL*",
     "*PASSWORD*",
+    "*COOKIE*",
+    # a personal access token: the word, never inside one (PATH, NODE_PATH)
+    "*_PAT",
+    "PAT_*",
+    "*_PAT_*",
 )
+
+
+def is_secret_env_name(name: str) -> bool:
+    """`name` matches a SECRET_DENY_VARS glob, in any case (as the scrub does)."""
+    return any(fnmatchcase(name.upper(), g.upper()) for g in SECRET_DENY_VARS)
 
 
 def shell_denied_env(plan: SessionPlan | None = None) -> tuple[str, ...]:

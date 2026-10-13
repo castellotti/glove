@@ -44,6 +44,7 @@ mcp_args() {
     --config /etc/glove/playwright/mcp.json --image-responses allow)
   if [ "$PW_SANDBOX" = on ]; then args+=(--sandbox); else args+=(--no-sandbox); fi
   if [ "$PW_PROFILE" = session ]; then args+=(--user-data-dir /data/profile); else args+=(--isolated); fi
+  if [ -f "$STATE" ]; then args+=(--storage-state "$STATE"); fi
   printf '%s\n' "${args[@]}"
 }
 
@@ -79,13 +80,28 @@ trust_corporate_ca() {
   echo "glove: trusting $# corporate CA certificate(s) from $ca" >&2
 }
 
-# Before the browser starts: the sandbox check, the CA, and staged downloads
-# (hooks.py STAGING) a killed sidecar left behind (Playwright deletes them only
-# when the browser context closes).
+# `playwright: {storage_state: …}`: the session `glove playwright login`
+# stored, handed over at `compose up` as gzip+base64 in PW_STORAGE_STATE (an
+# env string tops out at 128 KB). Written 0600 to the tmpfs, and the variable
+# unset before anything else starts; the MCP loads it into each new context.
+STATE=/tmp/glove-state/storage-state.json
+seed_storage_state() {
+  [ -n "${PW_STORAGE_STATE:-}" ] || return 0
+  (umask 077 && mkdir -p "${STATE%/*}" &&
+    node -e 'process.stdout.write(require("zlib").gunzipSync(Buffer.from(process.env.PW_STORAGE_STATE, "base64")))' \
+      > "$STATE")
+  unset PW_STORAGE_STATE
+  echo "glove: seeding the browser with a stored session" >&2
+}
+
+# Before the browser starts: the sandbox check, the CA, the stored session, and
+# staged downloads (hooks.py STAGING) a killed sidecar left behind (Playwright
+# deletes them only when the browser context closes).
 prepare() {
   require_sandbox
   find /data/staging -mindepth 1 -delete 2>/dev/null || true
   trust_corporate_ca
+  seed_storage_state
 }
 
 case "${1:-headless}" in

@@ -135,6 +135,19 @@ def test_a_flood_of_unopened_requests_is_bounded(tmp_path, monkeypatch):
         pytest.fail("pending places were never released")
 
 
+def test_the_ca_bundle_adds_the_corporate_ca_after_the_roots(tmp_path):
+    (tmp_path / "roots.pem").write_bytes(b"ROOTS")  # no trailing newline: still one cert per line run
+    (tmp_path / "corp.pem").write_bytes(b"CORP\n\n")
+    env = relayd.ca_bundle_env(str(tmp_path / "corp.pem"), dest=str(tmp_path / "b.pem"),
+                               roots=str(tmp_path / "roots.pem"))
+    assert (tmp_path / "b.pem").read_bytes() == b"ROOTS\nCORP\n"
+    assert env == dict.fromkeys(("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"),
+                                str(tmp_path / "b.pem"))
+    from glove.cafile import CA_BUNDLE_ENV
+
+    assert relayd.CA_BUNDLE_ENV == CA_BUNDLE_ENV  # the harness's list, in the image
+
+
 def test_a_declared_work_root_must_exist(tmp_path):
     with pytest.raises(SystemExit, match=r"work root .*/gone is not a directory"):
         relayd.main(["--channel", str(tmp_path), "--policy", "/nonexistent", "--work", str(tmp_path / "gone")])
@@ -158,3 +171,34 @@ def test_relay_is_a_library(tmp_path):
     cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path), extensions={"direct": {}, "relay": {}})
     with pytest.raises(ExtensionError, match="library extension"):
         build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
+
+
+def test_the_call_client_speaks_the_protocol(tmp_path, capfd):
+    """`relayd.py --call`: the request glove-relay makes (argv NUL-terminated,
+    cwd, FIFOs 1/2/rc, the id on the door), its output and exit code relayed."""
+    chan = tmp_path / "chan"
+    (chan / "req").mkdir(parents=True)
+    os.mkfifo(chan / "door")
+    seen = {}
+
+    def server():
+        with open(chan / "door") as door:
+            rid = door.readline().strip()
+        d = chan / "req" / rid
+        seen["argv"] = (d / "argv").read_bytes()
+        seen["cwd"] = (d / "cwd").read_text()
+        with open(d / "1", "w") as out, open(d / "2", "w") as err, open(d / "rc", "w") as rc:
+            out.write("hello\n")
+            err.write("warn\n")
+            out.flush()
+            err.flush()
+            rc.write("3\n")
+
+    t = threading.Thread(target=server, daemon=True)
+    t.start()
+    assert relayd.call(str(chan), ["scripts/x.py", "status", "a b"], timeout=10) == 3
+    t.join(5)
+    assert seen == {"argv": b"scripts/x.py\0status\0a b\0", "cwd": "/tmp"}
+    out, err = capfd.readouterr()
+    assert out == "hello\n" and err == "warn\n"
+    assert list((chan / "req").iterdir()) == []  # its request dir is gone

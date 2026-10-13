@@ -14,6 +14,19 @@ PEM_CERT = b"-----BEGIN CERTIFICATE-----"
 # public, and whatever is bound is readable by the agent.
 PEM_KEY = b"PRIVATE KEY-----"
 
+# `corporate_ca`'s read-only bind (the harness, and sidecars that trust it):
+# under /etc/glove, which every enforcer already lets the harness and its
+# commands read (nono: GLOVE_READ; srt: the whole rootfs is readable), so
+# trusting it needs no policy change.
+CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
+# corporate_ca, baked into the harness's derived image after the image's own
+# roots (every harness image is Debian's, with ca-certificates): one bundle
+# for the TLS clients that replace their trust store rather than add to it
+# (Node adds: NODE_EXTRA_CA_CERTS). Set in the harness only if absent.
+SYSTEM_ROOTS = "/etc/ssl/certs/ca-certificates.crt"
+CA_BUNDLE_PATH = "/etc/glove/ca-bundle.pem"
+CA_BUNDLE_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO")
+
 
 def resolve_ca_file(label: str, value: object, session_dir: Path | None) -> Path:
     """`value` as a validated host path (``~`` expanded, relative to the session

@@ -140,6 +140,20 @@ def test_package_lists_expand_from_a_list_setting(tree, tmp_path, monkeypatch):
         _plan(tree, tmp_path, monkeypatch, {"p": {"extra": ["a b"]}})
 
 
+def test_a_manifest_may_not_copy_host_paths(tree, tmp_path, monkeypatch):
+    # `copy_host` (a host path the hook checked) comes only from a contribute hook
+    _ext(tree, "c", """\
+        api: 1
+        name: c
+        summary: x
+        harness:
+          image:
+            "*": { copy_host: [[/etc/passwd, /opt/a]] }
+        """)
+    with pytest.raises(ExtensionError, match="`copy_host` comes only from a contribute hook"):
+        _plan(tree, tmp_path, monkeypatch, {"c": {}})
+
+
 def test_two_sources_may_not_stage_under_one_name(tree, tmp_path, monkeypatch):
     _ext(tree, "c", """\
         api: 1
@@ -151,3 +165,53 @@ def test_two_sources_may_not_stage_under_one_name(tree, tmp_path, monkeypatch):
         """, {"tool/x.py": "", "bin/tool": ""})
     with pytest.raises(ValueError, match="would both stage as 'c/tool'"):
         _plan(tree, tmp_path, monkeypatch, {"c": {}})
+
+
+def test_a_contribute_hook_extends_channels_privileges_and_ca_trust(tree, tmp_path, monkeypatch):
+    # what the manifest declares by service name, a hook may add for services
+    # its fragment renders from settings (`vars`); the manifest's entry wins
+    _ext(tree, "h", """\
+        api: 1
+        name: h
+        summary: x
+        hooks: hooks.py
+        privileges: { a: { low_ports: true } }
+        services: services.yml.j2
+        """, {"hooks.py": textwrap.dedent("""\
+            def contribute(ctx):
+                return {"channels": {"h-b": {"services": ["b"]}}, "privileges": {"a": {"read_only": False},
+                        "b": {"low_ports": True}}, "trust_corporate_ca": ["b"], "vars": {"names": ["a", "b"]}}
+            """), "services.yml.j2": textwrap.dedent("""\
+            services:
+            {% for n in vars.names %}
+              {{ n }}: { image: "x@sha256:00", command: ["true"] }
+            {% endfor %}
+            """)})
+    plan = _plan(tree, tmp_path, monkeypatch, {"h": {}})
+    comp = plan.composition
+    a = comp.by_name("h")
+    assert a.spec("privileges") == {"a": {"low_ports": True}, "b": {"low_ports": True}}
+    assert a.spec("trust_corporate_ca") == ["b"] and a.spec("channels") == {"h-b": {"services": ["b"]}}
+    assert [c.name for c in comp.channels] == ["h-b"] and [n for a_, d in comp.fragments for n in d["services"]] == [
+        "a", "b"]
+
+
+@pytest.mark.parametrize("bad", [{"trust_corporate_ca": "b"}, {"privileges": ["b"]}, {"channels": "x"}])
+def test_a_contribute_hook_extension_must_be_well_formed(tree, tmp_path, monkeypatch, bad):
+    _ext(tree, "h", "api: 1\nname: h\nsummary: x\nhooks: hooks.py\nservices: s.yml.j2\n",
+         {"hooks.py": f"def contribute(ctx):\n    return {bad!r}\n",
+          "s.yml.j2": 'services:\n  b: { image: "x@sha256:00", command: ["true"] }\n'})
+    with pytest.raises(ExtensionError, match="contributed"):
+        _plan(tree, tmp_path, monkeypatch, {"h": {}})
+
+
+@pytest.mark.parametrize("item", [
+    "{name: x, kind: exec-ok, service: harness, argv: [id]}",   # not its own sidecar
+    "{name: x, kind: exec-ok, service: a}",                      # no argv
+    "{name: x, kind: exec-ok, service: a, argv: id}",
+])
+def test_an_exec_check_runs_only_in_the_extensions_own_sidecar(tree, tmp_path, monkeypatch, item):
+    _ext(tree, "h", f"api: 1\nname: h\nsummary: x\nservices: s.yml.j2\nverify: [{item}]\n",
+         {"s.yml.j2": 'services:\n  a: { image: "x@sha256:00", command: ["true"], network_mode: none }\n'})
+    with pytest.raises(ExtensionError, match="exec-ok needs `service`, one of its own"):
+        _plan(tree, tmp_path, monkeypatch, {"h": {}})

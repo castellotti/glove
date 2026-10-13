@@ -21,14 +21,24 @@ Protocol (one request):
 
 The policy (`--policy`, a Python file loaded by path, owned by the consuming
 extension) names its commands (`COMMANDS`), validates every argv (`prepare`,
-raising its own `Refused` with the message to show), builds the children's
-environment (`setup`) and names the hosts the egress fence lets through
-(`HOSTS`; none: no fence and no proxy, e.g. ssh, whose only routes are its
-per-host forwarders). relayd itself holds no credential knowledge.
+raising its own `Refused` with the message to show; it returns the argv, or
+`(argv, env)` for a command with an environment of its own), builds the
+children's environment (`setup`) and names the hosts the egress fence lets
+through (`HOSTS`; none: no fence and no proxy, e.g. ssh, whose only routes are
+its per-host forwarders; a mapping of command → hosts: one fence per command,
+`setup` gets each one's URL in `proxies`). relayd itself holds no credential
+knowledge.
 
 Egress fence: children reach the network only through an in-process CONNECT
 proxy on 127.0.0.1 that tunnels to the session's egress proxy (`--upstream`)
 and refuses every host the policy does not name, whatever argv got through.
+
+`relayd.py --call <channel> <command> args…` is a client (the protocol above,
+in Python), for a check run inside the sidecar: it goes through the policy like
+any request.
+
+Trust: with `GLOVE_CORPORATE_CA` (glove's `corporate_ca`, bound read-only),
+children read one bundle, the image's roots and that CA (`ca_bundle_env`).
 
 Standard library only.
 """
@@ -165,10 +175,11 @@ def _reader_gone(fd: int) -> bool:
 
 class Relay:
     def __init__(self, channel: str, policy: ModuleType, env: dict[str, str], *, work: str, settings: dict,
-                 timeout: int, max_active: int):
+                 timeout: int, max_active: int, trust: dict[str, str] | None = None):
         self.channel = channel
         self.policy = policy
         self.env = env
+        self.trust = trust or {}  # ca_bundle_env, under a command's own environment too
         self.work = work  # "": a relay without a work root (ssh)
         self.settings = settings
         self.timeout = timeout
@@ -253,8 +264,9 @@ class Relay:
 
     def _run(self, req: Request, out: int, err: int) -> int:
         argv = self.policy.prepare(req, dict(self.env))
+        argv, env = (argv[0], {**self.trust, **argv[1]}) if isinstance(argv, tuple) else (argv, self.env)
         # the child changes into the very directory that was checked (its fd)
-        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=self.env,
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=env,
                              cwd=f"/proc/self/fd/{req.cwd_fd}", pass_fds=tuple(req.fds), start_new_session=True)
         deadline = time.monotonic() + self.timeout
         while True:
@@ -392,7 +404,78 @@ def load_policy(path: str) -> ModuleType:
     return module
 
 
+SYSTEM_ROOTS = "/etc/ssl/certs/ca-certificates.crt"
+# glove's cafile.CA_BUNDLE_ENV: what Python, curl, git and gh (Go) read
+CA_BUNDLE_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO")
+
+
+def ca_bundle_env(extra: str, dest: str = "/tmp/relay-ca-bundle.pem", roots: str = SYSTEM_ROOTS) -> dict[str, str]:
+    """The image's roots, then `extra`, written to `dest` (the sidecar's own
+    tmpfs): those variables, naming it. Trust is only added."""
+    with open(dest, "wb") as out:
+        for path in (roots, extra):
+            with open(path, "rb") as f:
+                out.write(f.read().rstrip(b"\n") + b"\n")
+    return dict.fromkeys(CA_BUNDLE_ENV, dest)
+
+
+def call(channel: str, argv: list[str], cwd: str = "/tmp", timeout: float | None = None) -> int:
+    """One request to the relay serving `channel`, as glove-relay makes it;
+    the command's output is this process's. Returns its exit code (124 when
+    it did not finish in `timeout`: by default the relay's own, RELAY_TIMEOUT
+    in the sidecar's environment, and a little more)."""
+    if timeout is None:
+        timeout = int(os.environ.get("RELAY_TIMEOUT", "600")) + 5
+    rid = os.urandom(16).hex()
+    d = os.path.join(channel, "req", rid)
+    opened: list[int] = []
+    os.mkdir(d, 0o700)
+    try:
+        with open(os.path.join(d, "argv"), "wb") as f:
+            f.write(b"".join(w.encode("utf-8", "surrogateescape") + b"\0" for w in argv))
+        with open(os.path.join(d, "cwd"), "w") as f:
+            f.write(cwd)
+        for name in ("1", "2", "rc"):
+            os.mkfifo(os.path.join(d, name), 0o600)
+        door = os.open(os.path.join(channel, "door"), os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(door, f"{rid}\n".encode())
+        finally:
+            os.close(door)
+        pipes = {os.open(os.path.join(d, n), os.O_RDONLY | os.O_NONBLOCK): fd for n, fd in (("1", 1), ("2", 2))}
+        rc = os.open(os.path.join(d, "rc"), os.O_RDONLY | os.O_NONBLOCK)
+        opened += [*pipes, rc]
+        code = b""
+        deadline = time.monotonic() + timeout
+        def pump() -> None:  # what is there now (a FIFO with no writer yet reads EOF: nothing)
+            for fd, to in pipes.items():
+                with contextlib.suppress(BlockingIOError):
+                    while data := os.read(fd, 65536):
+                        os.write(to, data)
+
+        while time.monotonic() < deadline:
+            # a FIFO reads EOF until relayd opens its end: done only once rc has a line
+            pump()
+            with contextlib.suppress(BlockingIOError):
+                code += os.read(rc, 64)
+            if code.endswith(b"\n"):
+                pump()
+                return int(code)
+            time.sleep(0.05)
+        return 124
+    finally:
+        for fd in opened:  # relayd sees its reader gone and stops the command
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["--call"]:
+        if len(argv) < 3:
+            raise SystemExit("usage: relayd.py --call <channel> <command> [args…]")
+        sys.exit(call(argv[1], argv[2:]))
     ap = argparse.ArgumentParser(prog="relayd")
     ap.add_argument("--channel", required=True)
     ap.add_argument("--policy", required=True)
@@ -406,14 +489,18 @@ def main(argv: list[str] | None = None) -> None:
     work = os.path.realpath(args.work) if args.work else ""
     policy = load_policy(args.policy)
     settings = json.loads(os.environ.get("RELAY_SETTINGS") or "{}")
-    fence = None
-    if policy.HOSTS:  # a policy that names no hosts reaches none through a proxy (ssh: its forwarders only)
-        if not args.upstream:
-            raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
-        fence = Fence(args.upstream, policy.HOSTS)
-    env = policy.setup({"proxy": fence.url if fence else None, "settings": settings, "work": work})
+    hosts = policy.HOSTS
+    per_command = isinstance(hosts, dict)  # one fence per command, each only its own hosts
+    if hosts and not args.upstream:  # a policy that names no hosts reaches none (ssh: its forwarders only)
+        raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
+    fences = {cmd: Fence(args.upstream, h) for cmd, h in hosts.items() if h} if per_command else {}
+    fence = Fence(args.upstream, hosts) if hosts and not per_command else None
+    env = policy.setup({"proxy": fence.url if fence else None, "proxies": {c: f.url for c, f in fences.items()},
+                        "settings": settings, "work": work})
+    trust = ca_bundle_env(os.environ["GLOVE_CORPORATE_CA"]) if os.environ.get("GLOVE_CORPORATE_CA") else {}
+    env = {**trust, **env}  # the policy's own setting wins
     Relay(args.channel, policy, env, work=work, settings=settings,
-          timeout=args.timeout, max_active=args.max).serve()
+          timeout=args.timeout, max_active=args.max, trust=trust).serve()
 
 
 if __name__ == "__main__":

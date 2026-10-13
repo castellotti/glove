@@ -16,6 +16,8 @@ forgets it between calls. Each HTTP server from `comp.mcp` is rendered as the
 image's stdio bridge (`glove-mcp-bridge <url>`, one session for Vibe's) under
 the same name, so its tool names don't change. `harness_config.mcp_servers`
 render as written.
+
+Contributed skills are linked from one baked directory, listed in `skill_paths`.
 """
 
 from __future__ import annotations
@@ -32,6 +34,14 @@ from glove.harnessconfig import rel_config_home
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
 
 MCP_BRIDGE = "/opt/glove/bin/glove-mcp-bridge"
+# Contributed skills, one link per skill (baked): Vibe's `skill_paths` lists
+# directories of skill dirs, ranked above the project's and the user's.
+SKILLS_DIR = "/opt/glove/vibe/skills"
+
+
+def image_lines(comp) -> tuple[list[str], list]:
+    lines = comp.skill_link_lines(SKILLS_DIR) if comp is not None else []
+    return (["# Vibe: contributed skills (skill_paths)", *lines] if lines else []), []
 
 
 def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
@@ -86,6 +96,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         # hook, which rewrites the command text, applies cleanly.
         "experimental_bash_tool": False,
         "mcp_servers": servers,
+        **({"skill_paths": [SKILLS_DIR]} if comp is not None and comp.skills else {}),
         "providers": [
             {
                 "name": "glove",
@@ -119,8 +130,8 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     for key, value in cfg.harness_config.items():
         if key == "mcp_servers":
             continue
-        if key in ("providers", "models") and isinstance(value, list):
-            doc[key].extend(value)
+        if isinstance(value, list) and isinstance(doc.get(key), list):  # glove's list, then the session's
+            doc[key] = [*doc[key], *value]
         elif key == "disabled_tools" and isinstance(value, list):
             disabled_tools = [*disabled_tools, *value]
         else:

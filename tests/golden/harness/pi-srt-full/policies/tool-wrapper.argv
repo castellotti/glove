@@ -15,6 +15,14 @@ GLOVE_LLM_API_KEY
 -u
 *PASSWORD*
 -u
+*COOKIE*
+-u
+*_PAT
+-u
+PAT_*
+-u
+*_PAT_*
+-u
 BROWSER_MCP_TOOLS
 -u
 BROWSER_MCP_URL

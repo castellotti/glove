@@ -15,10 +15,11 @@
 #     exported one), and an EXIT trap that stops the stub ($STUB) and removes
 #     TMPROOT (`chmod -R u+w` first: a session dir holds read-only placeholders;
 #     once more after a pause: Docker Desktop's file share can hold a bind's
-#     source briefly after `compose down`)
+#     source briefly after `compose down`); a driver's own cleanup goes in
+#     ON_EXIT (a command, run first)
 driver_init() {
-  TMPROOT="$(mktemp -d)"; S="$TMPROOT/${1:-session}"; export GLOVE_HOME="$TMPROOT/gh"; STUB=
-  trap '[ -n "$STUB" ] && kill "$STUB" 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null
+  TMPROOT="$(mktemp -d)"; S="$TMPROOT/${1:-session}"; export GLOVE_HOME="$TMPROOT/gh"; STUB=; ON_EXIT=
+  trap '[ -n "$ON_EXIT" ] && $ON_EXIT; [ -n "$STUB" ] && kill "$STUB" 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null
         rm -rf "$TMPROOT" 2>/dev/null || { sleep 3; rm -rf "$TMPROOT"; }' EXIT
 }
 
