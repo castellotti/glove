@@ -24,6 +24,7 @@ import importlib.util
 import ipaddress
 import re
 import secrets as pysecrets
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -577,6 +578,28 @@ class Composition:
     def skill_dest(self, ext: str, src: Path) -> str:
         return f"/opt/glove/skills/{ext}/{src.name}"
 
+    def skill_links(self) -> list[tuple[str, str]]:
+        """(link name, container path) per contributed skill, for a harness
+        that loads skills from one directory of links; a name taken by an
+        earlier skill gets its extension's prefix (and a number, if need be)."""
+        out: dict[str, str] = {}
+        for ext, _src, dest in self.skills:
+            name = base = Path(dest).name
+            n = 1
+            while name in out:  # never overwrite one: `<ext>-<name>`, then `<ext>-<name>-2`, …
+                name = f"{ext}-{base}" + (f"-{n}" if n > 1 else "")
+                n += 1
+            out[name] = dest
+        return list(out.items())
+
+    def skill_link_lines(self, directory: str) -> list[str]:
+        """Dockerfile lines baking `skill_links` into `directory` (none without skills)."""
+        links = self.skill_links()
+        if not links:
+            return []
+        ln = " && ".join(f"ln -s {shlex.quote(dest)} {shlex.quote(f'{directory}/{name}')}" for name, dest in links)
+        return [f"RUN mkdir -p {directory} && {ln}"]
+
     def rendered_briefs(self) -> list[tuple[str, str]]:
         out = []
         for ext, text in self.briefs:
@@ -966,7 +989,11 @@ def mcp_server(where: str, item: Any) -> dict[str, Any]:
 HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief"}) | CONTRIBUTIONS
 
 
-def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
+def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[str, Any]) -> None:
+    """The manifest's `harness:` section, plus what a `contribute` hook
+    returned for it: `image` layers (only these may `copy_host`: host paths
+    the hook checked), `env`, `skills` (container paths of SKILL.md dirs in the
+    image) and `mcp` items, each taken as is (never rendered)."""
     h = a.manifest.raw.get("harness") or {}
     where = f"extension {a.name!r} harness"
     allowed = HARNESS_KEYS | set(known_harnesses())
@@ -983,7 +1010,10 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             for k in ("apt", "pip", "npm"):
                 if layer.get(k):
                     layer[k] = [p for item in layer[k] for p in str(item).split()]
+            if "copy_host" in layer:
+                raise ExtensionError(f"{where}: image `copy_host` comes only from a contribute hook")
             comp.image_layers.append((a.name, layer))
+    comp.image_layers += [(a.name, layer) for layer in contributed.get("image") or []]
     # a value, or {value:, when:, shell:} (unset unless `when` matches; `shell: false`
     # hides it from shell commands)
     for k, v in (h.get("env") or {}).items():
@@ -1000,6 +1030,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
         if not shell:
             comp.shell_hidden_env.add(k)
+    for k, v in (contributed.get("env") or {}).items():
+        set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
     comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")
     if profile.renders("skills"):
         for item in active_items(h.get("skills"), ctx):
@@ -1018,8 +1050,9 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict) -> None:
             if not (src / "SKILL.md").is_file() or not src.is_relative_to(a.manifest.path.resolve()):
                 raise ExtensionError(f"{where}: skill {spec['src']!r} needs a SKILL.md inside the extension")
             comp.skills.append((a.name, src, comp.skill_dest(a.name, src)))
+        comp.skills += [(a.name, None, str(dest)) for dest in contributed.get("skills") or []]
     if profile.renders("mcp"):
-        for item in render_value(active_items(h.get("mcp"), ctx), ctx, where):
+        for item in [*render_value(active_items(h.get("mcp"), ctx), ctx, where), *(contributed.get("mcp") or [])]:
             server = mcp_server(where, item)
             if any(s["name"] == server["name"] for _, s in comp.mcp):
                 raise ExtensionError(f"{where}: mcp server {server['name']!r} is already set by another extension")
@@ -1194,9 +1227,7 @@ def compose(
         _outputs(comp, a, ctx, "inputs")
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
-        _harness_contrib(comp, a, ctx)
-        for k, v in (contributed.get("env") or {}).items():
-            set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
+        _harness_contrib(comp, a, ctx, contributed)
         _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
                                       *(contributed.get("host_services") or [])])
         for item in active_items([*(a.manifest.raw.get("verify") or []), *(contributed.get("verify") or [])], ctx):

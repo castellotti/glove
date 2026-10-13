@@ -363,6 +363,41 @@ has no server-side switch for it). The controls:
   (`accounts.google.com`, `clients2.google.com`, `update.googleapis.com`,
   `www.google.com` in live runs) through the egress; `filter` can block them.
 
+### Plugins and skills (`skills`)
+
+A plugin is code and prompts the operator chose to trust; glove bakes it, it
+does not vet it.
+- **What widens.** The agent reads the plugin's skill text (prompts) and runs
+  its scripts and `bin/` commands as shell commands: the same tool sandbox as
+  any command (`/work`, `/tmp`, rw mounts, no network). `env` values are plain
+  and visible to shell commands; a secret-shaped name or a `keychain:`/`env:`
+  reference is refused.
+- **Never the host checkout.** The plugin is baked into the image (read-only
+  rootfs), not bind-mounted. The session's `skills/` is never mounted and is
+  refused as a mount source or toolchain project. Core refuses any host tree a
+  hook bakes that an agent can write (`/work`, a read-write mount, another
+  registered session's `work/`): the agent could rewrite what the next session
+  bakes and runs, nor glove's state. A symlink leaving the plugin is refused.
+  Only the selected skills (and the plugin's other files) are staged, so an
+  unselected skill never reaches an image layer.
+- **Image layers are not secret storage.** A file that looks like a credential
+  (`.env`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, keystores, SSH
+  keys, a PEM private key anywhere) fails the plan.
+- **Build-time network only.** uv, a Python and each script's dependencies
+  (wheels, pinned by `uv export`, hash-checked by pip) are fetched when the
+  image is built; at run time scripts are offline. The harness's `/tmp` stays
+  noexec: dependencies are installed into read-only per-dependency-set
+  environments instead of a writable cache.
+- **MCP servers run under the tool wrapper.** A plugin's stdio server is
+  started through `glove-confine`, which execs the enforcer's tool wrapper
+  (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
+  not even the forwarders the harness process reaches (glove's own stdio MCP
+  servers on Claude Code run under the harness sandbox instead). With no
+  wrapper it refuses to start. Each server's tools must be listed; the
+  inventory fails closed.
+- **Not loaded:** plugin hooks, commands, agents, output styles; Claude Code
+  still refuses plugins as such (the skills come in through `--add-dir`).
+
 ## Relays: gh and git from shell commands (`relay`, `github`)
 
 Shell commands have no network, under every enforcer, and that stays true.

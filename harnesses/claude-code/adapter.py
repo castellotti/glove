@@ -36,7 +36,6 @@ with `--add-dir`), not the config home, whose deny rules would hide their files.
 from __future__ import annotations
 
 import json
-import shlex
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -234,13 +233,7 @@ def _merge_json(path: Path, update: dict[str, Any]) -> None:
 
 
 def _skill_links(comp) -> list[tuple[str, str]]:
-    """(link name, container path) per contributed skill; a name taken by an
-    earlier skill gets its extension's prefix."""
-    out: dict[str, str] = {}
-    for ext, _src, dest in comp.skills if comp is not None else []:
-        name = Path(dest).name
-        out[f"{ext}-{name}" if name in out else name] = dest
-    return list(out.items())
+    return comp.skill_links() if comp is not None else []
 
 
 def entry_args(comp) -> list[str]:
@@ -251,13 +244,8 @@ def image_lines(comp) -> tuple[list[str], list]:
     """Bake the skill links: outside the config home, so the agent can read a
     skill's files (and a tool command run its scripts) by the path Claude Code
     shows it."""
-    links = _skill_links(comp)
-    if not links:
-        return [], []
-    d = f"{SKILLS_ROOT}/.claude/skills"
-    return ["# Claude Code: contributed skills (loaded with --add-dir)",
-            f"RUN mkdir -p {d} && " + " && ".join(f"ln -s {shlex.quote(dest)} {shlex.quote(f'{d}/{name}')}"
-                                                for name, dest in links)], []
+    lines = comp.skill_link_lines(f"{SKILLS_ROOT}/.claude/skills") if comp is not None else []
+    return (["# Claude Code: contributed skills (loaded with --add-dir)", *lines] if lines else []), []
 
 
 def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:

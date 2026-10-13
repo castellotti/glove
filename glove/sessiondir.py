@@ -6,6 +6,8 @@
       glove-session.yml   the one file the user edits (schema v3)
       work/               → /work (rw)
       local/              optional user-private host assets; never mounted
+      skills/             optional plugin/skill checkouts (the `skills` extension
+                          bakes a filtered copy); never mounted
       .glove/             0700; only home/ and enforcer/ are ever mounted
         id                stable session id: <dirname>-<6 hex>
         compose.yml  effective.yml  baseline.yml  template.yml
@@ -37,7 +39,7 @@ import yaml
 from .config import Config, ConfigError, _coerce
 from .enforcers.base import default_enforcer
 from .exports import ensure_dir
-from .mounts import host_path
+from .mounts import host_path, overlaps
 
 SESSION_FILE = "glove-session.yml"
 STATE_DIR = ".glove"
@@ -212,7 +214,8 @@ def _mount(sd: SessionDir, item: Any) -> tuple[str, str]:
 def exposes_private(root: Path | None, host: Path) -> tuple[Path, str] | None:
     """The private path a harness mount of `host` would expose, if any.
 
-    Never glove's own state, the private local/ assets or the session file (the
+    Never glove's own state, the private local/ assets, the skills/ checkouts
+    (baked, filtered, by the `skills` extension) or the session file (the
     agent would rewrite its own grants) — including via an ancestor — nor
     glove's home (every session's exports and rules.json) or another registered
     session's state. Used for the session's `mounts:` and extensions' mounts."""
@@ -220,14 +223,13 @@ def exposes_private(root: Path | None, host: Path) -> tuple[Path, str] | None:
 
     private = [(glove_home(), "glove's home")]
     if root is not None:
-        private += [(root / STATE_DIR, ".glove/"), (root / "local", "local/"), (root / SESSION_FILE, SESSION_FILE)]
+        private += [(root / STATE_DIR, ".glove/"), (root / "local", "local/"), (root / "skills", "skills/"),
+                    (root / SESSION_FILE, SESSION_FILE)]
     with contextlib.suppress(RegistryError):
         private += [(Path(e.dir) / STATE_DIR, f"session {e.id}'s state") for e in load_registry()]
-    host = Path(os.path.realpath(host))
     for guarded, what in private:
-        p = Path(os.path.realpath(guarded))
-        if host == p or p.is_relative_to(host) or host.is_relative_to(p):
-            return p, what
+        if overlaps(host, guarded):
+            return Path(os.path.realpath(guarded)), what
     return None
 
 

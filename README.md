@@ -75,6 +75,8 @@ shows how.
   glove-session.yml   the file you edit (no secrets: references only)
   work/               → /work (rw)
   local/              optional private host assets (e.g. hooks); never mounted
+  skills/             optional plugin and skill checkouts (the `skills`
+                      extension bakes a checked copy); never mounted
   .glove/             0700; only home/ and enforcer/ are mounted
     id                stable session id: <dirname>-<6 hex>
     compose.yml  effective.yml  baseline.yml  template.yml
@@ -144,7 +146,7 @@ protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates emp
 ```
 
 Relative mount paths resolve against the session directory. A mount that would
-expose `.glove/`, `local/`, `glove-session.yml`, glove's home (`~/.glove`) or
+expose `.glove/`, `local/`, `skills/`, `glove-session.yml`, glove's home (`~/.glove`) or
 another session's state is refused. The v2 keys (`workdir`, `add_dirs`, `net`,
 `services`, `observe`, `name`, …) are refused with a pointer to their
 replacement.
@@ -722,14 +724,22 @@ Core validates all of it:
     `all_tools` as deny rules;
   - `skills: [skills/x]`: a `SKILL.md` directory baked into the image, or one
     from a mount (`{mount: m, path: skills/y}`, skipped when that mount is off),
-    for harnesses that load skills (Pi: `settings.json`);
+    for every harness (Pi: `settings.json`; Claude Code: links under
+    `/opt/glove/cc/.claude/skills`, `--add-dir`; Vibe: links under
+    `/opt/glove/vibe/skills`, its `skill_paths`);
   - `<harness>: {...}`: a section only that harness's adapter reads, e.g.
     `pi: {extensions: [pi-extension], tools: [web_search]}` (glove renders no
     MCP for Pi: its built-in MCP is off, so it loads its own code with `pi -e`).
     `tools` (a list or comma-separated) names the tools that code registers;
     they join the tool inventory, and Pi refuses any it doesn't name.
 
-  Any other key is an error.
+  Any other key is an error. A `contribute` hook may add `image` layers,
+  `env`, `skills` (container paths in the image) and `mcp` items, taken as
+  given. Only its layers may `copy_host` (host paths it checked; the `skills`
+  extension's plugins): core renders those last, after the toolchains, so an
+  edit to a checkout rebuilds nothing else, and refuses a source an agent can
+  write (a read-write mount, `/work` included, or another session's `work/`)
+  or glove's state.
 - **Fragments** (`compose/services.yml.j2`, Jinja) see a restricted context,
   including `settings`, `session` (`id`, `subnet`, `secrets_dir`),
   `endpoint.<name>` (every endpoint's `host`/`port`/`url`),
@@ -976,12 +986,58 @@ which applies.
 **`rag`** (requires `ocr`) bakes kstore: `kstore sync` turns
 `/work/data/input` into a keyword (Obsidian vault) and a vector (FAISS) store,
 OCR'ing scans and images, and `kstore ask` retrieves passages with citations
-(file, page, char/line) back to the original. Pi gets the `rag-parse` and
-`rag-query` skills. Embeddings run in-process (fastembed) from `models_dir`, a
+(file, page, char/line) back to the original. Every harness gets the
+`rag-parse` and `rag-query` skills. Embeddings run in-process (fastembed) from `models_dir`, a
 read-only mount filled once by `glove rag fetch-model`; `obsidian_dir` (a
 claude-obsidian checkout, read-only) adds its vault-synthesis skills. No egress
 provider is needed. Template: `glove new pi-rag <dir>`; details in
 [extensions/rag/README.md](extensions/rag/README.md).
+
+### Plugins and skills: `skills`
+
+**`skills`** loads Claude Code plugins, and plain directories of skills, into
+every harness. Clone a plugin into the session's `skills/` directory (never
+mounted, like `local/`) and name it:
+
+```yaml
+extensions:
+  skills:
+    plugins:
+      connectors:                                   # your name for it ([a-z0-9-])
+        path: skills/connectors-repo/plugins/connectors  # .claude-plugin/plugin.json, or a dir of <skill>/SKILL.md
+        skills: [confluence, slack]                 # default: all of them
+        env: { WIKI_SPACE: team }                   # plain values only: a secret is refused
+      notes:
+        path: skills/notes-repo/notes
+        mcp: true                                   # its .mcp.json servers (Claude Code, Vibe; Pi has no MCP)
+        tools: { notes: [search, fetch] }           # each server's allowed tools (required)
+```
+
+The plugin is baked into the harness image at `/opt/glove/plugins/<name>/`
+(content-addressed, in the image's last extension layer: an edit rebuilds
+only that layer on the next `glove up`; nothing is bind-mounted). Only the
+selected skills are staged, with the plugin's other files. In the baked copy,
+`${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` are replaced in the
+Markdown that names them (the data dir is `/work/.glove-plugin-data/<name>`,
+created by glove), and `bin/` is linked into `/usr/local/bin` (a name the image already
+has fails the build rather than shadow it). Skills load through the neutral
+`skills` contribution, so Claude Code takes them with `--add-dir` and its
+plugin refusal stays. PEP 723 scripts (`uv run --script` shebangs) run offline
+on a baked Python (`python:`, default 3.12): each set of dependencies is
+installed at build time into its own read-only environment (wheels only; an
+sdist-only dependency fails the build) and the shebang points at it, because
+the harness's `/tmp` is noexec and a compiled extension could not load from a
+uv cache there. An explicit `uv run --script` still works for pure-Python
+dependencies (the env points uv at the baked wheelhouse). Scripts run under the
+tool sandbox like any command: no network. Refused at plan time: a plugin an
+agent can write (`/work`, a read-write mount, another session's `work/`: it
+could edit what the next session bakes) or in glove's state, a symlink leaving the plugin, a file that looks like a credential
+(`.env`, `.netrc`, `.npmrc`, `.pypirc`, `*.p12`, SSH keys, a PEM private key),
+and a secret-shaped name or a `keychain:`/`env:` reference in `env`. A plugin's
+stdio MCP server runs under the tool wrapper (`glove-confine`: the per-command
+sandbox, no network), never with the harness's own network, which reaches the
+session's forwarders. Plugin hooks, commands and agents are not loaded. Details in
+[extensions/skills/README.md](extensions/skills/README.md).
 
 ### Browser: `playwright`
 
@@ -1134,7 +1190,8 @@ Refused on podman: its compose provider can't apply the profile.
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the harness-only vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` and `test_netgate_shutdown.sh` on both |
-| Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv, no skills) |
+| Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv; skills through `skill_paths`, as `skills`) |
+| Plugins | `skills` (Claude Code plugins and skill dirs, baked) | verified live on Docker (nono+srt) and Podman (nono) with Pi, Claude Code and Vibe, against the stub with the fixture plugin (`test_skills.sh`): scripts by the paths the skill names (stdlib, a dependency, a compiled dependency, an explicit `uv run --script`), `bin/` on PATH, paths resolved in the baked skill, the unselected skill absent, the plugin read-only and its data dir writable, the skill loaded (Pi's prompt, Claude Code's Skill tool, Vibe's `skill` tool), the plugin's stdio MCP server under the tool wrapper (Claude Code, Vibe: it answers and can't reach the llm forwarder), no network. Real-world plugins (an MCP server with compiled dependencies): built and their commands run by hand in the image; in a session **untested** |
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe, glove's stdio bridge keeps one MCP session per server, so a click after a navigate (and so an upload) works: verified live on Docker (`test_playwright.sh vibe` and `downloads`, also across two `run_typescript` calls); the bridge itself on Docker and Podman (`test_mcp_bridge.sh`); the Vibe browser case on Podman: **untested** |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts; Vibe, `srt`, Podman, behind tor/vpn/corporate: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
@@ -1234,6 +1291,8 @@ bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarde
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
 bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (42 checks;
                                               # 40 with RT=podman: no srt session)
+bash tests/integration/test_skills.sh pi      # a Claude Code plugin baked and used (11 checks; also:
+                                              # claude-code 14, vibe 13: its stdio MCP server)
 # RT=podman runs every script above except test_pi_srt on Podman (test_nono_srt checks the refusal);
 # KEEP=1 leaves a driver's session running
 # (images are per runtime: `glove build pi --provider podman`)

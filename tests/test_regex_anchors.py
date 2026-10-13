@@ -17,6 +17,7 @@ from glove.runtimes import docker
 ROOT = Path(__file__).resolve().parents[1]
 SSH = load_module(ROOT / "extensions/ssh/hooks.py", "ssh_hooks")
 VPN = load_module(ROOT / "extensions/vpn/hooks.py", "vpn")
+SKILLS = load_module(ROOT / "extensions/skills/hooks.py", "skills_hooks")
 
 
 @pytest.mark.parametrize("pattern,ok", [
@@ -36,6 +37,9 @@ VPN = load_module(ROOT / "extensions/vpn/hooks.py", "vpn")
     (SSH.USER, "agent"),
     (SSH.HOST, "lab.lan"),
     (VPN.WG_KEY, "A" * 43 + "="),
+    (SKILLS._NAME, "connectors"),
+    (SKILLS._FILE_NAME, "nexus"),
+    (SKILLS._ENV_VAR, "NEXUS_VAULT"),
 ])
 def test_a_trailing_newline_is_refused(pattern, ok):
     assert pattern.match(ok)

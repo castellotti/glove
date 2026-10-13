@@ -8,6 +8,7 @@ Built from a resolved ``Config`` plus the mount and network plans.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import posixpath
@@ -26,7 +27,16 @@ from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
 from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
-from .mounts import Mount, MountPlan, Protect, check_path, compute_mounts, protected_home, protected_paths
+from .mounts import (
+    Mount,
+    MountPlan,
+    Protect,
+    check_path,
+    compute_mounts,
+    overlaps,
+    protected_home,
+    protected_paths,
+)
 from .naming import project_name, scoped
 from .network import NetworkPlan, build_network_plan
 from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
@@ -274,6 +284,30 @@ def git_config_parameters(pairs: list[tuple[str, str]]) -> str:
     return " ".join(f"{q(k)}={q(v)}" for k, v in pairs)
 
 
+def _check_baked_sources(comp: Composition, mounts: list[Mount]) -> None:
+    """A host tree a `contribute` hook bakes into the image (`copy_host`) is
+    never one an agent can write (this session's rw mounts, `/work` included,
+    or another registered session's `work/`: it would change what the next
+    session bakes and runs), nor glove's state (a session's `.glove/`, its
+    session file, glove's home)."""
+    from .registry import RegistryError, glove_home, load_registry
+    from .sessiondir import SESSION_FILE, STATE_DIR
+
+    guarded = [(Path(m.host_path), "writable by an agent") for m in mounts if not m.read_only]
+    guarded.append((glove_home(), "glove's home"))
+    if comp.session_dir is not None:
+        guarded += [(comp.session_dir / STATE_DIR, "glove state"), (comp.session_dir / SESSION_FILE, "glove state")]
+    with contextlib.suppress(RegistryError):
+        for e in load_registry():
+            guarded += [(Path(e.dir) / "work", "writable by an agent"), (Path(e.dir) / STATE_DIR, "glove state")]
+    for ext, layer in comp.image_layers:
+        for src, _dst in layer.get("copy_host") or []:
+            for g, what in guarded:
+                if overlaps(Path(src), g):
+                    raise ConfigError(f"extension {ext!r}: {src} is {what} (it overlaps {os.path.realpath(g)}); "
+                                      "what is baked into the image must not be")
+
+
 def build_session_plan(
     cfg: Config,
     *,
@@ -323,6 +357,7 @@ def build_session_plan(
         cwd=cwd,
         allow_sensitive=cfg.allow_sensitive,
     )
+    _check_baked_sources(comp, mount_plan.mounts)
     session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
     opted = _opt_ins(cfg, profile)

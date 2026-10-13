@@ -1,0 +1,13 @@
+api: 1
+name: skills
+summary: Claude Code plugins (and plain directories of skills) for every harness — baked into the harness image, `${CLAUDE_PLUGIN_ROOT}` resolved, `bin/` on PATH, PEP 723 scripts offline through a wheelhouse, opt-in stdio MCP.
+settings:
+  # <name>: {path, skills, env, mcp, tools} — see README.md. The name is yours
+  # ([a-z0-9-]); `path` is a plugin directory (.claude-plugin/plugin.json) or a
+  # directory of SKILL.md dirs, usually a checkout in the session's skills/.
+  plugins: { type: map, default: {} }
+  # the Python that PEP 723 scripts (`uv run --script`) run on, installed by uv
+  python:  { type: string, default: "3.12", pattern: "^3\\.[0-9]+$" }
+hooks: hooks.py                 # contribute: check each plugin, bake it; materialize: its data dir
+harness:
+  brief: brief.md

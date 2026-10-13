@@ -6,6 +6,31 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **The `skills` extension: Claude Code plugins (and plain skill directories)
+  for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
+  tools}}}`; plugins are cloned into the session's new `skills/` directory
+  (never mounted, like `local/`). Each is checked and baked into the harness
+  image at `/opt/glove/plugins/<name>/` (content-addressed, the last layer; only
+  the selected skills are staged): `${CLAUDE_PLUGIN_ROOT}` and
+  `${CLAUDE_PLUGIN_DATA}` are resolved in its Markdown, `bin/` is linked into `/usr/local/bin` (never over an existing
+  command). PEP 723 scripts run offline on a baked Python, each set of
+  dependencies in its own read-only environment that the `uv run --script`
+  shebang points at (the harness's `/tmp` is noexec, so compiled extensions
+  could not load from a uv cache there); an explicit `uv run --script` uses the
+  baked wheelhouse. `mcp: true` makes its `.mcp.json` servers MCP servers for
+  Claude Code and Vibe, each with its tools listed; a stdio server runs under
+  the tool wrapper (`glove-confine`: no network), never the harness's sandbox.
+  Refused: a plugin an agent can write (core refuses any baked host tree in
+  `/work`, a read-write mount or another session's `work/`) or in `.glove/`, a
+  symlink leaving it, a file that looks like a credential, a secret in `env`. Verified live with Pi, Claude
+  Code and Vibe on Docker and Podman (`test_skills.sh`).
+- **Vibe loads contributed skills** (`skill_paths`, links under
+  `/opt/glove/vibe/skills`), so `rag`'s skills now reach Vibe too.
+- A `contribute` hook may return `image` layers, `skills` and `mcp` items. Its
+  layers alone may `copy_host` (host paths it checked): core renders them
+  after the toolchains and refuses a source an agent can write or glove's
+  state.
+
 - `glove --help` ends with the common commands: `glove check && glove up`,
   `glove playwright view --control` (watch and drive the session's browser) and
   `glove down`.

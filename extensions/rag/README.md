@@ -28,7 +28,7 @@ extensions:
 | `models_dir` | **required.** Host directory holding the fastembed model cache; mounted read-only at `/mnt/rag-models`. Fill it once with `glove rag fetch-model` (needs internet). |
 | `embed_model` | fastembed model id (default `BAAI/bge-small-en-v1.5`). The index records it; a mismatch asks for a rebuild. |
 | `query_stores` | default for `kstore ask`: `both` (fused by rank), `obsidian` or `llama`. |
-| `obsidian_dir` | optional claude-obsidian checkout, mounted read-only at `/mnt/rag-obsidian`: Pi gets its offline skills (`wiki-ingest`, `wiki-lint`, `wiki-mode`, `obsidian-markdown`, `canvas`, `think`). |
+| `obsidian_dir` | optional claude-obsidian checkout, mounted read-only at `/mnt/rag-obsidian`: every harness gets its offline skills (`wiki-ingest`, `wiki-lint`, `wiki-mode`, `obsidian-markdown`, `canvas`, `think`). |
 
 ```sh
 glove rag fetch-model        # in the session dir: download embed_model into models_dir
@@ -42,8 +42,8 @@ glove rag fetch-model        # in the session dir: download embed_model into mod
 | `kstore ask "<question>"` | top passages from the stores, each with its locator and which store found it (`--k`, `--stores`, `--json`) |
 | `kstore compare "<question>"` | keyword vs vector side by side: latency and citations |
 
-Pi's skills `rag-parse` (`kstore sync`) and `rag-query` (`kstore ask`) wrap
-them. Layout under `/work/data`: `input/` (the operator's files), `output/`
+The skills `rag-parse` (`kstore sync`) and `rag-query` (`kstore ask`) wrap
+them (Pi, Claude Code and Vibe). Layout under `/work/data`: `input/` (the operator's files), `output/`
 (deliverables only), `store/` (everything derived: corpus, vault, index, OCR
 cache, comparison records).
 

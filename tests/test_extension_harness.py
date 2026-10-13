@@ -140,6 +140,20 @@ def test_package_lists_expand_from_a_list_setting(tree, tmp_path, monkeypatch):
         _plan(tree, tmp_path, monkeypatch, {"p": {"extra": ["a b"]}})
 
 
+def test_a_manifest_may_not_copy_host_paths(tree, tmp_path, monkeypatch):
+    # `copy_host` (a host path the hook checked) comes only from a contribute hook
+    _ext(tree, "c", """\
+        api: 1
+        name: c
+        summary: x
+        harness:
+          image:
+            "*": { copy_host: [[/etc/passwd, /opt/a]] }
+        """)
+    with pytest.raises(ExtensionError, match="`copy_host` comes only from a contribute hook"):
+        _plan(tree, tmp_path, monkeypatch, {"c": {}})
+
+
 def test_two_sources_may_not_stage_under_one_name(tree, tmp_path, monkeypatch):
     _ext(tree, "c", """\
         api: 1
