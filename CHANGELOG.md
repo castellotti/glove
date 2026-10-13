@@ -35,7 +35,8 @@ All notable changes to glove are documented here.
   warning by default). `glove skills status|refresh|reload`: run the checks,
   store new values (from a secret's `refresh:` hook on the host, or a prompt)
   and recreate only that relay's sidecar while the harness keeps running.
-  Verified live (`test_skills_relay.sh`).
+  Verified live (`test_skills_relay.sh`; with `CORPORATE=1` behind `corporate`
+  with a `corporate_ca`, on every harness).
 - **`github`: GitHub Enterprise hosts, a token each.** `github: {hosts:
   [{host, token: keychain:<service>}]}`, with or without github.com's `token`;
   the relay serves exactly those hosts (gh's `--hostname`/`-R`, git remotes, the
@@ -46,8 +47,8 @@ All notable changes to glove are documented here.
   `fetch`, `clone`, `ls-remote`; `[fetch, clone, ls-remote]` refuses pushes).
   `glove check` warns when a filtering egress (`corporate`) does not admit a
   served host or its subdomains. Verified live against a two-host stand-in behind `corporate` with
-  a private CA (`test_github_ghes.sh`: Pi on Docker and Podman, Claude Code on
-  Docker); a real GHES is untested.
+  a private CA (`test_github_ghes.sh`: Pi on Docker and Podman, Claude Code and
+  Vibe on Docker); a real GHES is untested.
 - **`glove playwright login`: sign in on the host, hand only the session to
   the browser sidecar.** It starts a dedicated Chrome (a fresh profile, deleted
   afterwards; CDP over a pipe, so no debugging port) at `login.start_url`; you
@@ -66,8 +67,8 @@ All notable changes to glove are documented here.
   name the state file). **`glove playwright reload`** recreates the
   sidecar from the stored session; `status` shows the first cookie expiry.
   Verified live (`test_playwright_login.sh`: a real host Chrome against a
-  stand-in sign-on site, the sidecar seeded through `corporate`; Pi and Claude
-  Code on Docker, Pi on Podman); a real IdP's client-certificate handshake is
+  stand-in sign-on site, the sidecar seeded through `corporate`; Pi, Claude
+  Code and Vibe on Docker, Pi on Podman); a real IdP's client-certificate handshake is
   untested. With a stored session the browser's brief tells the agent it is
   signed in as the operator, to change nothing there the task doesn't ask for,
   and to ask for `glove playwright login` when a page wants a new sign-in;

@@ -5,7 +5,8 @@
 # ///
 """The fixture's API client, relayed by test_skills_relay.sh: its token comes
 from the relay's environment, a file from its home; "the API" is a public
-bearer-token echo. It prints hashes of what it got, never the token."""
+bearer-token echo (API_URL: a stand-in behind `corporate` with CORPORATE=1). It
+prints hashes of what it got, never the token."""
 import argparse
 import hashlib
 import json
@@ -13,7 +14,7 @@ import os
 import sys
 import urllib.request
 
-URL = "https://httpbin.org/bearer"
+URL = os.environ.get("API_URL") or "https://httpbin.org/bearer"
 
 
 def tag(value: str) -> str:

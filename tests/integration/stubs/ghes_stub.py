@@ -9,6 +9,8 @@ the path and whether the right token came, never the token:
   GET  /api/v3/user                          `Authorization: token <t>` → {"login": "user-<host>"}
   GET  /<o>/<r>.git/info/refs?service=git-upload-pack   Basic auth, the password <t>
   POST /<o>/<r>.git/git-upload-pack                     (likewise)
+  GET  /bearer        `Authorization: Bearer <t>` → {"authenticated": true, "token": <t>}
+                      (httpbin's echo, for test_skills_relay.sh with CORPORATE=1)
 Anything else is a 404, a push (receive-pack) a 403: the relay never sends one.
 """
 
@@ -70,6 +72,10 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._send(401, b'{"message": "Bad credentials"}')
             return self._send(200, json.dumps({"login": f"user-{host}"}).encode(), X_OAuth_Scopes="repo")
+        if path == "/bearer" and method == "GET":
+            if not ok:
+                return self._send(401, b'{"authenticated": false}')
+            return self._send(200, json.dumps({"authenticated": True, "token": token}).encode())
         m = GIT.fullmatch(path)
         if not m:
             return self._send(404, b'{"message": "Not Found"}')

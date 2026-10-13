@@ -77,10 +77,10 @@ def _checks(s, sh, tokens: dict[str, str]) -> None:
     print("== gh")
     out = sh("gh api user 2>&1")
     check("gh reaches the default host (the first) with its token, over the session's CA",
-          '"login":"user-ghes.test"' in out.replace(" ", ""), out[-200:])
+          '"login":"user-ghes.test"' in out.replace(" ", "").replace("\\\"", "\""), out[-200:])
     out = sh("gh api user --hostname ghes2.test 2>&1")
     check("gh reaches the other host by --hostname with its own token",
-          '"login":"user-ghes2.test"' in out.replace(" ", ""), out[-200:])
+          '"login":"user-ghes2.test"' in out.replace(" ", "").replace("\\\"", "\""), out[-200:])
     out = sh("gh api user --hostname github.com 2>&1; echo rc=$?")
     check("github.com is not served", "serves ghes.test, ghes2.test only" in out and "rc=0" not in out, out[-200:])
 
