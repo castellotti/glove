@@ -135,6 +135,19 @@ def test_a_flood_of_unopened_requests_is_bounded(tmp_path, monkeypatch):
         pytest.fail("pending places were never released")
 
 
+def test_the_ca_bundle_adds_the_corporate_ca_after_the_roots(tmp_path):
+    (tmp_path / "roots.pem").write_bytes(b"ROOTS")  # no trailing newline: still one cert per line run
+    (tmp_path / "corp.pem").write_bytes(b"CORP\n\n")
+    env = relayd.ca_bundle_env(str(tmp_path / "corp.pem"), dest=str(tmp_path / "b.pem"),
+                               roots=str(tmp_path / "roots.pem"))
+    assert (tmp_path / "b.pem").read_bytes() == b"ROOTS\nCORP\n"
+    assert env == dict.fromkeys(("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"),
+                                str(tmp_path / "b.pem"))
+    from glove.cafile import CA_BUNDLE_ENV
+
+    assert relayd.CA_BUNDLE_ENV == CA_BUNDLE_ENV  # the harness's list, in the image
+
+
 def test_a_declared_work_root_must_exist(tmp_path):
     with pytest.raises(SystemExit, match=r"work root .*/gone is not a directory"):
         relayd.main(["--channel", str(tmp_path), "--policy", "/nonexistent", "--work", str(tmp_path / "gone")])

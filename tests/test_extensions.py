@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import STUB_LLM, make_cfg, render
+from helpers import PEM, STUB_LLM, make_cfg, render
 
 from glove.config import ConfigError
 from glove.extensions import IN_TREE_DIR, ExtensionError, compose, discover, select, when_matches
@@ -311,6 +311,37 @@ def test_sidecars_get_the_hardening_set_and_namespaced_names(tmp_path, tree):
     assert nets["glove-s-wan"].get("internal") in (None, False)  # only the egress provider is on it
     assert set(doc["services"]["glove-s-tunnel"]["networks"]) == {"glove-s-egress", "glove-s-wan"}
     assert "glove-s-egress" not in doc["services"]["glove-s-harness"]["networks"]
+
+
+@pytest.mark.parametrize("with_ca", [True, False])
+def test_trust_corporate_ca_binds_the_ca_read_only_into_the_named_sidecars(tmp_path, tree, with_ca):
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    _egress(tree)
+    _svc_ext(tree, service=f"services:\n  worker: {{image: {DIGEST}, networks: [egress], environment: {{A: b}}}}\n"
+                           f"  other: {{image: {DIGEST}, networks: [egress]}}\n",
+             extra="trust_corporate_ca: [worker]")
+    _, doc = _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}},
+                     **({"corporate_ca": str(ca)} if with_ca else {}))
+    worker, other = doc["services"]["glove-s-worker"], doc["services"]["glove-s-other"]
+    assert "volumes" not in other and "GLOVE_CORPORATE_CA" not in (other.get("environment") or {})
+    if not with_ca:
+        assert "volumes" not in worker and worker["environment"] == {"A": "b"}
+        return
+    # never SELinux-relabelled: it is the operator's own file
+    assert worker["volumes"] == [{"type": "bind", "source": str(ca.resolve()),
+                                  "target": "/etc/glove/corporate-ca.pem", "read_only": True}]
+    assert worker["environment"] == {"A": "b", "GLOVE_CORPORATE_CA": "/etc/glove/corporate-ca.pem"}
+
+
+def test_a_fragment_never_binds_the_ca_itself(tmp_path, tree):
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    _egress(tree)
+    _svc_ext(tree, service=f"services:\n  worker:\n    image: {DIGEST}\n    networks: [egress]\n    volumes:\n"
+                           f"      - {{type: bind, source: '{ca}', target: /ca.pem, read_only: true}}\n")
+    with pytest.raises(ExtensionError, match="may bind only"):
+        _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}}, corporate_ca=str(ca))
 
 
 def test_only_the_egress_provider_joins_wan(tmp_path, tree):

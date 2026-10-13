@@ -62,7 +62,7 @@ MANIFEST_KEYS = frozenset({
     "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
     "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
     "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
-    "outputs", "inputs",
+    "outputs", "inputs", "trust_corporate_ca",
 })
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
@@ -143,7 +143,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     unknown = set(raw) - MANIFEST_KEYS
     if unknown:
         raise ExtensionError(f"extension {name!r}: unknown manifest keys {sorted(unknown)}")
-    for k in ("provides", "requires", "conflicts"):
+    for k in ("provides", "requires", "conflicts", "trust_corporate_ca"):
         if not isinstance(raw.get(k) or [], list):
             raise ExtensionError(f"extension {name!r}: `{k}` must be a list")
     bad_slots = [s for s in raw.get("provides") or [] if s not in SLOTS]
@@ -514,6 +514,10 @@ class Composition:
     # The harness's /work on the host: a trusted extension's sidecar binds all
     # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
+    # The session's validated `corporate_ca` PEM on the host (symlinks
+    # resolved): core binds it into the sidecars a manifest's
+    # `trust_corporate_ca:` names.
+    corporate_ca: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
     # Export root → this session's host dir (created by the CLI, never here).
@@ -1141,11 +1145,12 @@ def compose(
     subnet: str | None = None,
     export_dirs: dict[str, Path] | None = None,
     work_dir: Path | None = None,
+    corporate_ca: Path | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, work_dir=work_dir, subnet=subnet,
+                       session_dir=session_dir, work_dir=work_dir, corporate_ca=corporate_ca, subnet=subnet,
                        export_dirs=dict(export_dirs or {}),
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:

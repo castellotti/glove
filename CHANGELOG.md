@@ -6,6 +6,13 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- `glove --help` ends with the common commands: `glove check && glove up`,
+  `glove playwright view --control` (watch and drive the session's browser) and
+  `glove down`.
+- `glove keychain set <service> --stdin` reads the secret from a pipe (one
+  line), for scripts that mint a token. It goes to `security -i` on stdin,
+  quoted, never into argv. A terminal on stdin is refused.
+
 - Live drivers: no run downloads a large file unless asked. `BIG=1` adds one:
   `test_downloads.sh` checks the job path with `robots.txt` (`wait_s: 0`) and
   adds Debian's netinst ISO (`BIG=dvd`: its first DVD); `test_playwright.sh
@@ -297,6 +304,20 @@ All notable changes to glove are documented here.
   root-owned inside the harness, so git refused it as "dubious ownership".
 
 ### Changed
+
+- **`corporate_ca` reaches every TLS client, not only Node.** The session's
+  derived image bakes `/etc/glove/ca-bundle.pem` (the image's roots, then the
+  CA). `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+  `GIT_SSL_CAINFO` name it unless `env:` sets them, so curl, git, gh and Python
+  (Vibe included) trust the CA. Trust is only added; verification stays on.
+  The `github` relay sidecar and `webfetch`'s fetcher trust it too: a new
+  manifest key, `trust_corporate_ca: [<service>…]`, has core bind the CA
+  read-only (never SELinux-relabelled) into those sidecars with
+  `GLOVE_CORPORATE_CA` naming it. Verified live: curl, Python,
+  git and gh against a test-CA server, public hosts still verified.
+- More env names count as secrets and are unset before every shell command:
+  `*COOKIE*`, and a personal access token's `*_PAT`, `PAT_*`, `*_PAT_*` (never
+  `PATH`).
 
 - **Core checks every extension `mcp:` item**, which takes only the fields
   every harness renders alike: `name` (letters, digits, `_`, `-`; one per

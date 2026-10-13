@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .cafile import CA_BUNDLE_ENV, CA_BUNDLE_PATH, CORPORATE_CA_PATH, resolve_ca_file
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
 from .enforcers.base import TOOLS_FILE, WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
@@ -42,10 +43,6 @@ def forwarder_image() -> str:
     from .image import content_hash
 
     return f"glove/forwarder:0.2.0-{content_hash('', [('forwarder', FORWARDER_DIR)])}"
-# `corporate_ca`'s read-only bind: under /etc/glove, which every enforcer
-# already lets the harness and its commands read (nono: GLOVE_READ; srt: the
-# whole rootfs is readable), so trusting it needs no policy change.
-CORPORATE_CA_PATH = "/etc/glove/corporate-ca.pem"
 
 
 @dataclass
@@ -307,12 +304,15 @@ def build_session_plan(
     # Compose the selected extensions first: their endpoints, env, host services
     # and image layers feed the network plan, env and image below.
     sd_path = Path(session_dir) if session_dir else None
+    # checked at plan time, so `glove check` fails early; sidecars may trust it too
+    ca = resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path) if cfg.corporate_ca else None
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
+        corporate_ca=ca,
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
@@ -369,21 +369,19 @@ def build_session_plan(
     if cfg.enforcer_options["nono"]["browsers"] and not any(tc.browsers for tc in toolchains):
         raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "
                           "`toolchains` block bakes `browsers:`; drop the option or add the browsers")
-    corporate_ca = None
+    corporate_ca = str(comp.corporate_ca) if comp.corporate_ca else None
     trusted_cas = list(comp.trusted_cas)
-    if cfg.corporate_ca:
-        from .cafile import resolve_ca_file
-
-        # checked at plan time, so `glove check` fails early
-        corporate_ca = str(resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path))
+    if corporate_ca:
         trusted_cas.append(CORPORATE_CA_PATH)
+        for k in CA_BUNDLE_ENV:  # Python, curl, git, gh (Go): the baked bundle
+            environment.setdefault(k, CA_BUNDLE_PATH)
     if len(trusted_cas) > 1:  # Node takes one extra bundle (TODO: one built at harness start)
         raise ConfigError(f"the harness would trust {len(trusted_cas)} extra CAs ({', '.join(trusted_cas)}; "
                           "e.g. corporate_ca and llm `auth: oauth`'s session CA): not supported together yet")
     if trusted_cas:
         # Node *adds* these to its built-in roots: trust is widened, never
-        # replaced, and verification is never turned off. Non-Node tools
-        # (curl, python) keep the image's store (README: corporate_ca).
+        # replaced, and verification is never turned off. Other tools get
+        # corporate_ca's baked bundle (cafile.CA_BUNDLE_ENV), a channel's CA only Node.
         environment.setdefault("NODE_EXTRA_CA_CERTS", trusted_cas[0])
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)

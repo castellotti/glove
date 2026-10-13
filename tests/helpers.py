@@ -12,6 +12,8 @@ from glove.config import Config
 # Every harness session needs the `inference` slot filled. A host llama.cpp
 # with an explicit model resolves nothing at plan time and adds one forwarder
 # (`glove-<id>-llm` → host.docker.internal:8080).
+# A certificate-only PEM, as `corporate_ca` and `playwright.ca` require.
+PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
 STUB_LLM = {"provider": "llama.cpp", "location": "host", "endpoint": "127.0.0.1:8080", "model": "test-model"}
 
 

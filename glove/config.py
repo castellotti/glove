@@ -199,15 +199,22 @@ def secret_exists(value: str) -> tuple[bool, str]:
     return False, "not a reference (keychain:<service> | env:<VAR>)"
 
 
-def keychain_set(service: str) -> int:
-    """Store a secret in the login Keychain, prompting for it: `-w` as the last
-    option makes `security` read it from the terminal, so it is never in argv."""
+def keychain_set(service: str, secret: str | None = None) -> int:
+    """Store a secret in the login Keychain. Prompted for (None): `-w` as the
+    last option makes `security` read it from the terminal. Given: it goes to
+    `security -i` on stdin, quoted. Never in argv either way."""
     if not service or service.startswith("-"):
         raise ConfigError(f"invalid Keychain service name {service!r}")
     if not shutil.which("security"):
         raise ConfigError("the macOS `security` tool is not available on this host")
     user = os.environ.get("USER") or "glove"
-    return subprocess.run(["security", "add-generic-password", "-U", "-a", user, "-s", service, "-w"],
+    cmd = ["add-generic-password", "-U", "-a", user, "-s", service, "-w"]
+    if secret is None:
+        return subprocess.run(["security", *cmd], check=False).returncode
+    if not secret or any(c in w for w in (secret, service, user) for c in "\n\r\0"):
+        raise ConfigError("the secret (and the service name) must be one non-empty line")
+    line = " ".join('"' + w.replace("\\", "\\\\").replace('"', '\\"') + '"' for w in [*cmd, secret])
+    return subprocess.run(["security", "-i"], input=line + "\n", text=True, stdout=subprocess.DEVNULL,
                           check=False).returncode
 
 

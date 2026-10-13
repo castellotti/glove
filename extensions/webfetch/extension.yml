@@ -19,6 +19,8 @@ images:
   # every harness's web_download
   mcp: { build: image, when: *fetcher }
 services: compose/services.yml.j2
+# the fetcher trusts the session's corporate_ca too (webfetch_mcp: trust_corporate_ca)
+trust_corporate_ca: [fetcher]
 endpoints:
   # Pi and Claude Code: the harness reaches the egress proxy only through this
   # forwarder. Pi attaches it per request (never as a global dispatcher, so LLM

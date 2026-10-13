@@ -31,7 +31,11 @@
       "*SECRET*",
       "*API_KEY*",
       "*CREDENTIAL*",
-      "*PASSWORD*"
+      "*PASSWORD*",
+      "*COOKIE*",
+      "*_PAT",
+      "PAT_*",
+      "*_PAT_*"
     ]
   },
   "security": {

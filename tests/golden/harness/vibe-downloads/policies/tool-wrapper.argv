@@ -14,6 +14,14 @@ GLOVE_LLM_API_KEY
 *CREDENTIAL*
 -u
 *PASSWORD*
+-u
+*COOKIE*
+-u
+*_PAT
+-u
+PAT_*
+-u
+*_PAT_*
 --
 /usr/bin/nono
 wrap

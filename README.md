@@ -160,12 +160,17 @@ sets `NODE_EXTRA_CA_CERTS` to that path (an explicit `env:` entry wins). Node ad
 these certificates to its built-in roots, so the public roots stay trusted and
 **TLS verification is never turned off**. The PEM is a public certificate, not a
 secret, so it never goes through the Keychain. Every enforcer can already read
-`/etc/glove`, so no policy changes. This covers Node-based harnesses and tools
-(Pi, Claude Code, `web_fetch`). Non-Node tools in the box (curl, Python
-`requests`, Vibe's Python client) keep the image's trust store and won't trust
-the CA. The browser sidecar is a separate container: set
-`playwright: {ca: …}` as well (see Browser below). Unset, nothing renders
-differently.
+`/etc/glove`, so no policy changes. That covers Node (Pi, Claude Code,
+`web_fetch`). For everything else (curl, git, gh, Python `requests`/`urllib`,
+Vibe's client), glove bakes `/etc/glove/ca-bundle.pem` into the session's derived
+image: the image's own roots, then the CA. It sets `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` to that path, each only
+if `env:` doesn't set it. Changing the PEM rebuilds the image on the next `up`.
+The `github` relay and `webfetch`'s fetcher trust the CA too: core binds the same
+file read-only into them (`trust_corporate_ca:` in their manifests), and they build
+the same kind of bundle in their own `/tmp`. The browser
+sidecar is configured separately: set `playwright: {ca: …}` as well (see Browser
+below). Unset, nothing renders differently.
 
 **Language toolchains (`toolchains`, off by default).** Shell commands have no
 network, so `npm install`/`pip install` can't run in the box. `toolchains` declares
@@ -315,7 +320,7 @@ glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow r
 glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
-glove keychain set <service>                 # store a secret, prompting (never in argv)
+glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv)
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
@@ -651,7 +656,10 @@ Core validates all of it:
   the harness network, mounts the docker socket, or binds host paths other
   than its own session state, its outputs and inputs (below), and all of
   `work/` only with the `work` privilege (`github`'s sidecar, which pushes the
-  agent's checkout); never a path inside `work/`. A
+  agent's checkout); never a path inside `work/`. The services a manifest's
+  `trust_corporate_ca:` names get the session's `corporate_ca` from core, bound
+  read-only at `/etc/glove/corporate-ca.pem` and never SELinux-relabelled, with
+  `GLOVE_CORPORATE_CA` naming it; the image builds its own bundle from it. A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
   refuses), so it gets one as `llm-auth` gets the LLM key: a `launch_env` hook
   fills an `environment:` key declared without a value, at `compose up`.

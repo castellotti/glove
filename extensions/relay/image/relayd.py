@@ -30,6 +30,9 @@ Egress fence: children reach the network only through an in-process CONNECT
 proxy on 127.0.0.1 that tunnels to the session's egress proxy (`--upstream`)
 and refuses every host the policy does not name, whatever argv got through.
 
+Trust: with `GLOVE_CORPORATE_CA` (glove's `corporate_ca`, bound read-only),
+children read one bundle, the image's roots and that CA (`ca_bundle_env`).
+
 Standard library only.
 """
 
@@ -392,6 +395,21 @@ def load_policy(path: str) -> ModuleType:
     return module
 
 
+SYSTEM_ROOTS = "/etc/ssl/certs/ca-certificates.crt"
+# glove's cafile.CA_BUNDLE_ENV: what Python, curl, git and gh (Go) read
+CA_BUNDLE_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO")
+
+
+def ca_bundle_env(extra: str, dest: str = "/tmp/relay-ca-bundle.pem", roots: str = SYSTEM_ROOTS) -> dict[str, str]:
+    """The image's roots, then `extra`, written to `dest` (the sidecar's own
+    tmpfs): those variables, naming it. Trust is only added."""
+    with open(dest, "wb") as out:
+        for path in (roots, extra):
+            with open(path, "rb") as f:
+                out.write(f.read().rstrip(b"\n") + b"\n")
+    return dict.fromkeys(CA_BUNDLE_ENV, dest)
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="relayd")
     ap.add_argument("--channel", required=True)
@@ -412,6 +430,8 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("relayd: no upstream proxy (--upstream / RELAY_UPSTREAM)")
         fence = Fence(args.upstream, policy.HOSTS)
     env = policy.setup({"proxy": fence.url if fence else None, "settings": settings, "work": work})
+    if os.environ.get("GLOVE_CORPORATE_CA"):  # the policy's own setting wins
+        env = {**ca_bundle_env(os.environ["GLOVE_CORPORATE_CA"]), **env}
     Relay(args.channel, policy, env, work=work, settings=settings,
           timeout=args.timeout, max_active=args.max).serve()
 

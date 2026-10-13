@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg, render
+from helpers import PEM, make_cfg, render
 
 from glove.extensions import ExtensionError, load_module
 
@@ -287,12 +287,13 @@ def test_a_hostile_repo_config_cannot_run_code_or_take_the_token(work, tmp_path)
 CC_LLM = {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080", "model": "m"}
 
 
-def _render(tmp_path, harness="claude-code", observe=False, enforcer=None, **gh_settings):
+def _render(tmp_path, harness="claude-code", observe=False, enforcer=None, corporate_ca=None, **gh_settings):
     exts = {"direct": {}, "github": {"token": "env:GH_TEST", **gh_settings}, **({"observe": {}} if observe else {})}
     if harness == "claude-code":
         exts["llm"] = CC_LLM
     cfg = make_cfg(harness=harness, name="s", workdir=str(tmp_path / "w"), extensions=exts,
-                   **({"enforcer": enforcer} if enforcer else {}))
+                   **({"enforcer": enforcer} if enforcer else {}),
+                   **({"corporate_ca": corporate_ca} if corporate_ca else {}))
     (tmp_path / "w").mkdir(exist_ok=True)
     plan, text = render(cfg, tmp_path)
     return plan, yaml.safe_load(text)
@@ -325,6 +326,43 @@ def test_the_relay_sidecar(tmp_path, observe):
     else:
         assert set(svc["networks"]) == {"glove-s-egress", "glove-s-ghnet"}
         assert svc["environment"]["RELAY_UPSTREAM"] == "http://glove-s-direct-proxy:8888"
+
+
+def test_the_sidecar_trusts_the_sessions_corporate_ca_read_only(tmp_path):
+    from glove.cafile import CORPORATE_CA_PATH
+
+    _, doc = _render(tmp_path)
+    svc = doc["services"]["glove-s-gh"]
+    assert "GLOVE_CORPORATE_CA" not in svc["environment"]
+    assert CORPORATE_CA_PATH not in {v["target"] for v in svc["volumes"]}
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    _, doc = _render(tmp_path, corporate_ca=str(ca))
+    svc = doc["services"]["glove-s-gh"]
+    assert svc["environment"]["GLOVE_CORPORATE_CA"] == CORPORATE_CA_PATH  # relayd: ca_bundle_env
+    assert {v["target"]: v for v in svc["volumes"]}[CORPORATE_CA_PATH] == {
+        "type": "bind", "source": str(ca.resolve()), "target": CORPORATE_CA_PATH, "read_only": True}
+
+
+def test_on_selinux_the_ca_bind_is_never_relabelled(tmp_path, monkeypatch):
+    # `z` would relabel the operator's own file (maybe a system trust anchor)
+    from glove.cafile import CORPORATE_CA_PATH
+    from glove.plan import build_session_plan
+    from glove.runtimes.podman import PodmanRuntime
+
+    monkeypatch.setattr(PodmanRuntime, "selinux_enabled", lambda self: True)
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    (tmp_path / "w").mkdir()
+    cfg = make_cfg(harness="claude-code", name="s", workdir=str(tmp_path / "w"), corporate_ca=str(ca),
+                   extensions={"direct": {}, "github": {"token": "env:GH_TEST"}, "llm": CC_LLM})
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), state_dir=str(tmp_path / "ext"))
+    rt = PodmanRuntime()
+    rt._rootless = True
+    vols = {v["target"]: v for v in yaml.safe_load(rt.render(plan, tmp_path).compose_yaml)
+            ["services"]["glove-s-gh"]["volumes"]}
+    assert vols["/opt/glove/github/relay_policy.py"]["bind"] == {"selinux": "z"}
+    assert "bind" not in vols[CORPORATE_CA_PATH]
 
 
 @pytest.mark.parametrize("harness", ["claude-code", "pi", "vibe"])

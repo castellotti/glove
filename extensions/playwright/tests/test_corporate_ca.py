@@ -6,14 +6,13 @@ from __future__ import annotations
 
 import pytest
 import yaml
-from helpers import make_cfg
+from helpers import PEM, make_cfg
 
 from glove.extensions import IN_TREE_DIR, ExtensionError, materialize
 from glove.plan import build_session_plan
 from glove.runtimes.docker import DockerRuntime
 
 PW = IN_TREE_DIR / "playwright"
-PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
 KEY = "-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n"
 BOUND = "/etc/glove/playwright/corporate-ca.pem"
 BYPASS = ("--ignore-certificate-errors", "ignoreHTTPSErrors", "NODE_TLS_REJECT_UNAUTHORIZED",

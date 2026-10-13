@@ -124,6 +124,29 @@ def test_keychain_set_prompts_so_the_secret_is_never_in_argv(monkeypatch):
         keychain_set("-s")
 
 
+def test_keychain_set_with_a_secret_feeds_it_to_security_on_stdin_quoted(monkeypatch):
+    import subprocess
+
+    from glove import config as config_mod
+    from glove.config import ConfigError, keychain_set
+
+    calls = []
+    monkeypatch.setattr(config_mod.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(config_mod.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, kw.get("input"))) or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setenv("USER", "me")
+    assert keychain_set("corp pat", 'a b"c\\d') == 0
+    # never in argv: one `security -i` line, every word quoted (checked against
+    # the real tool by hand: it stores a b"c\d)
+    assert calls == [(["security", "-i"],
+                      '"add-generic-password" "-U" "-a" "me" "-s" "corp pat" "-w" "a b\\"c\\\\d"\n')]
+    for bad in ("", "two\nlines", "nul\0"):
+        with pytest.raises(ConfigError, match="one non-empty line"):
+            keychain_set("svc", bad)
+    with pytest.raises(ConfigError, match="one non-empty line"):
+        keychain_set("svc\n-x", "s")
+
+
 @pytest.mark.parametrize(("tools", "match"), [
     ({"net": "block"}, r"unknown tools keys: \['net'\]"),
     ({"allow_comands": ["cp"]}, "unknown tools keys"),

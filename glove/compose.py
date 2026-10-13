@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
+from .cafile import CORPORATE_CA_PATH
 from .extensions import (
     CORE_NETWORKS,
     SECRETS_DIR,
@@ -270,6 +271,16 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
             if extra.get("bind_selinux"):
                 bind["bind"] = {"selinux": extra["bind_selinux"]}
             out.setdefault("volumes", []).append(bind)
+    if comp.corporate_ca is not None and short in (a.manifest.raw.get("trust_corporate_ca") or []):
+        # read-only and never relabelled (SELinux `z` would relabel the
+        # operator's own file, maybe a system trust anchor), as in the harness;
+        # the image builds its bundle from it (GLOVE_CORPORATE_CA)
+        out.setdefault("volumes", []).append({"type": "bind", "source": str(comp.corporate_ca),
+                                              "target": CORPORATE_CA_PATH, "read_only": True})
+        env = out.get("environment") or {}
+        if not isinstance(env, dict):
+            raise ExtensionError(f"{where}: trusts corporate_ca, so its `environment` must be a mapping")
+        out["environment"] = {**env, "GLOVE_CORPORATE_CA": CORPORATE_CA_PATH}
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)

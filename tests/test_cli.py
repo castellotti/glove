@@ -465,9 +465,17 @@ def test_gc_refuses_a_v2_registry(home):
 
 def test_keychain_set_runs_security_interactively(monkeypatch):
     calls = []
-    monkeypatch.setattr("glove.config.keychain_set", lambda svc: calls.append(svc) or 0)
+    monkeypatch.setattr("glove.config.keychain_set", lambda svc, secret=None: calls.append((svc, secret)) or 0)
     result = runner.invoke(app, ["keychain", "set", "my-llm"])
-    assert result.exit_code == 0 and calls == ["my-llm"] and "keychain:my-llm" in result.output
+    assert result.exit_code == 0 and calls == [("my-llm", None)] and "keychain:my-llm" in result.output
+
+
+def test_keychain_set_stdin_takes_one_piped_line(monkeypatch):
+    calls = []
+    monkeypatch.setattr("glove.config.keychain_set", lambda svc, secret=None: calls.append((svc, secret)) or 0)
+    result = runner.invoke(app, ["keychain", "set", "--stdin", "corp-pat"], input="s3cret\n")
+    assert result.exit_code == 0 and calls == [("corp-pat", "s3cret")]
+    assert "s3cret" not in result.output
 
 
 def test_the_v2_commands_are_gone():

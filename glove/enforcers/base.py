@@ -60,6 +60,11 @@ SECRET_DENY_VARS = (
     "*API_KEY*",
     "*CREDENTIAL*",
     "*PASSWORD*",
+    "*COOKIE*",
+    # a personal access token: the word, never inside one (PATH, NODE_PATH)
+    "*_PAT",
+    "PAT_*",
+    "*_PAT_*",
 )
 
 

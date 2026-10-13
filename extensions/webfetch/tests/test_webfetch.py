@@ -17,7 +17,7 @@ from typing import ClassVar
 
 import pytest
 import yaml
-from helpers import make_cfg, render
+from helpers import PEM, make_cfg, render
 
 from glove.extensions import ExtensionError, load_module
 from glove.plan import build_session_plan
@@ -142,6 +142,41 @@ def test_core_binds_the_downloads_output_into_the_fetcher_only(tmp_path):
     assert fetcher["environment"]["GLOVE_DOWNLOADS_SHOWN_AS"] == "/work/downloads"
     binding = {n for n, svc in doc["services"].items() if str(tmp_path / "downloads") in str(svc.get("volumes"))}
     assert binding == {"glove-s-fetcher", "glove-s-harness"}  # and the harness read-only
+
+
+def test_the_fetcher_trusts_the_sessions_corporate_ca_read_only(tmp_path):
+    from glove.cafile import CORPORATE_CA_PATH
+    from glove.runtimes.docker import DockerRuntime
+
+    (tmp_path / "work").mkdir()
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    cfg = make_cfg(name="s", workdir=str(tmp_path / "work"), corporate_ca=str(ca),
+                   extensions={"direct": {}, "webfetch": {"downloads": "work"}})
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
+                              session_dir=str(tmp_path))
+    fetcher = yaml.safe_load(DockerRuntime().render(plan, tmp_path / "st").compose_yaml)["services"]["glove-s-fetcher"]
+    assert fetcher["environment"]["GLOVE_CORPORATE_CA"] == CORPORATE_CA_PATH
+    assert sorted(v["target"] for v in fetcher["volumes"]) == [CORPORATE_CA_PATH, "/run/glove-output/downloads"]
+    assert {"type": "bind", "source": str(ca.resolve()), "target": CORPORATE_CA_PATH,
+            "read_only": True} in fetcher["volumes"]
+
+
+def test_trust_corporate_ca_points_ssl_at_roots_then_the_ca(tmp_path, monkeypatch):
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    (tmp_path / "roots.pem").write_bytes(b"ROOTS\n")
+    (tmp_path / "corp.pem").write_bytes(b"CORP")
+    _server().trust_corporate_ca(str(tmp_path / "corp.pem"), dest=str(tmp_path / "b.pem"),
+                                 roots=str(tmp_path / "roots.pem"))
+    assert (tmp_path / "b.pem").read_bytes() == b"ROOTS\nCORP\n"
+    import os
+
+    assert os.environ["SSL_CERT_FILE"] == str(tmp_path / "b.pem")
+    # the relay image's copy of the same step (two images, no shared code)
+    relayd = load_module(Path(__file__).parents[2] / "relay" / "image" / "relayd.py", "relay")
+    relayd.ca_bundle_env(str(tmp_path / "corp.pem"), dest=str(tmp_path / "r.pem"), roots=str(tmp_path / "roots.pem"))
+    assert (tmp_path / "r.pem").read_bytes() == (tmp_path / "b.pem").read_bytes()
+    assert _server().SYSTEM_ROOTS == relayd.SYSTEM_ROOTS
 
 
 def test_downloads_off_render_no_fetcher_for_pi(tmp_path):

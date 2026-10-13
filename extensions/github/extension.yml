@@ -35,6 +35,8 @@ privileges:
   gh: { work: true }
 limits:
   gh: { pids: 256, memory: 1g }
+# gh and git trust the session's corporate_ca too (relayd: ca_bundle_env)
+trust_corporate_ca: [gh]
 verify:
   - { name: github-relay-up, kind: container-healthy, service: gh }
 harness:
