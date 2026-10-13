@@ -26,8 +26,9 @@ from pathlib import Path
 from . import SCOPES
 from .records import iso_utc
 
-# rules.json v1 is frozen (Layman mirrors its validator): the llm forwarder's
-# record-only scopes lan/cloud are not rule-matchable values.
+# rules.json v1 is frozen (Layman mirrors its validator): the record-only scopes
+# lan/cloud (the llm forwarder, `via: lan` relays such as ssh) are not
+# rule-matchable values; a rule matches those flows by `service` or `tool`.
 RULE_SCOPES = tuple(s for s in SCOPES if s not in ("lan", "cloud"))
 
 MAX_BYTES = 1024 * 1024

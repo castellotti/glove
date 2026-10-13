@@ -645,6 +645,16 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **netgate: a `--lan-only` refusal is `rule: "builtin:lan-only"`**, not
+  `lan-only`. The record contract reserves `builtin:` for glove's own refusals
+  (the SSRF guard, a malformed request), which no `rules.json` entry can allow;
+  this one was the only refusal outside it. The `scope` comments and the Layman
+  handoff now say what `lan` means: a routable LAN host, never tunnelled (the
+  llm forwarder at `location: lan`, or a `via: lan` relay hop such as
+  `ssh-<name>`), record-only like `cloud`, so a rule cuts it by `service` or
+  `tool`. A `via: lan` endpoint's gate now defaults to `scope: lan` (it was
+  `local`, which a rule's `scope: local` would also have matched); ssh set it
+  explicitly and now uses the default.
 - **`playwright`: a `javascript:` URL no longer stands in for
   `browser_evaluate`.** `browser_navigate` to one ran the agent's script in
   the current page, whose title the MCP returns, even with `browser_evaluate`

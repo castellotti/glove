@@ -139,8 +139,8 @@ Every capability (the model, search, the browser, …) is an extension in
   once at start (`glove-lan-forward`, `getent ahostsv4`), refuses unless the
   answer is a private IPv4 address and dials that address; under `observe` the
   netgate checks every connection (`--lan-only`; a refused flow is `blocked`,
-  rule `lan-only`). So a LAN resolver answering with a public address is
-  refused, not followed. Residual: a private range also covers the Docker
+  rule `builtin:lan-only`, which no `rules.json` entry can allow). So a LAN
+  resolver answering with a public address is refused, not followed. Residual: a private range also covers the Docker
   host's own bridge gateways.
 - **The `work` privilege** (in-tree or trusted only) binds the harness's whole
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists

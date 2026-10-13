@@ -71,7 +71,7 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
             "port": 22,  # the forwarder's, whatever the host's (RELAY_SETTINGS carries it)
             "target": {"address": f"{h['host']}:{h['port']}", "via": "lan"},
             "listen_networks": ["sshnet"],
-            "observe": {"tool": "ssh", "scope": "lan"},  # client: ssh, the default
+            "observe": {"tool": "ssh"},  # client: ssh and scope: lan, the defaults
         }
     return {"endpoints": endpoints}
 

@@ -170,7 +170,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - collect
     - --net-dir
@@ -386,7 +386,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -450,7 +450,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-browser:
     container_name: glove-s-browser
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -512,7 +512,7 @@ services:
     mem_limit: 512m
   glove-s-browser-egress:
     container_name: glove-s-browser-egress
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -568,7 +568,7 @@ services:
     mem_limit: 512m
   glove-s-search-mcp:
     container_name: glove-s-search-mcp
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -630,7 +630,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-egress:
     container_name: glove-s-searxng-egress
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -684,7 +684,7 @@ services:
     mem_limit: 512m
   glove-s-webfetch-mcp:
     container_name: glove-s-webfetch-mcp
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service
@@ -746,7 +746,7 @@ services:
     mem_limit: 512m
   glove-s-webfetch-egress:
     container_name: glove-s-webfetch-egress
-    image: glove/ext-gate-netgate:87fb623dc0
+    image: glove/ext-gate-netgate:4a0672937e
     command:
     - forward
     - --service

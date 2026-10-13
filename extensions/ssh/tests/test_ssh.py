@@ -128,7 +128,7 @@ def test_hosts_become_lan_endpoints_for_the_sidecar_only():
     assert eps["ssh-nas"] == {"harness": False, "port": 22,
                               "target": {"address": "nas.lan:2222", "via": "lan"},
                               "listen_networks": ["sshnet"],
-                              "observe": {"tool": "ssh", "scope": "lan"}}
+                              "observe": {"tool": "ssh"}}
 
 
 @pytest.mark.parametrize("bad,why", [

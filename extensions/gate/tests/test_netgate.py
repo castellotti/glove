@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from extensions.gate.netgate import guard
 from extensions.gate.netgate.collector import Collector
 from extensions.gate.netgate.forward import EventSink, Forwarder, ForwardSpec
 from extensions.gate.netgate.records import iso_utc, ulid
@@ -507,14 +508,20 @@ def test_a_client_label_is_a_name_and_never_harness(label):
 # --- `via: lan` upstreams ------------------------------------------------------
 
 
-def test_a_lan_endpoint_is_local_and_dialled_lan_only():
+def test_a_lan_endpoint_is_lan_and_dialled_lan_only():
     from extensions.gate.gatelib import Recording, forward_command, gate_spec
 
     gate = gate_spec(_ep(harness=False, target="nas.lan:22", lan=True), {})
-    assert gate.scope == "local" and gate.lan_only
+    assert gate.scope == "lan" and gate.lan_only
     assert "--lan-only" in forward_command(gate, Recording(), session="s", listen=22, ingress=None)
     other = gate_spec(_ep(harness=False, target="api.example.com:443"), {})
     assert not other.lan_only and other.scope == "direct"
+
+
+def test_every_refusal_of_glove_s_own_is_a_builtin_rule():
+    # handoff §2: glove's refusals are `builtin:…`, never toggleable; user rules are `r_…`
+    rules = {k: v for k, v in vars(guard).items() if k.endswith("_RULE")}
+    assert rules and all(v.startswith("builtin:") for v in rules.values())
 
 
 def test_a_lan_only_upstream_at_a_public_address_is_blocked_not_dialled(tmp_path, sockdir):
@@ -536,4 +543,4 @@ def test_a_lan_only_upstream_at_a_public_address_is_blocked_not_dialled(tmp_path
     got, seen = run(main())
     assert got == b"" and seen == []
     close = read_records(tmp_path)[-1]
-    assert close["verdict"] == "block" and close["rule"] == "lan-only" and close["close_reason"] == "blocked"
+    assert close["verdict"] == "block" and close["rule"] == guard.LAN_ONLY_RULE and close["close_reason"] == "blocked"
