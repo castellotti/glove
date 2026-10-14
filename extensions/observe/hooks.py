@@ -103,7 +103,7 @@ def session_facts(ctx: dict[str, Any]) -> dict[str, Any]:
     sid = ctx["session"]["id"]
     services = []
     for f in ctx["forwarders"]:
-        entry = {k: f[k] for k in ("service", "listen", "observed", "harness")}
+        entry = {k: f[k] for k in ("service", "listen", "observed", "harness", "next")}
         if f["observed"]:
             entry.update({k: f[k] for k in ("mode", "tool", "scope", "upstream", "route", "client")})
         services.append(entry)

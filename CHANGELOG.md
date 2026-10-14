@@ -6,6 +6,11 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **observe: `session.json` services list `next`**, the egress forwarders
+  that the sidecars behind a hop dial out through (e.g. `search` →
+  `searxng-egress`; a skipped gate is still listed; `[]` when the target is not
+  a sidecar; README "Network observability"), so a monitor can join a harness
+  hop to the egress flows it causes. Additive: the record contract stays at v1.
 - **The `skills` extension: Claude Code plugins (and plain skill directories)
   for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
   tools}}}`; plugins are cloned into the session's new `skills/` directory

@@ -168,9 +168,27 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
         session_networks=session_networks,
     )
     if comp is not None:
+        nxt = _next_gates(comp.endpoints)
         comp.forwarders = [
             {"service": s.role, "listen": f"{scoped(session, s.role)}:{s.listen_port}", "harness": s.harness,
-             "target": s.target, "observed": s.impl is not None, **s.facts}
+             "target": s.target, "observed": s.impl is not None, **s.facts, "next": nxt.get(s.role, [])}
             for s in sidecars
         ]
     return plan
+
+
+def _next_gates(endpoints: list[Endpoint]) -> dict[str, list[str]]:
+    """Forwarder → the egress forwarders its target's sidecars dial out on (session.json `next`).
+
+    A forwarder whose target is a service on network N feeds the off-harness
+    forwarders listening on N (observed or not: a skipped gate still carries the
+    traffic); when both declare an `observe.tool`, only the same tool's (the
+    webfetch fetcher sends each tool through its own egress forwarder)."""
+    rendered = [ep for ep in endpoints if ep.interposed or not ep.interpose]
+    tools = {ep.name: (ep.observe or {}).get("tool") for ep in rendered}
+    egress = [ep for ep in rendered if not ep.harness]
+    return {
+        ep.name: [g.name for g in egress if g is not ep and ep.target.network in g.listen_networks
+                  and (tools[ep.name] is None or tools[g.name] is None or tools[g.name] == tools[ep.name])]
+        for ep in rendered if ep.target.kind == "service"
+    }

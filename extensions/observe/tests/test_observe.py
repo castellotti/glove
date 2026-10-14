@@ -134,6 +134,30 @@ def test_searxng_reaches_egress_only_through_its_gate(tmp_path):
     assert set(doc2["services"]["glove-ps-searxng"]["networks"]) == {"glove-ps-egress", "glove-ps-searchnet"}
 
 
+@pytest.mark.parametrize(("exts", "harness", "want"), [
+    (PI_SEARCH, "pi", {"llm": [], "search": ["searxng-egress"], "searxng-egress": [], "proxy": []}),
+    # the fetcher sends each tool through its own egress gate, both on fetchnet
+    ({"direct": {}, "search": {}, "webfetch": {"downloads": "work"}, "playwright": {}}, "vibe",
+     {"llm": [], "browser": ["browser-egress"], "browser-egress": [], "search-mcp": ["searxng-egress"],
+      "searxng-egress": [], "webfetch-mcp": ["webfetch-egress"], "webdownload-mcp": ["webdownload-egress"],
+      "webfetch-egress": [], "webdownload-egress": []}),
+    ({"llm": {"provider": "anthropic", "location": "internet", "api_key": "keychain:fixture-llm"}}, "pi",
+     {"llm": ["llm-upstream"], "llm-upstream": []}),
+    ({"direct": {}, "github": {"token": "keychain:fixture-gh"}}, "pi", {"llm": [], "github-egress": []}),
+])
+def test_next_names_the_gates_a_hop_feeds(tmp_path, exts, harness, want):
+    plan = plan_for(tmp_path, exts=exts, harness=harness)
+    assert {f["service"]: f["next"] for f in plan.composition.forwarders} == want
+
+
+@pytest.mark.parametrize("skip", ["searxng-egress", "search"])
+def test_a_skipped_gate_keeps_its_place_in_next(tmp_path, skip):
+    # a skipped egress gate still carries the traffic (socat, unrecorded: observed false)
+    plan = plan_for(tmp_path, observe={"skip": [skip]})
+    fw = {f["service"]: f for f in plan.composition.forwarders}
+    assert fw["search"]["next"] == ["searxng-egress"] and not fw[skip]["observed"]
+
+
 def test_searxng_settings_point_at_the_hop(tmp_path):
     plan = plan_for(tmp_path)
     materialize(plan.composition)
@@ -296,6 +320,7 @@ def test_plan_materialises_the_observe_export_and_session_json(ghome, tmp_path, 
     llm = next(s for s in facts["services"] if s["service"] == "llm")
     assert llm["observed"] and llm["tool"] == "llm" and llm["route"] == {"kind": "tcp",
                                                                           "upstream": "tcp:host.docker.internal:8080"}
+    assert llm["next"] == []  # every entry carries it
     assert facts["grants"] == {"observe": {"net": True, "transcripts": True}, "filter": {"granted": False}}
     assert not (ghome / "control" / sid).exists()  # observe alone never creates it
     row = json.loads((ghome / "registry.json").read_text())["sessions"][0]

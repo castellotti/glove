@@ -891,6 +891,15 @@ net/status.json     gate heartbeat, upstream health, dropped-record counters, an
                     only with filter — the rules load result (the enforced file's SHA-256)
 ```
 
+Each service in `session.json` lists `next`: the egress forwarders (`harness:
+false`) that the sidecars behind it dial out through, so a monitor can join a
+harness hop to the egress flows it causes: `search` and `search-mcp` →
+`searxng-egress`, `webfetch-mcp` → `webfetch-egress`, `webdownload-mcp` →
+`webdownload-egress`, `browser` → `browser-egress`, `llm` → `llm-upstream` when
+glove injects the key. A skipped egress gate is still listed (`observed:
+false`). It is `[]` for a hop whose target is not a sidecar (`proxy`,
+`github-egress`, `ssh-<name>`) and for the egress forwarders themselves.
+
 With `transcripts: true`, glove binds `~/.glove/observe/<id>/transcripts/` over
 the harness's transcript directory (Pi `.pi/agent/sessions`, Vibe
 `.vibe/logs/session`), so transcripts are written there directly; `glove up
