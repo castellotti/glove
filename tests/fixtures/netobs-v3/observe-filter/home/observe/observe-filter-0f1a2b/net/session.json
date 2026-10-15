@@ -5,7 +5,7 @@
   "session": "observe-filter-0f1a2b",
   "harness": "pi",
   "gate": "0.2.0",
-  "image": "glove/ext-gate-netgate:fixtureixture",
+  "image": "glove/ext-gate-netgate:fixture",
   "record": "metadata",
   "resolve": "in-tunnel",
   "resolver": null,

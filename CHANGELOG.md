@@ -11,6 +11,12 @@ All notable changes to glove are documented here.
   `searxng-egress`; a skipped gate is still listed; `[]` when the target is not
   a sidecar; README "Network observability"), so a monitor can join a harness
   hop to the egress flows it causes. Additive: the record contract stays at v1.
+- **netobs-v3 fixture: hop scenarios.** `llm-auth` (an injected key: each
+  `llm` flow and the `llm-upstream` call it causes), `llm-auth-oauth` (Claude
+  Code: the `llm` hop shows the provider's SNI), `github` (`github-egress`),
+  `ssh` (an allowed host and a `builtin:lan-only` refusal) and `downloads`
+  (Vibe: each MCP hop and its egress flow, in Vibe's transcript layout). Flows
+  are labelled from their service's `session.json` entry.
 - **The `skills` extension: Claude Code plugins (and plain skill directories)
   for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
   tools}}}`; plugins are cloned into the session's new `skills/` directory
@@ -650,6 +656,14 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **netobs-v3 fixture: what a gate would really record.** `session.json`'s
+  `image` read `…:fixtureixture` (the generator normalised the tag twice); the
+  SSRF-blocked `169.254.169.254` flow lacked `dest.ip` (a literal is its own
+  address); `status.json` counted no flows. Flows are now built by the gate's
+  own classes and written by the collector; `run` names its gate
+  (`g_<service>`) and flow times are distinct (a hop's flow spans the egress
+  flow it caused). A monitor that copies the fixture byte for byte must re-copy
+  it.
 - **netgate: a `--lan-only` refusal is `rule: "builtin:lan-only"`**, not
   `lan-only`. The record contract reserves `builtin:` for glove's own refusals
   (the SSRF guard, a malformed request), which no `rules.json` entry can allow;
