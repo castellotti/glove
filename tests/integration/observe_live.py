@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from live_common import check, glove, inspect, live_session, summary, wait_for
+from live_common import check, check_next, glove, inspect, live_session, summary, wait_for
 
 from glove import registry
 
@@ -99,6 +99,7 @@ def main(directory: str) -> int:
             llm = [r for r in recs if r.get("service") == svc]
             check(f"flow: the model calls via {svc}, tool llm, client {client}",
                   bool(llm) and llm[-1].get("tool") == "llm" and llm[-1].get("client") == client, f"{len(llm)} flows")
+        check_next(net, recs, {"llm": ["llm-upstream"]})
         st = json.loads((net / "status.json").read_text()) if (net / "status.json").exists() else {}
         check("status.json: gates running, rules loaded", bool(st) and (st.get("rules") or {}).get("ok") is True,
               f"rules={json.dumps(st.get('rules', {}))[:80]}")

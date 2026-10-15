@@ -42,7 +42,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from live_common import check, glove, inspect, live_session, summary, tool_result, wait_for
+from live_common import check, check_next, glove, inspect, live_session, summary, tool_result, wait_for
 
 PDF = "https://www.worldradiohistory.com/Archive-Hands-On-Electronics/Hands-On-1987-01.pdf"
 CDX = "http://web.archive.org/cdx/search/cdx?url=theoldrobots.com&matchType=domain&limit=5"
@@ -180,6 +180,9 @@ def main(directory: str) -> int:
                           and r["dest"].get("port") == 80]
                 check("flow: → http://web.archive.org/ unwrapped (proto http)",
                       bool(protos) and set(protos) == {"http"}, f"protos {protos}")
+                if live.cfg.harness == "vibe":  # the MCP hops and the egress flows they cause
+                    check_next(live.net, live.flows(), {"webfetch-mcp": ["webfetch-egress"],
+                                                        "webdownload-mcp": ["webdownload-egress"]})
 
         if comp.by_name("filter"):
             print("== filter")

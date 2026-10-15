@@ -6,6 +6,15 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Live: the hop joins and a real `builtin:lan-only` refusal.**
+  `test_ssh.sh` gains `SSH_LAN_ONLY=1`: a host at `public.lan`, which a
+  stand-in (a TEST-NET-3 network joined to its gate) makes resolve public; the
+  gate refuses it (`builtin:lan-only`, zero bytes, `dest.ip: null`). The
+  observe, oauth (`test_llm_inject.sh claude-code-oauth`), github and Vibe
+  downloads drivers check `session.json`'s `next` and that each hop's flow
+  spans the egress flows it overlaps (`live_common.check_next`); the oauth
+  driver also that the `llm` hop is at llm-auth's port 8080.
+
 - **observe: `session.json` services list `next`**, the egress forwarders
   that the sidecars behind a hop dial out through (e.g. `search` →
   `searxng-egress`; a skipped gate is still listed; `[]` when the target is not
@@ -15,8 +24,11 @@ All notable changes to glove are documented here.
   `llm` flow and the `llm-upstream` call it causes), `llm-auth-oauth` (Claude
   Code: the `llm` hop shows the provider's SNI), `github` (`github-egress`),
   `ssh` (an allowed host and a `builtin:lan-only` refusal) and `downloads`
-  (Vibe: each MCP hop and its egress flow, in Vibe's transcript layout). Flows
-  are labelled from their service's `session.json` entry.
+  (Vibe: each MCP hop and its egress flow; the transcript is in Vibe's layout
+  before 2.26: 2.26.1 writes a journal under `unified/`, not yet modelled).
+  Flows are labelled from their service's `session.json` entry. The flows each
+  scenario shows were seen live (a `builtin:lan-only` refusal included); byte
+  counts are illustrative.
 - **The `skills` extension: Claude Code plugins (and plain skill directories)
   for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
   tools}}}`; plugins are cloned into the session's new `skills/` directory
@@ -655,6 +667,14 @@ All notable changes to glove are documented here.
   again.
 
 ### Fixed
+
+- **Live: `github_live.py` expected the pre-GHES refusal text** for a
+  non-GitHub remote (`https://github.com/<owner>/<repo> only`); it now reads
+  `/<owner>/<repo> only, the host one of github.com`. The refusal itself was
+  unchanged.
+- **netobs-v3 fixture: the `ssh` refusal's transcript text** is a live
+  refusal's (`Connection closed by <gate> port 22`, exit 255); it had an
+  invented `kex_exchange_identification` line.
 
 - **netobs-v3 fixture: what a gate would really record.** `session.json`'s
   `image` read `…:fixtureixture` (the generator normalised the tag twice); the

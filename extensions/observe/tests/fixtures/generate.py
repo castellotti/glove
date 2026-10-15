@@ -32,8 +32,9 @@ One directory per scenario, each holding `home/`: a tree shaped like
                           `builtin:lan-only` refusal (db.lan resolved public)
   downloads               Vibe with `webfetch: {downloads: work}`: each MCP hop
                           (`webfetch-mcp`, `webdownload-mcp`) and the egress
-                          flow behind it; Vibe's transcript layout
-                          (session_<ts>_<id>/messages.jsonl + meta.json)
+                          flow behind it; Vibe's transcript layout before
+                          2.26 (session_<ts>_<id>/messages.jsonl + meta.json;
+                          2.26 writes a journal under unified/ instead)
 
 Sessions are planned with `glove plan` (session.json, grants, registry rows),
 each flow is the gate's own record (its ForwardSpec built from the service's
@@ -127,15 +128,14 @@ SCENARIOS = {
         bash=(("gh pr list --repo octo-org/widgets", "12\tFix the widget\tfix-widget\tOPEN\n", False),
               ("git clone https://github.com/octo-org/widgets", "Cloning into 'widgets'...\n", False))),
     # db.lan resolved to a public address: the gate never dials it (the refused
-    # ssh's text is illustrative)
+    # ssh's text is a live refusal's, the gate's address standing in)
     "ssh": Scenario(
         "  ssh:\n    key: keychain:fixture-ssh\n    known_hosts: local/known_hosts\n    hosts:\n"
         '      - {name: build, to: "192.168.1.20:22", user: ci}\n'
         '      - {name: db, to: "db.lan:22", user: ops}\n' + OBSERVE,
         flows=(Flow("ssh-build", None, 3100, 4200, 1, 4), Flow("ssh-db", None, 0, 0, 5, 5, "builtin:lan-only")),
         bash=(("ssh build uptime", " 12:00:00 up 3 days,  2:14,  0 users,  load average: 0.08, 0.03, 0.01\n", False),
-              ("ssh db hostname", "kex_exchange_identification: Connection closed by remote host\n"
-               "Connection closed by 172.20.0.5 port 22\n", True)),
+              ("ssh db hostname", "Connection closed by 172.20.0.5 port 22\n", True)),
         files=(("local/known_hosts",
                 "192.168.1.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture01\n"
                 "db.lan ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureFixtureFixtureFixtureFixtureFixture02\n"),)),
@@ -232,8 +232,9 @@ def _pi_transcript(root: Path, bash: tuple) -> None:
 
 
 def _vibe_transcript(root: Path, sid: str) -> None:
-    """Vibe's layout under logs/session/: session_<ts>_<id>/messages.jsonl (one
-    message per line, MCP tools named <server>_<tool>) beside its meta.json."""
+    """Vibe's layout under logs/session/ before 2.26 (copied from a 2.x
+    session): session_<ts>_<id>/messages.jsonl (one message per line, MCP
+    tools named <server>_<tool>) beside its meta.json."""
     t = root / "session_20261001_120000_0f1a2b3c"
     t.mkdir()
     calls = [({"url": "https://example.com"}, "webfetch", "fetch_url",

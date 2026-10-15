@@ -6,6 +6,8 @@
 #   SSH_TEST_HOST=<host> SSH_TEST_USER=<user> SSH_KEYCHAIN=<service> \
 #     bash tests/integration/test_ssh.sh [nono|nono+srt|srt ...]
 #   SSH_TEST_PORT=<port> (default 22)   HARNESS=pi|vibe …   OBSERVE=1 …
+#   SSH_LAN_ONLY=1 …   also a host `public` at `public.lan`, which a stand-in makes
+#                      resolve public: its gate refuses it (builtin:lan-only)
 #
 # The Keychain item holds a private key (PEM, or base64 of it) authorized on
 # that host. known_hosts comes from ssh-keyscan into the throwaway session's
@@ -26,6 +28,7 @@ driver_init
 stub_llm "$HARNESS" "$PORT"
 start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 OBS=""; [ -n "${OBSERVE:-}" ] && OBS="  observe: {}"
+PUB=""; [ -n "${SSH_LAN_ONLY:-}" ] && PUB="      - {name: public, to: \"public.lan:22\", user: \"$SSH_TEST_USER\"}"
 rc=0
 for enf in "${ENFORCERS[@]}"; do
   S="$TMPROOT/ssh-${enf/+/-}"
@@ -42,7 +45,9 @@ extensions:
   llm: $LLM
   ssh:
     key: "keychain:$SSH_KEYCHAIN"
-    hosts: [{name: lanbox, to: "$SSH_TEST_HOST:$PORT_SSH", user: "$SSH_TEST_USER"}]
+    hosts:
+      - {name: lanbox, to: "$SSH_TEST_HOST:$PORT_SSH", user: "$SSH_TEST_USER"}
+$PUB
     known_hosts: local/known_hosts
 $OBS
 YAML

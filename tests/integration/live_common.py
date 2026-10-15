@@ -106,6 +106,25 @@ def summary() -> int:
     return 0 if all(RESULTS) else 1
 
 
+def check_next(net: Path, records: list[dict], expect: dict[str, list[str]]) -> None:
+    """session.json's `next` is `expect` for those services, and each closed
+    hop flow spans every closed `next` flow it overlaps: the join Layman makes
+    by time (flow times are same-format ISO strings, so they compare)."""
+    nxt = {e["service"]: e["next"] for e in json.loads((net / "session.json").read_text())["services"]}
+    check(f"session.json next: {json.dumps(expect)}", all(nxt.get(k) == v for k, v in expect.items()),
+          json.dumps({k: nxt.get(k) for k in expect}))
+    closed = [r for r in records if r.get("phase") == "close"]
+    for hop in expect:
+        pairs = [(o, i) for o in closed if o["service"] == hop for i in closed if i["service"] in nxt[hop]
+                 and i["t_open"] < o["t_close"] and o["t_open"] < i["t_close"]]
+        if expect[hop]:
+            check(f"each {hop} flow spans the {'/'.join(expect[hop])} flows it overlaps",
+                  bool(pairs) and all(o["t_open"] <= i["t_open"] and i["t_close"] <= o["t_close"] for o, i in pairs),
+                  f"{len(pairs)} overlapping pairs; outside: "
+                  + json.dumps([(o["t_open"], o["t_close"], i["t_open"], i["t_close"]) for o, i in pairs
+                                if not (o["t_open"] <= i["t_open"] and i["t_close"] <= o["t_close"])][:3]))
+
+
 def glove(*args: str, cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
     """The glove CLI, as the operator runs it."""
     return subprocess.run([sys.executable, "-m", "glove.cli", *args], cwd=cwd, stdin=subprocess.DEVNULL,
