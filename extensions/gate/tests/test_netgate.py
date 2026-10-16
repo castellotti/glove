@@ -516,6 +516,9 @@ def test_a_lan_endpoint_is_lan_and_dialled_lan_only():
     assert "--lan-only" in forward_command(gate, Recording(), session="s", listen=22, ingress=None)
     other = gate_spec(_ep(harness=False, target="api.example.com:443"), {})
     assert not other.lan_only and other.scope == "direct"
+    # aliased: a second hop dials the LAN host (and checks it); the gate in front is still `lan`
+    hop = gate_spec(_ep(harness=False, target="nas.lan:22", lan=False, via_lan=True), {})
+    assert hop.scope == "lan" and not hop.lan_only
 
 
 def test_every_refusal_of_glove_s_own_is_a_builtin_rule():

@@ -104,14 +104,15 @@ def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target:
                   lan: bool = False) -> dict[str, Any]:
     """What a `forwarder` hook is told about one endpoint (plain data); `target`
     is the `host:port` its forwarder dials (a second hop's, when there is one),
-    and `lan` whether that is a `via: lan` target, dialled only if private."""
+    `lan` whether that is a `via: lan` target, dialled only if private, and
+    `via_lan` whether the endpoint's own target is (its second hop dials it)."""
     return {
         "name": ep.name, "extension": ep.extension, "port": ep.port,
         "target": target, "target_kind": ep.target.kind,
         "harness": ep.harness, "host_gateway": ep.target.kind == "host", "networks": list(networks),
         "aliases": list(ep.aliases), "observe": ep.observe, "interpose": ep.interpose,
         "container": ep.host(session),
-        "lan": lan,
+        "lan": lan, "via_lan": ep.target.network == "lan",
     }
 
 

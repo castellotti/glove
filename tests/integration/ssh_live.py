@@ -37,6 +37,10 @@ def public_lan_name(s):
     net = f"glove-test-public-{s.sid}"
     gate = f"glove-{s.sid}-ssh-public"
     image = inspect(s.rt, gate)["Config"]["Image"]
+    for stale in subprocess.run([s.rt, "network", "ls", "--format", "{{.Name}}", "--filter", "name=glove-test-public-"],
+                                capture_output=True, text=True).stdout.split():  # a crashed run's holds the subnet
+        subprocess.run([s.rt, "rm", "-f", stale], capture_output=True)
+        subprocess.run([s.rt, "network", "rm", stale], capture_output=True)
     try:
         subprocess.run([s.rt, "network", "create", "--subnet", "203.0.113.0/24", net], check=True, capture_output=True)
         subprocess.run([s.rt, "run", "-d", "--name", net, "--network", net, "--network-alias", "public.lan",

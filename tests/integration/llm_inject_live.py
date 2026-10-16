@@ -234,7 +234,7 @@ def main(directory: str, stub_log: str | None) -> int:
             ports = {(r.get("dest") or {}).get("port") for r in closed if r.get("service") == "llm"}
             check("the llm hop's flows are at llm-auth's port 8080 (the SNI names the provider)", ports == {8080},
                   str(ports))
-            check_next(s.net, closed, {"llm": ["llm-upstream"]})
+            check_next(s.net, s.flows(), {"llm": ["llm-upstream"]})
     return summary()
 
 

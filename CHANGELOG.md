@@ -11,9 +11,12 @@ All notable changes to glove are documented here.
   stand-in (a TEST-NET-3 network joined to its gate) makes resolve public; the
   gate refuses it (`builtin:lan-only`, zero bytes, `dest.ip: null`). The
   observe, oauth (`test_llm_inject.sh claude-code-oauth`), github and Vibe
-  downloads drivers check `session.json`'s `next` and that each hop's flow
-  spans the egress flows it overlaps (`live_common.check_next`); the oauth
-  driver also that the `llm` hop is at llm-auth's port 8080.
+  downloads drivers check `session.json`'s `next` and that every egress flow
+  overlapping a hop's flows opened inside one of them (`live_common.check_next`:
+  only the start, as a pooled upstream connection may outlive or straddle hop
+  flows; flows still open count); the oauth driver also that the `llm` hop is
+  at llm-auth's port 8080. `SSH_LAN_ONLY=1` implies `OBSERVE=1` (the refusal
+  is the gate's), and a crashed run's TEST-NET-3 network is removed first.
 
 - **observe: `session.json` services list `next`**, the egress forwarders
   that the sidecars behind a hop dial out through (e.g. `search` →
@@ -692,8 +695,10 @@ All notable changes to glove are documented here.
   llm forwarder at `location: lan`, or a `via: lan` relay hop such as
   `ssh-<name>`), record-only like `cloud`, so a rule cuts it by `service` or
   `tool`. A `via: lan` endpoint's gate now defaults to `scope: lan` (it was
-  `local`, which a rule's `scope: local` would also have matched); ssh set it
-  explicitly and now uses the default.
+  `local`), also when its host is one of its aliases and a second hop dials
+  it; ssh set it explicitly and now uses the default. **Migration:** a rule
+  that matched such a flow by `scope: local` no longer does (rules.json v1
+  cannot name `lan`); match it by `service` or `tool` instead.
 - **`playwright`: a `javascript:` URL no longer stands in for
   `browser_evaluate`.** `browser_navigate` to one ran the agent's script in
   the current page, whose title the MCP returns, even with `browser_evaluate`

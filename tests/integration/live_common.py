@@ -107,22 +107,30 @@ def summary() -> int:
 
 
 def check_next(net: Path, records: list[dict], expect: dict[str, list[str]]) -> None:
-    """session.json's `next` is `expect` for those services, and each closed
-    hop flow spans every closed `next` flow it overlaps: the join Layman makes
-    by time (flow times are same-format ISO strings, so they compare)."""
+    """session.json's `next` is `expect` for those services, and every `next`
+    flow that overlaps the hop's flows opened inside one of them: the join
+    Layman makes by time (flow times are same-format ISO strings, so they
+    compare). Only the start is held to a hop flow: a pooled upstream
+    connection may outlive the turn (still open, no close record yet) or
+    straddle several hop flows, and concurrent hop flows overlap each other's."""
     nxt = {e["service"]: e["next"] for e in json.loads((net / "session.json").read_text())["services"]}
     check(f"session.json next: {json.dumps(expect)}", all(nxt.get(k) == v for k, v in expect.items()),
           json.dumps({k: nxt.get(k) for k in expect}))
-    closed = [r for r in records if r.get("phase") == "close"]
-    for hop in expect:
-        pairs = [(o, i) for o in closed if o["service"] == hop for i in closed if i["service"] in nxt[hop]
-                 and i["t_open"] < o["t_close"] and o["t_open"] < i["t_close"]]
-        if expect[hop]:
-            check(f"each {hop} flow spans the {'/'.join(expect[hop])} flows it overlaps",
-                  bool(pairs) and all(o["t_open"] <= i["t_open"] and i["t_close"] <= o["t_close"] for o, i in pairs),
-                  f"{len(pairs)} overlapping pairs; outside: "
-                  + json.dumps([(o["t_open"], o["t_close"], i["t_open"], i["t_close"]) for o, i in pairs
-                                if not (o["t_open"] <= i["t_open"] and i["t_close"] <= o["t_close"])][:3]))
+    flows: dict[str, dict] = {}  # by id: the close record, else the open one
+    for r in records:
+        if r.get("phase") == "close" or (r.get("phase") == "open" and r["id"] not in flows):
+            flows[r["id"]] = r
+    end = lambda f: f.get("t_close") or "~"  # noqa: E731 — still open: after every ISO time
+    for hop, want in expect.items():
+        if not want:
+            continue
+        outer = [f for f in flows.values() if f["service"] == hop]
+        inner = [i for i in flows.values() if i["service"] in (nxt.get(hop) or [])
+                 and any(i["t_open"] < end(o) and o["t_open"] < end(i) for o in outer)]
+        stray = [i for i in inner if not any(o["t_open"] <= i["t_open"] <= end(o) for o in outer)]
+        check(f"each {'/'.join(want)} flow overlapping a {hop} flow opened inside one",
+              bool(inner) and not stray,
+              f"{len(inner)} overlapping; opened outside: " + json.dumps([(i["service"], i["t_open"]) for i in stray][:3]))
 
 
 def glove(*args: str, cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
