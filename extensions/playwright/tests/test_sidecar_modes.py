@@ -88,8 +88,6 @@ def test_the_mcp_never_gets_a_cdp_port_or_file_access():
     # with the sandbox on, both modes prove it before serving (fail closed at `glove up`)
     assert "prepare() {\n  require_sandbox\n" in src and src.count("    prepare\n") == 2
     assert 'chromium_sandbox: "off"' in src
-    # every MCP client shares one context: a restarted harness's new session reuses the browser
-    assert "args+=(--shared-browser-context)" in src
 
 
 def test_one_playwright_pin():
@@ -110,6 +108,8 @@ def test_mcp_config_and_dirs(tmp_path):
     state = tmp_path / "ext" / "playwright"
     cfg = json.loads((state / "mcp.json").read_text())
     assert cfg["browser"]["contextOptions"] == {"timezoneId": "Europe/Berlin", "locale": "de-DE"}
+    # every MCP client shares one context: a restarted harness's new session reuses the browser
+    assert cfg["sharedBrowserContext"] is True
     assert cfg["browser"]["launchOptions"]["args"] == ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
     assert (state / "output").is_dir() and not (state / "profile").exists()
 

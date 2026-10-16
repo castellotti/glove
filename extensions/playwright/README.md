@@ -89,9 +89,9 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   there can leave through the browser. It checks the path as a string, so a
   symlink there resolves inside the sidecar and can name a sidecar file: with
   `profile: session`, the browser profile itself (see `docs/SECURITY.md`).
-- **One browser per sidecar.** Every MCP client shares one browser context
-  (`--shared-browser-context`), so a harness that restarts while the sidecar
-  runs picks up the same tabs, cookies and open connections. With
+- **One browser context per sidecar.** Every MCP client shares it
+  (`sharedBrowserContext` in the MCP's config), so a harness that restarts
+  while the sidecar runs picks up the same tabs, cookies and open connections. With
   `profile: ephemeral` they last until the sidecar stops; with `session`,
   cookies outlast it. A `glove filter block` applies to new connections, so
   use `--terminate` for a site the browser already has open.

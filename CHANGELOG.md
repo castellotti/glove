@@ -672,13 +672,13 @@ All notable changes to glove are documented here.
 ### Fixed
 
 - **playwright: a restarted harness can use the browser again.** The sidecar's
-  Playwright MCP now runs with `--shared-browser-context` (glove v2 did; the v3
-  sidecar had dropped it, host mode kept it), so every MCP client shares one
-  browser context. Before, a harness that restarted while its old MCP session
+  Playwright MCP now shares one browser context between all MCP clients
+  (`sharedBrowserContext` in its `mcp.json`; glove v2 passed
+  `--shared-browser-context`, the v3 sidecar had dropped it, host mode kept it). Before, a harness that restarted while its old MCP session
   was never closed (Pi exited, the sidecar kept running) got "Browser is
   already in use for /data/profile" on every browser call with
   `profile: session`; with the default ephemeral profile each restart left
-  another browser running. What changes: while the sidecar runs, a restarted
+  another browser context open. What changes: while the sidecar runs, a restarted
   harness sees the same tabs, cookies and pooled connections (as one harness
   session always did); a `glove filter block` still applies to new connections
   only, so add `--terminate` to cut a site the browser already has open.

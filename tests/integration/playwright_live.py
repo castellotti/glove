@@ -82,7 +82,7 @@ def held_mcp(argv: list[str]) -> Iterator[list[str]]:
             client.wait()
 
 
-def big_download(held: Callable[[list], contextlib.AbstractContextManager[list[str]]], out_dir: Path) -> None:
+def big_download(argv: Callable[[list], list[str]], out_dir: Path) -> None:
     """BIG: a download larger than the sidecar's 768 MB /tmp lands complete (staged on disk, <state>/downloading)."""
     big, size = BIG_ISO
     t = time.time()
@@ -92,7 +92,7 @@ def big_download(held: Callable[[list], contextlib.AbstractContextManager[list[s
 
     # one MCP session held open while the download runs (the shared context outlives
     # it: a partial download ends only when the sidecar stops)
-    with held([["browser_navigate", {"url": big}], ["sleep", {"s": 1800}]]) as out:
+    with held_mcp(argv([["browser_navigate", {"url": big}], ["sleep", {"s": 1800}]])) as out:
         got = wait_for(landed, timeout=1800, step=5)
     print(f"    {''.join(out).strip()[-300:]} ({time.time() - t:.0f}s)")
     check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
@@ -116,12 +116,9 @@ def main(directory: str) -> int:
         def mcp_argv(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> list[str]:
             return mcp_client_argv(rt, pw_image, network, f"http://{host}:8931/mcp", f"{host}:8931", steps)
 
-        def mcp(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> str:
-            r = subprocess.run(mcp_argv(steps, network, host), capture_output=True, text=True, timeout=300)
+        def mcp(steps: list, **where: str) -> str:
+            r = subprocess.run(mcp_argv(steps, **where), capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
-
-        def held(steps: list) -> contextlib.AbstractContextManager[list[str]]:
-            return held_mcp(mcp_argv(steps))
 
         print("== the browser sidecar")
         pw = inspect(rt, f"{s}-pw")
@@ -175,12 +172,11 @@ def main(directory: str) -> int:
 
         # A harness that restarts opens a new MCP session while the old one was never
         # closed (the browser stays open): the new session must reuse the browser.
-        with held([["browser_navigate", {"url": "https://example.com"}], ["sleep", {"s": 300}]]) as first:
-            opened = wait_for(lambda: any(ln.startswith("browser_navigate:") for ln in first), timeout=120, step=2)
+        with held_mcp(mcp_argv([["browser_navigate", {"url": "https://example.com"}], ["sleep", {"s": 300}]])) as first:
+            first_ok = wait_for(lambda: any("Page URL: https://example.com" in ln for ln in first), timeout=120, step=2)
             # not example.org: the filter check below must be its first visit (a shared
             # context keeps a pooled connection, and a rule applies to new ones)
             out = mcp([["browser_navigate", {"url": "https://example.net"}]])
-        first_ok = opened and any("Page URL: https://example.com" in ln for ln in first)
         check(f"a second MCP session reuses the browser a held one opened (profile {pws['profile']})",
               first_ok and "Page URL: https://example.net" in out,
               ("" if first_ok else f"held: {''.join(first).strip()[-120:]} | ") + out[-160:].replace("\n", " "))
@@ -267,7 +263,7 @@ def main(directory: str) -> int:
                 out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
                 check("7z l reads it from the shell", "files" in out, out[-160:])
             if os.environ.get("BIG"):
-                big_download(held, out_dir)
+                big_download(mcp_argv, out_dir)
             else:
                 print("    (BIG=1 adds a 2 GB ISO: a download larger than the sidecar's /tmp)")
         if pws["uploads"] == "work":
@@ -346,11 +342,9 @@ def main(directory: str) -> int:
 
             def click(secret: str) -> tuple[str, str]:
                 w, h = (int(x) for x in pws["viewport"].split("x"))
-                client = subprocess.Popen(
-                    mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp", f"{s}-browser:8931",
-                                    [["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
-                                     ["browser_snapshot", {}]]),
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                client = subprocess.Popen(mcp_argv([["browser_navigate", {"url": CLICK_PAGE}], ["sleep", {"s": 12}],
+                                                    ["browser_snapshot", {}]]),
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 time.sleep(8)
                 rfb = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pycryptodome", "python",
                                       str(HERE / "rfb_click.py"), rt, f"{s}-pw", secret, str(w // 2), str(h * 2 // 3)],
