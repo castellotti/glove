@@ -437,11 +437,12 @@ All notable changes to glove are documented here.
     `expect`). The host's own IP is fetched only with the new opt-in
     `host_check_url` (vpn, tor), which then must differ from the exit.
   - vpn: the exit is the VPN server's endpoint (the tunnel's entry address),
-    read every 30 s from gluetun's kill-switch rules by a wrapper around
-    gluetun's start script (no lookup; a reconnect is recorded too). By
-    default verify no longer compares the exit with the host's IP. It is published in `/run/glove-exit/ip`, in
-    vpn's `exit` volume. New settings: `publicip_api` (gluetun's own lookup
-    through the tunnel, with a service you name; no default),
+    read every 30 s (every 2 s until known) from gluetun's kill-switch rules
+    by a wrapper around gluetun's start script (no lookup; a reconnect is
+    recorded too). By default verify no longer compares the exit with the
+    host's IP. It is published in `/run/glove-exit/ip`, in vpn's `exit` volume.
+    New settings: `publicip_api` (gluetun's own lookup through the tunnel,
+    with a service you name; no default),
     `host_check_url`, and `dns_upstream`, `health_targets`, `health_icmp`
     (Quad9 by default). `check_url` is now an `http-ok` URL the proxy must
     fetch (default `https://on.quad9.net`), no longer an echo service; so is
@@ -465,6 +466,8 @@ All notable changes to glove are documented here.
     `exit` volume into the harness's proxy gate alone. The harness still
     mounts no volume but its channels.
   - Examples name no VPN company (`provider: <set-me>`); tests use `custom`.
+  - `test_observe.sh` checks `session.json`'s `exit_identity` and, but for
+    direct, a healthy `exit` record from the egress's source.
   - The netobs fixtures are regenerated (`tests/fixtures/netobs/` and the
     scenarios): exit source `vpn-endpoint` at an RFC 5737 address, no geo; the
     original fixture also picks up gate `0.2.0`, `run` on flows and the

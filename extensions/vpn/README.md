@@ -77,9 +77,10 @@ nothing starts half-tunnelled.
 gluetun's start script is wrapped: it publishes the session's exit as one bare
 IP in `/run/glove-exit/ip`, in vpn's `exit` volume.
 
-- **Default (`vpn-endpoint`):** the VPN server's endpoint, read every 30 s from
-  gluetun's kill-switch firewall rules (no network request). It is the tunnel's
-  entry address; a provider may send traffic out from another one. A reconnect
+- **Default (`vpn-endpoint`):** the VPN server's endpoint, read every 30 s
+  (every 2 s until known) from gluetun's kill-switch firewall rules (no network
+  request). It is the tunnel's entry address; a provider may send traffic out
+  from another one. A reconnect
   to another server rewrites the file; a gluetun restart removes it until the
   kill switch allows a server again. A dead handshake with the rule still in
   place does **not** empty it: gluetun's healthcheck is what notices that.

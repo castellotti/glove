@@ -105,7 +105,7 @@ def test_the_endpoint_is_read_from_the_kill_switch(tmp_path, tables, want):
     shared.mkdir()
     # one round of the loop, in the foreground (core renders `$` as compose's `$$`)
     script = (entry[2].replace("$$", "$").replace("/run/glove-exit", str(shared))
-              .replace("sleep 30; done) &", "break; done);").replace("exec /gluetun-entrypoint", "true"))
+              .replace("sleep $n; done) &", "break; done);").replace("exec /gluetun-entrypoint", "true"))
     stubs = tmp_path / "bin"
     stubs.mkdir()
     for t in ("iptables", "iptables-legacy", "ip6tables", "ip6tables-legacy"):

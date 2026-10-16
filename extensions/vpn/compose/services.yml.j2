@@ -84,7 +84,7 @@ services:
     # gluetun's own lookup writes it (PUBLICIP_FILE) and empties it when the tunnel drops
     entrypoint: ["/bin/sh", "-c", "rm -f /run/glove-exit/ip && exec /gluetun-entrypoint"]
 {% else %}
-    # No lookup: every 30 s (the gate's poll), the VPN server's endpoint from
+    # No lookup: every 30 s (the gate's poll; every 2 s until known), the VPN server's endpoint from
     # gluetun's kill switch, `-A OUTPUT -d <ip>/32 -o eth0 -p udp -m udp --dport <port> -j ACCEPT`
     # (WireGuard and OpenVPN alike; every iptables variant, as gluetun uses
     # whichever works). Written when there is exactly one and it changed (a
@@ -101,7 +101,7 @@ services:
         case $ip in *[!0-9A-Fa-f.:]*) ip= ;; esac;
         if [ "$ip" != "$last" ]; then printf '%s' "$ip" > /run/glove-exit/ip.new &&
         mv -f /run/glove-exit/ip.new /run/glove-exit/ip && last=$ip; fi;
-        sleep 30; done) &
+        [ -n "$last" ] && n=30 || n=2; sleep $n; done) &
         exec /gluetun-entrypoint
 {% endif %}
     volumes:

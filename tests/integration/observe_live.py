@@ -11,7 +11,8 @@ It checks, against real containers:
   3. Pi's web_search / web_fetch (stub-driven tool calls) are recorded as flows
      with the right service, tool, client and route, and each model call as two
      flows (`llm` client harness, `llm-upstream` client llm); transcripts are exported;
-     the harness sees no export but its transcripts;
+     the harness sees no export but its transcripts; `exit_identity: auto` follows
+     the egress (none for direct) and the gate writes a healthy `exit` record;
   4. filter: `glove filter block example.com` is enforced within seconds (the
      gates report the file's sha256), and the next web_fetch is refused and
      recorded `verdict: block` with the rule id;
@@ -30,6 +31,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 from live_common import check, check_next, glove, inspect, live_session, summary, wait_for
@@ -106,6 +108,18 @@ def main(directory: str) -> int:
         facts = json.loads((net / "session.json").read_text())
         check("session.json grants: observe + filter", facts["grants"]["observe"] == {"net": True, "transcripts": True}
               and facts["grants"]["filter"]["granted"] is True, json.dumps(facts["grants"]))
+        # exit_identity: auto follows the egress (direct: none; tor: its check URL; vpn: its shared file)
+        eg, ex = comp.slots["egress"].name, facts.get("exit_identity")
+        check(f"session.json exit_identity ({eg}, auto)", (ex == "none") == (eg == "direct"), ex)
+        if ex != "none":
+            src = f"via-proxy:{urlsplit(ex.removeprefix('via-proxy:')).hostname}" if ex.startswith("via-proxy:") else ex
+            exits = net / "exit.ndjson"
+            got = wait_for(lambda: [r for r in map(json.loads, exits.read_text().splitlines())
+                                    if r.get("source") == src and r.get("healthy") and r.get("ip")]
+                           if exits.exists() else [], 90)
+            # the IP itself is not printed (a vpn endpoint is the operator's)
+            check(f"exit.ndjson: a healthy exit record from {src}", bool(got),
+                  f"{len(got)} record(s), kind {got[-1].get('kind') if got else '?'}")
         tr = list((obs / "transcripts").rglob("*.jsonl"))
         check("transcripts exported to the observe dir", bool(tr), f"{len(tr)} file(s)")
         check("the harness mounts no export but transcripts/",
