@@ -187,7 +187,12 @@ def mcp_config(settings: dict[str, Any]) -> dict[str, Any]:
     if settings["mode"] == "novnc":  # headed: fill the VNC display
         w, h = settings["viewport"].split("x")
         args += [f"--window-size={w},{h}", "--window-position=0,0"]
-    return {"browser": {"contextOptions": {"timezoneId": settings["timezone"], "locale": settings["locale"]},
+    # One browser context for every MCP client: a harness that restarts (a new MCP
+    # session) while its old session was never closed reuses it. Without it a
+    # session profile refuses the second launch ("Browser is already in use for
+    # /data/profile") and an ephemeral one leaks a context per restart.
+    return {"sharedBrowserContext": True,
+            "browser": {"contextOptions": {"timezoneId": settings["timezone"], "locale": settings["locale"]},
                         "launchOptions": {"args": args, "downloadsPath": STAGING}}}
 
 

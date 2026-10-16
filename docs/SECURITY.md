@@ -59,7 +59,7 @@ remaining gaps for a session.
 | The browser (and, in host mode, the operator's desktop) | prompt-injected `curl` | rings 1 + 6 | only the harness's browser tool path may reach the browser endpoint; shell commands cannot. See "Browser" below |
 | The host / Docker Engine | container escape | ring 0 hardening | never `docker.sock`, never `--privileged`, never host-gateway on the harness |
 | Host code execution via files the host trusts later (git hooks, `.git/config`, IDE/direnv settings) | shell cmd *or* the harness writing into `/work` | ring 0 | see "Planted host-trusted files" below |
-| Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
+| Other sessions' browser state | the browser | sidecar / host services | sidecar modes: an in-memory profile by default (`profile: session` keeps it under this session's `.glove/`; refused with Tor unless acknowledged). Within one session, every MCP client shares one browser context (`sharedBrowserContext` in the MCP's config), so a restarted harness keeps the earlier tabs, cookies and pooled connections until the sidecar stops; a `glove filter block` reaches an already open connection only with `--terminate`. Host mode: the Chrome profile and ports are per session, and Chrome stops on `glove down` unless `keep_browser: true` |
 
 ## Credentials for corporate tools: what each widens
 
