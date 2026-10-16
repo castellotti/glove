@@ -717,6 +717,21 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **playwright: `profile: session` opens after a killed sidecar.** A sidecar
+  stopped without Chromium exiting cleanly (a hard stop, a crash, a host
+  restart) left Chromium's `SingletonLock` (`<hostname>-<pid>`) in the
+  persistent profile. Each new sidecar has another hostname, so Chromium
+  refused the profile as in use "by another computer", and every browser call
+  failed with "Browser is already in use for /data/profile" from then on.
+  The shared-context fix below did not cover this. The sidecar's start
+  now removes the profile's `Singleton*` files before Chromium launches (no
+  Chromium runs yet, and only that sidecar mounts the profile). To recover a
+  session hit by this, run `glove up` again with the new image; nothing in the
+  profile has to be deleted by hand. `test_playwright.sh` with
+  `PROFILE=session` kills the sidecar while a session holds the browser open,
+  checks that the lock was left behind, and browses from the recreated one
+  (it fails this way without the fix).
+
 - **playwright: a restarted harness can use the browser again.** The sidecar's
   Playwright MCP now shares one browser context between all MCP clients
   (`sharedBrowserContext` in its `mcp.json`; glove v2 passed

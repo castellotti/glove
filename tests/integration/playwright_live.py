@@ -14,7 +14,8 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      is offered the allowlisted tools only (never browser_run_code_unsafe);
      the page stays between a turn's calls (navigate, then click); a second
      MCP session reuses the browser while a first one still holds it (a
-     restarted harness; `PROFILE=session` for a persistent profile);
+     restarted harness; `PROFILE=session` for a persistent profile, which a
+     sidecar killed with the browser open must not leave locked);
      a shell command cannot reach the MCP (ring 1);
   4. with observe: the browser's destinations are flows `client: playwright,
      tool: browser`; with filter: a blocked site and the SSRF guard's refusal;
@@ -49,6 +50,7 @@ from pathlib import Path
 from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
 
 from glove.extensions import image_tag
+from glove.session import recreate_sidecar
 
 HERE = Path(__file__).parent
 # downloads/uploads (`downloads: work`, `uploads: work`)
@@ -120,6 +122,14 @@ def main(directory: str) -> int:
             r = subprocess.run(mcp_argv(steps, **where), capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
 
+        @contextlib.contextmanager
+        def holding(url: str) -> Iterator[tuple[list[str], bool]]:
+            """An MCP session that opened `url` and is never closed (a harness that restarts): its
+            output so far, and whether the navigate landed."""
+            with held_mcp(mcp_argv([["browser_navigate", {"url": url}], ["sleep", {"s": 300}]])) as lines:
+                yield lines, bool(wait_for(lambda: any(f"Page URL: {url}" in ln for ln in lines),
+                                           timeout=120, step=2))
+
         print("== the browser sidecar")
         pw = inspect(rt, f"{s}-pw")
         hc = pw.get("HostConfig", {})
@@ -172,14 +182,28 @@ def main(directory: str) -> int:
 
         # A harness that restarts opens a new MCP session while the old one was never
         # closed (the browser stays open): the new session must reuse the browser.
-        with held_mcp(mcp_argv([["browser_navigate", {"url": "https://example.com"}], ["sleep", {"s": 300}]])) as first:
-            first_ok = wait_for(lambda: any("Page URL: https://example.com" in ln for ln in first), timeout=120, step=2)
+        with holding("https://example.com") as (first, first_ok):
             # not example.org: the filter check below must be its first visit (a shared
             # context keeps a pooled connection, and a rule applies to new ones)
             out = mcp([["browser_navigate", {"url": "https://example.net"}]])
         check(f"a second MCP session reuses the browser a held one opened (profile {pws['profile']})",
               first_ok and "Page URL: https://example.net" in out,
               ("" if first_ok else f"held: {''.join(first).strip()[-120:]} | ") + out[-160:].replace("\n", " "))
+
+        if pws["profile"] == "session":
+            # A killed sidecar leaves Chromium's SingletonLock (`<hostname>-<pid>`) in the
+            # persistent profile; the next sidecar has another hostname, and Chromium
+            # refuses a profile "in use by another computer" unless the start clears it.
+            lock = sd.ext / "playwright" / "profile" / "SingletonLock"
+            with holding("https://example.com") as (_, held_ok):
+                killed = subprocess.run([rt, "rm", "-f", f"{s}-pw"], capture_output=True, text=True)  # browser open
+                left = lock.is_symlink()
+            again = recreate_sidecar(rt, live.sid, sd.compose, f"{s}-pw", live.secrets, wait=120)
+            out = mcp([["browser_navigate", {"url": "https://example.com"}]])
+            check("a recreated sidecar opens the persistent profile a killed one left locked",
+                  held_ok and killed.returncode == 0 and left and again is None and "Page URL: https://example.com" in out,
+                  f"held: {held_ok} | killed: rc={killed.returncode} {killed.stderr.strip()[-80:]} | "
+                  f"lock left: {left} | {again or 'recreated'} | " + out[-160:].replace("\n", " "))
 
         # each live.call is a new harness process (a new MCP session): one turn's calls share a page.
         # A selector, not a ref: a ref holds only for its tab's latest snapshot, and in a shared
