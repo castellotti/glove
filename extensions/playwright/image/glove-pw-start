@@ -44,6 +44,11 @@ mcp_args() {
     --config /etc/glove/playwright/mcp.json --image-responses allow)
   if [ "$PW_SANDBOX" = on ]; then args+=(--sandbox); else args+=(--no-sandbox); fi
   if [ "$PW_PROFILE" = session ]; then args+=(--user-data-dir /data/profile); else args+=(--isolated); fi
+  # One browser context for every MCP client: a harness that restarts (a new
+  # MCP session) while the old session was never closed reuses it. Without
+  # this, a session profile refuses the second launch ("Browser is already in
+  # use for /data/profile") and an ephemeral one leaks a browser per restart.
+  args+=(--shared-browser-context)
   if [ -f "$STATE" ]; then args+=(--storage-state "$STATE"); fi
   printf '%s\n' "${args[@]}"
 }

@@ -16,6 +16,7 @@
 #             HARNESS=vibe|claude-code for the other harnesses (default pi)
 #             (BIG=1 adds a 2 GB browser download; off by default)
 #   SANDBOX=off … runs any case with `chromium_sandbox: off`
+#   PROFILE=session … runs any case with `profile: session` (a persistent profile)
 #
 # A throwaway session dir (llm → the tool-driving stub) runs
 # tests/integration/playwright_live.py. Needs internet (example.com via the
@@ -42,8 +43,11 @@ case "$CASE" in
 esac
 stub_llm "$HARNESS" "$PORT"
 start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
+# pw_add 'key: value': one more setting in the PW flow mapping
+pw_add() { local in="${PW#\{}"; in="${in%\}}"; PW="{${in}${in:+, }$1}"; }
 # SANDBOX=off: Chromium without its sandbox (the container is the only boundary)
-if [ "${SANDBOX:-on}" = off ]; then IN="${PW#\{}"; IN="${IN%\}}"; PW="{${IN}${IN:+, }chromium_sandbox: \"off\"}"; fi
+[ "${SANDBOX:-on}" = off ] && pw_add 'chromium_sandbox: "off"'
+[ "${PROFILE:-ephemeral}" = session ] && pw_add 'profile: session'
 mkdir -p "$S/work"
 printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\n%sextensions:\n  llm: %s\n  direct: {}\n  playwright: %s\n%s' \
   "$RT" "$HARNESS" "$TOP" "$LLM" "$PW" "$EXTRA" > "$S/glove-session.yml"

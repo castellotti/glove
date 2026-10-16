@@ -88,6 +88,8 @@ def test_the_mcp_never_gets_a_cdp_port_or_file_access():
     # with the sandbox on, both modes prove it before serving (fail closed at `glove up`)
     assert "prepare() {\n  require_sandbox\n" in src and src.count("    prepare\n") == 2
     assert 'chromium_sandbox: "off"' in src
+    # every MCP client shares one context: a restarted harness's new session reuses the browser
+    assert "args+=(--shared-browser-context)" in src
 
 
 def test_one_playwright_pin():

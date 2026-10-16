@@ -12,7 +12,9 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      from the harness network the sidecar is unreachable, the forwarder is not;
   3. the harness (Pi or Vibe, stub-driven) browses example.com through it, and
      is offered the allowlisted tools only (never browser_run_code_unsafe);
-     the page stays between a turn's calls (navigate, then click);
+     the page stays between a turn's calls (navigate, then click); a second
+     MCP session reuses the browser while a first one still holds it (a
+     restarted harness; `PROFILE=session` for a persistent profile);
      a shell command cannot reach the MCP (ring 1);
   4. with observe: the browser's destinations are flows `client: playwright,
      tool: browser`; with filter: a blocked site and the SSRF guard's refusal;
@@ -31,17 +33,20 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, tool_result, wait_for
+from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
 
 from glove.extensions import image_tag
 
@@ -59,7 +64,25 @@ CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height
 BUTTON_PAGE = "data:text/html,<title>WAITING</title><button onclick=\"document.title='CLICKED'\">Go</button>"
 
 
-def big_download(rt: str, pw_image: str, s: str, out_dir: Path) -> None:
+@contextlib.contextmanager
+def held_mcp(argv: list[str]) -> Iterator[list[str]]:
+    """An MCP client whose `steps` end in a long `sleep`: its session stays open
+    until the block ends. Yields its output lines as they arrive."""
+    client = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines: list[str] = []
+    threading.Thread(target=lambda: lines.extend(iter(client.stdout.readline, "")), daemon=True).start()
+    try:
+        yield lines
+    finally:
+        client.terminate()
+        try:
+            client.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            client.kill()
+            client.wait()
+
+
+def big_download(held: Callable[[list], contextlib.AbstractContextManager[list[str]]], out_dir: Path) -> None:
     """BIG: a download larger than the sidecar's 768 MB /tmp lands complete (staged on disk, <state>/downloading)."""
     big, size = BIG_ISO
     t = time.time()
@@ -67,17 +90,11 @@ def big_download(rt: str, pw_image: str, s: str, out_dir: Path) -> None:
     def landed() -> list[Path]:  # the MCP sanitizes the name (dots in the stem become dashes)
         return [p for p in out_dir.glob("*.iso") if p.stat().st_size == size]
 
-    # one MCP session held open (its context closes, and the download with it, when the session ends)
-    client = subprocess.Popen(mcp_client_argv(rt, pw_image, f"{s}-net", f"http://{s}-browser:8931/mcp",
-                                              f"{s}-browser:8931", [["browser_navigate", {"url": big}],
-                                                                    ["sleep", {"s": 1800}]]),
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    try:
+    # one MCP session held open while the download runs (the shared context outlives
+    # it: a partial download ends only when the sidecar stops)
+    with held([["browser_navigate", {"url": big}], ["sleep", {"s": 1800}]]) as out:
         got = wait_for(landed, timeout=1800, step=5)
-    finally:
-        client.terminate()
-        out = client.communicate(timeout=30)[0]
-    print(f"    {out.strip()[-300:]} ({time.time() - t:.0f}s)")
+    print(f"    {''.join(out).strip()[-300:]} ({time.time() - t:.0f}s)")
     check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
           ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
 
@@ -96,10 +113,15 @@ def main(directory: str) -> int:
         def exec_pw(script: str) -> subprocess.CompletedProcess:
             return subprocess.run([rt, "exec", f"{s}-pw", "bash", "-c", script], capture_output=True, text=True)
 
+        def mcp_argv(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> list[str]:
+            return mcp_client_argv(rt, pw_image, network, f"http://{host}:8931/mcp", f"{host}:8931", steps)
+
         def mcp(steps: list, network: str = f"{s}-net", host: str = f"{s}-browser") -> str:
-            r = subprocess.run(mcp_client_argv(rt, pw_image, network, f"http://{host}:8931/mcp", f"{host}:8931", steps),
-                               capture_output=True, text=True, timeout=300)
+            r = subprocess.run(mcp_argv(steps, network, host), capture_output=True, text=True, timeout=300)
             return (r.stdout + r.stderr).strip()
+
+        def held(steps: list) -> contextlib.AbstractContextManager[list[str]]:
+            return held_mcp(mcp_argv(steps))
 
         print("== the browser sidecar")
         pw = inspect(rt, f"{s}-pw")
@@ -151,20 +173,27 @@ def main(directory: str) -> int:
         check("browser_navigate https://example.com", "Page URL: https://example.com" in ans,
               ans[-160:].replace("\n", " "))
 
-        def ref_of(url: str, name: str) -> str:
-            """The ref of `url`'s button `name` (a navigate of its own: its own browser context)."""
-            first = tool_result(live.call(f"{prefix}browser_navigate", {"url": url}), 1500)
-            return (re.search(rf'button "{name}" \[ref=(\w+)\]', first) or
-                    re.search(r"\[ref=(\w+)\]", first) or [None, "e2"])[1]
+        # A harness that restarts opens a new MCP session while the old one was never
+        # closed (the browser stays open): the new session must reuse the browser.
+        with held([["browser_navigate", {"url": "https://example.com"}], ["sleep", {"s": 300}]]) as first:
+            opened = wait_for(lambda: any(ln.startswith("browser_navigate:") for ln in first), timeout=120, step=2)
+            # not example.org: the filter check below must be its first visit (a shared
+            # context keeps a pooled connection, and a rule applies to new ones)
+            out = mcp([["browser_navigate", {"url": "https://example.net"}]])
+        first_ok = opened and any("Page URL: https://example.com" in ln for ln in first)
+        check(f"a second MCP session reuses the browser a held one opened (profile {pws['profile']})",
+              first_ok and "Page URL: https://example.net" in out,
+              ("" if first_ok else f"held: {''.join(first).strip()[-120:]} | ") + out[-160:].replace("\n", " "))
 
-        # each live.call is a new harness process (and so a fresh browser context): one turn's calls share a page
-        ref = ref_of(BUTTON_PAGE, "Go")
+        # each live.call is a new harness process (a new MCP session): one turn's calls share a page.
+        # A selector, not a ref: a ref holds only for its tab's latest snapshot, and in a shared
+        # context a later navigate in another turn renumbers it (`f3e2`).
         steps = ((f"{prefix}browser_navigate", {"url": BUTTON_PAGE}),
-                 (f"{prefix}browser_click", {"element": "Go", "target": ref}))
+                 (f"{prefix}browser_click", {"element": "Go", "target": "button"}))
         for label, split in [("", False)] + [(" (Vibe: each its own run_typescript)", True)] * (cfg.harness == "vibe"):
             res = live.seq(*steps, split=split)
             check(f"the page stays between a turn's calls: navigate, then click{label}",
-                  "Page Title: CLICKED" in res[1], f"ref {ref}: " + res[1][-160:].replace("\n", " "))
+                  "Page Title: CLICKED" in res[1], res[1][-160:].replace("\n", " "))
         offered = set()
         if cfg.harness == "vibe":  # Vibe offers MCP tools in run_typescript only
             offered = set(live.vibe_functions("mcp_playwright"))
@@ -238,7 +267,7 @@ def main(directory: str) -> int:
                 out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
                 check("7z l reads it from the shell", "files" in out, out[-160:])
             if os.environ.get("BIG"):
-                big_download(rt, pw_image, s, out_dir)
+                big_download(held, out_dir)
             else:
                 print("    (BIG=1 adds a 2 GB ISO: a download larger than the sidecar's /tmp)")
         if pws["uploads"] == "work":
@@ -254,17 +283,16 @@ def main(directory: str) -> int:
                   and (up / "up.txt").stat().st_mode & 0o777 == 0o600, out[-120:])
             r = exec_pw("touch /work/browser-uploads/x; echo rc=$?")
             check("the sidecar can't write it", "rc=0" not in r.stdout, r.stdout.strip()[-80:])
-            ref = ref_of(UPLOAD_PAGE, "Choose File")
 
             def upload(path: str) -> list[str]:
                 return live.seq((f"{prefix}browser_navigate", {"url": UPLOAD_PAGE}),
-                                (f"{prefix}browser_click", {"element": "Choose File", "target": ref}),
+                                (f"{prefix}browser_click", {"element": "Choose File", "target": "input[type=file]"}),
                                 (f"{prefix}browser_file_upload", {"paths": [path]}),
                                 (f"{prefix}browser_wait_for", {"time": 2}),
                                 (f"{prefix}browser_snapshot", {}))
 
             res = upload("/work/browser-uploads/up.txt")
-            print(f"    ref {ref}: {' ||| '.join(r[-160:] for r in res)}")
+            print(f"    {' ||| '.join(r[-160:] for r in res)}")
             check("browser_file_upload sends a file from /work/browser-uploads",
                   any("Page Title: GOT:hello upload" in r for r in res), res[-1][-200:])
             res = upload("/etc/passwd")

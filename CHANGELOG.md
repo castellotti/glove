@@ -671,6 +671,24 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **playwright: a restarted harness can use the browser again.** The sidecar's
+  Playwright MCP now runs with `--shared-browser-context` (glove v2 did; the v3
+  sidecar had dropped it, host mode kept it), so every MCP client shares one
+  browser context. Before, a harness that restarted while its old MCP session
+  was never closed (Pi exited, the sidecar kept running) got "Browser is
+  already in use for /data/profile" on every browser call with
+  `profile: session`; with the default ephemeral profile each restart left
+  another browser running. What changes: while the sidecar runs, a restarted
+  harness sees the same tabs, cookies and pooled connections (as one harness
+  session always did); a `glove filter block` still applies to new connections
+  only, so add `--terminate` to cut a site the browser already has open.
+  `test_playwright.sh` checks a second session while a first holds the browser
+  (`PROFILE=session` for a persistent profile). Live driver: the click and
+  upload checks use a selector (`button`, `input[type=file]`) instead of a ref
+  read in an earlier turn. Playwright 1.63's navigate links its snapshot as a
+  file, so the driver had always used its `e2` fallback, and a ref holds only
+  for its tab's latest snapshot (a shared context renumbers it, e.g. `f3e2`).
+
 - **Live: `github_live.py` expected the pre-GHES refusal text** for a
   non-GitHub remote (`https://github.com/<owner>/<repo> only`); it now reads
   `/<owner>/<repo> only, the host one of github.com`. The refusal itself was
