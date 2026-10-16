@@ -94,8 +94,8 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   while the sidecar runs picks up the same tabs, cookies and open connections. With
   `profile: ephemeral` they last until the sidecar stops; with `session`,
   cookies outlast it (the sidecar's start clears the lock Chromium leaves in
-  the profile when it is killed). A `glove filter block` applies to new connections, so
-  use `--terminate` for a site the browser already has open.
+  the profile when it is killed). A `glove filter block` applies to new
+  connections, so use `--terminate` for a site the browser already has open.
 - **`browser_evaluate`** (JavaScript in the page, inside the sidecar) is a
   reasonable addition to `tools` for sites that render nothing without it.
   Without it, a `javascript:` URL the agent navigates to would do the same

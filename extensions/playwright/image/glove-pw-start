@@ -100,11 +100,13 @@ seed_storage_state() {
 # Singleton* locks in a persistent profile. A lock names `<hostname>-<pid>`, and
 # each sidecar has a new hostname, so Chromium would refuse the profile as "in
 # use by another computer" ("Browser is already in use for /data/profile"). No
-# Chromium runs yet, and only this sidecar mounts the profile: any lock is stale.
+# Chromium runs yet, and only this sidecar mounts the profile (its container_name
+# is fixed, so the runtime removed the old one first): any lock is stale. A fixed
+# hostname would not make Chromium clear it: the pid is from another namespace.
 prepare() {
   require_sandbox
   find /data/staging -mindepth 1 -delete 2>/dev/null || true
-  [ "$PW_PROFILE" != session ] || rm -f /data/profile/SingletonLock /data/profile/SingletonSocket /data/profile/SingletonCookie
+  [ "$PW_PROFILE" != session ] || rm -f /data/profile/Singleton*
   trust_corporate_ca
   seed_storage_state
 }

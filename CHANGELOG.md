@@ -723,7 +723,7 @@ All notable changes to glove are documented here.
   persistent profile. Each new sidecar has another hostname, so Chromium
   refused the profile as in use "by another computer", and every browser call
   failed with "Browser is already in use for /data/profile" from then on.
-  The fix above (one shared context) did not cover this. The sidecar's start
+  The shared-context fix below did not cover this. The sidecar's start
   now removes the profile's `Singleton*` files before Chromium launches (no
   Chromium runs yet, and only that sidecar mounts the profile). To recover a
   session hit by this, run `glove up` again with the new image; nothing in the
