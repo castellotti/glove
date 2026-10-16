@@ -429,6 +429,52 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Exit identity: glove picks no IP-lookup service (breaking).** The exit
+  comes from the egress's own software; README "Egress" has the privacy note.
+  - verify: `exit-confirmed` replaces `exit-ip-differs`. The egress reports
+    one valid IP for its exit (`source: exec`, a command in its sidecar, or
+    `source: url`, a JSON answer through the proxy with `ip_field` and
+    `expect`). The host's own IP is fetched only with the new opt-in
+    `host_check_url` (vpn, tor), which then must differ from the exit.
+  - vpn: the exit is the VPN server's endpoint (the tunnel's entry address),
+    read every 30 s (every 2 s until known) from gluetun's kill-switch rules
+    by a wrapper around gluetun's start script (no lookup; a reconnect is
+    recorded too). By default verify no longer compares the exit with the
+    host's IP. It is published in `/run/glove-exit/ip`, in vpn's `exit` volume.
+    New settings: `publicip_api` (gluetun's own lookup through the tunnel,
+    with a service you name; no default),
+    `host_check_url`, and `dns_upstream`, `health_targets`, `health_icmp`
+    (Quad9 by default). `check_url` is now an `http-ok` URL the proxy must
+    fetch (default `https://on.quad9.net`), no longer an echo service; so is
+    direct's.
+  - tor: `check_url` removed; verify uses the Tor Project's check
+    (`IsTor: true`).
+  - observe: `exit_identity` is `auto` (the default), `none` or an `https://`
+    URL. `auto` follows the egress's new `exit_identity` export: vpn's exit
+    file (`source: vpn-endpoint`, or `gluetun:publicip` with `publicip_api`),
+    tor's check every 5 minutes (records' `source: via-proxy:check.torproject.org`;
+    Tor isolates circuits per client, so it is the gate's own exit), nothing for
+    direct and corporate. The default was `none`: **a tor session with
+    `observe: {}` now sends this poll** (set `exit_identity: none` to stop it). `exit_identity_url` and `via-proxy` are refused with a hint. A
+    file source writes no `exit` record until the file first appears; its
+    records have `null` geo. `session.json`'s `exit_identity` is
+    `vpn-endpoint`, `gluetun:publicip`, `via-proxy:<url>` or `none`.
+  - netgate: `--exit-file SOURCE=PATH` (a local read every 30 s) beside
+    `--exit-url`.
+  - core: an egress provider's new `shares:` export lists volumes a forwarder
+    may mount, **read-only only**, as `egress:<name>`; observe mounts vpn's
+    `exit` volume into the harness's proxy gate alone. The harness still
+    mounts no volume but its channels.
+  - Examples name no VPN company (`provider: <set-me>`); tests use `custom`.
+  - `test_observe.sh` checks `session.json`'s `exit_identity` and, but for
+    direct, a healthy `exit` record from the egress's source.
+  - The netobs fixtures are regenerated (`tests/fixtures/netobs/` and the
+    scenarios): exit source `vpn-endpoint` at an RFC 5737 address, no geo; the
+    original fixture also picks up gate `0.2.0`, `run` on flows and the
+    `rules.sha256`/`last_rejected` status fields. Its pinned hashes are
+    updated: Layman must re-copy it. Both generators import
+    `extensions.gate.netgate` again (they still named v2's `glove.netgate`).
+
 - **`corporate_ca` reaches every TLS client, not only Node.** The session's
   derived image bakes `/etc/glove/ca-bundle.pem` (the image's roots, then the
   CA). `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and

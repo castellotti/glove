@@ -3,7 +3,8 @@ name: direct
 summary: Egress straight to the internet through a small HTTP proxy — no tunnel, no anonymity (route direct).
 provides: [egress]
 settings:
-  check_url: { type: string, default: "https://am.i.mullvad.net/ip" }   # verify: egress passes traffic
+  # verify: egress passes traffic (no IP lookup: direct's exit is the host). Quad9's check page.
+  check_url: { type: string, default: "https://on.quad9.net" }
 images:
   proxy: { build: image }
 exports:

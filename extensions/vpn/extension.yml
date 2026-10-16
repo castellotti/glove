@@ -19,7 +19,17 @@ settings:
   register_hook:    { type: path, within: session }
   register_user:    { type: secret }
   register_pass:    { type: secret }
-  check_url:        { type: string, default: "https://am.i.mullvad.net/ip" }
+  check_url:        { type: string, default: "https://on.quad9.net" }   # verify: the proxy passes traffic
+  # Exit identity: by default the VPN server's endpoint IP, read from gluetun's
+  # kill-switch rule (no lookup). `publicip_api` turns gluetun's own lookup on,
+  # through the tunnel, with a service the operator names (gluetun's PUBLICIP_API,
+  # e.g. `echoip#https://<your server>`); glove picks none.
+  publicip_api:     { type: string, pattern: '[A-Za-z0-9#:/._~%?&=,+-]+' }
+  host_check_url:   { type: string, pattern: 'https?://[^\s"]+' }   # opt-in: the host's IP must differ from the exit
+  # Quad9 by default: gluetun's DNS upstream and the targets its health check dials through the tunnel
+  dns_upstream:     { type: list, default: [quad9], pattern: '[A-Za-z0-9._-]+' }                  # DNS_UPSTREAM_RESOLVERS
+  health_targets:   { type: list, default: ["dns.quad9.net:443"], pattern: '[A-Za-z0-9.:\[\]-]+' }  # HEALTH_TARGET_ADDRESSES
+  health_icmp:      { type: list, default: [9.9.9.9], pattern: '[0-9A-Fa-f.:]+' }                 # HEALTH_ICMP_TARGET_IPS
 validate:
   - when: { type: wireguard, wireguard_key: null, register_hook: null }
     error: "set `wireguard_key: keychain:<service>` (store it with `glove keychain set <service>`) or a `register_hook`"
@@ -36,6 +46,15 @@ exports:
   anonymising: true                    # hides the operator's address: browsers on the host would bypass it
   resolver: "dns://glove-{{ session.id }}-gluetun:53"
   network: egress
+  # Exit identity for observe (`exit_identity: auto`): one bare IP in the `ip`
+  # file of vpn's `exit` volume, which observe's gate mounts read-only (`shares`).
+  # No lookup by default: the endpoint gluetun's start script reads from its
+  # kill switch; with `publicip_api`, gluetun's own lookup.
+  exit_identity:
+    source: "{{ 'gluetun:publicip' if settings.publicip_api else 'vpn-endpoint' }}"
+    volume: exit
+    file: ip
+  shares: [exit]                       # the volumes a forwarder may mount read-only (`egress:<name>`)
 services: compose/services.yml.j2
 privileges:
   # gluetun configures the tunnel, routes and its kill-switch firewall itself
@@ -51,6 +70,15 @@ secrets:
   openvpn_password:      { from: openvpn_password, when: { type: openvpn } }
 verify:
   - { name: tunnel-up, kind: container-healthy, service: gluetun, timeout: 120 }
-  - { name: exit-not-host, kind: exit-ip-differs, echo_url: "{{ settings.check_url }}", service: gluetun }
+  # gluetun's HTTP proxy passes traffic through the tunnel (no IP lookup)
+  - { name: egress-up, kind: http-ok, url: "{{ settings.check_url }}", proxy: "{{ slot.egress.proxy_url }}",
+      service: gluetun }
+  # The exit's one IP, from the file gluetun publishes (the `exit_identity`
+  # export, also read by observe's gate): by default the endpoint its start script reads
+  # from its kill switch (compose/services.yml.j2), with `publicip_api` gluetun's
+  # own lookup. Empty or absent until it is known; two endpoints are not one.
+  - { name: exit-confirmed, kind: exit-confirmed, source: exec, service: gluetun, argv: [cat, /run/glove-exit/ip],
+      host_check_url: "{{ settings.host_check_url or '' }}",
+      retries: 15 }                     # until the tunnel is up and (publicip_api) gluetun's lookup answered
 harness:
   brief: brief.md

@@ -9,9 +9,9 @@ HTTP proxy on the internal egress network. Flows are labelled `route: vpn`.
 ```yaml
 extensions:
   vpn:
-    provider: mullvad                      # any gluetun provider name, or `custom`
+    provider: <set-me>                     # a gluetun provider name, or custom
     wireguard_key: keychain:my-vpn-wg-key  # store it: glove keychain set my-vpn-wg-key
-    addresses: 10.64.0.2/32                # when the provider needs WIREGUARD_ADDRESSES
+    addresses: 10.0.0.2/32                 # when the provider needs WIREGUARD_ADDRESSES
     countries: [Sweden]
 ```
 
@@ -22,7 +22,10 @@ extensions:
 | `wireguard_key` | Keychain/env reference to the WireGuard private key |
 | `countries`, `cities`, `hostnames` | gluetun server selection |
 | `register_hook` | see below |
-| `check_url` | echo service for the leak check (default `https://am.i.mullvad.net/ip`) |
+| `check_url` | a URL gluetun's proxy must fetch (`http-ok`; default `https://on.quad9.net`, no IP lookup) |
+| `publicip_api` | turns gluetun's own exit lookup on, through the tunnel, with a service you name (gluetun's `PUBLICIP_API`, e.g. `echoip#https://<your server>`); no default |
+| `host_check_url` | opt-in leak check: this service, asked from the host and through the tunnel, must see two different IPs; no default |
+| `dns_upstream`, `health_targets`, `health_icmp` | gluetun's DNS upstream and health-check targets (default Quad9) |
 
 Secrets are references (`keychain:<service>` or `env:<VAR>`), resolved in
 memory at `glove up` and handed to gluetun as compose secrets
@@ -63,6 +66,29 @@ inside `local/`, so a symlink into `work/` is refused.
 
 Before the harness starts: gluetun's healthcheck must report healthy (on
 failure glove reads tun0's byte counter to tell a dead handshake from other
-problems), then `exit-ip-differs`: the IP an echo service sees through the
-proxy must differ from this machine's public IP. Either failure stops the
-session's sidecars; nothing starts half-tunnelled.
+problems), then `egress-up`: gluetun's proxy must fetch `check_url`, then
+`exit-confirmed`: the exit file below must hold one valid IP. With
+`host_check_url` set, that service must also see a different IP from this
+machine than through the tunnel. Any failure stops the session's sidecars;
+nothing starts half-tunnelled.
+
+## Exit identity (no lookup by default)
+
+gluetun's start script is wrapped: it publishes the session's exit as one bare
+IP in `/run/glove-exit/ip`, in vpn's `exit` volume.
+
+- **Default (`vpn-endpoint`):** the VPN server's endpoint, read every 30 s
+  (every 2 s until known) from gluetun's kill-switch firewall rules (no network
+  request). It is the tunnel's entry address; a provider may send traffic out
+  from another one. A reconnect
+  to another server rewrites the file; a gluetun restart removes it until the
+  kill switch allows a server again. A dead handshake with the rule still in
+  place does **not** empty it: gluetun's healthcheck is what notices that.
+  Without `host_check_url`, verify does not compare the exit with this
+  machine's IP.
+- **`publicip_api` (`gluetun:publicip`):** gluetun's own lookup through the
+  tunnel (`PUBLICIP_FILE`), with the service you name. glove picks none.
+
+verify's `exit-confirmed` reads that file. observe's `exit_identity: auto`
+mounts the volume **read-only** into the harness's proxy gate only (vpn's
+`shares: [exit]` export); the harness never sees it.

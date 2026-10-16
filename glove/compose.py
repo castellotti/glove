@@ -19,6 +19,8 @@ project, so a bug in the merge cannot ship a weaker project.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from .cafile import CORPORATE_CA_PATH
@@ -124,8 +126,16 @@ def _within(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip("/") + "/")
 
 
+def _volume_name(comp: Composition, ext: str, vname: str) -> str:
+    """An extension fragment's volume, as the project names it."""
+    return scoped(comp.session, f"{ext}-{vname}")
+
+
 def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set[str],
-             extra: dict | None = None, *, work: bool = False) -> list[dict]:
+             extra: dict | None = None, *, work: bool = False, shared: Mapping[str, str] = MappingProxyType({})
+             ) -> list[dict]:
+    """`shared`: other extensions' volumes this service may mount read-only
+    (`<ref>` → full name; a forwarder's `egress:<volume>`)."""
     out = []
     state = str(comp.state_dir(a.name))
     roots = {root: ro for root, ro in comp.export_access(a).items() if root in comp.export_dirs}
@@ -137,10 +147,14 @@ def _volumes(comp: Composition, a: Active, short: str, vols: list, declared: set
         t = v.get("type")
         if t == "tmpfs":
             out.append(dict(v))
+        elif t == "volume" and v.get("source") in shared:
+            if v.get("read_only") is not True:
+                raise ExtensionError(f"{where}: another extension's volume mounts read-only")
+            out.append({**v, "source": shared[v["source"]]})
         elif t == "volume":
             if v.get("source") not in declared:
                 raise ExtensionError(f"{where}: named volume must be declared in the fragment's `volumes:`")
-            out.append({**v, "source": scoped(comp.session, f"{a.name}-{v['source']}")})
+            out.append({**v, "source": _volume_name(comp, a.name, v["source"])})
         elif t == "bind":
             src = str(v.get("source", ""))
             if "docker.sock" in src:
@@ -223,7 +237,7 @@ def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
                 f"extension {a.name!r}: volume {vname!r} may only be a plain or tmpfs volume "
                 "(`driver_opts: {type: tmpfs}`; core sets its size, mode and owner)"
             )
-        full = scoped(comp.session, f"{a.name}-{vname}")
+        full = _volume_name(comp, a.name, vname)
         if opts:
             # owned by the session uid as the mount sees ids, mode 0700
             opts = {"type": "tmpfs", "device": "tmpfs", "o": f"size=1m,{extra.get('tmpfs_volume_opts', 'mode=0700')}"}
@@ -233,7 +247,8 @@ def _declared_volumes(comp: Composition, a: Active, doc: dict, extra: dict,
 
 def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: SessionPlan, extra: dict,
                     declared: set[str], *, networks: dict[str, Any] | None = None,
-                    tmpfs_volumes: frozenset[str] = frozenset()) -> dict[str, Any]:
+                    tmpfs_volumes: frozenset[str] = frozenset(),
+                    shared: Mapping[str, str] = MappingProxyType({})) -> dict[str, Any]:
     """One validated, hardened service. `networks` (already full names) is core's
     choice for a forwarder; fragment services declare logical networks."""
     where = f"extension {a.name!r} service {short!r}"
@@ -258,7 +273,8 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         else:
             out["networks"] = nets
     if svc.get("volumes"):
-        out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra, work=bool(priv.get("work")))
+        out["volumes"] = _volumes(comp, a, short, svc["volumes"], declared, extra, work=bool(priv.get("work")),
+                                  shared=shared)
     if priv.get("work") and not any(v.get("target") == WORK_TARGET for v in out.get("volumes") or []):
         raise ExtensionError(f"{where}: holds the `work` privilege but binds no /work")
     for c in comp.channels:
@@ -302,9 +318,9 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         # which core creates owned by that uid (e.g. the netgate events
         # socket). Elsewhere its uid stays an unprivileged subuid.
         rw_bind = any(v.get("type") == "bind" and not v.get("read_only") for v in out.get("volumes") or [])
-        shared = any(v.get("type") == "volume" and v.get("source") in tmpfs_volumes for v in out.get("volumes") or [])
+        on_tmpfs = any(v.get("type") == "volume" and v.get("source") in tmpfs_volumes for v in out.get("volumes") or [])
         reads_input = any(o.input and short in o.services for o in comp.outputs_of(a.name))
-        if extra.get("userns_mode") and (rw_bind or shared or reads_input):
+        if extra.get("userns_mode") and (rw_bind or on_tmpfs or reads_input):
             out["userns_mode"] = extra["userns_mode"]
     out["cap_drop"] = ["ALL"]
     if priv.get("cap_add"):
@@ -380,6 +396,14 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
             services[name] = _harden_service(comp, a, short, svc, plan, extra, declared,
                                              tmpfs_volumes=_tmpfs(volumes))
     provider = comp.slots.get("forwarder")
+    # a forwarder sits on the egress hop: it may read the volumes the egress
+    # provider `shares` (e.g. vpn's exit IP for observe's gate), never write them
+    egress = comp.slots.get("egress")
+    shared: dict[str, str] = {}
+    for vol in comp.slot_exports("egress").get("shares") or []:
+        if vol not in declared_by.get(egress.name, ()):
+            raise ExtensionError(f"extension {egress.name!r} shares {vol!r}, which its fragment does not declare")
+        shared[f"egress:{vol}"] = _volume_name(comp, egress.name, vol)
     for s in plan.network.implemented:
         assert provider is not None
         name = scoped(comp.session, s.role)
@@ -387,7 +411,8 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
             raise ExtensionError(f"forwarder {name!r} clashes with an extension service")
         services[name] = _harden_service(comp, provider, s.role, dict(s.impl or {}), plan, extra,
                                          declared_by.get(provider.name, set()),
-                                         networks=_forwarder_networks(plan, s), tmpfs_volumes=_tmpfs(volumes))
+                                         networks=_forwarder_networks(plan, s), tmpfs_volumes=_tmpfs(volumes),
+                                         shared=shared)
         if s.host_gateway:
             services[name]["extra_hosts"] = [f"{extra.get('host_gateway_name', 'host.docker.internal')}:host-gateway"]
         if s.listen_port < 1024:

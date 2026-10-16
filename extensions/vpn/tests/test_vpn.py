@@ -22,7 +22,8 @@ def _render(tmp_path, **settings):
 
 
 def test_gluetun_privileges_secret_and_firewall(tmp_path):
-    plan, doc = _render(tmp_path, provider="mullvad", wireguard_key="keychain:wg", addresses="10.0.0.2/32")
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", addresses="10.0.0.2/32",
+                        public_key=KEY, endpoint="192.0.2.1:51820")
     g = doc["services"]["glove-s-gluetun"]
     assert set(g["networks"]) == {"glove-s-egress", "glove-s-wan"}
     assert "user" not in g and g["read_only"] is False  # root + writable rootfs: declared privileges
@@ -31,7 +32,9 @@ def test_gluetun_privileges_secret_and_firewall(tmp_path):
     # gluetun's DNS server on :53, the gates' resolver: podman does not allow low ports by default
     assert g["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": 0} and "NET_BIND_SERVICE" not in g["cap_add"]
     env = g["environment"]
-    assert env["VPN_SERVICE_PROVIDER"] == "mullvad" and env["WIREGUARD_ADDRESSES"] == "10.0.0.2/32"
+    assert env["VPN_SERVICE_PROVIDER"] == "custom" and env["WIREGUARD_ADDRESSES"] == "10.0.0.2/32"
+    assert env["WIREGUARD_PUBLIC_KEY"] == KEY
+    assert (env["WIREGUARD_ENDPOINT_IP"], env["WIREGUARD_ENDPOINT_PORT"]) == ("192.0.2.1", "51820")
     assert env["FIREWALL_OUTBOUND_SUBNETS"] == "172.31.7.0/24"
     assert env["HTTP_CONTROL_SERVER_ADDRESS"] == "127.0.0.1:8000"
     assert g["secrets"] == [{"source": "glove-s-vpn-wireguard_private_key",
@@ -42,9 +45,114 @@ def test_gluetun_privileges_secret_and_firewall(tmp_path):
         "environment": secret_env_var("vpn-wireguard_private_key")}
     assert "wireguard_key" not in yaml.safe_dump(env)  # the ref never reaches the container
     assert plan.composition.privileges["vpn/gluetun"]
-    assert [v["kind"] for _, v in plan.composition.verify] == ["container-healthy", "exit-ip-differs"]
+    assert [v["kind"] for _, v in plan.composition.verify] == ["container-healthy", "http-ok", "exit-confirmed"]
     # stated in the fragment: podman drops the HEALTHCHECK of an OCI-manifest image
     assert g["healthcheck"]["test"] == ["CMD-SHELL", "/gluetun-entrypoint healthcheck"]
+
+
+def test_quad9_by_default_and_no_lookup(tmp_path):
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
+    env = doc["services"]["glove-s-gluetun"]["environment"]
+    assert env["PUBLICIP_ENABLED"] == "off" and "PUBLICIP_API" not in env
+    assert (env["DNS_UPSTREAM_RESOLVERS"], env["HEALTH_TARGET_ADDRESSES"], env["HEALTH_ICMP_TARGET_IPS"]) == (
+        "quad9", "dns.quad9.net:443", "9.9.9.9")
+    assert plan.composition.verify[1][1]["url"] == "https://on.quad9.net"  # the proxy passes traffic
+    check = plan.composition.verify[2][1]
+    assert check["source"] == "exec" and check["argv"] == ["cat", "/run/glove-exit/ip"]
+    assert check["host_check_url"] == "" and check["retries"] == 15
+    # the operator's own choices; empty lists leave gluetun's defaults
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", publicip_api="echoip#https://ip.example",
+                        dns_upstream=["cloudflare", "google"], health_targets=[], health_icmp=[],
+                        host_check_url="https://mine.example/ip")
+    env = doc["services"]["glove-s-gluetun"]["environment"]
+    assert (env["PUBLICIP_ENABLED"], env["PUBLICIP_API"], env["PUBLICIP_FILE"]) == (
+        "on", "echoip#https://ip.example", "/run/glove-exit/ip")
+    assert env["DNS_UPSTREAM_RESOLVERS"] == "cloudflare,google"
+    assert "HEALTH_TARGET_ADDRESSES" not in env and "HEALTH_ICMP_TARGET_IPS" not in env
+    checks = [v for _, v in plan.composition.verify]
+    assert [v["kind"] for v in checks] == ["container-healthy", "http-ok", "exit-confirmed"]
+    assert checks[2]["retries"] == 15 and checks[2]["argv"] == ["cat", "/run/glove-exit/ip"]
+    assert checks[2]["host_check_url"] == "https://mine.example/ip"
+
+
+KILL_SWITCH = """-P INPUT DROP
+-P OUTPUT DROP
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A OUTPUT -d 172.31.7.0/24 -o eth0 -j ACCEPT
+-A OUTPUT -d 198.51.100.7/32 -o eth0 -p udp -m udp --dport 51820 -j ACCEPT
+-A OUTPUT -d 198.51.100.9/32 -o tun0 -p tcp -m tcp --dport 443 -j ACCEPT
+-A OUTPUT -o tun0 -j ACCEPT
+"""
+
+
+@pytest.mark.parametrize(("tables", "want"), [
+    ({"iptables": KILL_SWITCH}, "198.51.100.7\n"),
+    # gluetun may use the legacy tables: read both, an endpoint twice is one
+    ({"iptables": KILL_SWITCH, "iptables-legacy": KILL_SWITCH}, "198.51.100.7\n"),
+    ({"ip6tables": "-A OUTPUT -d 2001:db8::7/128 -o eth0 -p tcp -m tcp --dport 1194 -j ACCEPT\n"}, "2001:db8::7\n"),
+    ({"iptables": KILL_SWITCH.replace("198.51.100.7/32 -o eth0", "198.51.100.7/32 -o tun0")}, ""),  # no endpoint
+    ({"iptables": KILL_SWITCH, "ip6tables": "-A OUTPUT -d 2001:db8::7/128 -o eth0 -p udp -m udp --dport 1 -j ACCEPT"},
+     "198.51.100.7\n2001:db8::7\n"),  # two: core's check refuses it
+])
+def test_the_endpoint_is_read_from_the_kill_switch(tmp_path, tables, want):
+    import subprocess
+
+    _, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
+    entry = doc["services"]["glove-s-gluetun"]["entrypoint"]
+    assert entry[:2] == ["/bin/sh", "-c"] and entry[2].endswith("& exec /gluetun-entrypoint")
+    shared = tmp_path / "exit"  # vpn's `exit` volume, at /run/glove-exit in gluetun
+    shared.mkdir()
+    # one round of the loop, in the foreground (core renders `$` as compose's `$$`)
+    script = (entry[2].replace("$$", "$").replace("/run/glove-exit", str(shared))
+              .replace("sleep $n; done) &", "break; done);").replace("exec /gluetun-entrypoint", "true"))
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for t in ("iptables", "iptables-legacy", "ip6tables", "ip6tables-legacy"):
+        (stubs / f"{t}.out").write_text(tables.get(t, ""))
+        (stubs / t).write_text(f"#!/bin/sh\ncat '{stubs / t}.out'\n")
+        (stubs / t).chmod(0o755)
+
+    def once(script: str) -> str | None:
+        r = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                           env={"PATH": f"{stubs}:/usr/bin:/bin"}, check=True)
+        assert not r.stdout and not r.stderr
+        f = shared / "ip"
+        assert sorted(x.name for x in shared.iterdir()) == (["ip"] if f.exists() else [])
+        return f.read_text() if f.exists() else None
+
+    # absent until known (every start removes it); one endpoint is written, none or two are not
+    assert once(script) == (want.strip() if want.count("\n") == 1 else None)
+    # a later round, once 192.0.2.1 was known: a new one is written (a reconnect),
+    # none or two empty it (the tunnel moved or is down)
+    (shared / "ip").write_text("192.0.2.1")
+    later = script.removeprefix(f"rm -f {shared}/ip;").replace("(last=;", "(last=192.0.2.1;")
+    assert later.count("192.0.2.1") == 1 and once(later) == (want.strip() if want.count("\n") == 1 else "")
+
+
+def test_the_exit_file_is_shared_with_observe_and_emptied_at_start(tmp_path):
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
+    g = doc["services"]["glove-s-gluetun"]
+    assert {"type": "volume", "source": "glove-s-vpn-exit", "target": "/run/glove-exit"} in g["volumes"]
+    assert doc["volumes"]["glove-s-vpn-exit"] == {"name": "glove-s-vpn-exit"}  # gluetun's root owns it
+    assert g["entrypoint"][2].startswith("rm -f /run/glove-exit/ip;")
+    ex = plan.composition.slot_exports("egress")
+    assert ex["exit_identity"] == {"source": "vpn-endpoint", "volume": "exit", "file": "ip"}
+    assert ex["shares"] == ["exit"]  # only this volume reaches observe's gate (read-only)
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", publicip_api="echoip#https://ip.example")
+    assert plan.composition.slot_exports("egress")["exit_identity"]["source"] == "gluetun:publicip"
+    # gluetun writes it itself: no endpoint loop
+    assert doc["services"]["glove-s-gluetun"]["entrypoint"] == [
+        "/bin/sh", "-c", "rm -f /run/glove-exit/ip && exec /gluetun-entrypoint"]
+
+
+@pytest.mark.parametrize("settings", [
+    {"publicip_api": 'echoip#https://x" EXTRA: "1'}, {"dns_upstream": ["quad9,cloudflare\n"]},
+    {"health_icmp": ["9.9.9.9 "]}, {"host_check_url": "ftp://x"},
+])
+def test_new_settings_cannot_escape_their_value(tmp_path, settings):
+    with pytest.raises(ExtensionError, match="must match"):
+        _render(tmp_path, provider="custom", wireguard_key="keychain:wg", **settings)
 
 
 def test_openvpn_uses_two_secrets(tmp_path):

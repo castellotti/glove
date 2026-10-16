@@ -12,8 +12,9 @@ extensions:
 ```
 
 Verify: before the harness starts, glove fetches `check_url` (default
-`https://am.i.mullvad.net/ip`) through the proxy from a throwaway container on
-the egress network; the session does not start if that fails.
+`https://on.quad9.net`; an `http-ok`, no IP lookup) through the proxy from a
+throwaway container on the egress network; the session does not start if that
+fails. direct has no exit identity: observe records none.
 
 tinyproxy runs with the full sidecar hardening (your uid, no capabilities,
 read-only rootfs). It refuses local names, single-label names (other

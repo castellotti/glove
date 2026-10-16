@@ -29,6 +29,7 @@ EVENTS_SOCKET = f"{EVENTS_DIR}/events.sock"
 NET_DIR = "/var/lib/glove/net"
 CONTROL_DIR = "/etc/glove/netgate-control"  # rules.json lives here, read-only
 RULES_FILE = f"{CONTROL_DIR}/rules.json"
+EXIT_DIR = "/run/glove-exit"  # the egress provider's exit-identity file, read-only
 
 # Value sets validated on the host (extensions/gate/gatelib.py) and accepted by the gate.
 # lan: a routable LAN host, never tunnelled (the llm forwarder at location lan, or

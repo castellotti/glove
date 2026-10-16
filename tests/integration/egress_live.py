@@ -6,13 +6,13 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
 (tests/integration/stubs/llm_stub.py), it:
   1. renders the session as `glove up` does, builds images, starts every
      sidecar and runs the extensions' verify checks (`session.start_sidecars`:
-     container-healthy / tcp-open / http-ok / exit-ip-differs);
+     container-healthy / tcp-open / http-ok / exit-confirmed);
   2. checks the topology: only the egress provider's containers are on the
      session's wan network; SearXNG (egress consumer) has no direct internet;
      a container on the harness network has no internet at all;
   3. uses the harness endpoints from the harness network: Pi's `search` returns
-     SearXNG results and `proxy` reaches the internet (exit IP ≠ host IP unless
-     the route is direct); for Vibe and Claude Code the `search-mcp` and
+     SearXNG results and `proxy` reaches the internet (verify confirmed the
+     exit; no IP lookup here); for Vibe and Claude Code the `search-mcp` and
      `webfetch-mcp` sidecars answer over MCP (only under their forwarder's
      name) and the fetcher has no direct internet;
   4. runs the harness non-interactively (wrapped, hardened) with the stub
@@ -36,7 +36,7 @@ import sys
 from live_common import check, live_session, mcp_client_argv, summary
 
 from glove.extensions import image_tag
-from glove.verify import ECHO_URL, host_public_ip, probe
+from glove.verify import VerifyError, probe, run_check
 
 
 def main(directory: str) -> int:
@@ -79,13 +79,14 @@ def main(directory: str) -> int:
             hits = int(out) if rc == 0 and out.strip().isdigit() else -1
             check("search endpoint returns SearXNG results", hits > 0, f"{hits} results")
         if comp.by_name("webfetch") and cfg.harness in ("pi", "claude-code"):
-            real = host_public_ip(ECHO_URL)
-            rc, out = probe(rt, plan, "net", 'curl -fsS -m 30 -x "$X" "$U"',
-                            {"X": f"http://{s}-proxy:8888", "U": ECHO_URL}, timeout=60)
-            exit_ip = out.strip() if rc == 0 else ""
-            want = (exit_ip == real) if route == "direct" else (bool(exit_ip) and exit_ip != real)
-            check(f"proxy endpoint reaches the internet ({'exit = host' if route == 'direct' else 'exit ≠ host'})",
-                  bool(real) and want, f"host {real or '?'}, exit {exit_ip or '?'}")
+            # verify confirmed the exit; this checks the endpoint's path (no IP lookup)
+            try:
+                out = run_check(rt, plan, "webfetch", {"kind": "http-ok", "url": "https://on.quad9.net",
+                                                       "proxy": f"http://{s}-proxy:8888", "network": "net",
+                                                       "retries": 2}, print)
+                check("proxy endpoint reaches the internet", True, out)
+            except VerifyError as e:
+                check("proxy endpoint reaches the internet", False, str(e))
 
         def mcp(ext: str, host: str, steps: list, header: str | None = None) -> str:
             r = subprocess.run(mcp_client_argv(rt, image_tag(comp.by_name(ext), "mcp"), f"{s}-net",

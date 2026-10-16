@@ -39,7 +39,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from . import ANNOUNCE_EVERY, SCHEMA_VERSION, guard, httpproxy, sni
-from .exitid import ExitPoller
+from .exitid import FileExit, UrlExit
 from .policy import PolicyWatcher
 from .records import flow_record, gate_record, ulid
 from .resolver import InTunnel
@@ -98,6 +98,7 @@ class ForwardSpec:
     record_headers: bool = False  # record: full only
     resolver_url: str | None = None  # http-proxy mode: dns://h:p | tor-socks://h:p (in-tunnel)
     exit_url: str | None = None  # http-proxy mode: poll the apparent origin through the chain
+    exit_file: tuple[str, str] | None = None  # ...or (source label, path): the egress provider's read-only file
     # Operator-configured guard exceptions (only ever from the command line).
     exceptions: guard.Exceptions = field(default_factory=guard.Exceptions)
     direct: bool = False  # http-proxy mode: resolve + dial destinations itself (corporate)
@@ -256,11 +257,13 @@ class Forwarder:
             resolver = resolver_from_url(spec.resolver_url) if proxy and spec.resolve != "none" else None
         self.resolver = InTunnel(resolver) if resolver is not None else None
         self._resolver_reported: bool | None = None
-        self.exit = (
-            ExitPoller(url=spec.exit_url, kind=spec.route_kind, dial=self._dial_upstream, emit=sink.send,
-                       env=spec.env, session=spec.session)
-            if proxy and spec.exit_url and not spec.direct else None
-        )
+        self.exit = None
+        if proxy and not spec.direct and (spec.exit_url or spec.exit_file):
+            who = {"kind": spec.route_kind, "emit": sink.send, "env": spec.env, "session": spec.session}
+            if spec.exit_url:
+                self.exit = UrlExit(spec.exit_url, dial=self._dial_upstream, **who)
+            elif spec.exit_file:
+                self.exit = FileExit(spec.exit_file[1], source=spec.exit_file[0], **who)
         self._exit_task: asyncio.Task | None = None
 
     # --- lifecycle ---------------------------------------------------------

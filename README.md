@@ -124,7 +124,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     capabilities: auto      # or explicit keys, e.g. {vision: true}; probes fill the rest
     # api_key: keychain:my-llm   # a reference only (keychain:<service> | env:<VAR>)
   vpn:                      # egress: exactly one of vpn | tor | direct
-    provider: mullvad       # any gluetun provider, or `custom`
+    provider: <set-me>      # a gluetun provider name, or custom
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
   webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url); {downloads: work} adds web_download
@@ -798,8 +798,10 @@ consumers have no other route out (egress fails closed by topology).
 
 Before the harness starts, `glove up` runs each extension's **verify** checks:
 `container-healthy`, `tcp-open`, `http-ok`, `http-refused`,
-`exit-ip-differs` and `exec-ok`. `exit-ip-differs` requires the exit IP seen through the proxy
-to differ from this machine's IP, and fails if either is unknown;
+`exit-confirmed` and `exec-ok`. `exit-confirmed` requires the egress's own software to report one
+valid IP for its exit (vpn: the server it tunnels to; tor: the Tor Project's check, `IsTor: true`);
+with the operator's `host_check_url` (no default), that service, asked from the host and through
+the egress, must also see two different IPs;
 `http-refused` requires the proxy to refuse a URL (corporate: the general
 internet); `exec-ok` runs a command inside a sidecar and requires exit 0 (its
 output withheld; `skills` checks a relay's credentials this way). The network
@@ -810,6 +812,20 @@ and password lines withheld) and stops the session's sidecars, unless it is a
 Keychain references handed to gluetun as compose secrets. An optional
 **register hook** in the session's `local/` can mint a fresh WireGuard key at
 every `glove up` (see [extensions/vpn/README.md](extensions/vpn/README.md)).
+
+**Privacy: no lookup service of glove's own.** glove adds no IP-lookup service: what the
+session's exit is comes from the egress's own software.
+- `vpn` records the VPN server's endpoint as its exit (read from gluetun's kill-switch rules; no
+  lookup). That is the tunnel's entry address: a provider may send traffic out from another one.
+  With no `host_check_url`, verify does not compare the exit with the host's IP. Its `publicip_api` setting (no default) turns gluetun's own lookup on, through the
+  tunnel, with a service the operator names (gluetun's `PUBLICIP_API`).
+- `tor` uses the Tor Project's check (`check.torproject.org`), through Tor: at verify, and with
+  observe (its `exit_identity: auto` default) every 5 minutes from the proxy gate. Tor isolates circuits
+  per client, so the exit observe records for tor is its gate's own, not necessarily the agent's.
+- `direct` checks the proxy with an `http-ok` to `https://on.quad9.net` (`check_url`).
+- The host's own IP is never looked up unless the operator sets `host_check_url`.
+- vpn's DNS upstream and gluetun's health check use Quad9 by default (`dns_upstream`,
+  `health_targets`; both overridable).
 
 `search` runs SearXNG and valkey in the session, with every engine request
 going through the egress proxy. `webfetch` reads one page as text through the
@@ -866,7 +882,7 @@ extensions:
   observe:
     record: metadata          # metadata | full (method + URL of cleartext HTTP; loud warning)
     resolve: in-tunnel        # in-tunnel | none — there is deliberately no `host`
-    exit_identity: none       # via-proxy: poll the apparent exit IP through the tunnel
+    exit_identity: auto       # auto: ask the egress (vpn's endpoint, tor's check) | none | an https:// URL
     transcripts: true         # export the harness transcripts too
     rotate_mb: 64             # rotate flows.ndjson at this size…
     keep: 8                   # …keeping this many rotated files
@@ -886,7 +902,7 @@ container that has **no network at all** (`network_mode: none`):
 net/session.json    static facts: services, tools, upstreams, record mode, grants (0600)
 net/flows.ndjson    append-only flow stream + gate start/stop records, size-rotated
                     to flows-<stamp>[-<n>].ndjson (order by (stamp, n), not by name)
-net/exit.ndjson     apparent-origin changes (only with exit_identity: via-proxy)
+net/exit.ndjson     apparent-origin changes (exit_identity; absent until the exit is known)
 net/status.json     gate heartbeat, upstream health, dropped-record counters, and —
                     only with filter — the rules load result (the enforced file's SHA-256)
 ```
@@ -1290,8 +1306,8 @@ Refused on podman: its compose provider can't apply the profile.
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested**. Key injection (`llm-auth`) verified live against the stubs: Pi, Vibe and Claude Code on Docker, Pi on Podman (`test_llm_inject.sh`); a subscription token in `llm-auth` (TLS as `api.anthropic.com`, the session CA) against a stand-in for the provider on Docker and Podman (`test_llm_inject.sh claude-code-oauth`); through a real LAN server, a cloud provider with an API key, or a real subscription (`test_cc_account.sh`): **untested** |
 | Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh`: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, every tool it offers in its inventory, a `cd` not carried into the next Bash call, Write denied in the home and `/dev/shm`, transcripts; `test_nono_srt.sh claude-code`; `test_config_protect.sh claude-code`: the protected home read-only, the home outside `.claude/` read-only, `.claude.json` and sessions still written, `--continue` resumes) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct`), `playwright` headless with observe (`test_playwright.sh claude-code`: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
-| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, exit ≠ host, search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS; also under `nono+srt` on Docker); OpenVPN and built-in gluetun providers **untested** |
-| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: `exit-ip-differs` (tor), only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
+| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, `egress-up` (Quad9 through the tunnel), `exit-confirmed` (the endpoint from gluetun's kill switch; a gluetun restart removes and rewrites it), search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS, `exit_identity: auto` an `exit` record (`vpn-endpoint`) from the `exit` volume, read-only in the proxy gate; also under `nono+srt` on Docker); the opt-in `publicip_api` and `host_check_url`, OpenVPN and built-in gluetun providers **untested** |
+| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. `exit-confirmed` (tor: the Tor Project's `IsTor`), direct's `egress-up` (Quad9) and, with observe, tor's `exit` record (`exit_identity: auto`): verified live on Docker, on Podman **untested**. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
 | Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the harness-only vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` and `test_netgate_shutdown.sh` on both |

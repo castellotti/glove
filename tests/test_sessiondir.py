@@ -130,7 +130,7 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
     assert "keychain:<set-me>" in text  # secrets are references, never values
     filled = (text.replace("provider: <set-me>         # openai", "provider: llama.cpp  # openai")
               .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
-              .replace("provider: <set-me>", "provider: mullvad").replace("keychain:<set-me>", "keychain:wg"))
+              .replace("provider: <set-me>", "provider: custom").replace("keychain:<set-me>", "keychain:wg"))
     sd.file.write_text(filled)
     raw = sdm.load_file(sd)
     assert sdm.placeholders_left(raw) == []
@@ -251,7 +251,7 @@ def test_vibe_search_template_plans_once_filled(tmp_path, monkeypatch):
     cfg, plan = _plan_template(tmp_path, monkeypatch, "vibe-search", lambda text: (
         text.replace("provider: <set-me>         # openai", "provider: llama.cpp  # openai")
         .replace("location: <set-me>", "location: host").replace("endpoint: <set-me>", 'endpoint: "127.0.0.1:1"')
-        .replace("provider: <set-me>", "provider: mullvad").replace("keychain:<set-me>", "keychain:wg")))
+        .replace("provider: <set-me>", "provider: custom").replace("keychain:<set-me>", "keychain:wg")))
     comp = plan.composition
     assert cfg.harness == "vibe"
     assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]

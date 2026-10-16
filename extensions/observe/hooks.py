@@ -16,6 +16,7 @@ from typing import Any
 
 from extensions.gate import gatelib
 from extensions.gate.netgate import GATE_VERSION, SCHEMA_VERSION
+from extensions.gate.netgate.exitid import check_url
 from extensions.gate.netgate.records import iso_utc
 from extensions.gate.netgate.resolver import from_url
 from extensions.gate.netgate.writer import write_json_atomic
@@ -48,8 +49,53 @@ def _check(s: dict[str, Any]) -> None:
         from_url(str(s["resolver"]))
         if s["resolve"] == "none":
             raise ValueError("observe.resolver is set but observe.resolve is none — pick one")
-    if not str(s["exit_identity_url"]).startswith("https://"):
-        raise ValueError("observe.exit_identity_url must be an https:// URL")
+    if s["exit_identity"] not in ("auto", "none"):
+        try:
+            check_url(s["exit_identity"])
+        except ValueError:
+            raise ValueError("observe.exit_identity must be auto, none or an https://<host>/… URL (got "
+                             f"{s['exit_identity']!r}; `via-proxy` and exit_identity_url became a URL here)") from None
+
+
+def exit_identity(ctx: dict[str, Any]) -> dict[str, str] | None:
+    """Where the exit identity comes from: ``{url}`` (polled through the egress)
+    or ``{source, volume, file}`` (the egress provider's shared file, e.g.
+    vpn's `vpn-endpoint`) — the egress's `exit_identity` export under `auto`."""
+    v = ctx["settings"]["exit_identity"]
+    if v == "none":
+        return None
+    if v != "auto":
+        return {"url": str(v)}
+    ex = (ctx["slot"].get("egress") or {}).get("exit_identity")
+    if not ex:
+        return None
+    ok = isinstance(ex, dict) and (
+        (set(ex) == {"url"} and _url_ok(ex["url"]))
+        or (set(ex) == {"source", "volume", "file"}
+            and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", str(ex[k])) for k in ex)))
+    if not ok:
+        raise ValueError("the egress's exit_identity export must be {url: https://…} or "
+                         f"{{source, volume, file}}, got {ex!r}")
+    return {k: str(x) for k, x in ex.items()}
+
+
+def _url_ok(url: Any) -> bool:
+    try:
+        check_url(url)
+    except ValueError:
+        return False
+    return True
+
+
+def _polls_exit(harness: bool, mode: str | None, upstream: str | None) -> bool:
+    """The gate that polls the exit: the harness's own proxy gate, chained to the
+    egress (one, so the egress consumers' gates do not duplicate its records)."""
+    return harness and mode == "http-proxy" and upstream != "direct"
+
+
+def _polled(ctx: dict[str, Any]) -> bool:
+    return any(f["observed"] and _polls_exit(f["harness"], f.get("mode"), f["route"].get("upstream"))
+               for f in ctx["forwarders"])
 
 
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -69,16 +115,21 @@ def forwarder(ctx: dict[str, Any], ep: dict[str, Any]) -> dict[str, Any] | None:
         return None
     gate = gatelib.gate_spec(ep, ctx["slot"].get("egress") or {})
     rules = _rules(ctx)
+    volumes = [{"type": "volume", "source": EVENTS_VOLUME, "target": gatelib.EVENTS_DIR}]
+    exit_url = exit_file = None
+    exit_id = exit_identity(ctx) if _polls_exit(ep["harness"], gate.mode, gate.route_upstream) else None
+    if exit_id and "url" in exit_id:
+        exit_url = exit_id["url"]
+    elif exit_id:
+        # the egress provider's shared volume, read-only, in this gate only
+        volumes.append({"type": "volume", "source": f"egress:{exit_id['volume']}", "target": gatelib.EXIT_DIR,
+                        "read_only": True})
+        exit_file = f"{exit_id['source']}={gatelib.EXIT_DIR}/{exit_id['file']}"
     rec = gatelib.Recording(
         record=s["record"], record_headers=s["record_headers"], resolve=s["resolve"],
-        resolver=s.get("resolver") or None, rules=rules,
-        # exit identity is polled through the harness's own proxy gate only, so
-        # records are not duplicated by the egress consumers' gates
-        exit_url=s["exit_identity_url"] if s["exit_identity"] == "via-proxy" and ep["harness"]
-        and gate.mode == "http-proxy" else None,
+        resolver=s.get("resolver") or None, rules=rules, exit_url=exit_url, exit_file=exit_file,
     )
     ingress = gatelib.ingress_alias(ep["container"]) if ep["harness"] else None
-    volumes = [{"type": "volume", "source": EVENTS_VOLUME, "target": gatelib.EVENTS_DIR}]
     if rules:
         # directory mount (atomic-rename writes stay visible), read-only
         volumes.append({"type": "bind", "source": ctx["exports"]["control"], "target": gatelib.CONTROL_DIR,
@@ -121,7 +172,7 @@ def session_facts(ctx: dict[str, Any]) -> dict[str, Any]:
         "record": s["record"],
         "resolve": s["resolve"],
         "resolver": resolver if s["resolve"] == "in-tunnel" and resolver not in (None, "", "none") else None,
-        "exit_identity": f"via-proxy:{s['exit_identity_url']}" if s["exit_identity"] == "via-proxy" else "none",
+        "exit_identity": _exit_fact(exit_identity(ctx) if _polled(ctx) else None),
         # session-level: the chained route if any gate proxies through one
         # (`direct` wins — it must never be masked), else tcp
         "upstream_kind": next((k for k in ("direct", "corporate", "vpn", "tor") if k in kinds), "tcp"),
@@ -132,6 +183,12 @@ def session_facts(ctx: dict[str, Any]) -> dict[str, Any]:
         "services": services,
         "grants": ctx["grants"],
     }
+
+
+def _exit_fact(exit_id: dict[str, str] | None) -> str:
+    if exit_id is None:
+        return "none"
+    return f"via-proxy:{exit_id['url']}" if "url" in exit_id else exit_id["source"]
 
 
 def materialize(ctx: dict[str, Any]) -> None:

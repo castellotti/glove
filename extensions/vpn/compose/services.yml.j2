@@ -44,7 +44,22 @@ services:
       FIREWALL_OUTBOUND_SUBNETS: "{{ session.subnet }}"
 {% endif %}
       HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+{% if settings.publicip_api %}
+      PUBLICIP_ENABLED: "on"
+      PUBLICIP_API: "{{ settings.publicip_api }}"
+      PUBLICIP_FILE: /run/glove-exit/ip
+{% else %}
       PUBLICIP_ENABLED: "off"
+{% endif %}
+{% if settings.dns_upstream %}
+      DNS_UPSTREAM_RESOLVERS: "{{ settings.dns_upstream | join(',') }}"
+{% endif %}
+{% if settings.health_targets %}
+      HEALTH_TARGET_ADDRESSES: "{{ settings.health_targets | join(',') }}"
+{% endif %}
+{% if settings.health_icmp %}
+      HEALTH_ICMP_TARGET_IPS: "{{ settings.health_icmp | join(',') }}"
+{% endif %}
       VERSION_INFORMATION: "off"
     # core mounts secrets at session.secrets_dir, not gluetun's default /run/secrets
 {% if settings.type == 'wireguard' %}
@@ -60,8 +75,38 @@ services:
       - openvpn_user
       - openvpn_password
 {% endif %}
+    # The exit's bare IP (`exit_identity`: verify and observe's gate read it),
+    # removed at every start so a previous run's never shows. A plain volume:
+    # gluetun's root, with no capabilities, can write only a directory it owns
+    # (a session tmpfs is the session uid's). `/gluetun-entrypoint` is the
+    # pinned image's own entrypoint.
+{% if settings.publicip_api %}
+    # gluetun's own lookup writes it (PUBLICIP_FILE) and empties it when the tunnel drops
+    entrypoint: ["/bin/sh", "-c", "rm -f /run/glove-exit/ip && exec /gluetun-entrypoint"]
+{% else %}
+    # No lookup: every 30 s (the gate's poll; every 2 s until known), the VPN server's endpoint from
+    # gluetun's kill switch, `-A OUTPUT -d <ip>/32 -o eth0 -p udp -m udp --dport <port> -j ACCEPT`
+    # (WireGuard and OpenVPN alike; every iptables variant, as gluetun uses
+    # whichever works). Written when there is exactly one and it changed (a
+    # reconnect to another server); once known, emptied if there is none, or two.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        rm -f /run/glove-exit/ip;
+        (last=; while :; do
+        ip=$(for t in iptables iptables-legacy ip6tables ip6tables-legacy; do $t -S OUTPUT; done 2>/dev/null |
+        awk '$1 == "-A" && $2 == "OUTPUT" && $3 == "-d" && $4 ~ /\/(32|128)$/ && $5 == "-o" && $6 !~ /^(tun|wg)/
+        && / --dport [0-9]+ -j ACCEPT$/ { sub(/\/[0-9]+$/, "", $4); print $4 }' | sort -u);
+        case $ip in *[!0-9A-Fa-f.:]*) ip= ;; esac;
+        if [ "$ip" != "$last" ]; then printf '%s' "$ip" > /run/glove-exit/ip.new &&
+        mv -f /run/glove-exit/ip.new /run/glove-exit/ip && last=$ip; fi;
+        [ -n "$last" ] && n=30 || n=2; sleep $n; done) &
+        exec /gluetun-entrypoint
+{% endif %}
     volumes:
       - { type: volume, source: data, target: /gluetun }
+      - { type: volume, source: exit, target: /run/glove-exit }
     # the image's own HEALTHCHECK, restated: the image is an OCI manifest,
     # whose config has no healthcheck field, so podman drops it (docker keeps it)
     healthcheck:
@@ -72,3 +117,4 @@ services:
       retries: 3
 volumes:
   data: {}
+  exit: {}

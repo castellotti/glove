@@ -5,7 +5,7 @@ provides: [egress]
 settings:
   exit_nodes: { type: list, default: [] }        # e.g. ["{us}", "{ca}"] — unset: Tor chooses
   strict_nodes: { type: bool, default: false }
-  check_url: { type: string, default: "https://am.i.mullvad.net/ip" }
+  host_check_url: { type: string, pattern: 'https?://[^\s"]+' }   # opt-in: the host's IP must differ from the exit
 images:
   tor: { build: tor }
   privoxy: { build: privoxy }
@@ -19,12 +19,17 @@ exports:
   anonymising: true
   resolver: "tor-socks://glove-{{ session.id }}-tor:9150"
   network: egress
+  # Exit identity for observe (`exit_identity: auto`): the Tor Project's own check,
+  # polled through the gate's own circuit (the exit seen need not be the agent's)
+  exit_identity: { url: &check "https://check.torproject.org/api/ip" }
 services: compose/services.yml.j2
 verify:
   - { name: tor-socks, kind: tcp-open, host: "glove-{{ session.id }}-tor", port: 9150, network: torlink,
       retries: 24, interval: 5, service: tor }
   # Tor can take a minute or two to build its first circuit.
-  - { name: exit-not-host, kind: exit-ip-differs, echo_url: "{{ settings.check_url }}", retries: 30, interval: 5,
-      service: tor }
+  # The Tor Project's own check ({"IsTor": true, "IP": "…"}); it sees only the exit.
+  - { name: exit-confirmed, kind: exit-confirmed, source: url, url: *check,
+      ip_field: IP, expect: { IsTor: true }, host_check_url: "{{ settings.host_check_url or '' }}",
+      retries: 30, interval: 5, service: tor }
 harness:
   brief: brief.md

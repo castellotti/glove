@@ -25,6 +25,7 @@ def test_fills_the_egress_slot_with_a_plain_proxy(tmp_path):
     assert svc["user"] == "501:20" and svc["read_only"] is True and "cap_add" not in svc
     assert [(e, v["kind"]) for e, v in comp.verify] == [("direct", "http-ok")]
     assert comp.verify[0][1]["proxy"] == ex["proxy_url"]
+    assert comp.verify[0][1]["url"] == "https://on.quad9.net"  # no IP lookup: direct's exit is the host
 
 
 def test_one_egress_provider_only(tmp_path):

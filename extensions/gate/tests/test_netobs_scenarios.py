@@ -24,18 +24,19 @@ SCENARIOS = FIXTURES / "netobs-scenarios"
 NAMES = sorted(p.name for p in SCENARIOS.iterdir() if p.is_dir())
 GATE_KEYS = ["v", "type", "event", "role", "run", "service", "env", "session", "t"]
 
-# tests/fixtures/netobs/ as of 7d8b2c9 (the copy Layman tests against). Never regenerate it.
+# tests/fixtures/netobs/ as of round 14 (the copy Layman tests against). Regenerate it only with a Layman
+# handoff: round 14 did (exit source `vpn-endpoint`, an RFC 5737 exit IP; CHANGELOG "Exit identity").
 ORIGINAL = {
-    "exit.ndjson": "297c6bf50ee1c38d2962c2b05184bd5651747e822d806f7845942b199f1c2381",
-    "flows.ndjson": "ac1fa9a86ee1990412a406d01d779af2c52d2c4585055072a25297175a0ed3d9",
-    "generate.py": "1a12dda37bed91064cfada6bf9d5cb45629d9aa52b0d2a24ed41f2086fd6a85b",
+    "exit.ndjson": "739f15ea1bf2bda7213ec8ebc9e56d6661286a0d58638c7a9121628a19d874cc",
+    "flows.ndjson": "6e6f37dc90dd8e13b2b9d6e96215c185b2d036cd4d40159b43cdb42940fe58b6",
+    "generate.py": "8991443f8146e1cb69151bfc5f5da1bf289022668518cdb9883cb38c1ce8ecea",
     "rules.json": "aeeb213418a98261dd1bb3feec0edf09b51615afd012badf0f19b562a00ae225",
-    "session.json": "89057681a02699da5b9a3fc859b9afe6fca7d4070771b4e590cfdf3c6e470ef6",
-    "status.json": "c46bdda411a55800430f55af8f1fd5897a4cd3165d2389f5b088426a5f9704ad",
+    "session.json": "63d7801baabf0780f8e4df8241f2e86bd0b7b69ea27d177f961e4f2f23863621",
+    "status.json": "bd21e9db55e5bcc142567b9e87afae469ccf1b33948f341801713ef4ce5a43ac",
 }
 
 
-def test_the_original_fixture_is_byte_identical_to_7d8b2c9():
+def test_the_original_fixture_is_byte_identical_to_the_pinned_copy():
     got = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (FIXTURES / "netobs").iterdir()
            if p.is_file()}
     assert got == ORIGINAL

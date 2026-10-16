@@ -18,6 +18,13 @@ def _client(label: str) -> str:
     return label
 
 
+def _exit_file(value: str) -> tuple[str, str]:
+    source, _, path = value.partition("=")
+    if not source or not path.startswith("/"):
+        raise argparse.ArgumentTypeError(f"want SOURCE=/path, got {value!r}")
+    return source, path
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="netgate")
     p.add_argument("--version", action="version", version=GATE_VERSION)
@@ -42,7 +49,10 @@ def _parser() -> argparse.ArgumentParser:
     f.add_argument("--events", default=EVENTS_SOCKET)
     f.add_argument("--rules", default=None, help="rules.json path (in a read-only mount)")
     f.add_argument("--resolver", default=None, help="in-tunnel resolver: dns://h:p | tor-socks://h:p")
-    f.add_argument("--exit-url", default=None, help="https IP-echo URL polled through the chain")
+    exit_src = f.add_mutually_exclusive_group()
+    exit_src.add_argument("--exit-url", default=None, help="https exit-identity URL polled through the chain")
+    exit_src.add_argument("--exit-file", default=None, type=_exit_file, metavar="SOURCE=PATH",
+                          help="a read-only file holding the exit's bare IP, and its source label")
     f.add_argument("--client", default="unknown", type=_client,
                    help="label for connections that did not arrive on the harness ingress")
     f.add_argument("--record", default="metadata", choices=RECORD_MODES)
@@ -100,6 +110,7 @@ async def _run_forward(args) -> None:
         sni=not args.no_sni,
         resolver_url=args.resolver,
         exit_url=args.exit_url,
+        exit_file=args.exit_file,
         client=args.client,
         record=args.record,
         record_headers=args.record_headers,
