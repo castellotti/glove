@@ -95,11 +95,16 @@ seed_storage_state() {
 }
 
 # Before the browser starts: the sandbox check, the CA, the stored session, and
-# staged downloads (hooks.py STAGING) a killed sidecar left behind (Playwright
-# deletes them only when the browser context closes).
+# what a killed sidecar left behind: staged downloads (hooks.py STAGING;
+# Playwright deletes them only when the browser context closes) and Chromium's
+# Singleton* locks in a persistent profile. A lock names `<hostname>-<pid>`, and
+# each sidecar has a new hostname, so Chromium would refuse the profile as "in
+# use by another computer" ("Browser is already in use for /data/profile"). No
+# Chromium runs yet, and only this sidecar mounts the profile: any lock is stale.
 prepare() {
   require_sandbox
   find /data/staging -mindepth 1 -delete 2>/dev/null || true
+  [ "$PW_PROFILE" != session ] || rm -f /data/profile/SingletonLock /data/profile/SingletonSocket /data/profile/SingletonCookie
   trust_corporate_ca
   seed_storage_state
 }

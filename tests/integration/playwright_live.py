@@ -14,7 +14,8 @@ optionally observe + filter, and its llm pointed at the tool-driving stub
      is offered the allowlisted tools only (never browser_run_code_unsafe);
      the page stays between a turn's calls (navigate, then click); a second
      MCP session reuses the browser while a first one still holds it (a
-     restarted harness; `PROFILE=session` for a persistent profile);
+     restarted harness; `PROFILE=session` for a persistent profile, which a
+     sidecar killed with the browser open must not leave locked);
      a shell command cannot reach the MCP (ring 1);
   4. with observe: the browser's destinations are flows `client: playwright,
      tool: browser`; with filter: a blocked site and the SSRF guard's refusal;
@@ -180,6 +181,22 @@ def main(directory: str) -> int:
         check(f"a second MCP session reuses the browser a held one opened (profile {pws['profile']})",
               first_ok and "Page URL: https://example.net" in out,
               ("" if first_ok else f"held: {''.join(first).strip()[-120:]} | ") + out[-160:].replace("\n", " "))
+
+        if pws["profile"] == "session":
+            # A killed sidecar leaves Chromium's SingletonLock (`<hostname>-<pid>`) in the
+            # persistent profile; the next sidecar has another hostname, and Chromium
+            # refuses a profile "in use by another computer" unless the start clears it.
+            lock = sd.ext / "playwright" / "profile" / "SingletonLock"
+            hold = [["browser_navigate", {"url": "https://example.com"}], ["sleep", {"s": 300}]]
+            with held_mcp(mcp_argv(hold)) as held:
+                wait_for(lambda: any("Page URL: https://example.com" in ln for ln in held), timeout=120, step=2)
+                subprocess.run([rt, "rm", "-f", f"{s}-pw"], capture_output=True)  # the browser still open
+                left = lock.is_symlink()
+            live.relaunch()
+            out = mcp([["browser_navigate", {"url": "https://example.com"}]])
+            check("a recreated sidecar opens the persistent profile a killed one left locked",
+                  left and "Page URL: https://example.com" in out,
+                  f"lock left: {left} | " + out[-160:].replace("\n", " "))
 
         # each live.call is a new harness process (a new MCP session): one turn's calls share a page.
         # A selector, not a ref: a ref holds only for its tab's latest snapshot, and in a shared
