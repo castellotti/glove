@@ -30,5 +30,6 @@ gets `--rules`, and glove does not create `control/<id>/`
 
 CLI: `glove observe status [--json]`, `glove observe flows [--follow] [--json]
 [--tail N]`. Live test: `tests/integration/test_observe.sh [direct|tor]`
-(`RT=podman` too). Grant-state fixtures for Layman:
-`tests/fixtures/netobs-v3/` (`fixtures/generate.py`).
+(`RT=podman` too). Grant-state and hop fixtures for Layman
+(`llm-auth`, `github`, `ssh`, `downloads`, …): `tests/fixtures/netobs-v3/`
+(`fixtures/generate.py`; the scenarios are listed in its docstring).

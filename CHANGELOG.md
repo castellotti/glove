@@ -6,6 +6,32 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Live: the hop joins and a real `builtin:lan-only` refusal.**
+  `test_ssh.sh` gains `SSH_LAN_ONLY=1`: a host at `public.lan`, which a
+  stand-in (a TEST-NET-3 network joined to its gate) makes resolve public; the
+  gate refuses it (`builtin:lan-only`, zero bytes, `dest.ip: null`). The
+  observe, oauth (`test_llm_inject.sh claude-code-oauth`), github and Vibe
+  downloads drivers check `session.json`'s `next` and that every egress flow
+  overlapping a hop's flows opened inside one of them (`live_common.check_next`:
+  only the start, as a pooled upstream connection may outlive or straddle hop
+  flows; flows still open count); the oauth driver also that the `llm` hop is
+  at llm-auth's port 8080. `SSH_LAN_ONLY=1` implies `OBSERVE=1` (the refusal
+  is the gate's), and a crashed run's TEST-NET-3 network is removed first.
+
+- **observe: `session.json` services list `next`**, the egress forwarders
+  that the sidecars behind a hop dial out through (e.g. `search` →
+  `searxng-egress`; a skipped gate is still listed; `[]` when the target is not
+  a sidecar; README "Network observability"), so a monitor can join a harness
+  hop to the egress flows it causes. Additive: the record contract stays at v1.
+- **netobs-v3 fixture: hop scenarios.** `llm-auth` (an injected key: each
+  `llm` flow and the `llm-upstream` call it causes), `llm-auth-oauth` (Claude
+  Code: the `llm` hop shows the provider's SNI), `github` (`github-egress`),
+  `ssh` (an allowed host and a `builtin:lan-only` refusal) and `downloads`
+  (Vibe: each MCP hop and its egress flow; the transcript is in Vibe's layout
+  before 2.26: 2.26.1 writes a journal under `unified/`, not yet modelled).
+  Flows are labelled from their service's `session.json` entry. The flows each
+  scenario shows were seen live (a `builtin:lan-only` refusal included); byte
+  counts are illustrative.
 - **The `skills` extension: Claude Code plugins (and plain skill directories)
   for every harness.** `skills: {plugins: {<name>: {path, skills, env, mcp,
   tools}}}`; plugins are cloned into the session's new `skills/` directory
@@ -645,6 +671,34 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Live: `github_live.py` expected the pre-GHES refusal text** for a
+  non-GitHub remote (`https://github.com/<owner>/<repo> only`); it now reads
+  `/<owner>/<repo> only, the host one of github.com`. The refusal itself was
+  unchanged.
+- **netobs-v3 fixture: the `ssh` refusal's transcript text** is a live
+  refusal's (`Connection closed by <gate> port 22`, exit 255); it had an
+  invented `kex_exchange_identification` line.
+
+- **netobs-v3 fixture: what a gate would really record.** `session.json`'s
+  `image` read `…:fixtureixture` (the generator normalised the tag twice); the
+  SSRF-blocked `169.254.169.254` flow lacked `dest.ip` (a literal is its own
+  address); `status.json` counted no flows. Flows are now built by the gate's
+  own classes and written by the collector; `run` names its gate
+  (`g_<service>`) and flow times are distinct (a hop's flow spans the egress
+  flow it caused). A monitor that copies the fixture byte for byte must re-copy
+  it.
+- **netgate: a `--lan-only` refusal is `rule: "builtin:lan-only"`**, not
+  `lan-only`. The record contract reserves `builtin:` for glove's own refusals
+  (the SSRF guard, a malformed request), which no `rules.json` entry can allow;
+  this one was the only refusal outside it. The `scope` comments and the Layman
+  handoff now say what `lan` means: a routable LAN host, never tunnelled (the
+  llm forwarder at `location: lan`, or a `via: lan` relay hop such as
+  `ssh-<name>`), record-only like `cloud`, so a rule cuts it by `service` or
+  `tool`. A `via: lan` endpoint's gate now defaults to `scope: lan` (it was
+  `local`), also when its host is one of its aliases and a second hop dials
+  it; ssh set it explicitly and now uses the default. **Migration:** a rule
+  that matched such a flow by `scope: local` no longer does (rules.json v1
+  cannot name `lan`); match it by `service` or `tool` instead.
 - **`playwright`: a `javascript:` URL no longer stands in for
   `browser_evaluate`.** `browser_navigate` to one ran the agent's script in
   the current page, whose title the MCP returns, even with `browser_evaluate`

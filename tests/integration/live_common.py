@@ -106,6 +106,36 @@ def summary() -> int:
     return 0 if all(RESULTS) else 1
 
 
+def check_next(net: Path, records: list[dict], expect: dict[str, list[str]]) -> None:
+    """session.json's `next` is `expect` for those services, and every `next`
+    flow that overlaps the hop's flows opened inside one of them: the join
+    Layman makes by time (flow times are same-format ISO strings, so they
+    compare). Only the start is held to a hop flow: a pooled upstream
+    connection may outlive the turn (still open, no close record yet) or
+    straddle several hop flows, and concurrent hop flows overlap each other's."""
+    nxt = {e["service"]: e["next"] for e in json.loads((net / "session.json").read_text())["services"]}
+    check(f"session.json next: {json.dumps(expect)}", all(nxt.get(k) == v for k, v in expect.items()),
+          json.dumps({k: nxt.get(k) for k in expect}))
+    flows: dict[str, dict] = {}  # by id: the close record, else the open one
+    for r in records:
+        if r.get("phase") == "close" or (r.get("phase") == "open" and r["id"] not in flows):
+            flows[r["id"]] = r
+
+    def end(f: dict) -> str:
+        return f.get("t_close") or "~"  # still open: after every ISO time
+
+    for hop, want in expect.items():
+        if not want:
+            continue
+        outer = [f for f in flows.values() if f["service"] == hop]
+        inner = [i for i in flows.values() if i["service"] in (nxt.get(hop) or [])
+                 and any(i["t_open"] < end(o) and o["t_open"] < end(i) for o in outer)]
+        stray = [i for i in inner if not any(o["t_open"] <= i["t_open"] <= end(o) for o in outer)]
+        check(f"each {'/'.join(want)} flow overlapping a {hop} flow opened inside one",
+              bool(inner) and not stray,
+              f"{len(inner)} overlapping; opened outside: " + json.dumps([(i["service"], i["t_open"]) for i in stray][:3]))
+
+
 def glove(*args: str, cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
     """The glove CLI, as the operator runs it."""
     return subprocess.run([sys.executable, "-m", "glove.cli", *args], cwd=cwd, stdin=subprocess.DEVNULL,

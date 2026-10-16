@@ -25,7 +25,7 @@ import re
 import sys
 import time
 
-from live_common import check, live_session, summary
+from live_common import check, check_next, live_session, summary
 
 PUBLIC_REPO = "https://github.com/octocat/Hello-World.git"
 
@@ -64,8 +64,8 @@ def main(directory: str, repo: str | None) -> int:
             ("git -c core.sshCommand=touch push; echo rc=$?", "drop the global options"),
             ("git push --upload-pack=touch origin; echo rc=$?", "runs programs"),
             ("git ls-remote --upload-pack=touch https://github.com/o/r; echo rc=$?", "runs programs"),
-            ("git ls-remote https://gitlab.com/o/r.git; echo rc=$?", "https://github.com/<owner>/<repo> only"),
-            ("git clone https://example.com/r.git /work/x; echo rc=$?", "https://github.com/<owner>/<repo> only"),
+            ("git ls-remote https://gitlab.com/o/r.git; echo rc=$?", "/<owner>/<repo> only, the host one of github.com"),
+            ("git clone https://example.com/r.git /work/x; echo rc=$?", "/<owner>/<repo> only, the host one of github.com"),
             ("git clone --template=/work/t https://github.com/o/r; echo rc=$?", "runs programs"),
             ("/opt/glove/bin/glove-relay github bash -c id; echo rc=$?", "runs only"),
         ]:
@@ -140,6 +140,7 @@ def main(directory: str, repo: str | None) -> int:
                   "github.com" in hosts and all((r.get("client"), r.get("tool")) == ("github", "gh") for r in gh),
                   json.dumps(hosts))
             print(f"    (relay destinations: {', '.join(hosts)})")
+            check_next(s.net, recs, {"github-egress": []})
     return summary()
 
 

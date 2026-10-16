@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 GUARD_RULE = "builtin:ssrf-guard"
 MALFORMED_RULE = "builtin:malformed-request"
+LAN_ONLY_RULE = "builtin:lan-only"  # a `--lan-only` upstream resolved public (forward.py)
 
 LOCAL_SUFFIXES = (
     ".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa",

@@ -12,7 +12,8 @@ the agent's own shell tool, so every command runs where an agent's would:
      command;
   4. a shell command still cannot reach the host (or anything), and the sidecar
      reaches the host only through its forwarder;
-  5. with observe: the forwarder's flows are `client: ssh`, `scope: lan`.
+  5. with observe: the forwarder's flows are `client: ssh`, `scope: lan`; with
+     a host `public` (SSH_LAN_ONLY=1), its gate refuses it: `builtin:lan-only`.
 """
 
 from __future__ import annotations
@@ -23,8 +24,37 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 
-from live_common import check, live_session, summary
+from live_common import check, inspect, leftovers, live_session, summary
+
+
+@contextmanager
+def public_lan_name(s):
+    """Make `public.lan` resolve to a public address (TEST-NET-3) at the
+    `public` host's gate: a container known by that name on a network of its
+    own, joined to the gate."""
+    net = f"glove-test-public-{s.sid}"
+    gate = f"glove-{s.sid}-ssh-public"
+    image = inspect(s.rt, gate)["Config"]["Image"]
+
+    def drop(containers, networks):
+        for c in containers:
+            subprocess.run([s.rt, "rm", "-f", c], capture_output=True)
+        for n in networks:
+            subprocess.run([s.rt, "network", "rm", n], capture_output=True)
+
+    left = leftovers(s.rt, "glove-test-public-")  # a crashed run's network holds the subnet
+    drop(left["containers"], left["networks"])
+    try:
+        subprocess.run([s.rt, "network", "create", "--subnet", "203.0.113.0/24", net], check=True, capture_output=True)
+        subprocess.run([s.rt, "run", "-d", "--name", net, "--network", net, "--network-alias", "public.lan",
+                        "--entrypoint", "sleep", image, "300"], check=True, capture_output=True)
+        subprocess.run([s.rt, "network", "connect", net, gate], check=True, capture_output=True)
+        yield
+    finally:
+        subprocess.run([s.rt, "network", "disconnect", "-f", net, gate], capture_output=True)
+        drop([net], [net])
 
 
 def main(directory: str, name: str, user: str) -> int:
@@ -95,6 +125,23 @@ def main(directory: str, name: str, user: str) -> int:
                                    for r in fl), json.dumps([{k: r.get(k) for k in ("client", "tool", "scope")}
                                                              for r in fl[:3]]))
             print(f"    ({len(fl)} flows to the host)")
+            facts = json.loads((s.net / "session.json").read_text())
+            ssh = {e["service"]: (e["scope"], e["next"]) for e in facts["services"] if e["service"].startswith("ssh-")}
+            check("session.json: every ssh-* gate is scope lan, next []",
+                  bool(ssh) and all(v == ("lan", []) for v in ssh.values()), json.dumps(ssh))
+            if any(h["name"] == "public" for h in cfg.extensions["ssh"]["hosts"]):
+                with public_lan_name(s):
+                    out = sh("ssh public true; echo rc=$?")
+                print("    the refused ssh's output: " + out.strip()[-300:].replace("\n", " | "))
+                time.sleep(2)
+                fl = [r for r in s.flows(("close",)) if r.get("service") == "ssh-public"]
+                want = {"verdict": "block", "rule": "builtin:lan-only", "close_reason": "blocked", "scope": "lan",
+                        "bytes": {"up": 0, "down": 0}}
+                got = [{k: r.get(k) for k in want} | {"ip": r["dest"].get("ip"),
+                                                      "resolution": r["dest"].get("resolution")} for r in fl]
+                check("public.lan, resolving public, is refused: builtin:lan-only, zero bytes, dest.ip null",
+                      "rc=0" not in out and bool(got) and all(
+                          {k: g[k] for k in want} == want and g["ip"] is None for g in got), json.dumps(got))
     return summary()
 
 

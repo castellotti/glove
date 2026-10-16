@@ -486,7 +486,7 @@ class Forwarder:
         try:
             conn = await asyncio.wait_for(self._dial_upstream(), self.connect_timeout)
         except NotLan:
-            self._block(flow, "lan-only")
+            self._block(flow, guard.LAN_ONLY_RULE)
             flow.close_reason = "blocked"
             return None
         except TimeoutError:
