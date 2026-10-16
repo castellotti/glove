@@ -120,7 +120,10 @@ def check_next(net: Path, records: list[dict], expect: dict[str, list[str]]) -> 
     for r in records:
         if r.get("phase") == "close" or (r.get("phase") == "open" and r["id"] not in flows):
             flows[r["id"]] = r
-    end = lambda f: f.get("t_close") or "~"  # noqa: E731 — still open: after every ISO time
+
+    def end(f: dict) -> str:
+        return f.get("t_close") or "~"  # still open: after every ISO time
+
     for hop, want in expect.items():
         if not want:
             continue

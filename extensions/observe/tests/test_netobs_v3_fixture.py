@@ -101,8 +101,7 @@ def test_every_flow_is_labelled_as_its_service_says(name):
         if f["proto"] == "tcp":  # dialled where the route says (an SNI may rename the host)
             assert f["dest"]["port"] == _parse_upstream(s["upstream"], "tcp")[1]
     # a `next` flow opens inside the hop flow that caused it: joinable by time
-    # (live_common.check_next holds live sessions to the same; only the start,
-    # since a pooled upstream connection may outlive or straddle hop flows)
+    # (the rule tests/integration/live_common.check_next holds live sessions to)
     for outer in flows:
         for inner in (f for f in flows if f["service"] in services[outer["service"]]["next"]):
             if inner["t_open"] < outer["t_close"] and outer["t_open"] < inner["t_close"]:

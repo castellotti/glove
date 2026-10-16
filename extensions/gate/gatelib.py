@@ -135,14 +135,12 @@ def gate_spec(ep: dict[str, Any], egress: dict[str, Any]) -> GateSpec:
         )
     if "route" in raw or "upstream" in raw:
         raise ValueError(f"endpoint {name!r}: observe.route/upstream apply to http-proxy mode only")
-    lan = bool(ep.get("lan"))
     # a LAN host is `lan`, whatever its name looks like (also when a second hop dials it)
-    via_lan = lan or bool(ep.get("via_lan"))
-    scope = raw.get("scope") or ("lan" if via_lan else classify_scope(host, bool(ep.get("host_gateway"))))
+    scope = raw.get("scope") or ("lan" if ep.get("lan") else classify_scope(host, bool(ep.get("host_gateway"))))
     if scope not in SCOPES:
         raise ValueError(f"endpoint {name!r}: observe.scope must be one of {SCOPES}, got {scope!r}")
     return GateSpec(service=name, upstream_host=host, upstream_port=port, scope=scope, tool=tool, client=client,
-                    lan_only=lan)
+                    lan_only=bool(ep.get("lan_only")))
 
 
 def ingress_alias(container: str) -> str:

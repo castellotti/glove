@@ -224,7 +224,8 @@ def main(directory: str, stub_log: str | None) -> int:
             check(f"the TUI draws within {TUI_START:.0f}s", tui.waited is not None and tui.waited < TUI_START,
                   f"{tui.waited}")
             host = base.hostname
-            closed = s.flows(("close",))
+            recs = s.flows()
+            closed = [r for r in recs if r.get("phase") == "close"]
             for svc, client in (("llm", "harness"), ("llm-upstream", "llm")):
                 recs = [r for r in closed if r.get("service") == svc]
                 hosts = {(r.get("dest") or {}).get("host") for r in recs}
@@ -234,7 +235,7 @@ def main(directory: str, stub_log: str | None) -> int:
             ports = {(r.get("dest") or {}).get("port") for r in closed if r.get("service") == "llm"}
             check("the llm hop's flows are at llm-auth's port 8080 (the SNI names the provider)", ports == {8080},
                   str(ports))
-            check_next(s.net, s.flows(), {"llm": ["llm-upstream"]})
+            check_next(s.net, recs, {"llm": ["llm-upstream"]})
     return summary()
 
 

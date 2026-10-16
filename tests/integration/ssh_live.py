@@ -26,7 +26,7 @@ import sys
 import time
 from contextlib import contextmanager
 
-from live_common import check, inspect, live_session, summary
+from live_common import check, inspect, leftovers, live_session, summary
 
 
 @contextmanager
@@ -37,10 +37,15 @@ def public_lan_name(s):
     net = f"glove-test-public-{s.sid}"
     gate = f"glove-{s.sid}-ssh-public"
     image = inspect(s.rt, gate)["Config"]["Image"]
-    for stale in subprocess.run([s.rt, "network", "ls", "--format", "{{.Name}}", "--filter", "name=glove-test-public-"],
-                                capture_output=True, text=True).stdout.split():  # a crashed run's holds the subnet
-        subprocess.run([s.rt, "rm", "-f", stale], capture_output=True)
-        subprocess.run([s.rt, "network", "rm", stale], capture_output=True)
+
+    def drop(containers, networks):
+        for c in containers:
+            subprocess.run([s.rt, "rm", "-f", c], capture_output=True)
+        for n in networks:
+            subprocess.run([s.rt, "network", "rm", n], capture_output=True)
+
+    left = leftovers(s.rt, "glove-test-public-")  # a crashed run's network holds the subnet
+    drop(left["containers"], left["networks"])
     try:
         subprocess.run([s.rt, "network", "create", "--subnet", "203.0.113.0/24", net], check=True, capture_output=True)
         subprocess.run([s.rt, "run", "-d", "--name", net, "--network", net, "--network-alias", "public.lan",
@@ -49,8 +54,7 @@ def public_lan_name(s):
         yield
     finally:
         subprocess.run([s.rt, "network", "disconnect", "-f", net, gate], capture_output=True)
-        subprocess.run([s.rt, "rm", "-f", net], capture_output=True)
-        subprocess.run([s.rt, "network", "rm", net], capture_output=True)
+        drop([net], [net])
 
 
 def main(directory: str, name: str, user: str) -> int:

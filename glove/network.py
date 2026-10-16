@@ -101,18 +101,18 @@ def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
 
 
 def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target: str,
-                  lan: bool = False) -> dict[str, Any]:
+                  lan_only: bool = False) -> dict[str, Any]:
     """What a `forwarder` hook is told about one endpoint (plain data); `target`
     is the `host:port` its forwarder dials (a second hop's, when there is one),
-    `lan` whether that is a `via: lan` target, dialled only if private, and
-    `via_lan` whether the endpoint's own target is (its second hop dials it)."""
+    `lan` whether the endpoint's target is `via: lan`, and `lan_only` whether
+    this forwarder dials it (so checks it is private: not when a second hop does)."""
     return {
         "name": ep.name, "extension": ep.extension, "port": ep.port,
         "target": target, "target_kind": ep.target.kind,
         "harness": ep.harness, "host_gateway": ep.target.kind == "host", "networks": list(networks),
         "aliases": list(ep.aliases), "observe": ep.observe, "interpose": ep.interpose,
         "container": ep.host(session),
-        "lan": lan, "via_lan": ep.target.network == "lan",
+        "lan": ep.target.network == "lan", "lan_only": lan_only,
     }
 
 
@@ -143,14 +143,15 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
             hop = Sidecar(role=f"{ep.name}-out", listen_port=ep.target.port, target=target, harness=False,
                           networks=tuple(nets), lan=lan)
             target = f"{scoped(session, hop.role)}:{ep.target.port}"
-        info = endpoint_info(ep, session, tuple(nets), target, lan=lan and hop is None)
+        lan_only = lan and hop is None
+        info = endpoint_info(ep, session, tuple(nets), target, lan_only=lan_only)
         impl = forwarder_service(comp, info)
         sidecars.append(Sidecar(
             role=ep.name, listen_port=ep.port, target=target,
             host_gateway=ep.target.kind == "host", harness=ep.harness, networks=tuple(nets),
             aliases=ep.aliases, impl=impl[0] if impl else None, facts=impl[1] if impl else {},
             impl_aliases=tuple(impl[2]) if impl else (),
-            lan=lan and hop is None,
+            lan=lan_only,
         ))
         if hop is not None:
             sidecars.append(hop)
