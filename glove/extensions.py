@@ -43,6 +43,7 @@ from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
 from .verify import KINDS as VERIFY_KINDS
+from .verify import item_error as verify_item_error
 
 API_VERSION = 1
 IN_TREE_DIR = Path(__file__).resolve().parent.parent / "extensions"
@@ -1287,21 +1288,27 @@ def compose(
                         comp.networks.setdefault(net, {**CORE_NETWORKS[net], "owner": "core"})
             if any(doc.values()):  # a fragment whose `{% if %}` left nothing adds nothing
                 comp.fragments.append((a, doc))
-        _check_exec(a, comp.verify, set((doc.get("services") or {}) if frag else ()))
+        _check_verify(a, comp.verify, set((doc.get("services") or {}) if frag else ()))
     return comp
 
 
-def _check_exec(a: Active, checks: list[tuple[str, dict]], services: set[str]) -> None:
-    """An `exec-ok` check runs a command in one of the extension's own sidecars
-    (never the harness, never another extension's: it may hold a credential)."""
+def _check_verify(a: Active, checks: list[tuple[str, dict]], services: set[str]) -> None:
+    """Each of the extension's checks has its kind's fields, and one that runs a
+    command (`argv`) runs it in one of the extension's own sidecars (never the
+    harness, never another extension's: it may hold a credential)."""
     for ext, item in checks:
-        if ext != a.name or item.get("kind") != "exec-ok":
+        if ext != a.name:
+            continue
+        where = f"extension {a.name!r}: verify {item.get('name')!r}"
+        if err := verify_item_error(item):
+            raise ExtensionError(f"{where}: {err}")
+        if item.get("kind") != "exec-ok" and "argv" not in item and item.get("source") != "exec":
             continue
         argv = item.get("argv")
         if item.get("service") not in services or not isinstance(argv, list) or not argv or not all(
                 isinstance(x, str) for x in argv):
-            raise ExtensionError(f"extension {a.name!r}: verify {item.get('name')!r}: exec-ok needs `service`, one "
-                                 f"of its own ({sorted(services)}), and `argv`, a list of strings")
+            raise ExtensionError(f"{where}: {item.get('kind')} needs `service`, one of its own ({sorted(services)}), "
+                                 "and `argv`, a list of strings")
 
 
 # Where compose secrets appear in a sidecar. Not /run/secrets: podman's default

@@ -10,7 +10,7 @@
 #                  register_pass: keychain:…}' VPN_LOCAL=<dir with the hook> bash … vpn
 #
 # A throwaway session dir (llm → the tool-driving stub on the host) runs
-# tests/integration/egress_live.py: sidecars up + verify (exit-ip-differs for
+# tests/integration/egress_live.py: sidecars up + verify (exit-confirmed for
 # vpn/tor), wan holds only the egress provider, SearXNG and the harness network
 # have no direct internet, the search/proxy endpoints work from the harness
 # network, and the harness's search / fetch tools work through the egress

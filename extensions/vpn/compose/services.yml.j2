@@ -44,7 +44,22 @@ services:
       FIREWALL_OUTBOUND_SUBNETS: "{{ session.subnet }}"
 {% endif %}
       HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+{% if settings.publicip_api %}
+      PUBLICIP_ENABLED: "on"
+      PUBLICIP_API: "{{ settings.publicip_api }}"
+      PUBLICIP_FILE: /tmp/gluetun/ip
+{% else %}
       PUBLICIP_ENABLED: "off"
+{% endif %}
+{% if settings.dns_upstream %}
+      DNS_UPSTREAM_RESOLVERS: "{{ settings.dns_upstream | join(',') }}"
+{% endif %}
+{% if settings.health_targets %}
+      HEALTH_TARGET_ADDRESSES: "{{ settings.health_targets | join(',') }}"
+{% endif %}
+{% if settings.health_icmp %}
+      HEALTH_ICMP_TARGET_IPS: "{{ settings.health_icmp | join(',') }}"
+{% endif %}
       VERSION_INFORMATION: "off"
     # core mounts secrets at session.secrets_dir, not gluetun's default /run/secrets
 {% if settings.type == 'wireguard' %}

@@ -29,8 +29,12 @@ def test_topology(tmp_path):
         assert svc["user"] == "501:20" and svc["read_only"] is True and "cap_add" not in svc
     ex = plan.composition.slot_exports("egress")
     assert ex["route"] == "tor" and ex["proxy_url"] == "http://glove-s-privoxy:8118"
-    kinds = [v["kind"] for _, v in plan.composition.verify]
-    assert kinds == ["tcp-open", "exit-ip-differs"]
+    checks = [v for _, v in plan.composition.verify]
+    assert [v["kind"] for v in checks] == ["tcp-open", "exit-confirmed"]
+    # the Tor Project's own check; no host lookup unless the operator names one
+    assert {k: checks[1][k] for k in ("source", "url", "ip_field", "expect", "host_check_url")} == {
+        "source": "url", "url": "https://check.torproject.org/api/ip", "ip_field": "IP", "expect": {"IsTor": True},
+        "host_check_url": ""}
 
 
 def test_exit_nodes_go_on_the_command_line(tmp_path):

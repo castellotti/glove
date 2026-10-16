@@ -205,13 +205,19 @@ def test_a_contribute_hook_extension_must_be_well_formed(tree, tmp_path, monkeyp
         _plan(tree, tmp_path, monkeypatch, {"h": {}})
 
 
-@pytest.mark.parametrize("item", [
-    "{name: x, kind: exec-ok, service: harness, argv: [id]}",   # not its own sidecar
-    "{name: x, kind: exec-ok, service: a}",                      # no argv
-    "{name: x, kind: exec-ok, service: a, argv: id}",
+@pytest.mark.parametrize(("item", "match"), [
+    ("{name: x, kind: exec-ok, service: harness, argv: [id]}", "exec-ok needs `service`, one of its own"),
+    ("{name: x, kind: exec-ok, service: a}", "exec-ok needs `service`, one of its own"),   # no argv
+    ("{name: x, kind: exec-ok, service: a, argv: id}", "exec-ok needs `service`, one of its own"),
+    ("{name: x, kind: exit-confirmed, source: exec, service: harness, argv: [id]}",
+     "exit-confirmed needs `service`, one of its own"),
+    ("{name: x, kind: exit-confirmed, service: a, argv: [id]}", "needs `source`"),
+    ("{name: x, kind: exit-confirmed, source: url, url: 'https://x/'}", "needs `url`, `ip_field`"),
+    ("{name: x, kind: exit-confirmed, source: url, url: 'https://x/', ip_field: IP, expect: [IsTor]}",
+     "needs `url`, `ip_field`"),
 ])
-def test_an_exec_check_runs_only_in_the_extensions_own_sidecar(tree, tmp_path, monkeypatch, item):
+def test_an_exec_check_runs_only_in_the_extensions_own_sidecar(tree, tmp_path, monkeypatch, item, match):
     _ext(tree, "h", f"api: 1\nname: h\nsummary: x\nservices: s.yml.j2\nverify: [{item}]\n",
          {"s.yml.j2": 'services:\n  a: { image: "x@sha256:00", command: ["true"], network_mode: none }\n'})
-    with pytest.raises(ExtensionError, match="exec-ok needs `service`, one of its own"):
+    with pytest.raises(ExtensionError, match=match):
         _plan(tree, tmp_path, monkeypatch, {"h": {}})

@@ -24,33 +24,129 @@ def _quiet(_msg: str) -> None:
     pass
 
 
-def test_exit_ip_differs(tmp_path, monkeypatch):
+TOR = {"kind": "exit-confirmed", "source": "url", "url": "https://check.example/api/ip", "ip_field": "IP",
+       "expect": {"IsTor": True}, "retries": 2}
+GLUETUN = {"kind": "exit-confirmed", "source": "exec", "service": "gluetun", "argv": ["cat", "/tmp/gluetun/ip"],
+           "retries": 2}
+
+
+def _no_host_lookup(url):
+    raise AssertionError(f"looked up the host's IP at {url} without host_check_url")
+
+
+def test_exit_confirmed_from_a_url_through_the_egress_proxy(tmp_path, monkeypatch):
     plan = _plan(tmp_path)
     seen = {}
 
     def probe(provider, p, network, script, env, **kw):
         seen.update(network=network, **env)
-        return 0, "198.51.100.7\n"
+        return 0, '{"IsTor":true,"IP":"198.51.100.7"}'
 
     monkeypatch.setattr(verify, "probe", probe)
-    monkeypatch.setattr(verify, "host_public_ip", lambda url: "203.0.113.1")
-    out = run_check("docker", plan, "tor", {"kind": "exit-ip-differs"}, _quiet, sleep_scale=0)
-    assert out == "host 203.0.113.1 ≠ exit 198.51.100.7"
+    monkeypatch.setattr(verify, "host_public_ip", _no_host_lookup)
+    out = run_check("docker", plan, "tor", TOR, _quiet, sleep_scale=0)
+    assert out == "198.51.100.7 (via http://glove-s-privoxy:8118)"
     # probed from the egress network, through the slot's proxy
-    assert seen == {"network": "egress", "U": verify.ECHO_URL, "X": "http://glove-s-privoxy:8118"}
+    assert seen == {"network": "egress", "U": "https://check.example/api/ip", "X": "http://glove-s-privoxy:8118"}
 
 
-@pytest.mark.parametrize(("host", "exit_ip", "match"), [
-    ("203.0.113.1", "203.0.113.1", "NOT going through the tunnel"),
-    ("", "198.51.100.7", "cannot be ruled out"),
-    ("203.0.113.1", "", "not passing traffic"),
+@pytest.mark.parametrize(("rc", "body", "match", "tries"), [
+    # a JSON answer is final
+    (0, '{"IsTor":false,"IP":"198.51.100.7"}', "NOT leaving through the egress", 1),
+    (0, '{"IsTor":1,"IP":"198.51.100.7"}', "NOT leaving through the egress", 1),  # 1 is not true
+    (0, '{"IP":"198.51.100.7"}', "NOT leaving through the egress", 1),
+    (0, '{"IsTor":true,"IP":"<html>"}', "no IP address in 'IP'", 1),
+    (0, '{"IsTor":true}', "no IP address in 'IP'", 1),
+    # no answer, or not JSON (a fresh circuit's interstitial page): retried
+    (0, "<html><body>blocked</body></html>", "did not answer JSON", 2),
+    (0, "", "did not answer JSON", 2),
+    (0, '["198.51.100.7"]', "did not answer JSON", 2),
+    (7, "", "not passing traffic", 2),
 ])
-def test_exit_ip_differs_fails_closed(tmp_path, monkeypatch, host, exit_ip, match):
+def test_exit_confirmed_from_a_url_fails_closed(tmp_path, monkeypatch, rc, body, match, tries):
     plan = _plan(tmp_path)
-    monkeypatch.setattr(verify, "probe", lambda *a, **k: (0 if exit_ip else 7, exit_ip))
-    monkeypatch.setattr(verify, "host_public_ip", lambda url: host)
+    seen = []
+    monkeypatch.setattr(verify, "probe", lambda *a, **k: seen.append(1) or (rc, body))
     with pytest.raises(VerifyError, match=match):
-        run_check("docker", plan, "tor", {"kind": "exit-ip-differs", "retries": 2}, _quiet, sleep_scale=0)
+        run_check("docker", plan, "tor", TOR, _quiet, sleep_scale=0)
+    assert len(seen) == tries
+
+
+def test_exit_confirmed_from_a_url_retries_a_bad_answer(tmp_path, monkeypatch):
+    plan = _plan(tmp_path)
+    answers = iter([(0, "<html>connecting…</html>"), (0, '{"IsTor":true,"IP":"198.51.100.7"}')])
+    monkeypatch.setattr(verify, "probe", lambda *a, **k: next(answers))
+    assert run_check("docker", plan, "tor", TOR, _quiet, sleep_scale=0).startswith("198.51.100.7 ")
+
+
+def _exec(monkeypatch, outs):
+    calls, outs = [], iter(outs)
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        rc, out = next(outs)
+        return SimpleNamespace(returncode=rc, stdout=out if isinstance(out, bytes) else out.encode(), stderr=b"")
+
+    monkeypatch.setattr(verify.subprocess, "run", fake)
+    return calls
+
+
+def test_exit_confirmed_from_the_sidecar_retries_until_it_prints_an_ip(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, {"vpn": {"provider": "custom", "wireguard_key": "keychain:k"}})
+    monkeypatch.setattr(verify, "host_public_ip", _no_host_lookup)
+    calls = _exec(monkeypatch, [(0, ""), (0, "2001:db8::7\n")])  # gluetun's file is empty until its lookup
+    out = run_check("docker", plan, "vpn", GLUETUN, _quiet, sleep_scale=0)
+    assert out == "2001:db8::7 (from gluetun)"
+    assert calls[-1] == ["docker", "exec", "glove-s-gluetun", "cat", "/tmp/gluetun/ip"]
+
+
+@pytest.mark.parametrize("out", [
+    (0, ""),                                   # an empty gluetun file: the tunnel is down
+    (0, "198.51.100.7\n198.51.100.8\n"),       # two endpoints in the kill switch
+    (0, "<html>secret-account-id</html>"),     # not an IP (and withheld)
+    (0, "198.51.100.7:51820"),
+    (1, "198.51.100.7"),                       # the command failed
+    (0, b"\xff\xfesecret-account-id"),          # not UTF-8: still a VerifyError, still withheld
+])
+def test_exit_confirmed_from_the_sidecar_fails_closed(tmp_path, monkeypatch, out):
+    plan = _plan(tmp_path, {"vpn": {"provider": "custom", "wireguard_key": "keychain:k"}})
+    _exec(monkeypatch, [out, out])
+    with pytest.raises(VerifyError, match=r"`cat /tmp/gluetun/ip` in gluetun did not print one IP address") as e:
+        run_check("docker", plan, "vpn", GLUETUN, _quiet, sleep_scale=0)
+    assert "secret-account-id" not in str(e.value) and e.value.service == "gluetun"
+
+
+@pytest.mark.parametrize(("host", "seen", "match"), [
+    ("203.0.113.1", "198.51.100.8", None),
+    ("203.0.113.1", "203.0.113.1", "NOT going through the tunnel"),
+    (None, "198.51.100.8", "cannot be ruled out"),       # no answer from the host, or not an IP
+    ("203.0.113.1", "<html>", "named no IP address through the egress proxy"),
+])
+def test_host_check_url_is_opt_in_and_asks_from_both_sides(tmp_path, monkeypatch, host, seen, match):
+    plan = _plan(tmp_path, {"vpn": {"provider": "custom", "wireguard_key": "keychain:k"}})
+    _exec(monkeypatch, [(0, "198.51.100.7")])  # the endpoint: never compared with the host
+    asked, probed = [], []
+    monkeypatch.setattr(verify, "host_public_ip", lambda url: asked.append(url) or host)
+    monkeypatch.setattr(verify, "probe", lambda p, pl, net, script, env, **k: probed.append(env) or (0, seen))
+    item = {**GLUETUN, "host_check_url": "https://mine.example/ip"}
+    if match:
+        with pytest.raises(VerifyError, match=match):
+            run_check("docker", plan, "vpn", item, _quiet, sleep_scale=0)
+    else:
+        assert run_check("docker", plan, "vpn", item, _quiet, sleep_scale=0) == (
+            "198.51.100.7 (from gluetun); https://mine.example/ip: host 203.0.113.1 ≠ egress 198.51.100.8")
+    assert asked == ["https://mine.example/ip"]
+    assert probed in ([], [{"U": "https://mine.example/ip", "X": "http://glove-s-gluetun:8888"}])
+
+
+@pytest.mark.parametrize(("body", "want"), [
+    (b"203.0.113.1\n", "203.0.113.1"), (b" 2001:db8::1 ", "2001:db8::1"), (b"<html>", None), (b"", None),
+])
+def test_host_public_ip_must_be_an_ip(monkeypatch, body, want):
+    import io
+
+    monkeypatch.setattr(verify.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(body))
+    assert verify.host_public_ip("https://mine.example/ip") == want
 
 
 def test_http_ok_and_tcp_open_retry_then_pass(tmp_path, monkeypatch):
@@ -98,7 +194,7 @@ def test_a_warn_check_that_fails_lets_the_session_start(tmp_path, monkeypatch):
     plan = _plan(tmp_path)
     plan.composition.verify = [("x", {"name": "soft", "kind": "exec-ok", "service": "r", "argv": ["c"], "warn": True}),
                                ("x", {"name": "hard", "kind": "exec-ok", "service": "r", "argv": ["c"]})]
-    monkeypatch.setattr(verify.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
+    monkeypatch.setattr(verify.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=b""))
     said: list[str] = []
     with pytest.raises(VerifyError, match="exited 1"):
         run_verify("docker", plan, said.append)
@@ -123,7 +219,7 @@ def test_unknown_kind_is_refused_at_compose_time(tmp_path):
 def test_diagnose_hook_explains_a_failure(tmp_path, monkeypatch):
     plan = _plan(tmp_path, {"vpn": {"provider": "x", "wireguard_key": "keychain:k"}})
     monkeypatch.setattr(verify, "_health", lambda rt, c: "unhealthy")
-    monkeypatch.setattr(verify.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="0\n"))
+    monkeypatch.setattr(verify.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=b"0\n"))
     monkeypatch.setattr(verify.time, "sleep", lambda s: None)
     with pytest.raises(VerifyError, match="never answered") as e:
         run_verify("docker", plan, _quiet)

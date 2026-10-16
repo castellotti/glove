@@ -19,7 +19,17 @@ settings:
   register_hook:    { type: path, within: session }
   register_user:    { type: secret }
   register_pass:    { type: secret }
-  check_url:        { type: string, default: "https://am.i.mullvad.net/ip" }
+  check_url:        { type: string, default: "https://on.quad9.net" }   # verify: the proxy passes traffic
+  # Exit identity: by default the VPN server's endpoint IP, read from gluetun's
+  # kill-switch rule (no lookup). `publicip_api` turns gluetun's own lookup on,
+  # through the tunnel, with a service the operator names (gluetun's PUBLICIP_API,
+  # e.g. `echoip#https://<your server>`); glove picks none.
+  publicip_api:     { type: string, pattern: '[A-Za-z0-9#:/._~%?&=,+-]+' }
+  host_check_url:   { type: string, pattern: 'https?://[^\s"]+' }   # opt-in: the host's IP must differ from the exit
+  # Quad9 by default: gluetun's DNS upstream and the targets its health check dials through the tunnel
+  dns_upstream:     { type: list, default: [quad9], pattern: '[A-Za-z0-9._-]+' }                  # DNS_UPSTREAM_RESOLVERS
+  health_targets:   { type: list, default: ["dns.quad9.net:443"], pattern: '[A-Za-z0-9.:\[\]-]+' }  # HEALTH_TARGET_ADDRESSES
+  health_icmp:      { type: list, default: [9.9.9.9], pattern: '[0-9A-Fa-f.:]+' }                 # HEALTH_ICMP_TARGET_IPS
 validate:
   - when: { type: wireguard, wireguard_key: null, register_hook: null }
     error: "set `wireguard_key: keychain:<service>` (store it with `glove keychain set <service>`) or a `register_hook`"
@@ -51,6 +61,33 @@ secrets:
   openvpn_password:      { from: openvpn_password, when: { type: openvpn } }
 verify:
   - { name: tunnel-up, kind: container-healthy, service: gluetun, timeout: 120 }
-  - { name: exit-not-host, kind: exit-ip-differs, echo_url: "{{ settings.check_url }}", service: gluetun }
+  # gluetun's HTTP proxy passes traffic through the tunnel (no IP lookup)
+  - { name: egress-up, kind: http-ok, url: "{{ settings.check_url }}", proxy: "{{ slot.egress.proxy_url }}",
+      service: gluetun }
+  # The endpoint from gluetun's kill switch: `-A OUTPUT -d <ip>/32 -o eth0 -p udp
+  # -m udp --dport <port> -j ACCEPT` (WireGuard and OpenVPN alike). gluetun uses
+  # whichever iptables works, so every variant is read; two endpoints fail. The
+  # rule is in place before the tunnel is healthy, so one read is final.
+  - &exit
+    when: { publicip_api: { set: false } }
+    retries: 1
+    name: exit-confirmed
+    kind: exit-confirmed
+    source: exec
+    service: gluetun
+    argv:
+      - sh
+      - -c
+      - >-
+        for t in iptables iptables-legacy ip6tables ip6tables-legacy; do $t -S OUTPUT; done 2>/dev/null |
+        awk '$1 == "-A" && $2 == "OUTPUT" && $3 == "-d" && $4 ~ /\/(32|128)$/ && $5 == "-o" && $6 !~ /^(tun|wg)/
+        && / --dport [0-9]+ -j ACCEPT$/ { sub(/\/[0-9]+$/, "", $4); print $4 }' | sort -u
+    host_check_url: "{{ settings.host_check_url or '' }}"
+  # gluetun's own lookup: the bare IP it writes while the tunnel is up (emptied
+  # when the tunnel drops: `ClearData`, internal/publicip/data.go)
+  - <<: *exit
+    when: { publicip_api: { set: true } }
+    retries: 15                         # the file is empty until gluetun's lookup answers
+    argv: [cat, /tmp/gluetun/ip]
 harness:
   brief: brief.md
