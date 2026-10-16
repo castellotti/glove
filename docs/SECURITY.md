@@ -243,10 +243,27 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
 
 - **Fail closed at launch.** `glove up` starts the harness only after the
   provider's checks pass: gluetun healthy (a dead WireGuard handshake is told
-  apart by tun0's byte counter), Tor's SOCKS port open, and `exit-ip-differs`
-  (the exit IP seen through the proxy must differ from this machine's; an
-  unknown IP on either side fails too). A failure shows the sidecar's last log
-  lines, with key and password lines withheld, and stops the session's sidecars.
+  apart by tun0's byte counter), Tor's SOCKS port open, gluetun's proxy passing
+  traffic, and `exit-confirmed` (the egress's own software reports one valid IP
+  for its exit: vpn's endpoint, or the Tor Project's check with `IsTor: true`;
+  with the operator's `host_check_url`, that service must also see the host and
+  the exit as two different IPs). A failure shows the sidecar's last log lines,
+  with key and password lines withheld, and stops the session's sidecars.
+- **No lookup service of glove's own.** glove adds no IP-lookup service. vpn
+  records the VPN server's endpoint as its exit (read from gluetun's kill-switch
+  rules, no network request; the tunnel's entry address, which a provider may
+  not exit from), and without `host_check_url` verify no longer compares it
+  with the host's IP; `publicip_api` (no default) turns gluetun's own
+  lookup on, through the tunnel, with a service the operator names. tor uses the
+  Tor Project's check, through Tor (with observe, by default every 5 minutes). The host's own IP is looked up only when the
+  operator sets `host_check_url`. vpn's DNS upstream and gluetun's health check
+  use Quad9 by default (both overridable); `direct`'s proxy check fetches
+  `https://on.quad9.net`.
+- **vpn's `exit` volume.** gluetun's start script is wrapped to publish the exit
+  IP in a plain volume (`/run/glove-exit/ip`). vpn lists it in its `shares`
+  export; core lets a forwarder mount such a volume **read-only** only, and
+  observe mounts it into the harness's proxy gate alone. The harness mounts no
+  volume but its channels, so it never sees the file.
 - **Privileges.** Only gluetun takes exceptions (root, `NET_ADMIN`,
   `/dev/net/tun`, writable rootfs; no sysctls). It is never on a network with
   the harness. tor, privoxy, tinyproxy, SearXNG and valkey run with the full
@@ -1059,10 +1076,13 @@ reporting `rules`).
 - **Traffic the gate itself originates (M4, when configured).** A proxy gate
   sends DNS queries for destination names to the configured *in-tunnel*
   resolver (gluetun's DNS, which uses DoT through the VPN, or Tor `RESOLVE`), the same resolver the
-  upstream uses anyway. With `exit_identity: via-proxy`, one gate also fetches an
-  IP-echo URL through the tunnel every ~5 min. That service learns the exit IP
-  and nothing about the operator. Neither is agent traffic, so neither appears
-  in `flows.ndjson`.
+  upstream uses anyway. When the exit identity is a URL (tor's
+  `exit_identity: auto`, or a URL the operator names), one gate also fetches it
+  through the tunnel every ~5 min. That service learns the exit IP and nothing
+  about the operator; Tor isolates circuits per client, so for tor the exit seen
+  is the gate's own, not necessarily the agent's. vpn's default exit is a local
+  file read: no traffic. Neither is agent traffic, so neither appears in
+  `flows.ndjson`.
 - **Fail open on telemetry.** A stopped, slow or unwritable collector drops
   records (counted in `status.json`, logged by the collector), never traffic.
 

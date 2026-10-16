@@ -89,7 +89,7 @@ def test_vibe_refused_without_ack(tmp_path):
 
 @pytest.mark.parametrize("egress", ["vpn", "tor"])
 def test_host_mode_refused_behind_an_anonymising_egress(tmp_path, egress):
-    settings = {"vpn": {"provider": "mullvad", "wireguard_key": "env:WG_KEY"}, "tor": {}}[egress]
+    settings = {"vpn": {"provider": "custom", "wireguard_key": "env:WG_KEY"}, "tor": {}}[egress]
     with pytest.raises(ExtensionError, match="bypasses the session's vpn/tor egress"):
         _plan(tmp_path, extra={egress: settings})
     _plan(tmp_path / "direct", extra={"direct": {}})  # no anonymity to lose

@@ -27,7 +27,7 @@ follows the egress provider's `exit_identity` export:
 
 | egress | source | what it is |
 |---|---|---|
-| `vpn` | `vpn-endpoint` | the VPN server's address, which gluetun's start script reads from its kill switch every 30 s (a reconnect to another server shows as a change; no lookup) |
+| `vpn` | `vpn-endpoint` | the VPN server's address, which gluetun's start script reads from its kill switch every 30 s (a reconnect to another server shows as a change; no lookup). The tunnel's entry address; see [vpn's "Exit identity"](../vpn/README.md#exit-identity-no-lookup-by-default) for what its health means |
 | `vpn` with `publicip_api` | `gluetun:publicip` | gluetun's own lookup through the tunnel, with the service the operator named; emptied when the tunnel drops |
 | `tor` | `via-proxy:check.torproject.org` | the Tor Project's check, every 5 minutes; `IsTor` must be true. Tor builds this gate its own circuit, so its exit need not be the agent's |
 | `direct`, `corporate` | none | the exit is the host's (or the corporate proxy's) address |

@@ -10,10 +10,17 @@ names are resolved at the Tor exit. Flows are labelled `route: tor`.
 ```yaml
 extensions:
   tor: {}
-  # tor: { exit_nodes: ["{se}", "{ch}"], strict_nodes: false }
+  # tor: { exit_nodes: ["{se}", "{ch}"], strict_nodes: false, host_check_url: https://<your echo service> }
 ```
 
-Verify: Tor's SOCKS port must open, then `exit-ip-differs` (the IP an echo
-service sees through privoxy must differ from this machine's). The first
-circuit can take a minute or two. Many sites block or CAPTCHA Tor exits; the
-`search` extension picks engines that tolerate Tor.
+Verify: Tor's SOCKS port must open, then `exit-confirmed`: the Tor Project's
+own check (`https://check.torproject.org/api/ip`), fetched through privoxy, must
+answer `IsTor: true` with one valid IP. With `host_check_url` set (no default),
+that service must also see a different IP from this machine than through Tor.
+The first circuit can take a minute or two. Many sites block or CAPTCHA Tor
+exits; the `search` extension picks engines that tolerate Tor.
+
+Exit identity: observe's `exit_identity: auto` (its default) polls the same
+check through the harness's proxy gate every 5 minutes. Tor isolates circuits
+per client, so the exit it records is the gate's own, not necessarily the
+agent's.

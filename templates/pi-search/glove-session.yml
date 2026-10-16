@@ -36,7 +36,7 @@ extensions:
   # playwright: {downloads: work}   # a real Chromium in a sidecar, via the egress; its downloads land in
                                     # browser-output/ (extensions/playwright/README.md)
   # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
-  # observe: {exit_identity: via-proxy}
+  # observe: {}                # exit_identity: auto (default) records the exit the egress reports
   # filter: {}                 # also let `glove filter …` / Layman block destinations (needs observe)
 harness_config:
   settings:

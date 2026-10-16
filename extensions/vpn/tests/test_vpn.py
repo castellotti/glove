@@ -22,7 +22,8 @@ def _render(tmp_path, **settings):
 
 
 def test_gluetun_privileges_secret_and_firewall(tmp_path):
-    plan, doc = _render(tmp_path, provider="mullvad", wireguard_key="keychain:wg", addresses="10.0.0.2/32")
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", addresses="10.0.0.2/32",
+                        public_key=KEY, endpoint="192.0.2.1:51820")
     g = doc["services"]["glove-s-gluetun"]
     assert set(g["networks"]) == {"glove-s-egress", "glove-s-wan"}
     assert "user" not in g and g["read_only"] is False  # root + writable rootfs: declared privileges
@@ -31,7 +32,9 @@ def test_gluetun_privileges_secret_and_firewall(tmp_path):
     # gluetun's DNS server on :53, the gates' resolver: podman does not allow low ports by default
     assert g["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": 0} and "NET_BIND_SERVICE" not in g["cap_add"]
     env = g["environment"]
-    assert env["VPN_SERVICE_PROVIDER"] == "mullvad" and env["WIREGUARD_ADDRESSES"] == "10.0.0.2/32"
+    assert env["VPN_SERVICE_PROVIDER"] == "custom" and env["WIREGUARD_ADDRESSES"] == "10.0.0.2/32"
+    assert env["WIREGUARD_PUBLIC_KEY"] == KEY
+    assert (env["WIREGUARD_ENDPOINT_IP"], env["WIREGUARD_ENDPOINT_PORT"]) == ("192.0.2.1", "51820")
     assert env["FIREWALL_OUTBOUND_SUBNETS"] == "172.31.7.0/24"
     assert env["HTTP_CONTROL_SERVER_ADDRESS"] == "127.0.0.1:8000"
     assert g["secrets"] == [{"source": "glove-s-vpn-wireguard_private_key",

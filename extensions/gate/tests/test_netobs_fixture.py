@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from extensions.gate.tests.contract import CONTRACT
-from extensions.gate.tests.test_netgate_invariants import _shape
+from extensions.gate.tests.test_netgate_invariants import _shape, assert_flow_shape
 
 FIXTURE = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "netobs"
 
@@ -27,9 +27,8 @@ def _flows() -> list[dict]:
 
 
 def test_every_record_has_exactly_the_handoff_shape():
-    spec = _shape(CONTRACT["flow"])
     for rec in _flows():
-        assert _shape(rec) == spec, rec["id"]
+        assert_flow_shape(rec)
         for key, allowed in ENUMS.items():
             assert rec[key] in allowed, (key, rec[key])
         assert rec["dest"]["resolution"] in {"in-tunnel", "literal", "unavailable", "disabled"}
@@ -90,7 +89,7 @@ def test_exit_sample_matches_the_handoff_shape_and_resolutions_are_mixed():
     spec = _shape(CONTRACT["exit"])
     exits = [json.loads(line) for line in (FIXTURE / "exit.ndjson").read_text().splitlines() if line]
     assert exits and all(_shape(e) == spec for e in exits)
-    assert exits[0]["kind"] == "vpn" and exits[0]["source"].startswith("via-proxy:")
+    assert exits[0]["kind"] == "vpn" and exits[0]["source"] == "vpn-endpoint" and exits[0]["country"] is None
     res = {r["dest"]["resolution"] for r in _flows()}
     assert {"in-tunnel", "literal", "unavailable", "disabled"} <= res  # every state a UI must bucket
 

@@ -219,9 +219,14 @@ def test_flow_record_matches_handoff_schema_exactly():
 ADDITIVE_FLOW_KEYS = ["run"]
 
 
-def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
+def assert_flow_shape(rec: dict) -> None:
+    """A flow record is the v1 contract's, in order, plus only the documented additive keys."""
     spec_flow = CONTRACT["flow"]
+    assert list(rec) == [*spec_flow, *ADDITIVE_FLOW_KEYS], rec.get("id")
+    assert {k: _shape(v) for k, v in rec.items() if k in spec_flow} == _shape(spec_flow), rec.get("id")
 
+
+def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
     async def main():
         async def up(r, w):
             await r.read()
@@ -247,8 +252,7 @@ def test_forwarder_records_are_v1_plus_only_documented_additive_keys():
     flows = [r for r in asyncio.run(asyncio.wait_for(main(), 10)) if r["type"] == "flow"]
     assert flows
     for rec in flows:
-        assert list(rec) == [*spec_flow, *ADDITIVE_FLOW_KEYS]
-        assert {k: _shape(v) for k, v in rec.items() if k in spec_flow} == _shape(spec_flow)
+        assert_flow_shape(rec)
 
 
 def test_status_json_carries_every_handoff_field(tmp_path):
