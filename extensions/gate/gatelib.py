@@ -17,7 +17,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .netgate import CONTROL_DIR, EVENTS_DIR, EVENTS_SOCKET, MODES, NET_DIR, ROUTES, RULES_FILE, SCOPES, client_problem
+from .netgate import (
+    CONTROL_DIR,
+    EVENTS_DIR,
+    EVENTS_SOCKET,
+    EXIT_DIR,
+    MODES,
+    NET_DIR,
+    ROUTES,
+    RULES_FILE,
+    SCOPES,
+    client_problem,
+)
 
 # §2.4 tool labels by conventional endpoint name. An explicit `observe.tool`
 # (e.g. the llm extension's annotation) always wins.
@@ -68,7 +79,9 @@ class Recording:
     record_headers: bool = False
     resolve: str = "in-tunnel"
     resolver: str | None = None  # overrides the egress provider's
-    exit_url: str | None = None  # set on the one gate that polls exit identity
+    # set on the one gate that polls exit identity: a URL, or `SOURCE=PATH`
+    exit_url: str | None = None
+    exit_file: str | None = None
     rules: bool = False  # the filter grant: read rules.json
 
 
@@ -179,6 +192,8 @@ def forward_command(gate: GateSpec, rec: Recording, *, session: str, listen: int
             cmd += ["--resolver", resolver]
         if rec.exit_url:
             cmd += ["--exit-url", rec.exit_url]
+        elif rec.exit_file:
+            cmd += ["--exit-file", rec.exit_file]
         for h in gate.guard_hosts:
             cmd += ["--guard-allow-host", h]
         for c in gate.guard_cidrs:
@@ -222,6 +237,6 @@ def rules_file_problem(control: Path) -> str | None:
 
 
 __all__ = [
-    "CONTROL_DIR", "EVENTS_DIR", "NET_DIR", "GateSpec", "Recording", "classify_scope", "collect_command",
+    "CONTROL_DIR", "EVENTS_DIR", "EXIT_DIR", "NET_DIR", "GateSpec", "Recording", "classify_scope", "collect_command",
     "facts", "forward_command", "gate_spec", "ingress_alias", "rules_file_problem",
 ]

@@ -174,7 +174,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - collect
     - --net-dir
@@ -242,7 +242,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service
@@ -300,7 +300,7 @@ services:
     - host.docker.internal:host-gateway
   glove-s-webfetch-mcp:
     container_name: glove-s-webfetch-mcp
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service
@@ -356,7 +356,7 @@ services:
     mem_limit: 512m
   glove-s-webdownload-mcp:
     container_name: glove-s-webdownload-mcp
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service
@@ -412,7 +412,7 @@ services:
     mem_limit: 512m
   glove-s-webfetch-egress:
     container_name: glove-s-webfetch-egress
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service
@@ -462,7 +462,7 @@ services:
     mem_limit: 512m
   glove-s-webdownload-egress:
     container_name: glove-s-webdownload-egress
-    image: glove/ext-gate-netgate:4a0672937e
+    image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service

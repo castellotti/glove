@@ -55,20 +55,20 @@ def test_quad9_by_default_and_no_lookup(tmp_path):
         "quad9", "dns.quad9.net:443", "9.9.9.9")
     assert plan.composition.verify[1][1]["url"] == "https://on.quad9.net"  # the proxy passes traffic
     check = plan.composition.verify[2][1]
-    assert check["retries"] == 1  # the kill-switch rule is in place before the tunnel is healthy
-    assert check["source"] == "exec" and check["argv"][:2] == ["sh", "-c"] and check["host_check_url"] == ""
+    assert check["source"] == "exec" and check["argv"] == ["cat", "/run/glove-exit/ip"]
+    assert check["host_check_url"] == "" and check["retries"] == 15
     # the operator's own choices; empty lists leave gluetun's defaults
     plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", publicip_api="echoip#https://ip.example",
                         dns_upstream=["cloudflare", "google"], health_targets=[], health_icmp=[],
                         host_check_url="https://mine.example/ip")
     env = doc["services"]["glove-s-gluetun"]["environment"]
     assert (env["PUBLICIP_ENABLED"], env["PUBLICIP_API"], env["PUBLICIP_FILE"]) == (
-        "on", "echoip#https://ip.example", "/tmp/gluetun/ip")
+        "on", "echoip#https://ip.example", "/run/glove-exit/ip")
     assert env["DNS_UPSTREAM_RESOLVERS"] == "cloudflare,google"
     assert "HEALTH_TARGET_ADDRESSES" not in env and "HEALTH_ICMP_TARGET_IPS" not in env
     checks = [v for _, v in plan.composition.verify]
     assert [v["kind"] for v in checks] == ["container-healthy", "http-ok", "exit-confirmed"]
-    assert checks[2]["retries"] == 15 and checks[2]["argv"] == ["cat", "/tmp/gluetun/ip"]
+    assert checks[2]["retries"] == 15 and checks[2]["argv"] == ["cat", "/run/glove-exit/ip"]
     assert checks[2]["host_check_url"] == "https://mine.example/ip"
 
 
@@ -95,16 +95,52 @@ KILL_SWITCH = """-P INPUT DROP
 def test_the_endpoint_is_read_from_the_kill_switch(tmp_path, tables, want):
     import subprocess
 
-    plan, _ = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
-    argv = plan.composition.verify[2][1]["argv"]
+    _, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
+    entry = doc["services"]["glove-s-gluetun"]["entrypoint"]
+    assert entry[:2] == ["/bin/sh", "-c"] and entry[2].endswith("& exec /gluetun-entrypoint")
+    shared = tmp_path / "exit"  # vpn's `exit` volume, at /run/glove-exit in gluetun
+    shared.mkdir()
+    # one round of the loop, in the foreground (core renders `$` as compose's `$$`)
+    script = (entry[2].replace("$$", "$").replace("/run/glove-exit", str(shared))
+              .replace("sleep 30; done) &", "break; done);").replace("exec /gluetun-entrypoint", "true"))
     stubs = tmp_path / "bin"
     stubs.mkdir()
     for t in ("iptables", "iptables-legacy", "ip6tables", "ip6tables-legacy"):
         (stubs / f"{t}.out").write_text(tables.get(t, ""))
         (stubs / t).write_text(f"#!/bin/sh\ncat '{stubs / t}.out'\n")
         (stubs / t).chmod(0o755)
-    r = subprocess.run(argv, capture_output=True, text=True, env={"PATH": f"{stubs}:/usr/bin:/bin"}, check=True)
-    assert r.stdout == want
+
+    def once(script: str) -> str | None:
+        r = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                           env={"PATH": f"{stubs}:/usr/bin:/bin"}, check=True)
+        assert not r.stdout and not r.stderr
+        f = shared / "ip"
+        assert sorted(x.name for x in shared.iterdir()) == (["ip"] if f.exists() else [])
+        return f.read_text() if f.exists() else None
+
+    # absent until known (every start removes it); one endpoint is written, none or two are not
+    assert once(script) == (want.strip() if want.count("\n") == 1 else None)
+    # a later round, once 192.0.2.1 was known: a new one is written (a reconnect),
+    # none or two empty it (the tunnel moved or is down)
+    (shared / "ip").write_text("192.0.2.1")
+    later = script.removeprefix(f"rm -f {shared}/ip;").replace("(last=;", "(last=192.0.2.1;")
+    assert later.count("192.0.2.1") == 1 and once(later) == (want.strip() if want.count("\n") == 1 else "")
+
+
+def test_the_exit_file_is_shared_with_observe_and_emptied_at_start(tmp_path):
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg")
+    g = doc["services"]["glove-s-gluetun"]
+    assert {"type": "volume", "source": "glove-s-vpn-exit", "target": "/run/glove-exit"} in g["volumes"]
+    assert doc["volumes"]["glove-s-vpn-exit"] == {"name": "glove-s-vpn-exit"}  # gluetun's root owns it
+    assert g["entrypoint"][2].startswith("rm -f /run/glove-exit/ip;")
+    ex = plan.composition.slot_exports("egress")
+    assert ex["exit_identity"] == {"source": "vpn-endpoint", "volume": "exit", "file": "ip"}
+    assert ex["shares"] == ["exit"]  # only this volume reaches observe's gate (read-only)
+    plan, doc = _render(tmp_path, provider="custom", wireguard_key="keychain:wg", publicip_api="echoip#https://ip.example")
+    assert plan.composition.slot_exports("egress")["exit_identity"]["source"] == "gluetun:publicip"
+    # gluetun writes it itself: no endpoint loop
+    assert doc["services"]["glove-s-gluetun"]["entrypoint"] == [
+        "/bin/sh", "-c", "rm -f /run/glove-exit/ip && exec /gluetun-entrypoint"]
 
 
 @pytest.mark.parametrize("settings", [

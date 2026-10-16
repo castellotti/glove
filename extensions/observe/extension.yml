@@ -11,8 +11,10 @@ settings:
   rotate_mb:       { type: number, default: 64 }
   keep:            { type: int, default: 8 }
   retain:          { type: string, default: none }       # 30m | 12h | 7d | none
-  exit_identity:   { type: enum, values: [via-proxy, none], default: none }
-  exit_identity_url: { type: string, default: "https://am.i.mullvad.net/json" }
+  # auto: ask the egress's own software (its `exit_identity` export: vpn's endpoint
+  # or gluetun's lookup, tor's Tor Project check; none for direct/corporate);
+  # none; or an https:// URL the operator names, polled through the egress
+  exit_identity:   { type: string, default: auto }
   transcripts:     { type: bool, default: true }        # export the harness transcripts too
   skip:            { type: list, default: [] }           # endpoint names that stay plain socat
 hooks: hooks.py

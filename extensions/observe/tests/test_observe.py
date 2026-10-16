@@ -65,7 +65,10 @@ def flag(cmd: list[str], name: str) -> str | None:
     ({"retain": "soon"}, "duration"),
     ({"resolver": "http://x:1"}, "unknown resolver scheme"),
     ({"resolver": "dns://gluetun:53", "resolve": "none"}, "pick one"),
-    ({"exit_identity_url": "http://x"}, "https://"),
+    ({"exit_identity": "http://x"}, "https://"),
+    ({"exit_identity": "https://"}, "https://"),  # no host: the gate would crash-loop on it
+    ({"exit_identity": "via-proxy"}, "auto, none or an https://"),  # the old switch names its successor
+    ({"exit_identity_url": "https://x"}, "unknown setting"),
     ({"resolve": "host"}, "must be one of"),  # never the host resolver
     ({"enabled": True}, "unknown setting"),  # the v2 master switch is gone: presence enables
 ])
@@ -176,14 +179,95 @@ def test_collector_has_no_network_and_a_tmpfs_event_volume(tmp_path):
 
 
 def test_resolver_and_exit_identity_only_on_proxy_gates(tmp_path):
-    _, doc, _ = render(tmp_path, exts={"tor": {}, "search": {}, "webfetch": {}},
-                       observe={"exit_identity": "via-proxy"})
+    _, doc, _ = render(tmp_path, exts={"tor": {}, "search": {}, "webfetch": {}})
     g = gates(doc)
     proxy, hop, llm = (g[f"glove-ps-{n}"]["command"] for n in ("proxy", "searxng-egress", "llm"))
     assert flag(proxy, "--resolver") == flag(hop, "--resolver") == "tor-socks://glove-ps-tor:9150"
     assert flag(proxy, "--route") == "tor"
-    assert flag(proxy, "--exit-url") == "https://am.i.mullvad.net/json"
+    # auto: tor's own export, the Tor Project's check
+    assert flag(proxy, "--exit-url") == "https://check.torproject.org/api/ip"
     assert "--exit-url" not in hop and "--resolver" not in llm and "--exit-url" not in llm
+
+
+VPN = {"vpn": {"provider": "custom", "wireguard_key": "keychain:wg"}, "webfetch": {}}
+TOR = {"tor": {}, "webfetch": {}}
+
+
+@pytest.mark.parametrize(("exts", "observe", "url"), [
+    (TOR, {"exit_identity": "https://mine.example/ip"}, "https://mine.example/ip"),  # the operator's
+    (VPN, {"exit_identity": "https://mine.example/ip"}, "https://mine.example/ip"),
+    (TOR, {"exit_identity": "none"}, None),
+    (PI_SEARCH, None, None),  # direct exports none: the exit is the host
+])
+def test_exit_identity_url_or_none(tmp_path, exts, observe, url):
+    _, doc, _ = render(tmp_path, exts=exts, observe=observe)
+    cmds = [svc["command"] for svc in gates(doc).values()]
+    assert [flag(c, "--exit-url") for c in cmds if "--exit-url" in c] == ([url] if url else [])
+    assert not any("--exit-file" in c for c in cmds)
+    assert not any(v.get("source") == "glove-ps-vpn-exit" for s in gates(doc).values() for v in s["volumes"])
+
+
+def test_vpn_exit_is_read_from_its_file_by_the_proxy_gate_only(tmp_path):
+    plan, doc, _ = render(tmp_path, exts=VPN)
+    proxy = doc["services"]["glove-ps-proxy"]
+    assert flag(proxy["command"], "--exit-file") == "vpn-endpoint=/run/glove-exit/ip"
+    assert "--exit-url" not in proxy["command"]
+    shared = {"type": "volume", "source": "glove-ps-vpn-exit", "target": "/run/glove-exit", "read_only": True}
+    assert shared in proxy["volumes"]
+    # only gluetun (which writes it) and the proxy gate (read-only) mount it — never the harness
+    mounts = {n for n, svc in doc["services"].items()
+              if any(v.get("source") == "glove-ps-vpn-exit" for v in svc.get("volumes") or [] if isinstance(v, dict))}
+    assert mounts == {"glove-ps-gluetun", "glove-ps-proxy"} and plan.harness_service not in mounts
+
+
+FILE = {"source": "vpn-endpoint", "volume": "exit", "file": "ip"}
+TOR_CHECK = {"url": "https://check.torproject.org/api/ip"}
+
+
+@pytest.mark.parametrize(("setting", "egress", "fact"), [
+    ("auto", {"exit_identity": FILE}, "vpn-endpoint"),
+    ("auto", {"exit_identity": {**FILE, "source": "gluetun:publicip"}}, "gluetun:publicip"),
+    ("auto", {"exit_identity": TOR_CHECK}, "via-proxy:https://check.torproject.org/api/ip"),
+    ("auto", {}, "none"),
+    ("https://mine.example/ip", {"exit_identity": FILE}, "via-proxy:https://mine.example/ip"),
+    ("none", {"exit_identity": FILE}, "none"),
+])
+def test_session_json_names_the_exit_source(tmp_path, setting, egress, fact):
+    hooks = plan_for(tmp_path).composition.by_name("observe").hooks
+    ctx = {"settings": {"exit_identity": setting}, "slot": {"egress": egress}}
+    assert hooks._exit_fact(hooks.exit_identity(ctx)) == fact
+
+
+def test_no_exit_identity_without_a_polling_gate(tmp_path):
+    # the proxy endpoint skipped: no gate polls, so session.json claims nothing
+    _, doc, _ = render(tmp_path, exts=VPN, observe={"skip": ["proxy"]})
+    assert not any("--exit-file" in s["command"] for s in gates(doc).values())
+    hooks = plan_for(tmp_path).composition.by_name("observe").hooks
+    fwd = {"harness": True, "observed": True, "mode": "http-proxy", "route": {"kind": "vpn", "upstream": "x:1"}}
+    assert hooks._polled({"forwarders": [fwd]})
+    for other in ({"observed": False}, {"harness": False}, {"mode": "tcp"},
+                  {"route": {"kind": "corporate", "upstream": "direct"}}):
+        assert not hooks._polled({"forwarders": [{**fwd, **other}]})
+    for bad in ("vpn-endpoint", {"url": "http://x/"}, {"url": "https://"}, {**FILE, "file": "../ip"},
+                {"source": "s", "volume": "exit"}, {**TOR_CHECK, **FILE}):
+        with pytest.raises(ValueError, match="must be"):
+            hooks.exit_identity({"settings": {"exit_identity": "auto"}, "slot": {"egress": {"exit_identity": bad}}})
+
+
+def test_a_forwarder_reads_only_the_egress_exit_volume(tmp_path):
+    from glove.compose import harden_fragments
+
+    plan = plan_for(tmp_path, exts=VPN)
+    proxy = next(s for s in plan.network.implemented if s.role == "proxy")
+    vols = proxy.impl["volumes"]
+    exit_vol = next(v for v in vols if v["source"] == "egress:exit")
+    for bad, match in [({**exit_vol, "read_only": False}, "mounts read-only"),
+                       ({**exit_vol, "source": "egress:data"}, "must be declared")]:  # gluetun's state: not shared
+        vols[vols.index(exit_vol)] = bad
+        with pytest.raises(ExtensionError, match=match):
+            harden_fragments(plan.composition, plan, {})
+        vols[vols.index(bad)] = exit_vol
+    assert harden_fragments(plan.composition, plan, {})  # restored: renders
 
 
 def test_gates_are_hardened_and_unprivileged(tmp_path):
@@ -317,6 +401,7 @@ def test_plan_materialises_the_observe_export_and_session_json(ghome, tmp_path, 
     assert (facts["v"], facts["type"], facts["env"], facts["session"], facts["harness"]) == \
         (1, "session", sid, sid, "pi")
     assert facts["gate"] == "0.2.0" and facts["image"].startswith("glove/ext-gate-netgate:")
+    assert facts["exit_identity"] == "none"  # auto, and direct exports none
     llm = next(s for s in facts["services"] if s["service"] == "llm")
     assert llm["observed"] and llm["tool"] == "llm" and llm["route"] == {"kind": "tcp",
                                                                           "upstream": "tcp:host.docker.internal:8080"}

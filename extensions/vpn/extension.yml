@@ -46,6 +46,15 @@ exports:
   anonymising: true                    # hides the operator's address: browsers on the host would bypass it
   resolver: "dns://glove-{{ session.id }}-gluetun:53"
   network: egress
+  # Exit identity for observe (`exit_identity: auto`): one bare IP in the `ip`
+  # file of vpn's `exit` volume, which observe's gate mounts read-only (`shares`).
+  # No lookup by default: the endpoint gluetun's start script reads from its
+  # kill switch; with `publicip_api`, gluetun's own lookup.
+  exit_identity:
+    source: "{{ 'gluetun:publicip' if settings.publicip_api else 'vpn-endpoint' }}"
+    volume: exit
+    file: ip
+  shares: [exit]                       # the volumes a forwarder may mount read-only (`egress:<name>`)
 services: compose/services.yml.j2
 privileges:
   # gluetun configures the tunnel, routes and its kill-switch firewall itself
@@ -64,30 +73,12 @@ verify:
   # gluetun's HTTP proxy passes traffic through the tunnel (no IP lookup)
   - { name: egress-up, kind: http-ok, url: "{{ settings.check_url }}", proxy: "{{ slot.egress.proxy_url }}",
       service: gluetun }
-  # The endpoint from gluetun's kill switch: `-A OUTPUT -d <ip>/32 -o eth0 -p udp
-  # -m udp --dport <port> -j ACCEPT` (WireGuard and OpenVPN alike). gluetun uses
-  # whichever iptables works, so every variant is read; two endpoints fail. The
-  # rule is in place before the tunnel is healthy, so one read is final.
-  - &exit
-    when: { publicip_api: { set: false } }
-    retries: 1
-    name: exit-confirmed
-    kind: exit-confirmed
-    source: exec
-    service: gluetun
-    argv:
-      - sh
-      - -c
-      - >-
-        for t in iptables iptables-legacy ip6tables ip6tables-legacy; do $t -S OUTPUT; done 2>/dev/null |
-        awk '$1 == "-A" && $2 == "OUTPUT" && $3 == "-d" && $4 ~ /\/(32|128)$/ && $5 == "-o" && $6 !~ /^(tun|wg)/
-        && / --dport [0-9]+ -j ACCEPT$/ { sub(/\/[0-9]+$/, "", $4); print $4 }' | sort -u
-    host_check_url: "{{ settings.host_check_url or '' }}"
-  # gluetun's own lookup: the bare IP it writes while the tunnel is up (emptied
-  # when the tunnel drops: `ClearData`, internal/publicip/data.go)
-  - <<: *exit
-    when: { publicip_api: { set: true } }
-    retries: 15                         # the file is empty until gluetun's lookup answers
-    argv: [cat, /tmp/gluetun/ip]
+  # The exit's one IP, from the file gluetun publishes (the `exit_identity`
+  # export, also read by observe's gate): by default the endpoint its start script reads
+  # from its kill switch (compose/services.yml.j2), with `publicip_api` gluetun's
+  # own lookup. Empty or absent until it is known; two endpoints are not one.
+  - { name: exit-confirmed, kind: exit-confirmed, source: exec, service: gluetun, argv: [cat, /run/glove-exit/ip],
+      host_check_url: "{{ settings.host_check_url or '' }}",
+      retries: 15 }                     # until the tunnel is up and (publicip_api) gluetun's lookup answered
 harness:
   brief: brief.md

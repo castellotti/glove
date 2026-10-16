@@ -26,7 +26,7 @@ def _quiet(_msg: str) -> None:
 
 TOR = {"kind": "exit-confirmed", "source": "url", "url": "https://check.example/api/ip", "ip_field": "IP",
        "expect": {"IsTor": True}, "retries": 2}
-GLUETUN = {"kind": "exit-confirmed", "source": "exec", "service": "gluetun", "argv": ["cat", "/tmp/gluetun/ip"],
+GLUETUN = {"kind": "exit-confirmed", "source": "exec", "service": "gluetun", "argv": ["cat", "/run/glove-exit/ip"],
            "retries": 2}
 
 
@@ -97,7 +97,7 @@ def test_exit_confirmed_from_the_sidecar_retries_until_it_prints_an_ip(tmp_path,
     calls = _exec(monkeypatch, [(0, ""), (0, "2001:db8::7\n")])  # gluetun's file is empty until its lookup
     out = run_check("docker", plan, "vpn", GLUETUN, _quiet, sleep_scale=0)
     assert out == "2001:db8::7 (from gluetun)"
-    assert calls[-1] == ["docker", "exec", "glove-s-gluetun", "cat", "/tmp/gluetun/ip"]
+    assert calls[-1] == ["docker", "exec", "glove-s-gluetun", "cat", "/run/glove-exit/ip"]
 
 
 @pytest.mark.parametrize("out", [
@@ -111,7 +111,7 @@ def test_exit_confirmed_from_the_sidecar_retries_until_it_prints_an_ip(tmp_path,
 def test_exit_confirmed_from_the_sidecar_fails_closed(tmp_path, monkeypatch, out):
     plan = _plan(tmp_path, {"vpn": {"provider": "custom", "wireguard_key": "keychain:k"}})
     _exec(monkeypatch, [out, out])
-    with pytest.raises(VerifyError, match=r"`cat /tmp/gluetun/ip` in gluetun did not print one IP address") as e:
+    with pytest.raises(VerifyError, match=r"`cat /run/glove-exit/ip` in gluetun did not print one IP address") as e:
         run_check("docker", plan, "vpn", GLUETUN, _quiet, sleep_scale=0)
     assert "secret-account-id" not in str(e.value) and e.value.service == "gluetun"
 

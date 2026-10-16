@@ -13,13 +13,30 @@ extensions:
     record_headers: false     # record: full only; credentials redacted
     resolve: in-tunnel        # in-tunnel | none
     # resolver: dns://…:53    # default: the egress provider's (gluetun DNS, Tor SOCKS)
-    exit_identity: none       # via-proxy: poll the exit IP through the tunnel
+    exit_identity: auto       # auto | none | an https:// URL you name (see below)
     transcripts: true
     rotate_mb: 64
     keep: 8
     retain: none              # e.g. 12h
     skip: []                  # endpoint names that stay plain socat
 ```
+
+Exit identity (`net/exit.ndjson`, written on the first answer and on change)
+asks the egress's own software, never a lookup service glove picks. `auto`
+follows the egress provider's `exit_identity` export:
+
+| egress | source | what it is |
+|---|---|---|
+| `vpn` | `vpn-endpoint` | the VPN server's address, which gluetun's start script reads from its kill switch every 30 s (a reconnect to another server shows as a change; no lookup) |
+| `vpn` with `publicip_api` | `gluetun:publicip` | gluetun's own lookup through the tunnel, with the service the operator named; emptied when the tunnel drops |
+| `tor` | `via-proxy:check.torproject.org` | the Tor Project's check, every 5 minutes; `IsTor` must be true. Tor builds this gate its own circuit, so its exit need not be the agent's |
+| `direct`, `corporate` | none | the exit is the host's (or the corporate proxy's) address |
+
+vpn's address arrives in a file in gluetun's `exit` volume, which vpn `shares`
+read-only with the harness's proxy gate (never with the harness); it has no
+country or city. An absent file is "not known yet": no record until it appears.
+An `https://` URL makes the gate poll that service through the egress instead
+(geo if it answers ipinfo/echoip-style JSON); `none` records nothing.
 
 Egress consumers get their own gate too: SearXNG leaves the egress network and
 reaches the proxy only through `searxng-egress`.

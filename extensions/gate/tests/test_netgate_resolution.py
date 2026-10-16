@@ -12,7 +12,7 @@ import pytest
 
 from extensions.gate.netgate import resolver as res
 from extensions.gate.netgate.collector import Collector
-from extensions.gate.netgate.exitid import ExitPoller, parse_echo
+from extensions.gate.netgate.exitid import FileExit, UrlExit, check_url, parse_echo, parse_ip_file
 from extensions.gate.netgate.forward import Forwarder, ForwardSpec
 from extensions.gate.tests.test_netgate_proxy import Captured, StubUpstreamProxy, _exchange, _origin, run
 
@@ -294,17 +294,60 @@ def test_nxdomain_is_unavailable_not_an_error():
 
 
 def test_parse_echo_shapes():
-    assert parse_echo(b'{"ip":"195.177.93.1","country":"Switzerland","city":null,"latitude":47.36,"longitude":8.54}') \
-        == {"ip": "195.177.93.1", "country": "Switzerland", "city": None, "lat": 47.36, "lon": 8.54}
+    assert parse_echo(b'{"ip":"192.0.2.1","country":"Switzerland","city":null,"latitude":47.36,"longitude":8.54}') \
+        == {"ip": "192.0.2.1", "country": "Switzerland", "city": None, "lat": 47.36, "lon": 8.54}
     assert parse_echo(b'{"ip":"1.2.3.4","country":"NL","city":"Amsterdam","loc":"52.37,4.90"}')["lon"] == 4.9
-    with pytest.raises(ValueError):
-        parse_echo(b'{"country":"x"}')
+    # the Tor Project's check: no geo
+    assert parse_echo(b'{"IsTor":true,"IP":"2001:db8::1"}') == {
+        "ip": "2001:db8::1", "country": None, "city": None, "lat": None, "lon": None}
+    for bad in (b'{"country":"x"}', b'{"ip":"<html>"}', b'{"ip":""}', b'[]', b'{"IsTor":false,"IP":"192.0.2.1"}',
+                b'{"IsTor":"true","IP":"192.0.2.1"}', b"<html>"):
+        with pytest.raises(ValueError):
+            parse_echo(bad)
+
+
+def test_parse_ip_file():
+    assert parse_ip_file("198.51.100.7\n")["ip"] == "198.51.100.7"
+    assert parse_ip_file(" 2001:DB8::7 ")["ip"] == "2001:db8::7"  # canonical
+    for bad in ("", "\n", "198.51.100.7\n198.51.100.8\n", "not an ip", "198.51.100.7/32"):
+        with pytest.raises(ValueError):
+            parse_ip_file(bad)
+
+
+def test_exit_poller_reads_the_egress_file_and_emits_on_change(tmp_path):
+    f = tmp_path / "ip"
+    records = []
+    poller = FileExit(str(f), source="gluetun:publicip", kind="vpn", emit=records.append,
+                      env="pi-search", session="pi-search")
+    assert poller.interval == 30.0
+
+    async def main():
+        oks = [await poller.poll_once()]  # absent: not published yet, so no record
+        for text in ("198.51.100.7\n", "198.51.100.7\n", "", "garbage", "203.0.113.9", None):
+            if text is None:
+                f.unlink()  # the egress restarted
+            else:
+                f.write_text(text)
+            oks.append(await poller.poll_once())
+        return oks
+
+    assert run(main()) == [False, True, True, False, False, True, False]
+    assert [(r["ip"], r["healthy"]) for r in records] == [
+        ("198.51.100.7", True), (None, False), ("203.0.113.9", True), (None, False)]
+    assert {r["source"] for r in records} == {"gluetun:publicip"} and records[1]["country"] is None
+
+
+def test_exit_urls_are_https_with_a_host():
+    assert check_url("https://check.torproject.org/api/ip") == ("check.torproject.org", 443, "/api/ip")
+    assert check_url("https://x.example:8443?a=1") == ("x.example", 8443, "/?a=1")
+    for bad in ("http://x.example/", "https://", "https:///p", "x.example"):
+        with pytest.raises(ValueError):
+            check_url(bad)
 
 
 def test_exit_poller_fetches_through_the_chain_and_emits_on_change():
-    bodies = [b'{"ip":"195.177.93.1","country":"Switzerland","latitude":47.36,"longitude":8.54}',
-              b'{"ip":"195.177.93.1","country":"Switzerland","latitude":47.36,"longitude":8.54}',
-              b'{"ip":"198.51.100.7","country":"Netherlands","city":"Amsterdam","latitude":52.37,"longitude":4.9}']
+    bodies = [b'{"IsTor":true,"IP":"192.0.2.1"}', b'{"IsTor":true,"IP":"192.0.2.1"}',
+              b'{"IsTor":true,"IP":"198.51.100.7"}']
 
     async def echo(r, w):
         await r.readuntil(b"\r\n\r\n")
@@ -315,10 +358,10 @@ def test_exit_poller_fetches_through_the_chain_and_emits_on_change():
 
     async def main():
         server = await asyncio.start_server(echo, "127.0.0.1", 0)
-        up = StubUpstreamProxy({"am.i.mullvad.net": server.sockets[0].getsockname()[1]})
+        up = StubUpstreamProxy({"check.torproject.org": server.sockets[0].getsockname()[1]})
         await up.start()
         records = []
-        poller = ExitPoller(url="https://am.i.mullvad.net/json", kind="vpn",
+        poller = UrlExit("https://check.torproject.org/api/ip", kind="tor",
                             dial=lambda: asyncio.open_connection("127.0.0.1", up.port),
                             emit=records.append, env="pi-search", session="pi-search", tls=False)
         oks = [await poller.poll_once() for _ in range(4)]
@@ -328,10 +371,10 @@ def test_exit_poller_fetches_through_the_chain_and_emits_on_change():
 
     oks, records, heads = run(main())
     assert oks == [True, True, True, False]
-    assert heads[0] == b"CONNECT am.i.mullvad.net:443 HTTP/1.1\r\nHost: am.i.mullvad.net:443\r\n\r\n"
+    assert heads[0] == b"CONNECT check.torproject.org:443 HTTP/1.1\r\nHost: check.torproject.org:443\r\n\r\n"
     assert [(r["ip"], r["healthy"]) for r in records] == [
-        ("195.177.93.1", True), ("198.51.100.7", True), (None, False)]  # unchanged poll: no record
-    assert records[0]["source"] == "via-proxy:am.i.mullvad.net" and records[0]["kind"] == "vpn"
+        ("192.0.2.1", True), ("198.51.100.7", True), (None, False)]  # unchanged poll: no record
+    assert records[0]["source"] == "via-proxy:check.torproject.org" and records[0]["kind"] == "tor"
 
 
 def test_collector_writes_exit_ndjson_and_resolver_health(tmp_path):
@@ -360,3 +403,16 @@ def test_ip_rule_blocks_a_hostname_by_its_in_tunnel_address(tmp_path):
     assert out.startswith(b"HTTP/1.1 403") and heads == []
     close = [r for r in recs if r.get("phase") == "close"][-1]
     assert close["rule"] == "r_net" and close["dest"]["ip"] == "93.184.216.34"
+
+
+@pytest.mark.parametrize("bad", ["vpn-endpoint", "=/run/glove-exit/ip", "vpn-endpoint=ip"])
+def test_an_exit_file_is_source_and_absolute_path(bad):
+    from extensions.gate.netgate import __main__ as entry
+
+    base = ["forward", "--service", "p", "--listen", "0", "--upstream", "x", "--env", "e", "--session", "e"]
+    assert entry._parser().parse_args([*base, "--exit-file", "vpn-endpoint=/run/glove-exit/ip"]).exit_file == (
+        "vpn-endpoint", "/run/glove-exit/ip")
+    with pytest.raises(SystemExit):
+        entry._parser().parse_args([*base, "--exit-file", bad])
+    with pytest.raises(SystemExit):  # one exit source per gate
+        entry._parser().parse_args([*base, "--exit-url", "https://x.example/", "--exit-file", "s=/f"])
