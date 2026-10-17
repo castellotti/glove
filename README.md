@@ -58,7 +58,7 @@ exports, stays under `~/.glove`; `glove gc` removes those).
 glove new minimal ~/work/research-1     # glove-session.yml, work/, .glove/ (0700)
 cd ~/work/research-1
 $EDITOR glove-session.yml               # the ONE file you edit (set the llm <set-me>s)
-glove check                             # schema, secrets exist (never read), doctor
+glove check                             # schema, secrets exist (never read), doctor, the LLM server answers
 glove plan                              # what it grants; renders .glove/, launches nothing
 glove up                                # build → sidecars → resolve model → TUI
 glove down                              # stop (glove rm: also delete .glove/)
@@ -316,7 +316,8 @@ Session commands take an optional directory; without one they use the nearest
 ```
 glove new <template|path|git-url> [DIR]      # materialize a session (DIR default: .)
 glove new --diff <any> [DIR]                 # how the template changed since `glove new`
-glove check [DIR] [--no-container]           # schema, placeholders, secrets exist, doctor
+glove check [DIR] [--no-container] [--offline]   # schema, placeholders, secrets exist, doctor; the LLM
+                                             # server lists the model (--offline: contact nothing)
 glove plan  [DIR] [--compose] [--resume|--session ID]   # render .glove/, print the grants
 glove up    [DIR] [--resume|-r] [--session ID] [--rebuild]   # runs the extensions' checks first
 glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow record
@@ -378,7 +379,8 @@ prompt-injected instructions) will run with the wider reach.
 > reference: `keychain:<service>` (a macOS Keychain generic password) or
 > `env:<VAR>`; a literal key is refused. glove resolves it in memory when the
 > session launches (never during `glove plan` or `glove check`, which only checks
-> that the Keychain item exists), and the effective config records
+> that the Keychain item exists, and asks the server for its models without the
+> key), and the effective config records
 > only the reference. **The harness never holds an API key:** glove hands it
 > only to the `llm` extension's `llm-auth` sidecar (through `compose`'s
 > environment at launch), which adds it to model requests and refuses anything

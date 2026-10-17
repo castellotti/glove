@@ -360,12 +360,22 @@ def test_check_reports_secrets_without_reading_them(home, tmp_path, monkeypatch)
     monkeypatch.setattr(config_mod, "resolve_secret", boom)
     monkeypatch.delenv("NOT_SET_KEY", raising=False)
     d = make_session(tmp_path / "s", llm=_lan(", api_key: env:NOT_SET_KEY"))
-    result = runner.invoke(app, ["check", str(d), "--no-container"])
+    result = runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
     assert result.exit_code == 1 and "NOT_SET_KEY is not set" in result.output
     assert not (d / ".glove").exists() and not (home / "registry.json").exists()  # check writes nothing
     monkeypatch.setenv("NOT_SET_KEY", "x")
-    result = runner.invoke(app, ["check", str(d), "--no-container"])
+    result = runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
     assert "secret llm.api_key" in result.output and "is not set" not in result.output
+
+
+
+def test_check_asks_the_llm_server_unless_offline(home, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: seen.append(k["network"]) or [])
+    d = make_session(tmp_path / "s", llm=_lan())
+    runner.invoke(app, ["check", str(d), "--no-container"])
+    runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
+    assert seen == [True, False]
 
 
 # --- ls / down / rm / gc ----------------------------------------------------------------------

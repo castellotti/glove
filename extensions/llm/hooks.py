@@ -26,14 +26,18 @@ catalog's `oauth.paths` (the account calls) join the allowlist.
 
 `resolve()` runs at launch, after the forwarders are up. It resolves
 `model: auto` (the single model `/v1/models` lists) and `capabilities: auto` (the
-catalog's probes) through a throwaway container on the harness network — the
-host never resolves or contacts the endpoint itself.
+catalog's probes) through a throwaway container on the harness network.
+
+`doctor()` (`glove check`, unless `--offline`) asks the server for its model
+list from this machine, with no key: it answers, and lists the model.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -380,10 +384,58 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
     return out, notes
 
 
+PROBE_TIMEOUT = 5
+
+
+def _host_probe(url: str, headers: dict[str, str]) -> tuple[int, str]:
+    """GET `url` from this machine, never through a proxy (the forwarder dials direct)."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(urllib.request.Request(url, headers=headers), timeout=PROBE_TIMEOUT) as r:
+            return r.status, r.read(1 << 20).decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(2000).decode(errors="replace")
+
+
+def server_check(s: dict[str, Any], cat: dict[str, Any], r: dict[str, Any], probe=None) -> tuple[str, str, str]:
+    """The server answers its model list and lists `model` (or, `auto`, exactly one).
+    No key is sent: with `api_key` set, a 401/403 still shows it answers."""
+    root = f"{r['scheme']}://{_hostport(r['host'], r['port'], r['scheme'])}{_server_root(r['base_path'], cat)}"
+    statuses: list[int] = []
+
+    def get(url: str, **_) -> tuple[int, str]:
+        status, text = (probe or _host_probe)(url, _headers(cat))
+        statuses.append(status)
+        return status, text
+
+    try:
+        ids = _model_ids(cat, root, get)
+    except OSError as e:  # refused, unresolvable, timed out
+        why = getattr(e, "reason", None) or e
+        return "llm server", "fail", f"no answer at {root} ({why}): is it running and reachable from this machine?"
+    except LlmError as e:
+        if statuses and statuses[-1] in (401, 403) and s.get("api_key"):
+            return "llm server", "ok", f"answers at {root} (HTTP {statuses[-1]} without the key; glove adds it)"
+        return "llm server", "fail", str(e)
+    model = s.get("model") or "auto"
+    if model == "auto":
+        if len(ids) == 1:
+            return "llm server", "ok", f"answers at {root}; model auto → {ids[0]}"
+        return "llm server", "fail", f"model: auto needs exactly one model at {root}, found {ids or 'none'}"
+    if _served(model, ids, cat):
+        return "llm server", "ok", f"answers at {root}; serves {model}"
+    listed = ", ".join(map(str, ids[:8])) or "none"
+    return "llm server", "fail", f"{root} does not list model {model!r} (it lists {listed})"
+
+
 def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:
     s = ctx["settings"]
     try:
-        r = route(s, load_provider(s["provider"]))
+        cat = load_provider(s["provider"])
+        r = route(s, cat)
     except LlmError as e:
         return [("llm", "fail", str(e))]
-    return [("llm", "ok", f"{s['provider']} at {r['location']} {r['host']}:{r['port']}")]
+    checks = [("llm", "ok", f"{s['provider']} at {r['location']} {r['host']}:{r['port']}")]
+    if ctx.get("network"):
+        checks.append(server_check(s, cat, r))
+    return checks

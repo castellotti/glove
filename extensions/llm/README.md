@@ -130,8 +130,8 @@ carries the TLS SNI). `glove filter` rules apply at both.
 ## `model: auto` and `capabilities: auto`
 
 Resolved at `glove up`/`run`, after the forwarder starts, from a throwaway
-hardened container on the harness network (the host never resolves or contacts
-the server):
+hardened container on the harness network (the launch never contacts the
+server from the host):
 
 - `GET /v1/models`: exactly one model → used; several or none → error listing them.
 - the catalog's capability probe: `openai-compatible` reads `max_model_len`
@@ -141,6 +141,14 @@ the server):
 - explicit `capabilities:` keys win and the probe fills the rest; a conflict is
   a warning, not an error. Vision can't be discovered through the OpenAI API,
   so a vision model on a generic server needs `capabilities: {vision: true}`.
+
+## `glove check`: the server answers
+
+`glove check` asks the server for `/v1/models` from this machine, without the
+key and never through a proxy, and fails when it does not answer, when
+`model:` is not listed, or (`model: auto`) when it lists other than exactly one.
+With `api_key` set, a 401/403 still counts as an answer. `glove check --offline`
+skips it.
 
 ## When a server gets its own provider
 

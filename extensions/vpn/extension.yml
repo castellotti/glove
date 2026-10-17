@@ -11,7 +11,7 @@ settings:
   endpoint:         { type: string, pattern: '[0-9.]+:[0-9]{1,5}' }   # custom: server ip:port
   openvpn_user:     { type: secret }
   openvpn_password: { type: secret }
-  countries:        { type: list, default: [] }
+  countries:        { type: list, default: [] }      # gluetun's server filters: a named provider only (custom has no list)
   cities:           { type: list, default: [] }
   hostnames:        { type: list, default: [] }
   # An executable in the session's local/ that registers a fresh WireGuard key
@@ -19,6 +19,9 @@ settings:
   register_hook:    { type: path, within: session }
   register_user:    { type: secret }
   register_pass:    { type: secret }
+  # With register_hook: the server location the hook picks, in the hook's (the
+  # provider's) own terms, e.g. a region id. Handed to the hook as VPN_LOCATION.
+  location:         { type: string, pattern: '[A-Za-z0-9._-]+' }
   check_url:        { type: string, default: "https://on.quad9.net" }   # verify: the proxy passes traffic
   # Exit identity: by default the VPN server's endpoint IP, read from gluetun's
   # kill-switch rule (no lookup). `publicip_api` turns gluetun's own lookup on,

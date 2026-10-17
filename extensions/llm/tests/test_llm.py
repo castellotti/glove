@@ -519,3 +519,46 @@ def test_an_alias_matches_its_dated_snapshot(tmp_path):
     (tmp_path / "b").mkdir()
     with pytest.raises(hooks.LlmError, match="is not served"):
         _resolve(tmp_path / "b", PagedServer(["claude-x-2-20251001"]), **ANTHROPIC, model="claude-x")
+
+
+# --- `glove check`: the server answers ------------------------------------------------
+
+
+def _server(settings: dict, probe):
+    s = {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto", **settings}
+    cat = hooks.load_provider(s["provider"])
+    return hooks.server_check(s, cat, hooks.route(s, cat), probe=probe)
+
+
+def _models(*ids, status=200):
+    return lambda url, headers: (status, json.dumps({"data": [{"id": i} for i in ids]}))
+
+
+@pytest.mark.parametrize(("settings", "probe", "status", "detail"), [
+    ({}, _models("q"), "ok", "model auto → q"),
+    ({}, _models("a", "b"), "fail", "exactly one model"),
+    ({"model": "q"}, _models("p", "q"), "ok", "serves q"),
+    ({"model": "q"}, _models("p"), "fail", "does not list model 'q' (it lists p)"),
+    ({}, _models(status=502), "fail", "HTTP 502"),
+    ({"api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
+    ({}, _models(status=401), "fail", "HTTP 401"),
+])
+def test_server_check(settings, probe, status, detail):
+    name, got, text = _server(settings, probe)
+    assert (name, got) == ("llm server", status) and detail in text, text
+
+
+def test_server_check_no_answer():
+    def refused(url, headers):
+        assert url == "http://192.0.2.5:8080/v1/models"
+        raise ConnectionRefusedError("refused")
+    _, status, text = _server({}, refused)
+    assert status == "fail" and "no answer at http://192.0.2.5:8080" in text and "running" in text
+
+
+def test_doctor_contacts_the_server_only_with_network(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hooks, "_host_probe", lambda url, headers: calls.append(url) or _models("q")(url, headers))
+    ctx = {"settings": {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto"}}
+    assert [c[0] for c in hooks.doctor(ctx)] == ["llm"] and not calls
+    assert [c[1] for c in hooks.doctor({**ctx, "network": True})] == ["ok", "ok"] and calls

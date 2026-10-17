@@ -580,9 +580,11 @@ def _print_extensions(plan) -> None:
 def check(
     directory: Path | None = _DIR_ARG,
     no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
+    offline: bool = typer.Option(False, "--offline", help="contact nothing the session reaches (e.g. the LLM server)"),
 ) -> None:
     """Validate the session file, check its secrets exist (never reads them),
-    and run doctor for its runtime, enforcer and extensions."""
+    run doctor for its runtime, enforcer and extensions, and (unless --offline)
+    ask the LLM server for its models."""
 
     from .config import secret_exists
     from .doctor import extension_checks, run_doctor
@@ -622,7 +624,8 @@ def check(
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
         checks += extension_checks(cfg.extensions, harness=cfg.harness,
-                                   comp=plan.composition if plan is not None else None, session_dir=sd.root)
+                                   comp=plan.composition if plan is not None else None, session_dir=sd.root,
+                                   network=not offline)
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
     _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)

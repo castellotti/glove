@@ -81,10 +81,11 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
 
 
 def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None,
-                     session_dir: Path | None = None) -> list[Check]:
+                     session_dir: Path | None = None, network: bool = False) -> list[Check]:
     """Selection/settings validation plus each extension's own `doctor` hook.
     ``comp``: the session plan's composition, when it already built one;
-    ``session_dir`` resolves relative path settings when it did not."""
+    ``session_dir`` resolves relative path settings when it did not;
+    ``network``: a hook may contact what the session reaches (``ctx["network"]``)."""
     from .extensions import base_context, compose
 
     if comp is None:
@@ -99,7 +100,8 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
     checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "doctor"):
-            checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(base_context(comp, a))]
+            ctx = {**base_context(comp, a), "network": network}
+            checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(ctx)]
         checks += egress_host_checks(comp, a)
     return checks
 

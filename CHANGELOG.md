@@ -6,6 +6,22 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **vpn: `location` picks where a register hook's server is.** A
+  `register_hook` session (`provider: custom`) had no way to choose its server
+  from the session file: gluetun's `countries`/`cities`/`hostnames` filter a
+  named provider's server list, and `custom` has none (gluetun refuses to start
+  with them). `location: <id>` is handed to the hook as `VPN_LOCATION`, in the
+  hook's own terms (e.g. the provider's region id); one inherited from the shell
+  never is. `glove check` now refuses `countries`/`cities`/`hostnames` with
+  `custom`, and `location` without a hook (vpn README "Register hook").
+
+- **`glove check` asks the LLM server for its models.** From this machine,
+  without the key and never through a proxy: it fails when the server does not
+  answer, does not list `model:`, or (`model: auto`) lists other than exactly
+  one. With `api_key` set, a 401/403 counts as an answer. `--offline` skips it
+  (llm README "`glove check`: the server answers"). Before, a server that was
+  down showed only once `glove up` had started every sidecar.
+
 - **Live: the hop joins and a real `builtin:lan-only` refusal.**
   `test_ssh.sh` gains `SSH_LAN_ONLY=1`: a host at `public.lan`, which a
   stand-in (a TEST-NET-3 network joined to its gate) makes resolve public; the
