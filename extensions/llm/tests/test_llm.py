@@ -519,3 +519,64 @@ def test_an_alias_matches_its_dated_snapshot(tmp_path):
     (tmp_path / "b").mkdir()
     with pytest.raises(hooks.LlmError, match="is not served"):
         _resolve(tmp_path / "b", PagedServer(["claude-x-2-20251001"]), **ANTHROPIC, model="claude-x")
+
+
+# --- `glove check`: the server answers ------------------------------------------------
+
+
+LAN = {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto", "auth": "api-key"}
+
+
+def _server(settings: dict, probe):
+    s = {**LAN, **settings}
+    cat = hooks.load_provider(s["provider"])
+    return hooks.server_check(s, cat, hooks.route(s, cat), probe)
+
+
+def _models(*ids, status=200):
+    return lambda url, **_: (status, json.dumps({"data": [{"id": i} for i in ids]}))
+
+
+@pytest.mark.parametrize(("settings", "probe", "status", "detail"), [
+    ({}, _models("q"), "ok", "model auto → q"),
+    ({}, _models("a", "b"), "fail", "exactly one model"),
+    ({"model": "q"}, _models("p", "q"), "ok", "serves q"),
+    ({"model": "q"}, _models("p"), "fail", "model 'q' is not served (available: ['p'])"),
+    ({"model": "q"}, _models(), "ok", "lists no models, so q is not checked"),  # as resolve() takes it
+    ({}, _models(), "fail", "found none"),
+    ({}, _models(status=502), "fail", "HTTP 502"),
+    ({"api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
+    ({}, _models(status=401), "fail", "HTTP 401"),
+])
+def test_server_check(settings, probe, status, detail):
+    name, got, text = _server(settings, probe)
+    assert (name, got) == ("llm server", status) and detail in text, text
+
+
+def test_server_check_no_answer():
+    def refused(url, **_):
+        assert url == "http://192.0.2.5:8080/v1/models"
+        return 0, "curl: (7) Failed to connect\n"
+    _, status, text = _server({}, refused)
+    assert status == "fail" and text.startswith("http://192.0.2.5:8080: ") and "(HTTP 0): curl: (7)" in text
+    assert "never through a proxy" in text
+
+
+def test_server_check_names_this_machine_as_configured():
+    """core's probe maps loopback to the host gateway (session.probe_direct)."""
+    seen = []
+    _, status, _ = _server({"location": "host", "endpoint": "127.0.0.1:11434"},
+                           lambda url, **_: seen.append(url) or _models("q")(url))
+    assert seen == ["http://127.0.0.1:11434/v1/models"] and status == "ok"
+
+
+def test_doctor_contacts_the_server_only_through_cores_probe():
+    calls = []
+
+    def probe(url, **_):
+        calls.append(url)
+        return _models("q")(url)
+    ctx = {"settings": LAN, "harness": "pi"}
+    assert [c[0] for c in hooks.doctor(ctx)] == ["llm"]
+    assert [c[1] for c in hooks.doctor({**ctx, "probe": probe})] == ["ok", "ok"] and calls
+    assert not hasattr(hooks, "urllib")  # the host never dials the endpoint itself

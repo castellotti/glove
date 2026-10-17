@@ -427,21 +427,19 @@ def prepare_harness(sd, cfg, plan) -> None:
 def _resolve_extensions(plan, provider: str) -> None:
     """Run each active extension's `resolve` hook (after sidecars are up) and
     refresh the model descriptor from the inference slot's resolved exports."""
+    from functools import partial
+
     from .extensions import base_context
     from .harnessconfig import harness_model
-    from .session import probe_http
+    from .session import probe_http, with_headers
 
     comp = plan.composition
     for a in comp.active:
         if a.hooks is None or not hasattr(a.hooks, "resolve"):
             continue
-        ex = a.exports
-
-        def probe(url, method="GET", body=None, _ex=ex):
-            return probe_http(provider, plan, url, method=method, body=body, headers=_ex.get("probe_headers") or {})
-
         try:
-            a.exports, notes = a.hooks.resolve(base_context(comp, a), ex, probe)
+            probe = with_headers(partial(probe_http, provider, plan), a.exports)
+            a.exports, notes = a.hooks.resolve(base_context(comp, a), a.exports, probe)
         except ValueError as e:
             raise ConfigError(str(e)) from e
         for n in notes:
@@ -580,14 +578,20 @@ def _print_extensions(plan) -> None:
 def check(
     directory: Path | None = _DIR_ARG,
     no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
+    offline: bool = typer.Option(False, "--offline", help="contact nothing the session reaches (e.g. the LLM server)"),
 ) -> None:
     """Validate the session file, check its secrets exist (never reads them),
-    and run doctor for its runtime, enforcer and extensions."""
+    run doctor for its runtime, enforcer and extensions, and (unless --offline
+    or --no-container) ask the LLM server for its models from a throwaway
+    container (never from this machine)."""
+
+    from functools import partial
 
     from .config import secret_exists
     from .doctor import extension_checks, run_doctor
     from .plan import secret_refs
     from .runtimes.base import Check
+    from .session import probe_direct
 
     try:
         sd, raw, sid, cfg = _open(directory, register=False)
@@ -622,7 +626,8 @@ def check(
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
         checks += extension_checks(cfg.extensions, harness=cfg.harness,
-                                   comp=plan.composition if plan is not None else None, session_dir=sd.root)
+                                   comp=plan.composition if plan is not None else None, session_dir=sd.root,
+                                   probe=None if offline or no_container else partial(probe_direct, cfg.provider))
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
     _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)

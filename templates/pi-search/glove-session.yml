@@ -21,11 +21,12 @@ extensions:
     provider: <set-me>         # a gluetun provider name, or `custom`
     wireguard_key: keychain:<set-me>
     # addresses: 10.0.0.2/32   # when your provider needs WIREGUARD_ADDRESSES
-    # countries: [Sweden]
+    # countries: [Sweden]      # a named provider's server filter (not with `custom`)
     # Instead of wireguard_key, a hook in local/ can register a fresh key each launch:
     # register_hook: local/<your-hook>.sh
     # register_user: keychain:<set-me>
     # register_pass: keychain:<set-me>
+    # location: <set-me>       # where the hook picks its server (it gets VPN_LOCATION), e.g. a region id
   # tor: {}                    # replace `vpn:` with this for Tor
   # direct: {}                 # or this: no tunnel, no anonymity
   search: {}                   # SearXNG behind the egress (extensions/search/README.md)

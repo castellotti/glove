@@ -174,6 +174,11 @@ def test_openvpn_uses_two_secrets(tmp_path):
     ({"provider": "custom", "register_hook": "local/h.sh"}, "register_user"),
     ({"provider": "custom", "register_hook": "/etc/h.sh", "register_user": "keychain:u",
       "register_pass": "keychain:p"}, "inside the session"),
+    # custom has no server list for gluetun to filter (it would refuse to start)
+    ({"provider": "custom", "register_hook": "local/h.sh", "register_user": "keychain:u",
+      "register_pass": "keychain:p", "countries": ["Sweden"]}, "vpn.countries .* set `location:` instead"),
+    ({"provider": "custom", "wireguard_key": "keychain:wg", "cities": ["Stockholm"]}, "vpn.cities .* remove it"),
+    ({"provider": "x", "wireguard_key": "keychain:wg", "location": "here"}, "vpn.location is for the register_hook"),
 ])
 def test_bad_settings_are_refused(tmp_path, settings, match):
     with pytest.raises(ExtensionError, match=match):
@@ -200,6 +205,20 @@ def test_register_hook_contract(tmp_path):
     assert out == {"secrets": {"wireguard_private_key": KEY},
                    "env": {"WIREGUARD_PUBLIC_KEY": "pub", "WIREGUARD_ENDPOINT_IP": "192.0.2.1",
                            "WIREGUARD_ENDPOINT_PORT": "1337", "WIREGUARD_ADDRESSES": "10.1.2.3/32"}}
+
+
+def test_the_hook_gets_location_as_vpn_location_only(tmp_path, monkeypatch):
+    session = tmp_path / "sess"
+    _hook(session, 'read u; read p; [ "$VPN_LOCATION" = "${WANT-}" ] || exit 3\n'
+                   f'echo WIREGUARD_PRIVATE_KEY={KEY}\necho WIREGUARD_PUBLIC_KEY=pub\n'
+                   'echo WIREGUARD_ENDPOINT_IP=192.0.2.1\necho WIREGUARD_ENDPOINT_PORT=1337\n'
+                   'echo WIREGUARD_ADDRESSES=10.1.2.3/32\n')
+    settings = {"register_hook": "local/register.sh", "register_user": "keychain:u", "register_pass": "keychain:p"}
+    monkeypatch.setenv("VPN_LOCATION", "from-the-shell")  # never passed on
+    monkeypatch.setenv("WANT", "region_2")
+    HOOKS.launch_env({"settings": {**settings, "location": "region_2"}, "session_dir": session}, str)
+    monkeypatch.setenv("WANT", "")
+    HOOKS.launch_env({"settings": settings, "session_dir": session}, str)
 
 
 def test_hook_must_stay_in_local(tmp_path):

@@ -3,7 +3,8 @@
 `launch_env()` runs on the host at `glove up`. With `register_hook` set it runs
 that executable (it must live in the session's `local/`, which is never
 mounted into the harness) with the account username and password on stdin, one
-per line, and reads `WIREGUARD_*=value` lines from its stdout:
+per line, and `location` (if set) as VPN_LOCATION in its environment, and reads
+`WIREGUARD_*=value` lines from its stdout:
 
     WIREGUARD_PRIVATE_KEY  → the gluetun compose secret (memory only)
     WIREGUARD_PUBLIC_KEY, WIREGUARD_ENDPOINT_IP, WIREGUARD_ENDPOINT_PORT,
@@ -35,6 +36,16 @@ class VpnError(ValueError):
 
 def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     s = ctx["settings"]
+    # gluetun filters a named provider's server list; `custom` has none, and it
+    # refuses a filter there ("no choice"): the endpoint (or the hook) is the server
+    picked = [k for k in ("countries", "cities", "hostnames") if s.get(k)]
+    if picked and s.get("provider") == "custom":
+        fix = ("set `location:` instead (the hook gets it as VPN_LOCATION)" if s.get("register_hook")
+               else "remove it (the endpoint is the server)")
+        raise VpnError(f"vpn.{picked[0]} filters a gluetun provider's server list, and `custom` has none: {fix}")
+    if s.get("location") and not s.get("register_hook"):
+        raise VpnError("vpn.location is for the register_hook (it gets it as VPN_LOCATION); "
+                       "a gluetun provider picks its server with `countries`, `cities` or `hostnames`")
     if s.get("register_hook"):
         if s.get("type") != "wireguard":
             raise VpnError("vpn.register_hook registers a WireGuard key: it needs `type: wireguard`")
@@ -91,10 +102,15 @@ def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
         raise VpnError("vpn.register_hook needs the session directory")
     hook = hook_path(Path(ctx["session_dir"]), str(s["register_hook"]))
     stdin = f"{resolve_secret(s['register_user'])}\n{resolve_secret(s['register_pass'])}\n"
-    print(f"vpn: registering a fresh WireGuard key ({hook.name})…", flush=True)
+    # VPN_LOCATION is the session's `location` only, never one inherited from the shell
+    env = {k: v for k, v in os.environ.items() if k != "VPN_LOCATION"}
+    if s.get("location"):
+        env["VPN_LOCATION"] = s["location"]
+    where = f", location {s['location']}" if s.get("location") else ""
+    print(f"vpn: registering a fresh WireGuard key ({hook.name}{where})…", flush=True)
     try:
         r = subprocess.run([str(hook)], input=stdin, stdout=subprocess.PIPE, text=True, timeout=180,
-                           cwd=hook.parent, check=False)
+                           cwd=hook.parent, env=env, check=False)
     except subprocess.TimeoutExpired as e:
         raise VpnError(f"the register hook {hook} timed out") from e
     finally:

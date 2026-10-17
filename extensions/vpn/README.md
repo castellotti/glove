@@ -20,8 +20,9 @@ extensions:
 | `provider` | gluetun's `VPN_SERVICE_PROVIDER`, or `custom` (then `public_key` and `endpoint: ip:port`) |
 | `type` | `wireguard` (default) or `openvpn` (`openvpn_user`/`openvpn_password` refs) |
 | `wireguard_key` | Keychain/env reference to the WireGuard private key |
-| `countries`, `cities`, `hostnames` | gluetun server selection |
+| `countries`, `cities`, `hostnames` | gluetun's server selection, for a named provider; `custom` has no server list, so they are refused there |
 | `register_hook` | see below |
+| `location` | with `register_hook`: where the hook picks its server, in the hook's own terms (e.g. the provider's region id); the hook gets it as `VPN_LOCATION` |
 | `check_url` | a URL gluetun's proxy must fetch (`http-ok`; default `https://on.quad9.net`, no IP lookup) |
 | `publicip_api` | turns gluetun's own exit lookup on, through the tunnel, with a service you name (gluetun's `PUBLICIP_API`, e.g. `echoip#https://<your server>`); no default |
 | `host_check_url` | opt-in leak check: this service, asked from the host and through the tunnel, must see two different IPs; no default |
@@ -44,10 +45,17 @@ point `register_hook` at it:
     register_hook: local/register.sh
     register_user: keychain:my-vpn-user
     register_pass: keychain:my-vpn-pass
+    location: <set-me>               # optional: the region id your hook knows
 ```
 
 At every `glove up` glove runs it on this machine with the account username
-and password on stdin (one per line). It must print exactly these lines on
+and password on stdin (one per line) and `location`, if set, as `VPN_LOCATION`
+in its environment (never one inherited from your shell). The hook chooses the
+server, so this is how a session picks where it exits: gluetun's `countries`,
+`cities` and `hostnames` filter a named provider's server list, and `custom`
+has none (gluetun refuses to start with them, so glove refuses them first).
+Check the id against your provider's own list: a region's id and name can
+differ from the place you expect. The hook must print exactly these lines on
 stdout (progress on stderr):
 
 ```

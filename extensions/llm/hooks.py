@@ -28,6 +28,11 @@ catalog's `oauth.paths` (the account calls) join the allowlist.
 `model: auto` (the single model `/v1/models` lists) and `capabilities: auto` (the
 catalog's probes) through a throwaway container on the harness network — the
 host never resolves or contacts the endpoint itself.
+
+`doctor()` (`glove check`, given core's `probe`) asks the server for its model
+list, with no key, from a throwaway container dialling it as `llm-upstream`
+would: it answers, and lists the model as `resolve()` needs it. The host does
+not contact it either.
 """
 
 from __future__ import annotations
@@ -61,7 +66,9 @@ AUTH_PORT = 8080  # llm-auth's listener, and the harness's `llm` port for a clou
 
 
 class LlmError(ValueError):
-    pass
+    def __init__(self, msg: str, status: int | None = None) -> None:
+        super().__init__(msg)
+        self.status = status  # a server's HTTP status (0: no answer), when it caused this
 
 
 def load_provider(name: str) -> dict[str, Any]:
@@ -312,7 +319,8 @@ def _model_ids(cat: dict[str, Any], root: str, probe) -> list[str]:
         status, text = probe(url)  # core retries while a forwarder is still starting
         if status != 200:
             raise LlmError(f"llm: {cat['name']} did not answer {endpoint} (HTTP {status}): "
-                           f"{text[:200]} — is the server running and reachable at the configured endpoint?")
+                           f"{text.strip()[:200]} — is the server running and reachable at the configured endpoint?",
+                           status)
         try:
             doc = json.loads(text)
             ids += [m.get("id") for m in (doc.get("data") or []) if isinstance(m, dict)]
@@ -330,6 +338,19 @@ def _served(model: str, ids: list[str], cat: dict[str, Any]) -> bool:
         re.fullmatch(re.escape(model) + r"-\d{8}", i or "") for i in ids))
 
 
+def _pick_model(model: str, ids: list[str], cat: dict[str, Any]) -> str:
+    """`model` as the server lists it: `auto` is the one model listed; an id must
+    be listed, unless the server lists none (it is taken at its word)."""
+    if model == "auto":
+        if len(ids) != 1:
+            raise LlmError(f"llm: model: auto needs exactly one model at {cat.get('models_endpoint', '/v1/models')}, "
+                           f"found {ids or 'none'} — set `model:` to one of them")
+        return ids[0]
+    if ids and not _served(model, ids, cat):
+        raise LlmError(f"llm: model {model!r} is not served (available: {ids})")
+    return model
+
+
 def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
     """Resolve `model: auto` / `capabilities: auto`. Returns (exports, notes).
     `probe(url, method=, body=)` → (status, text) via a throwaway container holding
@@ -338,15 +359,9 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
     root = _server_root(exports["base_url"], cat)
     notes: list[str] = []
     out = dict(exports)
-    ids = _model_ids(cat, root, probe)
+    out["model"] = _pick_model(exports["model"], _model_ids(cat, root, probe), cat)
     if exports["model"] == "auto":
-        if len(ids) != 1:
-            raise LlmError(f"llm: model: auto needs exactly one model at {cat.get('models_endpoint')}, found "
-                           f"{ids or 'none'} — set `model:` to one of them")
-        out["model"] = ids[0]
-        notes.append(f"model: auto → {ids[0]}")
-    elif ids and not _served(exports["model"], ids, cat):
-        raise LlmError(f"llm: model {exports['model']!r} is not served (available: {ids})")
+        notes.append(f"model: auto → {out['model']}")
     caps = dict(exports["capabilities"])
     spec = (cat.get("probes") or {}).get("capabilities")
     if spec:
@@ -380,10 +395,33 @@ def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[s
     return out, notes
 
 
+def server_check(s: dict[str, Any], cat: dict[str, Any], r: dict[str, Any], probe) -> tuple[str, str, str]:
+    """The server answers its model list and lists `model` as `resolve()` needs
+    it, asked with no key: with `api_key` set, a 401/403 still shows it answers."""
+    root = f"{r['scheme']}://{_hostport(r['host'], r['port'], r['scheme'])}{_server_root(r['base_path'], cat)}"
+    want = s.get("model") or "auto"
+    try:
+        ids = _model_ids(cat, root, probe)
+        model = _pick_model(want, ids, cat)
+    except LlmError as e:
+        if e.status in (401, 403) and s.get("api_key"):
+            return "llm server", "ok", f"answers at {root} (HTTP {e.status} without the key; glove adds it)"
+        proxy = " (glove dials it direct, never through a proxy)" if e.status == 0 else ""
+        return "llm server", "fail", f"{root}: {e}{proxy}"
+    if want == "auto":
+        return "llm server", "ok", f"answers at {root}; model auto → {model}"
+    return "llm server", "ok", f"answers at {root}; " + (f"serves {model}" if ids else
+                                                        f"lists no models, so {model} is not checked")
+
+
 def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:
     s = ctx["settings"]
     try:
-        r = route(s, load_provider(s["provider"]))
+        cat = load_provider(s["provider"])
+        r = route(s, cat)
     except LlmError as e:
         return [("llm", "fail", str(e))]
-    return [("llm", "ok", f"{s['provider']} at {r['location']} {r['host']}:{r['port']}")]
+    checks = [("llm", "ok", f"{s['provider']} at {r['location']} {r['host']}:{r['port']}")]
+    if ctx.get("probe"):
+        checks.append(server_check(s, cat, r, ctx["probe"]))
+    return checks
