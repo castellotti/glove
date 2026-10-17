@@ -583,13 +583,17 @@ def check(
     offline: bool = typer.Option(False, "--offline", help="contact nothing the session reaches (e.g. the LLM server)"),
 ) -> None:
     """Validate the session file, check its secrets exist (never reads them),
-    run doctor for its runtime, enforcer and extensions, and (unless --offline)
-    ask the LLM server for its models."""
+    run doctor for its runtime, enforcer and extensions, and (unless --offline
+    or --no-container) ask the LLM server for its models from a throwaway
+    container (never from this machine)."""
+
+    from functools import partial
 
     from .config import secret_exists
     from .doctor import extension_checks, run_doctor
     from .plan import secret_refs
     from .runtimes.base import Check
+    from .session import probe_direct
 
     try:
         sd, raw, sid, cfg = _open(directory, register=False)
@@ -625,7 +629,7 @@ def check(
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
         checks += extension_checks(cfg.extensions, harness=cfg.harness,
                                    comp=plan.composition if plan is not None else None, session_dir=sd.root,
-                                   network=not offline)
+                                   probe=None if offline or no_container else partial(probe_direct, cfg.provider))
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
     _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)

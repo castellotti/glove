@@ -87,3 +87,32 @@ def test_on_rootless_podman_it_runs_in_the_sessions_userns(tmp_path, monkeypatch
     assert calls[0][calls[0].index("--userns") + 1] == "keep-id"
     session.probe_http("docker", plan, "https://x/")
     assert "--userns" not in calls[1]
+
+
+def test_probe_direct_runs_a_hardened_curl_on_the_default_bridge(monkeypatch):
+    """`glove check` asks before anything is up: not the harness network, no
+    session user namespace, no retries, IPv4 as the forwarders dial."""
+    from glove.verify import PROBE_IMAGE
+
+    calls = _run(monkeypatch, "200 0\n{}")
+    assert session.probe_direct("docker", "http://x/v1/models", {"v": "1"}) == (200, "{}")
+    cmd = calls[0]
+    assert cmd[cmd.index("--network") + 1] == "bridge" and "--add-host" not in cmd and "--userns" not in cmd
+    assert cmd[cmd.index("--user") + 1] == "65534:65534" and "--cap-drop" in cmd and "--read-only" in cmd
+    assert cmd[-3] == PROBE_IMAGE
+    script = cmd[-1]
+    assert "for w in 0;" in script and "curl -4 -sS -m 10 " in script and "-H 'v: 1'" in script
+    session.probe_direct("docker", "http://host.docker.internal:1/", host_gateway=True)
+    assert calls[1][calls[1].index("--add-host") + 1] == "host.docker.internal:host-gateway"
+
+
+def test_probe_direct_without_a_container_runtime_is_no_answer():
+    status, text = session.probe_direct("apple-container", "http://x/")
+    assert status == 0 and "not implemented" in text
+
+
+def test_a_hung_probe_container_is_no_answer(monkeypatch):
+    def run(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+    monkeypatch.setattr(session.subprocess, "run", run)
+    assert session.probe_direct("docker", "http://x/") == (0, "the probe container timed out")

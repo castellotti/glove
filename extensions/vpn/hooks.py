@@ -40,8 +40,9 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     # refuses a filter there ("no choice"): the endpoint (or the hook) is the server
     picked = [k for k in ("countries", "cities", "hostnames") if s.get(k)]
     if picked and s.get("provider") == "custom":
-        raise VpnError(f"vpn.{picked[0]} filters a gluetun provider's server list, and `custom` has none: "
-                       "with a register_hook, set `location:` (the hook gets it as VPN_LOCATION)")
+        fix = ("set `location:` instead (the hook gets it as VPN_LOCATION)" if s.get("register_hook")
+               else "remove it (the endpoint is the server)")
+        raise VpnError(f"vpn.{picked[0]} filters a gluetun provider's server list, and `custom` has none: {fix}")
     if s.get("location") and not s.get("register_hook"):
         raise VpnError("vpn.location is for the register_hook (it gets it as VPN_LOCATION); "
                        "a gluetun provider picks its server with `countries`, `cities` or `hostnames`")

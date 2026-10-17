@@ -368,14 +368,22 @@ def test_check_reports_secrets_without_reading_them(home, tmp_path, monkeypatch)
     assert "secret llm.api_key" in result.output and "is not set" not in result.output
 
 
+def test_check_asks_the_llm_server_only_from_a_container(home, tmp_path, monkeypatch):
+    from glove import session
 
-def test_check_asks_the_llm_server_unless_offline(home, tmp_path, monkeypatch):
-    seen = []
-    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: seen.append(k["network"]) or [])
+    asked = []
+    monkeypatch.setattr(session, "probe_direct", lambda provider, url, headers=None, host_gateway=False:
+                        asked.append((provider, url)) or (200, '{"data": [{"id": "m"}]}'))
+    monkeypatch.setattr("glove.doctor.run_doctor", lambda **k: [])  # no runtime probes here
     d = make_session(tmp_path / "s", llm=_lan())
-    runner.invoke(app, ["check", str(d), "--no-container"])
-    runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
-    assert seen == [True, False]
+    result = runner.invoke(app, ["check", str(d)])
+    assert result.exit_code == 0, result.output
+    assert "llm server" in result.output and "serves m" in result.output
+    assert asked == [("docker", "http://example.test:8080/v1/models")]
+    for flag in ("--offline", "--no-container"):  # neither runs a container: nothing is asked
+        result = runner.invoke(app, ["check", str(d), flag])
+        assert result.exit_code == 0 and "llm server" not in result.output, result.output
+    assert len(asked) == 1
 
 
 # --- ls / down / rm / gc ----------------------------------------------------------------------

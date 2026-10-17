@@ -176,8 +176,8 @@ def test_openvpn_uses_two_secrets(tmp_path):
       "register_pass": "keychain:p"}, "inside the session"),
     # custom has no server list for gluetun to filter (it would refuse to start)
     ({"provider": "custom", "register_hook": "local/h.sh", "register_user": "keychain:u",
-      "register_pass": "keychain:p", "countries": ["Sweden"]}, "vpn.countries .* set `location:`"),
-    ({"provider": "custom", "wireguard_key": "keychain:wg", "cities": ["Stockholm"]}, "vpn.cities"),
+      "register_pass": "keychain:p", "countries": ["Sweden"]}, "vpn.countries .* set `location:` instead"),
+    ({"provider": "custom", "wireguard_key": "keychain:wg", "cities": ["Stockholm"]}, "vpn.cities .* remove it"),
     ({"provider": "x", "wireguard_key": "keychain:wg", "location": "here"}, "vpn.location is for the register_hook"),
 ])
 def test_bad_settings_are_refused(tmp_path, settings, match):

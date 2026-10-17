@@ -144,11 +144,15 @@ server from the host):
 
 ## `glove check`: the server answers
 
-`glove check` asks the server for `/v1/models` from this machine, without the
-key and never through a proxy, and fails when it does not answer, when
-`model:` is not listed, or (`model: auto`) when it lists other than exactly one.
-With `api_key` set, a 401/403 still counts as an answer. `glove check --offline`
-skips it.
+`glove check` asks the server for `/v1/models` with the launch probe's public
+headers, without the key, and fails when it does not answer, when `model:` is
+not listed, or (`model: auto`) when it lists other than exactly one. With
+`api_key` set, a 401/403 still counts as an answer; a server that lists no
+models is taken at its word, as at launch. Like every other probe, it runs in a
+throwaway, hardened container, never on this machine: on the runtime's default
+bridge (nothing of the session is up yet), dialling the server as `llm-upstream`
+does: direct (never through a proxy), over IPv4, and `location: host` through
+`host.docker.internal`. `--offline` and `--no-container` skip it.
 
 ## When a server gets its own provider
 

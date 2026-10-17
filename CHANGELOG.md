@@ -13,14 +13,20 @@ All notable changes to glove are documented here.
   with them). `location: <id>` is handed to the hook as `VPN_LOCATION`, in the
   hook's own terms (e.g. the provider's region id); one inherited from the shell
   never is. `glove check` now refuses `countries`/`cities`/`hostnames` with
-  `custom`, and `location` without a hook (vpn README "Register hook").
+  `custom` (with a hook: use `location`; without one: remove the filter, the
+  endpoint is the server), and `location` without a hook (vpn README
+  "Register hook").
 
-- **`glove check` asks the LLM server for its models.** From this machine,
-  without the key and never through a proxy: it fails when the server does not
-  answer, does not list `model:`, or (`model: auto`) lists other than exactly
-  one. With `api_key` set, a 401/403 counts as an answer. `--offline` skips it
-  (llm README "`glove check`: the server answers"). Before, a server that was
-  down showed only once `glove up` had started every sidecar.
+- **`glove check` asks the LLM server for its models.** From a throwaway,
+  hardened curl container on the runtime's default bridge, never from this
+  machine (the host still never resolves or contacts the endpoint), dialled as
+  `llm-upstream` dials it: direct, IPv4, `location: host` through
+  `host.docker.internal`. It sends the launch probe's public headers but not
+  the key, and fails when the server does not answer, does not list `model:`,
+  or (`model: auto`) lists other than exactly one. With `api_key` set, a
+  401/403 counts as an answer. `--offline` and `--no-container` skip it (llm
+  README "`glove check`: the server answers"). Before, a server that was down
+  showed only once `glove up` had started every sidecar.
 
 - **Live: the hop joins and a real `builtin:lan-only` refusal.**
   `test_ssh.sh` gains `SSH_LAN_ONLY=1`: a host at `public.lan`, which a

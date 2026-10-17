@@ -144,6 +144,7 @@ class DockerRuntime:
         self, image: str, argv: list[str], *, plan: SessionPlan | None = None, network: str = "none",
         user: str = "65534:65534", env: Iterable[str] = (), mounts: Iterable[tuple[str, str]] = (),
         entrypoint: str | None = None, seccomp: str | None = None, pids: int = 64, memory: str = "128m",
+        add_hosts: Iterable[str] = (),
     ) -> list[str]:
         """`run` of a hardened throwaway container (a probe, a check): removed on
         exit, no capabilities, no-new-privileges, read-only rootfs (a tmpfs
@@ -153,7 +154,8 @@ class DockerRuntime:
         (rootless Podman's keep-id).
         `env`: names only, the values come from the caller's environment (never
         an argv); `mounts`: (source, target) pairs, read-only, never relabelled
-        (a probe must not change a host file's SELinux label)."""
+        (a probe must not change a host file's SELinux label); `add_hosts`:
+        `name:address` entries (e.g. a forwarder's `host.docker.internal:host-gateway`)."""
         userns = None
         if plan is not None:
             user, userns = f"{plan.uid}:{plan.gid}", self.compose_extra(plan)["userns_mode"]
@@ -163,7 +165,7 @@ class DockerRuntime:
             self.cli, "run", "--rm", "--network", network, *(["--userns", userns] if userns else []),
             "--user", user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", *sec,
             "--read-only", "--tmpfs", "/tmp", "--pids-limit", str(pids), "--memory", memory,
-            *[x for k in env for x in ("-e", k)], *vols,
+            *[x for k in env for x in ("-e", k)], *vols, *[x for h in add_hosts for x in ("--add-host", h)],
             *(["--entrypoint", entrypoint] if entrypoint else []), image, *argv,
         ]
 

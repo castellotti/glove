@@ -524,14 +524,17 @@ def test_an_alias_matches_its_dated_snapshot(tmp_path):
 # --- `glove check`: the server answers ------------------------------------------------
 
 
+LAN = {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto", "auth": "api-key"}
+
+
 def _server(settings: dict, probe):
-    s = {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto", **settings}
+    s = {**LAN, **settings}
     cat = hooks.load_provider(s["provider"])
-    return hooks.server_check(s, cat, hooks.route(s, cat), probe=probe)
+    return hooks.server_check(s, cat, hooks.route(s, cat), hooks._auth(s, cat, "pi")[1], probe)
 
 
 def _models(*ids, status=200):
-    return lambda url, headers: (status, json.dumps({"data": [{"id": i} for i in ids]}))
+    return lambda url, headers, host_gateway=False: (status, json.dumps({"data": [{"id": i} for i in ids]}))
 
 
 @pytest.mark.parametrize(("settings", "probe", "status", "detail"), [
@@ -539,6 +542,8 @@ def _models(*ids, status=200):
     ({}, _models("a", "b"), "fail", "exactly one model"),
     ({"model": "q"}, _models("p", "q"), "ok", "serves q"),
     ({"model": "q"}, _models("p"), "fail", "does not list model 'q' (it lists p)"),
+    ({"model": "q"}, _models(), "ok", "lists no models, so q is not checked"),  # as resolve() takes it
+    ({}, _models(), "fail", "found none"),
     ({}, _models(status=502), "fail", "HTTP 502"),
     ({"api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
     ({}, _models(status=401), "fail", "HTTP 401"),
@@ -549,16 +554,43 @@ def test_server_check(settings, probe, status, detail):
 
 
 def test_server_check_no_answer():
-    def refused(url, headers):
-        assert url == "http://192.0.2.5:8080/v1/models"
-        raise ConnectionRefusedError("refused")
+    def refused(url, headers, host_gateway=False):
+        assert url == "http://192.0.2.5:8080/v1/models" and not host_gateway
+        return 0, "curl: (7) Failed to connect\n"
     _, status, text = _server({}, refused)
-    assert status == "fail" and "no answer at http://192.0.2.5:8080" in text and "running" in text
+    assert status == "fail" and "no answer at http://192.0.2.5:8080 (curl: (7) Failed to connect)" in text
+    assert "proxy" in text
 
 
-def test_doctor_contacts_the_server_only_with_network(monkeypatch):
+def test_server_check_dials_this_machine_as_the_forwarder_does():
+    seen = []
+
+    def probe(url, headers, host_gateway=False):
+        seen.append((url, host_gateway))
+        return _models("q")(url, headers)
+    _, status, text = _server({"location": "host", "endpoint": "127.0.0.1:11434"}, probe)
+    assert seen == [("http://host.docker.internal:11434/v1/models", True)]
+    assert status == "ok" and "http://127.0.0.1:11434" in text  # reported as configured
+
+
+def test_server_check_sends_the_launch_probes_headers():
+    seen = []
+    s = {"provider": "anthropic", "model": "claude-x", "auth": "oauth", "api_key": "keychain:t"}
+    cat = hooks.load_provider("anthropic")
+    want = hooks._auth(s, cat, "claude-code")[1]
+    assert set(want) > set(hooks._headers(cat))  # the oauth block's headers too
+    hooks.doctor({"settings": s, "harness": "claude-code",
+                  "probe": lambda url, headers, host_gateway=False: seen.append(headers) or (401, "")})
+    assert seen == [want]
+
+
+def test_doctor_contacts_the_server_only_through_cores_probe():
     calls = []
-    monkeypatch.setattr(hooks, "_host_probe", lambda url, headers: calls.append(url) or _models("q")(url, headers))
-    ctx = {"settings": {"provider": "llama.cpp", "location": "lan", "endpoint": "192.0.2.5:8080", "model": "auto"}}
-    assert [c[0] for c in hooks.doctor(ctx)] == ["llm"] and not calls
-    assert [c[1] for c in hooks.doctor({**ctx, "network": True})] == ["ok", "ok"] and calls
+
+    def probe(url, headers, host_gateway=False):
+        calls.append(url)
+        return _models("q")(url, headers)
+    ctx = {"settings": LAN, "harness": "pi"}
+    assert [c[0] for c in hooks.doctor(ctx)] == ["llm"]
+    assert [c[1] for c in hooks.doctor({**ctx, "probe": probe})] == ["ok", "ok"] and calls
+    assert not hasattr(hooks, "urllib")  # the host never dials the endpoint itself

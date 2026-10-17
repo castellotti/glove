@@ -317,7 +317,8 @@ Session commands take an optional directory; without one they use the nearest
 glove new <template|path|git-url> [DIR]      # materialize a session (DIR default: .)
 glove new --diff <any> [DIR]                 # how the template changed since `glove new`
 glove check [DIR] [--no-container] [--offline]   # schema, placeholders, secrets exist, doctor; the LLM
-                                             # server lists the model (--offline: contact nothing)
+                                             # server lists the model, asked from a throwaway container
+                                             # (--offline: contact nothing)
 glove plan  [DIR] [--compose] [--resume|--session ID]   # render .glove/, print the grants
 glove up    [DIR] [--resume|-r] [--session ID] [--rebuild]   # runs the extensions' checks first
 glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow record

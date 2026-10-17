@@ -346,7 +346,6 @@ def probe_http(
     forwarder still starting) is retried inside the one container after each
     of `CONNECT_RETRIES` seconds; a timeout is not. Status 0: no HTTP answer
     (the text is then curl's own message)."""
-    import json as _json
     import shlex
 
     # Trust what the harness trusts: the image's roots plus its extra CAs
@@ -360,25 +359,59 @@ def probe_http(
         trust = [(c.volume(plan.session), c.path) for c in plan.composition.channels if c.trust]
         if plan.corporate_ca_host_path:
             trust.append((plan.corporate_ca_host_path, CORPORATE_CA_PATH))
-    cacert = "--cacert /tmp/ca.pem " if prelude else ""
-    curl = f'curl {cacert}-sS -m 20 -o /tmp/b -w "%{{http_code}}" -X "$M" "$U"'
+    # in the session's user namespace, as the harness it stands in for (rootless
+    # Podman's keep-id: what it mounts is owned by the session uid as seen there)
+    return _curl(provider, plan.image, url, method=method, body=body, headers=headers, plan=plan,
+                 network=plan.network.internal_network, mounts=trust, prelude=prelude,
+                 curl_flags="--cacert /tmp/ca.pem " if prelude else "", retries=CONNECT_RETRIES)
+
+
+def probe_direct(provider: str, url: str, headers: dict[str, str] | None = None, *,
+                 host_gateway: bool = False) -> tuple[int, str]:
+    """`glove check`'s GET of a server the session reaches, before anything is
+    up: from a throwaway, hardened container on the runtime's default bridge,
+    dialled as a forwarder dials it (direct, IPv4, never through a proxy), so
+    the host never resolves or contacts it either. `host_gateway`: the URL
+    names this machine as `host.docker.internal`. Status 0: no HTTP answer."""
+    from .verify import PROBE_IMAGE
+
+    try:
+        return _curl(provider, PROBE_IMAGE, url, headers=headers, network="bridge", curl_flags="-4 ", max_time=10,
+                     add_hosts=("host.docker.internal:host-gateway",) if host_gateway else ())
+    except NotImplementedError as e:  # a runtime that runs no container yet
+        return 0, str(e)
+
+
+def _curl(
+    provider: str, image: str, url: str, *, network: str, method: str = "GET", body: dict | None = None,
+    headers: dict[str, str] | None = None, plan: SessionPlan | None = None, mounts=(), prelude: str = "",
+    curl_flags: str = "", max_time: int = 20, retries: tuple[int, ...] = (), add_hosts=(),
+) -> tuple[int, str]:
+    """curl `url` in a throwaway, hardened container: (status, body), or (0,
+    curl's message). A fast failure (`FAST_FAILURES`) is retried in the one
+    container after each of `retries` seconds. Values travel as env vars."""
+    import json as _json
+    import shlex
+
+    curl = f'curl {curl_flags}-sS -m {max_time} -o /tmp/b -w "%{{http_code}}" -X "$M" "$U"'
     for k, v in (headers or {}).items():
         curl += " -H " + shlex.quote(f"{k}: {v}")
     if body is not None:
         curl += ' -H "content-type: application/json" --data "$B"'
-    waits = " ".join(str(w) for w in CONNECT_RETRIES)
+    waits = " ".join(str(w) for w in (*retries, 0))
     fast = "|".join(str(c) for c in sorted(FAST_FAILURES))
     # "<http code> <curl exit code>", then the body
-    script = (f'{prelude}for w in {waits} 0; do code=$({curl}); rc=$?; '
+    script = (f'{prelude}for w in {waits}; do code=$({curl}); rc=$?; '
               f'case $rc in {fast}) [ "$w" -gt 0 ] && sleep "$w" && continue;; esac; break; done; '
               'echo "$code $rc"; cat /tmp/b 2>/dev/null')
-    # in the session's user namespace, as the harness it stands in for (rootless
-    # Podman's keep-id: what it mounts is owned by the session uid as seen there)
     cmd = get_runtime(provider).throwaway_argv(
-        plan.image, ["-c", script], plan=plan, network=plan.network.internal_network, env=("M", "U", "B"),
-        mounts=trust, entrypoint="sh")
+        image, ["-c", script], plan=plan, network=network, env=("M", "U", "B"), mounts=mounts,
+        entrypoint="sh", add_hosts=add_hosts)
     env = {**os.environ, "M": method, "U": url, "B": _json.dumps(body or {})}
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
+    except subprocess.TimeoutExpired:
+        return 0, "the probe container timed out"
     head, _, rest = r.stdout.partition("\n")
     try:
         status, curl_rc = (int(x) for x in head.split())
