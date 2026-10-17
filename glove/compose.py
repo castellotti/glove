@@ -287,7 +287,7 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
             if extra.get("bind_selinux"):
                 bind["bind"] = {"selinux": extra["bind_selinux"]}
             out.setdefault("volumes", []).append(bind)
-    if comp.corporate_ca is not None and short in a.spec("trust_corporate_ca"):
+    if comp.corporate_ca is not None and short in a.spec("trust"):
         # read-only and never relabelled (SELinux `z` would relabel the
         # operator's own file, maybe a system trust anchor), as in the harness;
         # the image builds its bundle from it (GLOVE_CORPORATE_CA)

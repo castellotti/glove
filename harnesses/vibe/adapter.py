@@ -1,6 +1,6 @@
 """Mistral Vibe adapter: config.toml (provider, model, MCP servers) + hooks.toml.
 
-MCP servers come from the neutral `harness.mcp` contribution (`comp.mcp`). A
+MCP servers come from the neutral `harness.mcp` contribution (`actx.mcp`). A
 server's `tools` (a list, or comma-separated) is an allowlist: Vibe has no
 per-server allowlist (its global `enabled_tools` would hide its own tools too),
 so it becomes one `disabled_tools` regex that hides every other `<server>_*`
@@ -12,7 +12,7 @@ without an allowlist (`harness_config.mcp_servers`) adds none: its tools need
 
 Vibe (2.26.1; re-check at a bump) opens a new MCP session for every call to
 an HTTP server, so a server that keeps state per session (Playwright's pages)
-forgets it between calls. Each HTTP server from `comp.mcp` is rendered as the
+forgets it between calls. Each HTTP server from `actx.mcp` is rendered as the
 image's stdio bridge (`glove-mcp-bridge <url>`, one session for Vibe's) under
 the same name, so its tool names don't change. `harness_config.mcp_servers`
 render as written.
@@ -28,7 +28,7 @@ from typing import Any
 
 import tomli_w
 
-from glove.harnessconfig import rel_config_home
+from glove.api.harness import AdapterContext
 
 # Descriptor api → Vibe (backend, api_style).
 VIBE_BACKENDS = {"openai-completions": ("generic", "openai"), "mistral-conversations": ("mistral", "openai")}
@@ -39,17 +39,17 @@ MCP_BRIDGE = "/opt/glove/bin/glove-mcp-bridge"
 SKILLS_DIR = "/opt/glove/vibe/skills"
 
 
-def image_lines(comp) -> tuple[list[str], list]:
-    lines = comp.skill_link_lines(SKILLS_DIR) if comp is not None else []
+def image_lines(actx: AdapterContext) -> tuple[list[str], list]:
+    lines = actx.skill_link_lines(SKILLS_DIR)
     return (["# Vibe: contributed skills (skill_paths)", *lines] if lines else []), []
 
 
-def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
+def _mcp_servers(actx: AdapterContext) -> tuple[list[dict[str, Any]], list[str]]:
     """Each extension's MCP server, then explicit `harness_config.mcp_servers` —
     and the `disabled_tools` patterns their `tools` allowlists imply."""
     servers: list[dict[str, Any]] = []
     disabled: list[str] = []
-    for _ext, item in comp.mcp if comp is not None else []:
+    for _ext, item in actx.mcp:
         item = dict(item)
         item.pop("all_tools", None)  # the regex below hides every other tool, known or not
         names = item.pop("tools", None)  # core checked them
@@ -60,21 +60,22 @@ def _mcp_servers(cfg, comp) -> tuple[list[dict[str, Any]], list[str]]:
         if item["transport"] == "http":  # core allows only the url: the bridge drops nothing
             item.update(transport="stdio", command=MCP_BRIDGE, args=[item.pop("url")])
         servers.append(item)
-    servers.extend(cfg.harness_config.get("mcp_servers", []))
+    servers.extend(actx.harness_config.get("mcp_servers", []))
     return servers, disabled
 
 
-def tool_names(comp) -> list[str]:
+def tool_names(actx: AdapterContext) -> list[str]:
     """The MCP tools glove's servers allow, as the pre_tool hook sees them."""
-    return [f"mcp_{item['name']}.{t}" for _ext, item in comp.mcp for t in item.get("tools", [])]
+    return [f"mcp_{item['name']}.{t}" for _ext, item in actx.mcp for t in item.get("tools", [])]
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
-    cfg_dir = home_dir / rel_config_home(profile)
+def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
+    model = actx.model
+    cfg_dir = actx.config_dir(home_dir)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     # Pre-create the session-log dir so an external monitor (e.g. Layman) can
     # bind-mount it read-only before Vibe's first turn writes messages.jsonl.
-    (cfg_dir / profile.sessions_subdir).mkdir(parents=True, exist_ok=True)
+    (cfg_dir / actx.sessions_subdir).mkdir(parents=True, exist_ok=True)
 
     if model.api not in VIBE_BACKENDS:
         raise ValueError(f"Vibe cannot speak the {model.api!r} API; pick an OpenAI-compatible or Mistral provider")
@@ -84,7 +85,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     # Vibe deep-merges models by alias, so a collision silently shadows ours).
     alias = "glove"
 
-    servers, disabled_tools = _mcp_servers(cfg, comp)
+    servers, disabled_tools = _mcp_servers(actx)
     doc: dict[str, Any] = {
         "active_model": alias,
         "auto_approve": True,
@@ -96,7 +97,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         # hook, which rewrites the command text, applies cleanly.
         "experimental_bash_tool": False,
         "mcp_servers": servers,
-        **({"skill_paths": [SKILLS_DIR]} if comp is not None and comp.skills else {}),
+        **({"skill_paths": [SKILLS_DIR]} if actx.skills else {}),
         "providers": [
             {
                 "name": "glove",
@@ -127,7 +128,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     # Pass through arbitrary Vibe config from the (git-tracked) session file's
     # `harness_config`, keeping it the single reproducible source of truth.
     # mcp_servers is already merged above; lists extend, scalars/tables override.
-    for key, value in cfg.harness_config.items():
+    for key, value in actx.harness_config.items():
         if key == "mcp_servers":
             continue
         if isinstance(value, list) and isinstance(doc.get(key), list):  # glove's list, then the session's
@@ -146,7 +147,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     # Ring-1 tool hook: route every bash tool call through the enforcer's
     # per-command sandbox. Only when an in-container enforcer is
     # active — `none` has no wrapper to invoke.
-    if cfg.enforcer != "none":
+    if actx.enforcer != "none":
         written.append(_write_vibe_hooks(cfg_dir))
     return written
 

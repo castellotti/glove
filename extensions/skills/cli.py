@@ -63,8 +63,9 @@ class _Session:
         self.runtime = sdm.session_provider(self.sd)
 
     def relays(self, only: str | None = None) -> list[Any]:
-        ctx = {"settings": self.settings, "session_dir": self.sd.root, "work": {"host": str(self.sd.work)},
-               "renders": []}
+        from glove.api import HookContext
+
+        ctx = HookContext(name="skills", settings=self.settings, session_dir=self.sd.root, work_dir=self.sd.work)
         try:
             found = _hooks().relays(ctx, only)
         except ValueError as e:

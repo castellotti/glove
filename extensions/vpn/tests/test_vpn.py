@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg, render
+from helpers import hook_ctx, make_cfg, render
 
 from glove.extensions import ExtensionError, launch_env, load_module, secret_env_var
 
@@ -199,8 +199,8 @@ def test_register_hook_contract(tmp_path):
                    f'echo WIREGUARD_PRIVATE_KEY={KEY}\necho WIREGUARD_PUBLIC_KEY=pub\n'
                    'echo WIREGUARD_ENDPOINT_IP=192.0.2.1\necho WIREGUARD_ENDPOINT_PORT=1337\n'
                    'echo WIREGUARD_ADDRESSES=10.1.2.3/32\necho progress >&2\n')
-    ctx = {"settings": {"register_hook": "local/register.sh", "register_user": "keychain:u",
-                        "register_pass": "keychain:p"}, "session_dir": session}
+    ctx = hook_ctx(settings={"register_hook": "local/register.sh", "register_user": "keychain:u",
+                             "register_pass": "keychain:p"}, session_dir=session)
     out = HOOKS.launch_env(ctx, {"keychain:u": "alice", "keychain:p": "s3cret"}.__getitem__)
     assert out == {"secrets": {"wireguard_private_key": KEY},
                    "env": {"WIREGUARD_PUBLIC_KEY": "pub", "WIREGUARD_ENDPOINT_IP": "192.0.2.1",
@@ -216,9 +216,9 @@ def test_the_hook_gets_location_as_vpn_location_only(tmp_path, monkeypatch):
     settings = {"register_hook": "local/register.sh", "register_user": "keychain:u", "register_pass": "keychain:p"}
     monkeypatch.setenv("VPN_LOCATION", "from-the-shell")  # never passed on
     monkeypatch.setenv("WANT", "region_2")
-    HOOKS.launch_env({"settings": {**settings, "location": "region_2"}, "session_dir": session}, str)
+    HOOKS.launch_env(hook_ctx(settings={**settings, "location": "region_2"}, session_dir=session), str)
     monkeypatch.setenv("WANT", "")
-    HOOKS.launch_env({"settings": settings, "session_dir": session}, str)
+    HOOKS.launch_env(hook_ctx(settings=settings, session_dir=session), str)
 
 
 def test_hook_must_stay_in_local(tmp_path):
@@ -272,7 +272,7 @@ def test_hook_values_reach_compose_only_through_the_environment(tmp_path, monkey
 
 
 def test_diagnose_reads_the_tun_counter():
-    ctx = {"settings": {"register_hook": None}}
+    ctx = hook_ctx(settings={"register_hook": None})
     check = {"service": "gluetun"}
     assert "never answered" in HOOKS.diagnose(ctx, check, lambda s, a: (0, "0"))
     assert "passes traffic" in HOOKS.diagnose(ctx, check, lambda s, a: (0, "1234"))

@@ -122,7 +122,9 @@ def render_dockerfile(
 
     extension_layers(host=False)
     # the harness's own image contributions (e.g. Pi's `-e` extensions)
-    body, sources = adapter_call(profile, "image_lines", comp, default=([], []))
+    from .harnessconfig import adapter_context
+
+    body, sources = adapter_call(profile, "image_lines", adapter_context(comp), default=([], []))
     lines += body
     staged += sources
     for ext, src, dest in comp.skills:

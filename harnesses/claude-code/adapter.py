@@ -40,12 +40,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from glove.config import ConfigError
-from glove.enforcers.base import TOOLS_FILE, argv_lines, write_roots
-from glove.extensions import ExtensionError, render_value
-from glove.harnessconfig import INJECTED_KEY, rel_config_home
-from glove.mounts import CONTAINER_HOME
-from glove.naming import scoped
+from glove.api import ConfigError, ExtensionError, scoped
+from glove.api.harness import CONTAINER_HOME, INJECTED_KEY, AdapterContext, argv_lines
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
@@ -78,8 +74,8 @@ def secret_env(model) -> str:
     return "CLAUDE_CODE_OAUTH_TOKEN" if model.api_key_kind == "oauth" else "ANTHROPIC_API_KEY"
 
 
-def _config(cfg) -> dict[str, Any]:
-    hc = cfg.harness_config or {}
+def _config(actx: AdapterContext) -> dict[str, Any]:
+    hc = dict(actx.harness_config)
     unknown = set(hc) - CONFIG_KEYS
     perms = hc.get("permissions") or {}
     if unknown or not isinstance(perms, dict) or set(perms) - PERMISSION_KEYS:
@@ -96,7 +92,7 @@ def _config(cfg) -> dict[str, Any]:
     return hc
 
 
-def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[str], dict[str, str]]:
+def _mcp(actx: AdapterContext, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[str], dict[str, str]]:
     """managed-mcp.json servers from the neutral `mcp` contribution; the
     permission rules their `tools` allowlists imply: allow rules for the listed
     tools, deny rules for every other tool the server is known to have
@@ -107,7 +103,7 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[s
     allow: list[str] = []
     deny: list[str] = []
     argv_files: dict[str, str] = {}
-    for _ext, item in comp.mcp if comp is not None else []:
+    for _ext, item in actx.mcp:
         name, tools = item["name"], item.get("tools")  # core checked them
         if item["transport"] == "http":
             servers[name] = {"type": "http", "url": item["url"]}
@@ -128,15 +124,15 @@ def _mcp(comp, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[s
     return servers, allow, deny, argv_files
 
 
-def _web_fetch_proxy(comp) -> str | None:
+def _web_fetch_proxy(actx: AdapterContext) -> str | None:
     """The egress proxy an extension hands WebFetch (`claude-code: {web_fetch:
     {proxy: <url>}}`), if any."""
     proxy = None
-    for a, section, ctx in comp.harness_items if comp is not None else []:
-        where = f"extension {a.name!r} harness"
-        match render_value(section, ctx, where):
+    for sec in actx.sections:
+        where = f"extension {sec.extension!r} harness"
+        match sec.data:
             case {"web_fetch": {"proxy": str() as url} as wf} as section if len(section) == len(wf) == 1 \
-                    and url.startswith(f"http://{scoped(comp.session, '')}"):
+                    and url.startswith(f"http://{scoped(actx.session, '')}"):
                 proxy = url
             case _:
                 raise ExtensionError(
@@ -144,36 +140,32 @@ def _web_fetch_proxy(comp) -> str | None:
     return proxy
 
 
-def _no_proxy(plan) -> str:
+def _no_proxy(actx: AdapterContext) -> str:
     """Every name the harness reaches a session forwarder by (and loopback):
     inference, MCP servers and the rest never go through the egress proxy."""
-    hosts = ["localhost", "127.0.0.1", "::1"]
-    for sc in plan.network.sidecars:
-        if sc.harness:
-            hosts += [scoped(plan.session, sc.role), *sc.aliases, *sc.impl_aliases]
-    return ",".join(dict.fromkeys(hosts))
+    return ",".join(dict.fromkeys(["localhost", "127.0.0.1", "::1", *actx.harness_hosts]))
 
 
-def _write_denies(plan) -> list[str]:
-    roots = write_roots(plan)
+def _write_denies(actx: AdapterContext) -> list[str]:
+    roots = actx.write_roots or ()
     for p in HARNESS_WRITABLE:
         if any(r == p or r.startswith(f"{p}/") for r in roots):
             raise ConfigError(f"claude-code: write root under {p}: its write tools are denied there")
     return [f"Edit(/{p}/**)" for p in HARNESS_WRITABLE]
 
 
-def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], mcp_deny: list[str],
-                     wrapped: bool) -> dict[str, Any]:
-    perms = _config(cfg).get("permissions") or {}
-    home = plan.profile.config_home_path
-    tools = json.loads(plan.policies[TOOLS_FILE])
+def managed_settings(actx: AdapterContext, servers: dict[str, Any], mcp_allow: list[str],
+                     mcp_deny: list[str]) -> dict[str, Any]:
+    perms = _config(actx).get("permissions") or {}
+    home = actx.config_home
+    tools = actx.tool_policy
     env = dict(MANAGED_ENV)
-    if wrapped:
+    if actx.wrapped:
         env["CLAUDE_CODE_SHELL_PREFIX"] = SHELL_PREFIX
-    proxy = _web_fetch_proxy(plan.composition)
+    proxy = _web_fetch_proxy(actx)
     if proxy:
-        env.update({"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "NO_PROXY": _no_proxy(plan)})
-    model = plan.model
+        env.update({"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "NO_PROXY": _no_proxy(actx)})
+    model = actx.model
     if model is not None and urlsplit(model.base_url).hostname != DEFAULT_HOST:
         # only off the default host: CC treats a base URL as a gateway
         env["ANTHROPIC_BASE_URL"] = model.base_url
@@ -189,7 +181,7 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
             "allow": [*tools["shell"], *tools["file_write"], *tools["allow"], *([WEB_FETCH] if proxy else []),
                       *mcp_allow, *(perms.get("allow") or [])],
             # WebFetch is denied unless webfetch hands it the egress proxy
-            "deny": [f"Read(/{home}/**)", *_write_denies(plan),
+            "deny": [f"Read(/{home}/**)", *_write_denies(actx),
                      *(d for d in tools["deny"] if not proxy or d != WEB_FETCH), *mcp_deny, *(perms.get("deny") or [])],
         },
         "enableArtifact": False,
@@ -199,15 +191,14 @@ def managed_settings(cfg, plan, servers: dict[str, Any], mcp_allow: list[str], m
     }
 
 
-def system_files(cfg, plan) -> dict[str, dict[str, str]]:
+def system_files(actx: AdapterContext) -> dict[str, dict[str, str]]:
     """/etc/claude-code, bound read-only (see the module docstring)."""
-    model = plan.model
+    model = actx.model
     if model is not None and model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}; "
                           "pick provider anthropic (or an Anthropic-compatible endpoint)")
-    wrapped = "tool-wrapper.argv" in plan.policies
-    servers, mcp_allow, mcp_deny, argv_files = _mcp(plan.composition, wrapped)
-    settings = managed_settings(cfg, plan, servers, mcp_allow, mcp_deny, wrapped)
+    servers, mcp_allow, mcp_deny, argv_files = _mcp(actx, actx.wrapped)
+    settings = managed_settings(actx, servers, mcp_allow, mcp_deny)
     files = {"managed-settings.json": json.dumps(settings, indent=2) + "\n"}
     if servers:
         files["managed-mcp.json"] = json.dumps({"mcpServers": servers}, indent=2) + "\n"
@@ -232,29 +223,26 @@ def _merge_json(path: Path, update: dict[str, Any]) -> None:
     path.write_text(json.dumps(merge(doc, update), indent=2) + "\n")
 
 
-def _skill_links(comp) -> list[tuple[str, str]]:
-    return comp.skill_links() if comp is not None else []
+def entry_args(actx: AdapterContext) -> list[str]:
+    return ["--add-dir", SKILLS_ROOT] if actx.skill_links else []
 
 
-def entry_args(comp) -> list[str]:
-    return ["--add-dir", SKILLS_ROOT] if _skill_links(comp) else []
-
-
-def image_lines(comp) -> tuple[list[str], list]:
+def image_lines(actx: AdapterContext) -> tuple[list[str], list]:
     """Bake the skill links: outside the config home, so the agent can read a
     skill's files (and a tool command run its scripts) by the path Claude Code
     shows it."""
-    lines = comp.skill_link_lines(f"{SKILLS_ROOT}/.claude/skills") if comp is not None else []
+    lines = actx.skill_link_lines(f"{SKILLS_ROOT}/.claude/skills")
     return (["# Claude Code: contributed skills (loaded with --add-dir)", *lines] if lines else []), []
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
-    hc = _config(cfg)
+def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
+    hc = _config(actx)
+    model = actx.model
     if model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}")
-    cfg_dir = home_dir / rel_config_home(profile)
+    cfg_dir = actx.config_dir(home_dir)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / profile.transcript_subdir).mkdir(exist_ok=True)
+    (cfg_dir / actx.transcript_subdir).mkdir(exist_ok=True)
 
     settings: dict[str, Any] = {
         "model": model.model,
@@ -265,7 +253,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     p_settings = cfg_dir / "settings.json"
     p_settings.write_text(json.dumps(settings, indent=2) + "\n")
 
-    work = mount_plan.working_dir
+    work = actx.working_dir
     p_state = cfg_dir / ".claude.json"
     state: dict[str, Any] = {"hasCompletedOnboarding": True, "projects": {work: {"hasTrustDialogAccepted": True}}}
     if model.api_key_injected and model.api_key_kind == "api-key":  # an approved key's last 20 chars
@@ -287,7 +275,7 @@ def _approved_keys(path: Path) -> list:
     return approved if isinstance(approved, list) else []
 
 
-def describe(comp) -> list[str]:
-    servers, _, _, _ = _mcp(comp)
+def describe(actx: AdapterContext) -> list[str]:
+    servers, _, _, _ = _mcp(actx)
     return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {n}" for n in servers),
-            *(f"skill: {name} → {dest}" for name, dest in _skill_links(comp))]
+            *(f"skill: {name} → {dest}" for name, dest in actx.skill_links)]

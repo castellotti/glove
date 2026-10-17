@@ -116,3 +116,10 @@ def pw_service(tmp_path, plan) -> tuple[dict, str]:
 
     text = DockerRuntime().render(plan, tmp_path).compose_yaml
     return yaml.safe_load(text)["services"]["glove-s-pw"], text
+
+
+def hook_ctx(name: str = "test", **fields):
+    """A `HookContext` for calling an extension's hook directly."""
+    from glove.hooks import HookContext
+
+    return HookContext(name=name, **fields)

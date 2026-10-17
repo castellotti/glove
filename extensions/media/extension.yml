@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: media
 summary: Image/audio/video analysis toolchain (ffmpeg, imagemagick, webp, exiftool, PIL) baked into the harness image.
 harness:

@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg, make_session
+from helpers import hook_ctx, make_cfg, make_session
 from typer.testing import CliRunner
 
 from extensions.gate.gatelib import classify_scope, collect_command
 from glove.cli import app
 from glove.config import AddDir
-from glove.extensions import ExtensionError, materialize
+from glove.extensions import IN_TREE_DIR, ExtensionError, load_module, materialize
 from glove.hardening import HardeningError
 from glove.plan import build_session_plan
 from glove.runtimes.docker import DockerRuntime
@@ -232,9 +232,9 @@ TOR_CHECK = {"url": "https://check.torproject.org/api/ip"}
     ("https://mine.example/ip", {"exit_identity": FILE}, "via-proxy:https://mine.example/ip"),
     ("none", {"exit_identity": FILE}, "none"),
 ])
-def test_session_json_names_the_exit_source(tmp_path, setting, egress, fact):
-    hooks = plan_for(tmp_path).composition.by_name("observe").hooks
-    ctx = {"settings": {"exit_identity": setting}, "slot": {"egress": egress}}
+def test_session_json_names_the_exit_source(setting, egress, fact):
+    hooks = load_module(IN_TREE_DIR / "observe" / "hooks.py", "observe")
+    ctx = hook_ctx(settings={"exit_identity": setting}, slot={"egress": egress})
     assert hooks._exit_fact(hooks.exit_identity(ctx)) == fact
 
 
@@ -242,16 +242,16 @@ def test_no_exit_identity_without_a_polling_gate(tmp_path):
     # the proxy endpoint skipped: no gate polls, so session.json claims nothing
     _, doc, _ = render(tmp_path, exts=VPN, observe={"skip": ["proxy"]})
     assert not any("--exit-file" in s["command"] for s in gates(doc).values())
-    hooks = plan_for(tmp_path).composition.by_name("observe").hooks
+    hooks = load_module(IN_TREE_DIR / "observe" / "hooks.py", "observe")
     fwd = {"harness": True, "observed": True, "mode": "http-proxy", "route": {"kind": "vpn", "upstream": "x:1"}}
-    assert hooks._polled({"forwarders": [fwd]})
+    assert hooks._polled(hook_ctx(forwarders=[fwd]))
     for other in ({"observed": False}, {"harness": False}, {"mode": "tcp"},
                   {"route": {"kind": "corporate", "upstream": "direct"}}):
-        assert not hooks._polled({"forwarders": [{**fwd, **other}]})
+        assert not hooks._polled(hook_ctx(forwarders=[{**fwd, **other}]))
     for bad in ("vpn-endpoint", {"url": "http://x/"}, {"url": "https://"}, {**FILE, "file": "../ip"},
                 {"source": "s", "volume": "exit"}, {**TOR_CHECK, **FILE}):
         with pytest.raises(ValueError, match="must be"):
-            hooks.exit_identity({"settings": {"exit_identity": "auto"}, "slot": {"egress": {"exit_identity": bad}}})
+            hooks.exit_identity(hook_ctx(settings={"exit_identity": "auto"}, slot={"egress": {"exit_identity": bad}}))
 
 
 def test_a_forwarder_reads_only_the_egress_exit_volume(tmp_path):

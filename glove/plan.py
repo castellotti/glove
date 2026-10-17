@@ -26,7 +26,7 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
-from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
+from .harnessconfig import CONTAINER_HOME, INJECTED_KEY, adapter_context
 from .mounts import (
     Mount,
     MountPlan,
@@ -491,18 +491,19 @@ def build_session_plan(
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
     # collect enforcer env/caps. The adapter may extend the entry (Pi loads
     # capability code as `-e <path>`).
-    entry = [*profile.entry, *adapter_call(profile, "entry_args", comp, default=[])]
+    actx = adapter_context(comp, cfg)
+    entry = [*profile.entry, *adapter_call(profile, "entry_args", actx, default=[])]
     # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
     # wrapper prefix. session_id=None ⇒ continue-last.
     if resume or session_id is not None:
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
     plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
-    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, comp), indent=2) + "\n"
+    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, actx), indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
-    plan.system_files = adapter_call(profile, "system_files", cfg, plan, default={})
+    plan.system_files = adapter_call(profile, "system_files", adapter_context(comp, cfg, plan), default={})
     validate_system_files(plan)  # a bad adapter fails at `plan`, not at `up`
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)

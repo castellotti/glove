@@ -20,6 +20,7 @@ from extensions.gate.netgate.exitid import check_url
 from extensions.gate.netgate.records import iso_utc
 from extensions.gate.netgate.resolver import from_url
 from extensions.gate.netgate.writer import write_json_atomic
+from glove.api import HookContext, hook
 
 EVENTS_VOLUME = "events"  # the fragment's tmpfs volume
 
@@ -57,16 +58,16 @@ def _check(s: dict[str, Any]) -> None:
                              f"{s['exit_identity']!r}; `via-proxy` and exit_identity_url became a URL here)") from None
 
 
-def exit_identity(ctx: dict[str, Any]) -> dict[str, str] | None:
+def exit_identity(ctx: HookContext) -> dict[str, str] | None:
     """Where the exit identity comes from: ``{url}`` (polled through the egress)
     or ``{source, volume, file}`` (the egress provider's shared file, e.g.
     vpn's `vpn-endpoint`) — the egress's `exit_identity` export under `auto`."""
-    v = ctx["settings"]["exit_identity"]
+    v = ctx.settings["exit_identity"]
     if v == "none":
         return None
     if v != "auto":
         return {"url": str(v)}
-    ex = (ctx["slot"].get("egress") or {}).get("exit_identity")
+    ex = (ctx.slot.get("egress") or {}).get("exit_identity")
     if not ex:
         return None
     ok = isinstance(ex, dict) and (
@@ -93,27 +94,29 @@ def _polls_exit(harness: bool, mode: str | None, upstream: str | None) -> bool:
     return harness and mode == "http-proxy" and upstream != "direct"
 
 
-def _polled(ctx: dict[str, Any]) -> bool:
+def _polled(ctx: HookContext) -> bool:
     return any(f["observed"] and _polls_exit(f["harness"], f.get("mode"), f["route"].get("upstream"))
-               for f in ctx["forwarders"])
+               for f in ctx.forwarders)
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
     _check(s)
     return {"exports": {"transcripts": bool(s["transcripts"])}}
 
 
-def _rules(ctx: dict[str, Any]) -> bool:
+def _rules(ctx: HookContext) -> bool:
     """The filter grant is on: core offers the control root to this extension."""
-    return "control" in ctx["exports"]
+    return "control" in ctx.export_dirs
 
 
-def forwarder(ctx: dict[str, Any], ep: dict[str, Any]) -> dict[str, Any] | None:
-    s = ctx["settings"]
+@hook
+def forwarder(ctx: HookContext, ep: dict[str, Any]) -> dict[str, Any] | None:
+    s = ctx.settings
     if ep["name"] in (s["skip"] or []):
         return None
-    gate = gatelib.gate_spec(ep, ctx["slot"].get("egress") or {})
+    gate = gatelib.gate_spec(ep, ctx.slot.get("egress") or {})
     rules = _rules(ctx)
     volumes = [{"type": "volume", "source": EVENTS_VOLUME, "target": gatelib.EVENTS_DIR}]
     exit_url = exit_file = None
@@ -132,12 +135,12 @@ def forwarder(ctx: dict[str, Any], ep: dict[str, Any]) -> dict[str, Any] | None:
     ingress = gatelib.ingress_alias(ep["container"]) if ep["harness"] else None
     if rules:
         # directory mount (atomic-rename writes stay visible), read-only
-        volumes.append({"type": "bind", "source": ctx["exports"]["control"], "target": gatelib.CONTROL_DIR,
+        volumes.append({"type": "bind", "source": str(ctx.export_dirs["control"]), "target": gatelib.CONTROL_DIR,
                         "read_only": True})
     return {
         "service": {
-            "image": ctx["libs"]["gate"]["images"]["netgate"],
-            "command": gatelib.forward_command(gate, rec, session=ctx["session"]["id"], listen=ep["port"],
+            "image": ctx.libs["gate"]["images"]["netgate"],
+            "command": gatelib.forward_command(gate, rec, session=ctx.session["id"], listen=ep["port"],
                                                ingress=ingress),
             "volumes": volumes,
             "depends_on": ["netgate"],
@@ -147,28 +150,28 @@ def forwarder(ctx: dict[str, Any], ep: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def session_facts(ctx: dict[str, Any]) -> dict[str, Any]:
+def session_facts(ctx: HookContext) -> dict[str, Any]:
     """Static ``net/session.json``: what Layman needs before any flow arrives —
     including services that have not been used yet (handoff §8)."""
-    s = ctx["settings"]
-    sid = ctx["session"]["id"]
+    s = ctx.settings
+    sid = ctx.session["id"]
     services = []
-    for f in ctx["forwarders"]:
+    for f in ctx.forwarders:
         entry = {k: f[k] for k in ("service", "listen", "observed", "harness", "next")}
         if f["observed"]:
             entry.update({k: f[k] for k in ("mode", "tool", "scope", "upstream", "route", "client")})
         services.append(entry)
-    kinds = {f["route"]["kind"] for f in ctx["forwarders"] if f.get("observed") and f.get("mode") == "http-proxy"}
-    egress = ctx["slot"].get("egress") or {}
+    kinds = {f["route"]["kind"] for f in ctx.forwarders if f.get("observed") and f.get("mode") == "http-proxy"}
+    egress = ctx.slot.get("egress") or {}
     resolver = s.get("resolver") or egress.get("resolver")
     return {
         "v": SCHEMA_VERSION,
         "type": "session",
         "env": sid,
         "session": sid,
-        "harness": ctx["harness"],
+        "harness": ctx.harness,
         "gate": GATE_VERSION,
-        "image": ctx["libs"]["gate"]["images"]["netgate"],
+        "image": ctx.libs["gate"]["images"]["netgate"],
         "record": s["record"],
         "resolve": s["resolve"],
         "resolver": resolver if s["resolve"] == "in-tunnel" and resolver not in (None, "", "none") else None,
@@ -181,7 +184,7 @@ def session_facts(ctx: dict[str, Any]) -> dict[str, Any]:
         "record_headers": s["record_headers"],
         "rendered_at": iso_utc(),
         "services": services,
-        "grants": ctx["grants"],
+        "grants": dict(ctx.grants),
     }
 
 
@@ -191,15 +194,16 @@ def _exit_fact(exit_id: dict[str, str] | None) -> str:
     return f"via-proxy:{exit_id['url']}" if "url" in exit_id else exit_id["source"]
 
 
-def materialize(ctx: dict[str, Any]) -> None:
+@hook
+def materialize(ctx: HookContext) -> None:
     """Lay out ``net/`` in the observe export (0700, the collector writes it as
     this user) and write ``session.json``. Core created the export root."""
-    net = Path(ctx["exports"]["observe"]) / "net"
+    net = Path(ctx.export_dirs["observe"]) / "net"
     net.mkdir(mode=0o700, parents=True, exist_ok=True)
     net.chmod(0o700)
     if not write_json_atomic(net / "session.json", session_facts(ctx)):
         raise OSError(f"could not write {net}/session.json")
-    s = ctx["settings"]
+    s = ctx.settings
     if s["record"] == "full":
         print(
             "⚠ observe.record: full — this session writes a browsing log to "
@@ -208,7 +212,7 @@ def materialize(ctx: dict[str, Any]) -> None:
             + ". HTTPS paths stay invisible (no TLS interception). This trades the session's privacy for "
             "visibility; `glove observe status` and Layman badge it.", file=sys.stderr)
     if _rules(ctx):
-        problem = gatelib.rules_file_problem(Path(ctx["exports"]["control"]))
+        problem = gatelib.rules_file_problem(Path(ctx.export_dirs["control"]))
         if problem:
             print(f"⚠ rules.json: {problem} — the gates run as you, so they will reject this file "
                   "(status.json rules.ok: false) and enforce no rules until it is readable. A second writer "

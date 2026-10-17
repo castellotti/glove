@@ -88,16 +88,6 @@ KNOWN = frozenset({
     "extensions/skills/hooks.py -> glove.mounts",
     "extensions/skills/hooks.py -> glove.naming",
     "extensions/skills/hooks.py -> glove.toolchains",
-    "harnesses/claude-code/adapter.py -> glove.config",
-    "harnesses/claude-code/adapter.py -> glove.enforcers",
-    "harnesses/claude-code/adapter.py -> glove.extensions",
-    "harnesses/claude-code/adapter.py -> glove.harnessconfig",
-    "harnesses/claude-code/adapter.py -> glove.mounts",
-    "harnesses/claude-code/adapter.py -> glove.naming",
-    "harnesses/pi/adapter.py -> glove.extensions",
-    "harnesses/pi/adapter.py -> glove.harnessconfig",
-    "harnesses/pi/adapter.py -> glove.image",
-    "harnesses/vibe/adapter.py -> glove.harnessconfig",
 })
 
 

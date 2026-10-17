@@ -206,10 +206,10 @@ def test_unknown_kind_is_refused_at_compose_time(tmp_path):
 
     ext = tmp_path / "bad"
     ext.mkdir()
-    (ext / "extension.yml").write_text("api: 1\nname: bad\nverify: [{name: x, kind: ping}]\n")
+    (ext / "extension.yml").write_text("api: 2\nname: bad\nverify: [{name: x, kind: ping}]\n")
     from glove.extensions import discover
 
-    manifests = {**discover(), "bad": Manifest("bad", ext, {"api": 1, "name": "bad",
+    manifests = {**discover(), "bad": Manifest("bad", ext, {"api": 2, "name": "bad",
                                                             "verify": [{"name": "x", "kind": "ping"}]})}
     with pytest.raises(ExtensionError, match="needs a kind"):
         compose({"llm": {"provider": "llama.cpp", "location": "host", "endpoint": "127.0.0.1:1", "model": "m"},
@@ -298,7 +298,7 @@ def test_redact_log_drops_credential_lines():
 def _with_hook(tmp_path, monkeypatch, result):
     plan = _plan(tmp_path, {"vpn": {"provider": "x", "wireguard_key": "keychain:k"}})
     a = plan.composition.by_name("vpn")
-    monkeypatch.setattr(a, "hooks", SimpleNamespace(launch_env=lambda ctx, resolve: result))
+    monkeypatch.setattr(a, "hooks", {"launch_env": lambda ctx, resolve: result})
     return plan.composition
 
 

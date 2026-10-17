@@ -87,9 +87,9 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
     ``session_dir`` resolves relative path settings when it did not;
     ``probe``: ``probe(url, method=, body=, headers=)`` → (status, text), a
     request to what the session reaches from a throwaway container, never the
-    host; a hook gets it as ``ctx["probe"](url, method=, body=)``, as at launch,
-    with its own ``probe_headers`` export (None: a hook contacts nothing)."""
-    from .extensions import base_context, compose
+    host; a `doctor(ctx, probe)` hook calls ``probe(url, method=, body=)``, as at
+    launch, with its own ``probe_headers`` export (None: a hook contacts nothing)."""
+    from .extensions import call_hook, compose
     from .session import with_headers
 
     if comp is None:
@@ -103,9 +103,9 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
             return [Check("extensions", "fail", str(e))]
     checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
     for a in comp.active:
-        if a.hooks is not None and hasattr(a.hooks, "doctor"):
-            ctx = {**base_context(comp, a), "probe": probe and with_headers(probe, a.exports)}
-            checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(ctx)]
+        if "doctor" in a.hooks:
+            hook_probe = probe and with_headers(probe, a.exports)
+            checks += [Check(n, st, d) for n, st, d in call_hook(comp, a, "doctor", hook_probe)]
         checks += egress_host_checks(comp, a)
     return checks
 

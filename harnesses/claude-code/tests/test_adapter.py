@@ -242,10 +242,11 @@ def test_skills_are_baked_outside_the_config_home(tmp_path):
     # the config home is denied to Read and to tool commands, so a skill's files
     # must be reachable by the path Claude Code shows: <add-dir>/.claude/skills/<name>
     from glove.harness import adapter_call
+    from glove.harnessconfig import adapter_context
 
     cfg, plan = _plan(tmp_path, extensions={"media": {}, "ocr": {}, "rag": {"models_dir": str(tmp_path)}})
     assert plan.command[-2:] == ["--add-dir", "/opt/glove/cc"]
-    lines, _ = adapter_call(plan.profile, "image_lines", plan.composition)
+    lines, _ = adapter_call(plan.profile, "image_lines", adapter_context(plan.composition))
     assert lines[-1] == ("RUN mkdir -p /opt/glove/cc/.claude/skills"
                          " && ln -s /opt/glove/skills/rag/rag-parse /opt/glove/cc/.claude/skills/rag-parse"
                          " && ln -s /opt/glove/skills/rag/rag-query /opt/glove/cc/.claude/skills/rag-query")

@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: cc-mcp-probe
 summary: test_cc_nono.sh only — a stdio "MCP server" that records whether it reached the session's llm forwarder.
 harness:

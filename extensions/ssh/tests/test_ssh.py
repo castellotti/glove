@@ -6,11 +6,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_cfg, render
+from helpers import hook_ctx, make_cfg, render
 
 from glove.extensions import ExtensionError, load_module
 
@@ -123,7 +124,7 @@ def test_the_key_may_be_base64_of_the_pem():
 
 
 def test_hosts_become_lan_endpoints_for_the_sidecar_only():
-    eps = hooks.contribute({"settings": {"hosts": HOSTS, "known_hosts": "local/kh"}})["endpoints"]
+    eps = hooks.contribute(hook_ctx(settings={"hosts": HOSTS, "known_hosts": "local/kh"}))["endpoints"]
     assert set(eps) == {"ssh-build", "ssh-nas"}
     assert eps["ssh-nas"] == {"harness": False, "port": 22,
                               "target": {"address": "nas.lan:2222", "via": "lan"},
@@ -153,8 +154,8 @@ def test_bad_hosts(bad, why):
 
 def test_known_hosts_must_be_a_file_in_the_session_and_is_copied_to_state(tmp_path):
     (tmp_path / "local").mkdir()
-    ctx = {"settings": {"hosts": HOSTS, "known_hosts": "local/kh"}, "session_dir": tmp_path,
-           "state_dir": tmp_path / "state"}
+    ctx = hook_ctx(settings={"hosts": HOSTS, "known_hosts": "local/kh"}, session_dir=tmp_path,
+                   state_dir=tmp_path / "state")
     with pytest.raises(ValueError, match="not a file in the session directory"):
         hooks.contribute(ctx)
     (tmp_path / "local" / "kh").write_text("192.168.1.10 ssh-ed25519 AAAA\n")
@@ -164,13 +165,14 @@ def test_known_hosts_must_be_a_file_in_the_session_and_is_copied_to_state(tmp_pa
     assert (tmp_path / "state" / "known_hosts").read_text() == "192.168.1.10 ssh-ed25519 AAAA\n"
     (tmp_path / "out").write_text("x")
     with pytest.raises(ValueError, match="not a file in the session directory"):
-        hooks.contribute({**ctx, "settings": {**ctx["settings"], "known_hosts": "local/../../out"}})
+        hooks.contribute(replace(ctx, settings={**ctx.settings, "known_hosts": "local/../../out"}))
 
 
 def test_launch_env_resolves_the_key_in_memory():
-    assert hooks.launch_env({"settings": {"key": "keychain:x"}}, lambda r: "KEY\n") == {"env": {"RELAY_SSH_KEY": "KEY"}}
+    out = hooks.launch_env(hook_ctx(settings={"key": "keychain:x"}), lambda r: "KEY\n")
+    assert out == {"env": {"RELAY_SSH_KEY": "KEY"}}
     with pytest.raises(ValueError, match="empty"):
-        hooks.launch_env({"settings": {"key": "env:X"}}, lambda r: "")
+        hooks.launch_env(hook_ctx(settings={"key": "env:X"}), lambda r: "")
 
 
 # --- the session --------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: corporate
 summary: Egress to corporate resources only (over the host's corporate VPN) — a default-block netgate proxy with an allowlist; route corporate.
 provides: [egress]

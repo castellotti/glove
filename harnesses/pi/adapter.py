@@ -5,7 +5,7 @@ tools: [<name>, …]}}` (Pi has no MCP): each directory is baked into the derive
 image under /opt/glove/ext/<ext>/ and loaded with `pi -e <path>`, and the tools
 it registers are added to the session's tool inventory (passthrough; the
 enforcer extension refuses any tool not in it). Skills come from the
-neutral `harness.skills` contribution (`comp.skills`).
+neutral `harness.skills` contribution (`actx.skills`).
 """
 
 from __future__ import annotations
@@ -14,10 +14,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from glove.extensions import ExtensionError, active_items, render_value
-from glove.extensions import tool_names as checked_tool_names
-from glove.harnessconfig import rel_config_home
-from glove.image import staged_name
+from glove.api import ExtensionError
+from glove.api import tool_names as checked_tool_names
+from glove.api.harness import AdapterContext, HarnessSection, staged_name
 
 # What Pi sends when the endpoint needs no key (Pi refuses a provider without one).
 NO_KEY_PLACEHOLDER = "glove-no-key"
@@ -29,30 +28,32 @@ def _merged(first: list, extra: list | None) -> list:
     return [*first, *(e for e in extra or [] if e not in first)]
 
 
-def _sections(comp):
-    for a, section, ctx in comp.harness_items:
-        where = f"extension {a.name!r} harness"
-        if not isinstance(section, dict) or set(section) - SECTION_KEYS:
+def _sections(actx: AdapterContext) -> list[tuple[HarnessSection, str]]:
+    out = []
+    for sec in actx.sections:
+        where = f"extension {sec.extension!r} harness"
+        if not isinstance(sec.data, dict) or set(sec.data) - SECTION_KEYS:
             raise ExtensionError(f"{where}: `pi:` takes {sorted(SECTION_KEYS)}")
-        yield a, section, ctx, where
+        out.append((sec, where))
+    return out
 
 
-def tool_names(comp) -> list[str]:
+def tool_names(actx: AdapterContext) -> list[str]:
     """The tools the session's Pi extensions register (`pi: {tools: …}`, a list
     or comma-separated)."""
-    return [n for _a, section, ctx, where in _sections(comp)
-            for n in checked_tool_names(f"{where} pi", render_value(section.get("tools") or [], ctx, where))]
+    return [n for sec, where in _sections(actx)
+            for n in checked_tool_names(f"{where} pi", sec.data.get("tools") or [])]
 
 
-def extensions(comp) -> list[tuple[str, Path]]:
+def extensions(actx: AdapterContext) -> list[tuple[str, Path]]:
     """(extension, source dir) of every Pi extension the session's extensions contribute."""
     out: list[tuple[str, Path]] = []
-    for a, section, ctx, where in _sections(comp):
-        for item in active_items(section.get("extensions"), ctx):
-            src = a.manifest.path / (item["src"] if isinstance(item, dict) else item)
+    for sec, where in _sections(actx):
+        for item in sec.data.get("extensions") or []:
+            src = sec.assets / (item["src"] if isinstance(item, dict) else item)
             if not src.is_dir():
                 raise ExtensionError(f"{where}: pi extension {src} not found")
-            out.append((a.name, src))
+            out.append((sec.extension, src))
     return out
 
 
@@ -60,13 +61,13 @@ def extension_dest(ext: str, src: Path) -> str:
     return f"/opt/glove/ext/{ext}/{src.name}"
 
 
-def entry_args(comp) -> list[str]:
-    return [arg for ext, src in extensions(comp) for arg in ("-e", extension_dest(ext, src))]
+def entry_args(actx: AdapterContext) -> list[str]:
+    return [arg for ext, src in extensions(actx) for arg in ("-e", extension_dest(ext, src))]
 
 
-def image_lines(comp) -> tuple[list[str], list[tuple[str, Path]]]:
+def image_lines(actx: AdapterContext) -> tuple[list[str], list[tuple[str, Path]]]:
     lines: list[str] = []
-    staged = extensions(comp)
+    staged = extensions(actx)
     for ext, src in staged:
         dest = extension_dest(ext, src)
         lines.append(f"# extension: {ext} (Pi extension)")
@@ -76,9 +77,9 @@ def image_lines(comp) -> tuple[list[str], list[tuple[str, Path]]]:
     return lines, staged
 
 
-def describe(comp) -> list[str]:
+def describe(actx: AdapterContext) -> list[str]:
     """Lines for `glove plan`."""
-    return [f"pi extension ({ext}): {extension_dest(ext, src)}" for ext, src in extensions(comp)]
+    return [f"pi extension ({ext}): {extension_dest(ext, src)}" for ext, src in extensions(actx)]
 
 
 def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
@@ -99,8 +100,9 @@ def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
     return out
 
 
-def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[Path]:
-    cfg_dir = home_dir / rel_config_home(profile)
+def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
+    model = actx.model
+    cfg_dir = actx.config_dir(home_dir)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     model_id = model.model
 
@@ -140,10 +142,10 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
     # Let the (git-tracked) session file's `harness_config` override Pi settings
     # and model fields without a code change — e.g. `defaultThinkingLevel: xhigh`,
     # or extra per-model tuning if the endpoint supports it. `env` is deep-merged.
-    extra_settings = dict(cfg.harness_config.get("settings", {}))
+    extra_settings = dict(actx.harness_config.get("settings", {}))
     extra_env = extra_settings.pop("env", None)
     # extensions' skills first, then any the session file lists itself
-    skills = [dest for _, _, dest in (comp.skills if comp else [])]
+    skills = list(actx.skills)
     # the session's own extensions after glove's, minus any naming the built-in MCP
     extra_ext = [e for e in extra_settings.pop("extensions", None) or [] if not e.endswith("builtin:mcp")]
     settings_json.update(extra_settings)
@@ -152,7 +154,7 @@ def render_home(cfg, profile, home_dir: Path, model, comp, mount_plan) -> list[P
         settings_json["skills"] = _merged(skills, extra_settings.get("skills"))
     if extra_env:
         settings_json.setdefault("env", {}).update(extra_env)
-    model_overrides = cfg.harness_config.get("model", {})
+    model_overrides = actx.harness_config.get("model", {})
     if model_overrides:
         models[0].update(model_overrides)
 

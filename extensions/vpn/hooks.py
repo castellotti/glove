@@ -25,6 +25,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from glove.api import HookContext, hook
+
 WG_KEY = re.compile(r"^[A-Za-z0-9+/]{43}=\Z")
 HOOK_KEYS = ("WIREGUARD_PRIVATE_KEY", "WIREGUARD_PUBLIC_KEY", "WIREGUARD_ENDPOINT_IP", "WIREGUARD_ENDPOINT_PORT",
              "WIREGUARD_ADDRESSES")
@@ -34,8 +36,9 @@ class VpnError(ValueError):
     pass
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
     # gluetun filters a named provider's server list; `custom` has none, and it
     # refuses a filter there ("no choice"): the endpoint (or the hook) is the server
     picked = [k for k in ("countries", "cities", "hostnames") if s.get(k)]
@@ -94,13 +97,14 @@ def parse_hook_output(out: str) -> dict[str, str]:
     return values
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
+    s = ctx.settings
     if not s.get("register_hook"):
         return {}
-    if ctx.get("session_dir") is None:
+    if ctx.session_dir is None:
         raise VpnError("vpn.register_hook needs the session directory")
-    hook = hook_path(Path(ctx["session_dir"]), str(s["register_hook"]))
+    hook = hook_path(Path(ctx.session_dir), str(s["register_hook"]))
     stdin = f"{resolve_secret(s['register_user'])}\n{resolve_secret(s['register_pass'])}\n"
     # VPN_LOCATION is the session's `location` only, never one inherited from the shell
     env = {k: v for k, v in os.environ.items() if k != "VPN_LOCATION"}
@@ -122,7 +126,8 @@ def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
     return {"secrets": {"wireguard_private_key": key}, "env": values}
 
 
-def diagnose(ctx: dict[str, Any], check: dict[str, Any], run) -> str | None:
+@hook
+def diagnose(ctx: HookContext, check: dict[str, Any], run) -> str | None:
     if check.get("service") != "gluetun":
         return None
     rc, rx = run("gluetun", ["cat", "/sys/class/net/tun0/statistics/rx_bytes"])
@@ -131,7 +136,7 @@ def diagnose(ctx: dict[str, Any], check: dict[str, Any], run) -> str | None:
     if int(rx) == 0:
         hint = ("no WireGuard handshake: the VPN server never answered (tun0 received 0 bytes). "
                 "The key was likely revoked or the server changed")
-        if ctx["settings"].get("register_hook"):
+        if ctx.settings.get("register_hook"):
             return hint + "; `glove up` registers a new key each time, so check the hook and the account."
         return (hint + ": check the key/device with your VPN provider and store a new key with "
                 "`glove keychain set <service>`. Also possible: this network blocks outbound UDP to the endpoint.")

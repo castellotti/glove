@@ -1,4 +1,4 @@
-"""Extensions: manifest loading, settings, slots and composition (api: 1).
+"""Extensions: manifest loading, settings, slots and composition (api: 2).
 
 An extension is a directory holding ``extension.yml`` plus assets (compose
 fragment, Pi extensions, brief, container code, an optional ``hooks.py`` and
@@ -7,8 +7,10 @@ load from ``extension_paths`` in ``~/.glove/config.yml``, marked *out-of-tree*
 (the Linux "taint") and refused privilege exceptions unless listed in
 ``trusted_extensions``.
 
-Core never imports an extension: ``hooks.py``/``cli.py`` are loaded by path
-(``load_module``), and ``uv run lint-imports`` forbids ``glove`` → ``extensions``.
+Core never imports an extension: ``hooks.py``/``cli.py`` load by path as
+modules of a package ``glove_ext.<name>`` (``load_module``), and ``uv run
+lint-imports`` forbids ``glove`` → ``extensions``. The schema is
+``glove/manifest.py``; the hook protocol ``glove/hooks.py``.
 
 ``compose(...)`` turns the session's ``extensions:`` map into a ``Composition``:
 the selected extensions in dependency order, with validated settings, filled
@@ -24,7 +26,6 @@ import importlib.util
 import ipaddress
 import re
 import secrets as pysecrets
-import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,9 +36,11 @@ import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from .config import ConfigError, HostService, git_config_pairs, is_secret_ref
+from .config import HostService, git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
+from .hooks import HookContext, hooks_of, validate_result
+from .manifest import KEYS, ExtensionError, check_manifest, check_slot_exports, merge_names
 from .mounts import WORK_TARGET, check_path, host_path
 from .naming import project_name, scoped
 from .sessiondir import PLACEHOLDER
@@ -45,7 +48,6 @@ from .userconfig import load_user_config
 from .verify import KINDS as VERIFY_KINDS
 from .verify import item_error as verify_item_error
 
-API_VERSION = 1
 IN_TREE_DIR = Path(__file__).resolve().parent.parent / "extensions"
 MANIFEST = "extension.yml"
 
@@ -61,12 +63,6 @@ REQUIRED_SLOTS = frozenset({"inference"})
 # only while `filter` is active.
 EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 
-MANIFEST_KEYS = frozenset({
-    "api", "name", "summary", "provides", "requires", "conflicts", "auto", "selectable",
-    "settings", "exports", "services", "networks", "privileges", "secrets", "limits", "verify",
-    "harness", "host_services", "cli", "hooks", "validate", "images", "endpoints", "mounts", "channels",
-    "outputs", "inputs", "trust_corporate_ca",
-})
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")  # one path component, never `..`
@@ -76,10 +72,6 @@ _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*\Z")
 # A channel's directory in the harness and in the sidecars that serve it (see
 # `Channel`).
 CHANNEL_ROOT = "/run/glove"
-
-
-class ExtensionError(ConfigError):
-    """A manifest, setting or composition problem (always names the extension)."""
 
 
 # --- manifests ---------------------------------------------------------------
@@ -141,14 +133,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     name = raw.get("name")
     if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise ExtensionError(f"{f}: `name` must match {_NAME.pattern}, got {name!r}")
-    if raw.get("api") != API_VERSION:
-        raise ExtensionError(f"extension {name!r}: api must be {API_VERSION}, got {raw.get('api')!r}")
-    unknown = set(raw) - MANIFEST_KEYS
-    if unknown:
-        raise ExtensionError(f"extension {name!r}: unknown manifest keys {sorted(unknown)}")
-    for k in ("provides", "requires", "conflicts", "trust_corporate_ca"):
-        if not isinstance(raw.get(k) or [], list):
-            raise ExtensionError(f"extension {name!r}: `{k}` must be a list")
+    check_manifest(name, raw)
     bad_slots = [s for s in raw.get("provides") or [] if s not in SLOTS]
     if bad_slots:
         raise ExtensionError(f"extension {name!r}: unknown slot(s) {bad_slots} (known: {sorted(SLOTS)})")
@@ -188,8 +173,14 @@ def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
 
 
 def load_module(path: Path, name: str) -> ModuleType:
-    """Import an extension's `hooks.py`/`cli.py` by path (never by package name)."""
-    spec = importlib.util.spec_from_file_location(f"glove_ext_{name.replace('-', '_')}_{path.stem}", path)
+    """Import an extension's `hooks.py`/`cli.py` by path, as a module of the
+    package `glove_ext.<name>` on its directory: it imports its own files
+    relatively (`from . import relay_policy`)."""
+    pkg = f"glove_ext.{name.replace('-', '_')}"
+    root = next((d for d in path.parents if (d / MANIFEST).is_file()), path.parent)
+    sys.modules.setdefault("glove_ext", ModuleType("glove_ext")).__path__ = []
+    sys.modules.setdefault(pkg, ModuleType(pkg)).__path__ = [str(root)]  # the extension's own directory
+    spec = importlib.util.spec_from_file_location(f"{pkg}.{path.stem}", path)
     if spec is None or spec.loader is None:
         raise ExtensionError(f"extension {name!r}: cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -359,6 +350,11 @@ def render_value(value: Any, ctx: dict[str, Any], where: str = "") -> Any:
     return value
 
 
+def _entry_active(ctx: dict[str, Any]):
+    """Whether a mapping entry's `when:` matches (for `merge_names`)."""
+    return lambda spec: when_matches(spec.get("when") if isinstance(spec, dict) else None, ctx)
+
+
 def active_items(items: list | None, ctx: dict[str, Any]) -> list:
     """List entries whose optional `when:` matches, with `when` removed."""
     out = []
@@ -481,7 +477,7 @@ class Active:
     settings: dict[str, Any]
     auto_added: bool = False
     exports: dict[str, Any] = field(default_factory=dict)
-    hooks: ModuleType | None = None
+    hooks: dict[str, Any] = field(default_factory=dict)  # its `@hook` functions by name
     mounts: dict[str, str] = field(default_factory=dict)  # mount name → container path
     # what its `contribute` hook returned (plan time), for the keys core reads
     # beside the manifest's (`spec`)
@@ -492,17 +488,18 @@ class Active:
         return self.manifest.name
 
     def spec(self, key: str) -> Any:
-        """A manifest key that a `contribute` hook may extend: `privileges` and
-        `channels` (mappings, by service or channel name; the manifest's entry
-        wins) or `trust_corporate_ca` (a list of services)."""
+        """A manifest key with what its `contribute` hook added (`KEYS` says
+        how; a name both set is refused)."""
         mine, more = self.manifest.raw.get(key), self.contributed.get(key)
-        if key == "trust_corporate_ca":
-            if more is not None and (not isinstance(more, list) or not all(isinstance(x, str) for x in more)):
-                raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a list of its services")
+        if KEYS[key].merge == "cat":
             return [*(mine or []), *(more or [])]
-        if more is not None and not isinstance(more, dict):
-            raise ExtensionError(f"extension {self.name!r}: contributed {key} must be a mapping")
-        return {**(more or {}), **(mine or {})}
+        return merge_names(f"extension {self.name!r} {key}", mine, more)
+
+    def set_exports(self, exports: dict[str, Any]) -> None:
+        """Its exports, checked against the schema of each slot it provides."""
+        for s in self.manifest.provides:
+            check_slot_exports(s, self.name, exports)
+        self.exports = exports
 
 
 @dataclass
@@ -544,8 +541,7 @@ class Composition:
     # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
     # The session's validated `corporate_ca` PEM on the host (symlinks
-    # resolved): core binds it into the sidecars a manifest's
-    # `trust_corporate_ca:` names.
+    # resolved): core binds it into the sidecars a manifest's `trust:` names.
     corporate_ca: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
@@ -619,14 +615,6 @@ class Composition:
                 n += 1
             out[name] = dest
         return list(out.items())
-
-    def skill_link_lines(self, directory: str) -> list[str]:
-        """Dockerfile lines baking `skill_links` into `directory` (none without skills)."""
-        links = self.skill_links()
-        if not links:
-            return []
-        ln = " && ".join(f"ln -s {shlex.quote(dest)} {shlex.quote(f'{directory}/{name}')}" for name, dest in links)
-        return [f"RUN mkdir -p {directory} && {ln}"]
 
     def rendered_briefs(self) -> list[tuple[str, str]]:
         out = []
@@ -715,7 +703,7 @@ def select(
     requested: dict[str, Any], *, harness: str, manifests: dict[str, Manifest] | None = None,
 ) -> list[Active]:
     """Validate the `extensions:` map, expand `auto` requirements, fill slots,
-    check conflicts, and return the extensions in dependency order."""
+    and return the extensions in dependency order."""
     manifests = manifests if manifests is not None else discover()
     if not isinstance(requested, dict):
         raise ExtensionError("`extensions` must be a mapping of name → settings")
@@ -760,9 +748,6 @@ def select(
                 raise ExtensionError(
                     f"extension {a.name!r} requires the {req!r} slot — add one of {providers} to `extensions`"
                 )
-        for c in a.manifest.raw.get("conflicts") or []:
-            if c in chosen or c in slots:
-                raise ExtensionError(f"extension {a.name!r} conflicts with {c!r}")
         for rule in a.manifest.raw.get("validate") or []:
             if when_matches(rule.get("when"), ctx_of(a, slots)) and "error" in rule:
                 raise ExtensionError(f"extension {a.name!r}: {rule['error']}")
@@ -1154,7 +1139,10 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
     trust: <file>, when: …}}` — a directory shared by the harness and those
     sidecars (`Channel`). A new edge into the harness, so a privilege: in-tree
     or trusted extensions only."""
-    for name, spec in a.spec("channels").items():
+    channels = merge_names(f"extension {a.name!r} channels", a.manifest.raw.get("channels"),
+                           a.contributed.get("channels"),
+                           active=_entry_active(ctx))
+    for name, spec in channels.items():
         where = f"extension {a.name!r} channel {name!r}"
         if (not _NAME.fullmatch(str(name)) or not isinstance(spec, dict)
                 or set(spec) - {"services", "read_only", "trust", "when"}
@@ -1174,8 +1162,10 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
                                      read_only=spec.get("read_only", False), trust=spec.get("trust")))
 
 
-def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None:
-    for item in active_items(items, ctx):
+def _host_services(comp: Composition, a: Active, ctx: dict) -> None:
+    """What its contribute hook returned for `host_services` (R16.C moves them
+    into playwright)."""
+    for item in active_items(a.contributed.get("host_services"), ctx):
         require_trust(a, f"extension {a.name!r}: a host service")
         r = render_value(item, ctx, f"extension {a.name!r} host service")
         comp.host_services.append(HostService(
@@ -1185,14 +1175,62 @@ def _host_services(comp: Composition, a: Active, ctx: dict, items: list) -> None
         ))
 
 
-def _hook_ctx(comp: Composition, a: Active) -> dict[str, Any]:
-    ctx = base_context(comp, a)
-    ctx["state_dir"] = comp.state_dir(a.name)
-    ctx["session_dir"] = comp.session_dir
-    ctx["active"] = [x.name for x in comp.active]
-    ctx["forwarders"] = [dict(f) for f in comp.forwarders]
-    ctx["grants"] = dict(comp.grants)
-    return ctx
+def declares_host_paths(m: Manifest, *, work: bool = False) -> bool:
+    """Whether a hook of `m` gets the session dir (or, with `work`, the work
+    dir) in its context: trusted, and its manifest names a reason — outputs
+    or inputs, `host_files: true`, and a `path` setting or `mounts` (session
+    dir) or a `work` privilege (work dir)."""
+    raw = m.raw
+    if not m.trusted:
+        return False
+    if raw.get("host_files") or raw.get("outputs") or raw.get("inputs"):
+        return True
+    if work:
+        return any(isinstance(p, dict) and p.get("work") for v in (raw.get("privileges") or {}).values()
+                   for p in (v if isinstance(v, list) else [v]))
+    return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") == "path"
+                                          for x in (raw.get("settings") or {}).values())
+
+
+_SHARED = ("harness", "session", "names", "slot", "endpoint", "own_endpoints", "images", "libs", "mount", "output",
+           "input")
+
+
+def hook_context(comp: Composition, a: Active) -> HookContext:
+    """`a`'s hook context: see `HookContext`."""
+    t = base_context(comp, a)
+    forwarder = comp.slots.get("forwarder") is a
+    return HookContext(
+        name=a.name, settings=a.settings, renders=t["renders"], trusted=a.manifest.trusted,
+        active=[x.name for x in comp.active], state_dir=comp.state_dir(a.name), assets=a.manifest.path,
+        session_dir=comp.session_dir if declares_host_paths(a.manifest) else None,
+        work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True) else None,
+        export_dirs={r: comp.export_dirs[r] for r in comp.export_access(a) if r in comp.export_dirs},
+        forwarders=[dict(f) for f in comp.forwarders] if forwarder else [],
+        grants=dict(comp.grants) if forwarder else {},
+        **{k: t[k] for k in _SHARED},
+    )
+
+
+def call_hook(comp: Composition, a: Active, name: str, *args: Any) -> Any:
+    """Run `a`'s hook `name` (None when it has none) and check what it
+    returned. A `ValueError` (`ConfigError`) it raises names the extension and
+    hook; anything else is a bug, and propagates with a note saying where."""
+    fn = a.hooks.get(name)
+    if fn is None:
+        return None
+    if not any(x is a for x in comp.active):
+        raise ExtensionError(f"extension {a.name!r} is not selected: its hooks never run")
+    try:
+        out = fn(hook_context(comp, a), *args)
+    except ExtensionError:
+        raise
+    except ValueError as e:
+        raise ExtensionError(f"extension {a.name!r}: {name}: {e}") from e
+    except Exception as e:
+        e.add_note(f"(in the {name} hook of extension {a.name!r})")
+        raise
+    return validate_result(name, a.name, out)
 
 
 def compose(
@@ -1216,24 +1254,18 @@ def compose(
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
         if a.manifest.hooks_path:
-            a.hooks = load_module(a.manifest.hooks_path, a.name)
+            a.hooks = hooks_of(load_module(a.manifest.hooks_path, a.name), a.name)
         # Slot exports are visible to later extensions (topological order).
         ctx = base_context(comp, a)
-        contributed: dict[str, Any] = {}
-        if a.hooks is not None and hasattr(a.hooks, "contribute"):
-            try:
-                contributed = a.hooks.contribute(_hook_ctx(comp, a)) or {}
-            except ExtensionError:
-                raise
-            except ValueError as e:
-                raise ExtensionError(f"extension {a.name!r}: {e}") from e
-        a.contributed = contributed
-        for key in ("channels", "privileges", "trust_corporate_ca"):
-            a.spec(key)  # well formed, or refused now
-        a.exports = {**render_value(a.manifest.raw.get("exports") or {}, ctx, f"extension {a.name!r} exports"),
-                     **(contributed.get("exports") or {})}
-        for s in a.manifest.provides:
-            comp.slots[s] = a
+        a.contributed = contributed = call_hook(comp, a, "contribute") or {}
+        where = f"extension {a.name!r}"
+        a.spec("privileges")  # no name set twice
+        if not all(isinstance(x, str) for x in a.spec("trust")):
+            raise ExtensionError(f"{where}: `trust` lists its services")
+        a.set_exports(merge_names(f"{where} exports",
+                                  render_value(a.manifest.raw.get("exports") or {}, ctx, f"{where} exports"),
+                                  contributed.get("exports")))
+        comp.slots.update(dict.fromkeys(a.manifest.provides, a))
         ctx = base_context(comp, a)
         for net, spec in (a.manifest.raw.get("networks") or {}).items():
             if net in CORE_NETWORKS or not when_matches((spec or {}).get("when"), ctx):
@@ -1241,7 +1273,8 @@ def compose(
             if not (spec or {}).get("internal", True):
                 raise ExtensionError(f"extension {a.name!r}: private network {net!r} must be internal")
             comp.networks[net] = {"internal": True, "owner": a.name}
-        endpoints = {**(a.manifest.raw.get("endpoints") or {}), **(contributed.get("endpoints") or {})}
+        endpoints = merge_names(f"{where} endpoints", a.manifest.raw.get("endpoints"), contributed.get("endpoints"),
+                                active=_entry_active(ctx))
         for name, spec in endpoints.items():
             if not when_matches(spec.get("when"), ctx):
                 continue
@@ -1258,10 +1291,9 @@ def compose(
         _outputs(comp, a, ctx, "inputs")
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
-        _harness_contrib(comp, a, ctx, contributed)
-        _host_services(comp, a, ctx, [*(a.manifest.raw.get("host_services") or []),
-                                      *(contributed.get("host_services") or [])])
-        for item in active_items([*(a.manifest.raw.get("verify") or []), *(contributed.get("verify") or [])], ctx):
+        _harness_contrib(comp, a, ctx, contributed.get("harness") or {})
+        _host_services(comp, a, ctx)
+        for item in active_items(a.spec("verify"), ctx):
             if not isinstance(item, dict) or item.get("kind") not in VERIFY_KINDS:
                 raise ExtensionError(f"extension {a.name!r}: verify {item!r} needs a kind in {sorted(VERIFY_KINDS)}")
             comp.verify.append((a.name, render_value(item, ctx, f"extension {a.name!r} verify")))
@@ -1345,16 +1377,16 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 # --- lifecycle hooks --------------------------------------------------------------
 #
 # Besides `contribute` (plan time, pure) and `resolve` (after the sidecars are
-# up), an extension's hooks.py may define:
-#   materialize(ctx)               — write its state under ctx["state_dir"] when the
+# up), an extension's hooks.py may define (`docs/extensions.md`):
+#   materialize(ctx)               — write its state under ctx.state_dir when the
 #                                    session is rendered (`glove plan`/`up`, never `check`);
 #   launch_env(ctx, resolve_secret) → {"secrets": {name: value}, "env": {VAR: value}}
 #                                    — host-side work at `glove up`, in memory only
 #                                    (e.g. the vpn register hook). `secrets` fill the
 #                                    extension's own compose secrets; `env` fills
 #                                    null-valued `environment:` keys of its sidecars;
-#   diagnose(ctx, check, run)      → str | None — explain a failed verify check.
-
+#   diagnose(ctx, check, run)      → str | None — explain a failed verify check;
+#   doctor(ctx, probe)             → [(name, status, detail)] — `glove doctor`/`check`.
 
 
 def materialize(comp: Composition) -> None:
@@ -1362,9 +1394,9 @@ def materialize(comp: Composition) -> None:
         check_path(str(comp.session_dir), o.name, "dir")
         o.host.mkdir(mode=0o755, exist_ok=True)
     for a in comp.active:
-        if a.hooks is not None and hasattr(a.hooks, "materialize"):
+        if "materialize" in a.hooks:
             ensure_dir(comp.state_dir(a.name))
-            a.hooks.materialize(_hook_ctx(comp, a))
+            call_hook(comp, a, "materialize")
 
 
 def launch_env(comp: Composition) -> dict[str, str]:
@@ -1374,12 +1406,9 @@ def launch_env(comp: Composition) -> dict[str, str]:
 
     env: dict[str, str] = {}
     for a in comp.active:
-        if a.hooks is None or not hasattr(a.hooks, "launch_env"):
+        if "launch_env" not in a.hooks:
             continue
-        try:
-            out = a.hooks.launch_env(_hook_ctx(comp, a), resolve_secret) or {}
-        except ValueError as e:
-            raise ExtensionError(f"extension {a.name!r}: {e}") from e
+        out = call_hook(comp, a, "launch_env", resolve_secret)
         own = {k.removeprefix(f"{a.name}-") for k, (ext, _) in comp.secrets.items() if ext == a.name}
         for name, value in (out.get("secrets") or {}).items():
             if name not in own:
@@ -1392,33 +1421,15 @@ def launch_env(comp: Composition) -> dict[str, str]:
     return env
 
 
-# The keys a `forwarder` hook's service may set. Core names it after the
-# endpoint, joins its networks (the harness net with its aliases, the target's
-# network) and applies the sidecar hardening set; privileges are never granted.
-FORWARDER_KEYS = frozenset({
-    "image", "command", "entrypoint", "environment", "volumes", "tmpfs", "depends_on", "healthcheck", "init",
-    "restart", "stop_grace_period", "stop_signal", "labels",
-})
-
-
 def forwarder_service(comp: Composition, ep: dict[str, Any]) -> tuple[dict, dict, list[str]] | None:
     """(service fragment, facts, extra harness-net aliases) for one endpoint from
     the `forwarder` slot's hook — ``forwarder(ctx, endpoint) -> {service, facts,
     aliases} | None`` — or None: the endpoint stays a socat forwarder."""
     a = comp.slots.get("forwarder")
-    if a is None or a.hooks is None or not hasattr(a.hooks, "forwarder"):
-        return None
-    try:
-        out = a.hooks.forwarder(_hook_ctx(comp, a), ep)
-    except ValueError as e:
-        raise ExtensionError(f"extension {a.name!r}: endpoint {ep['name']!r}: {e}") from e
+    out = call_hook(comp, a, "forwarder", ep) if a is not None else None
     if not out:
         return None
     svc = dict(out.get("service") or {})
-    bad = set(svc) - FORWARDER_KEYS
-    if bad:
-        raise ExtensionError(f"extension {a.name!r}: forwarder for {ep['name']!r} sets {sorted(bad)} "
-                             "(core owns names, networks and security keys)")
     prefix = f"{ep['container']}-"
     aliases = list(_aliases(out.get("aliases"), f"extension {a.name!r} forwarder"))
     if any(not x.startswith(prefix) for x in aliases):

@@ -22,6 +22,8 @@ from typing import Any
 
 import yaml
 
+from glove.api import HookContext, hook
+
 SETTINGS = Path(__file__).parent / "settings"
 
 # Engine → categories. A group removes every engine carrying its category.
@@ -204,9 +206,9 @@ def remove_list(groups: dict[str, Any], engines: dict[str, Any]) -> list[str]:
     return sorted(remove)
 
 
-def settings_doc(ctx: dict[str, Any], secret_key: str) -> dict[str, Any]:
-    s = ctx["settings"]
-    egress = ctx["slot"].get("egress") or {}
+def settings_doc(ctx: HookContext, secret_key: str) -> dict[str, Any]:
+    s = ctx.settings
+    egress = ctx.slot.get("egress") or {}
     route = egress.get("route")
     if not egress.get("proxy_url"):
         raise SearchError("search needs an egress provider (vpn, tor or direct)")
@@ -215,25 +217,27 @@ def settings_doc(ctx: dict[str, Any], secret_key: str) -> dict[str, Any]:
     doc: dict[str, Any] = {"use_default_settings": {"engines": {"remove": remove}} if remove else True}
     doc.update(base)
     doc.setdefault("server", {})["secret_key"] = secret_key
-    doc["valkey"] = {"url": f"valkey://glove-{ctx['session']['id']}-valkey:6379/0"}
+    doc["valkey"] = {"url": f"valkey://glove-{ctx.session['id']}-valkey:6379/0"}
     # using_tor_proxy stays off even for Tor: SearXNG accepts it only with
     # socks5h:// proxies, and every consumer here uses the one HTTP proxy_url
     # (privoxy for Tor). tor.yml carries the longer timeouts instead.
     # The egress hop: with observe, a gate on searchnet (SearXNG then has no
     # route to the egress proxy but through it); without, the proxy itself.
-    hop = ((ctx.get("endpoint") or {}).get("searxng-egress") or {}).get("url") or egress["proxy_url"]
+    hop = ((ctx.endpoint or {}).get("searxng-egress") or {}).get("url") or egress["proxy_url"]
     doc["outgoing"] = {**(doc.get("outgoing") or {}), "proxies": {"all://": [hop]}, "using_tor_proxy": False}
     return doc
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
     remove_list(dict(s.get("groups") or {}), dict(s.get("engines") or {}))  # validate at plan time
     return {}
 
 
-def materialize(ctx: dict[str, Any]) -> None:
-    state = Path(ctx["state_dir"])
+@hook
+def materialize(ctx: HookContext) -> None:
+    state = Path(ctx.state_dir)
     key_file = state / "secret_key"
     if not key_file.exists():
         fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

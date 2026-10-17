@@ -14,16 +14,21 @@ routing and probes live in the `llm` extension.
 
 from __future__ import annotations
 
-import copy
+import json
+import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from .config import Config
-from .harness import HarnessProfile, adapter_call
+from .harness import HarnessProfile, adapter_call, get_profile
 from .mounts import CONTAINER_HOME
+from .naming import scoped
 
 if TYPE_CHECKING:
+    from .extensions import Composition
     from .plan import SessionPlan
 
 
@@ -80,6 +85,87 @@ def harness_model(profile: HarnessProfile, exports: dict[str, Any]) -> ModelDesc
     model = ModelDescriptor.from_exports(exports)
     name = adapter_call(profile, "secret_env", model) if model.api_key_env else None
     return replace(model, api_key_env=name) if name else model
+
+
+@dataclass(frozen=True)
+class HarnessSection:
+    """An extension's `harness.<this harness>:` section, rendered by core: a
+    list in it holds only the items whose `when:` matches, without `when`."""
+
+    extension: str
+    assets: Path  # the extension's directory
+    data: Any
+
+
+@dataclass(frozen=True)
+class AdapterContext:
+    """What a harness adapter's functions see (`api: 2`). The late fields are
+    None (or empty) until the plan has them: `tool_names`, `entry_args`,
+    `image_lines` and `describe` run before it exists."""
+
+    session: str
+    config_home: str  # the harness's config dir in the container
+    transcript_subdir: str | None = None
+    sessions_subdir: str | None = None
+    harness_config: Mapping[str, Any] = MappingProxyType({})  # without glove's `protect:` opt-ins
+    enforcer: str = ""
+    mcp: tuple[tuple[str, dict], ...] = ()  # (extension, checked server)
+    skills: tuple[str, ...] = ()  # container paths
+    skill_links: tuple[tuple[str, str], ...] = ()  # (link name, container path)
+    sections: tuple[HarnessSection, ...] = ()
+    # late
+    model: ModelDescriptor | None = None
+    tool_policy: Mapping[str, list[str]] | None = None  # tools.json
+    wrapped: bool = False  # a tool wrapper runs every command
+    write_roots: tuple[str, ...] | None = None
+    harness_hosts: tuple[str, ...] = ()  # the names the harness reaches forwarders by
+    working_dir: str | None = None
+
+    def config_dir(self, home_dir: Path) -> Path:
+        """The config dir under the session home on the host."""
+        return home_dir / Path(self.config_home).relative_to(CONTAINER_HOME)
+
+    def skill_link_lines(self, directory: str) -> list[str]:
+        """Dockerfile lines baking `skill_links` into `directory` (none without skills)."""
+        if not self.skill_links:
+            return []
+        q = shlex.quote
+        return ["RUN mkdir -p " + directory + " && "
+                + " && ".join(f"ln -s {q(dest)} {q(f'{directory}/{name}')}" for name, dest in self.skill_links)]
+
+
+def adapter_context(comp: Composition, cfg: Config | None = None, plan: SessionPlan | None = None) -> AdapterContext:
+    """The adapter's context for `comp`, with the session's `harness_config`
+    when `cfg` is given and the late fields when `plan` is."""
+    from .extensions import active_items, render_value
+
+    def section(a, data: Any, ctx: dict) -> HarnessSection:
+        if isinstance(data, dict):  # inactive items go before rendering: theirs may not render
+            data = {k: active_items(v, ctx) if isinstance(v, list) else v for k, v in data.items()}
+        return HarnessSection(a.name, a.manifest.path, render_value(data, ctx, f"extension {a.name!r} harness"))
+
+    profile = get_profile(comp.harness)
+    late: dict[str, Any] = {}
+    if plan is not None:
+        from .enforcers.base import TOOLS_FILE, write_roots
+
+        late = {
+            "model": plan.model, "wrapped": "tool-wrapper.argv" in plan.policies,
+            "tool_policy": json.loads(plan.policies[TOOLS_FILE]) if TOOLS_FILE in plan.policies else None,
+            "write_roots": tuple(write_roots(plan)), "working_dir": plan.mount_plan.working_dir,
+            "harness_hosts": tuple(h for sc in plan.network.sidecars if sc.harness
+                                   for h in (scoped(plan.session, sc.role), *sc.aliases, *sc.impl_aliases)),
+        }
+    return AdapterContext(
+        session=comp.session, config_home=profile.config_home_path, transcript_subdir=profile.transcript_subdir,
+        sessions_subdir=profile.sessions_subdir,
+        harness_config=MappingProxyType({k: v for k, v in (cfg.harness_config if cfg else {}).items()
+                                         if k not in profile.opt_ins}),
+        enforcer=cfg.enforcer if cfg else "", mcp=tuple(comp.mcp), skills=tuple(d for _, _, d in comp.skills),
+        skill_links=tuple(comp.skill_links()),
+        sections=tuple(section(*item) for item in comp.harness_items),
+        **late,
+    )
 
 
 def build_environment_context(plan: SessionPlan) -> str:
@@ -156,13 +242,9 @@ def render_home(cfg: Config, plan: SessionPlan, home_dir: Path) -> list[Path]:
     `model` (the inference slot's descriptor, launch-resolved by `glove up`).
     """
     home_dir.mkdir(parents=True, exist_ok=True)
-    profile = plan.profile
-    # the `protect:` opt-ins are glove's (plan.py), not the harness's config
-    cfg = copy.copy(cfg)
-    cfg.harness_config = {k: v for k, v in cfg.harness_config.items() if k not in profile.opt_ins}
     # the harness's native config (its adapter: harnesses/<name>/adapter.py)
-    written: list[Path] = adapter_call(profile, "render_home", cfg, profile, home_dir, plan.model,
-                                       plan.composition, plan.mount_plan, default=[])
+    written: list[Path] = adapter_call(plan.profile, "render_home", adapter_context(plan.composition, cfg, plan),
+                                       home_dir, default=[])
     written.append(_write_context_file(cfg, plan, home_dir))
     return written
 

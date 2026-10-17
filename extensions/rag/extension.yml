@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: rag
 summary: Offline, source-traceable document Q&A — kstore builds a keyword (Obsidian vault) and a vector (FAISS) store from /work/data/input; skills rag-parse / rag-query.
 requires: [ocr]

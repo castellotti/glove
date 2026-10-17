@@ -257,8 +257,7 @@ def test_vibe_bridges_a_checked_http_mcp_server():
     from glove.harness import adapter_call, get_profile
 
     def servers(item):
-        return adapter_call(get_profile("vibe"), "_mcp_servers", SimpleNamespace(harness_config={}),
-                            SimpleNamespace(mcp=[("x", item)]))
+        return adapter_call(get_profile("vibe"), "_mcp_servers", SimpleNamespace(harness_config={}, mcp=[("x", item)]))
 
     item = mcp_server("x", {"name": "s", "transport": "streamable-http", "url": "http://s/mcp", "tools": "a, b"})
     assert servers(item) == ([{"name": "s", "transport": "stdio", "command": "/opt/glove/bin/glove-mcp-bridge",

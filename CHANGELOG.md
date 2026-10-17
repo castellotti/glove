@@ -4,6 +4,25 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Extensions speak `api: 2` (breaking for out-of-tree extensions and
+  adapters).** A manifest says `api: 2`; `api: 1` is refused with a pointer to
+  the README. Hooks are marked `@hook` from `glove.api` and get a read-only
+  `HookContext` (`ctx.settings`, not `ctx["settings"]`); `doctor` takes
+  `(ctx, probe)`; a `contribute` hook returns its harness parts under
+  `harness:`, and a name it sets that the manifest also sets (and doesn't
+  `when:`-exclude) is refused instead of one silently winning. Every hook's
+  result is checked, and a `ValueError` it raises names the extension and the
+  hook. `trust_corporate_ca:` is now `trust:`; `conflicts:` and the manifest's
+  `host_services:` are gone (a hook may still contribute `host_services`).
+  The session and work directories reach a hook only when its manifest gives a
+  reason (`host_files: true` is new; `skills` sets it). The slot exports core
+  reads (`egress`: `proxy_url`, `exit_identity`, `shares`, …; `inference`) are
+  type-checked after `contribute` and after `resolve`. Harness adapters take
+  one `AdapterContext` (`render_home(actx, home_dir)`). New for extension CLIs:
+  `glove.api.ext_session` and `reload_sidecar`.
+
 ### Added
 
 - **Guardrails for a small core (contributors).** `tests/test_core_budget.py`

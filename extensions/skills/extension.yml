@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: skills
 summary: Claude Code plugins (and plain directories of skills) for every harness — baked into the harness image, `${CLAUDE_PLUGIN_ROOT}` resolved, `bin/` on PATH, PEP 723 scripts offline through a wheelhouse, opt-in stdio MCP.
 settings:
@@ -17,6 +17,8 @@ requires:
 # hop and checks; materialize: its data dir, a relayed plugin's copy; launch_env:
 # the relays' secrets, in memory
 hooks: hooks.py
+# its hooks read the plugins' paths (session dir) and bind /work into a relay
+host_files: true
 networks:
   skillnet: { internal: true, when: { "settings.plugins.*.relay": { set: true } } }
 services: compose/services.yml.j2

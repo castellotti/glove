@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: github
 summary: gh, and git push/fetch/pull/clone, from shell commands — relayed to a sidecar that holds the tokens (github.com, GitHub Enterprise hosts); the sandbox never sees them or gets a route.
 requires: [relay, egress]
@@ -42,7 +42,7 @@ privileges:
 limits:
   gh: { pids: 256, memory: 1g }
 # gh and git trust the session's corporate_ca too (relayd: ca_bundle_env)
-trust_corporate_ca: [gh]
+trust: [gh]
 verify:
   - { name: github-relay-up, kind: container-healthy, service: gh }
 harness:

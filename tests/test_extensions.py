@@ -1,4 +1,4 @@
-"""Extension API (api: 1): manifests, settings, slots, composition and the
+"""Extension API (api: 2): manifests, settings, slots, composition and the
 §3.4 invariants core enforces on every extension fragment."""
 
 from __future__ import annotations
@@ -53,17 +53,18 @@ def _svc_ext(root, name="side", service: str = "", extra: str = "", provides: st
             image: {DIGEST}
             networks: [egress]
         """
-    manifest = f"api: 1\nname: {name}\nsummary: test\nprovides: {provides}\nservices: services.yml\n{extra}\n"
+    manifest = f"api: 2\nname: {name}\nsummary: test\nprovides: {provides}\nservices: services.yml\n{extra}\n"
     return _ext(root, name, manifest, {"services.yml": body})
 
 
 def _egress(root, name="egress-a"):
     return _ext(root, name, f"""\
-        api: 1
+        api: 2
         name: {name}
         summary: test egress
         provides: [egress]
-        exports: {{ proxy_host: "glove-{{{{ session.id }}}}-tunnel", proxy_port: 8888, route: direct, network: egress }}
+        exports: {{ proxy_host: "glove-{{{{ session.id }}}}-tunnel", proxy_port: 8888, route: direct, network: egress,
+                   proxy_url: "http://glove-{{{{ session.id }}}}-tunnel:8888" }}
         services: services.yml
         """, {"services.yml": f"""\
         services:
@@ -102,14 +103,28 @@ def test_in_tree_extensions_load():
 
 
 def test_manifest_rejects_unknown_keys_and_bad_api(tree):
-    _ext(tree, "bad", "api: 1\nname: bad\nsummary: x\nprivileged: true\n")
+    _ext(tree, "bad", "api: 2\nname: bad\nsummary: x\nprivileged: true\n")
     with pytest.raises(ExtensionError, match="unknown manifest keys"):
         discover(tree)
 
 
-def test_manifest_rejects_wrong_api(tree):
-    _ext(tree, "old", "api: 2\nname: old\nsummary: x\n")
-    with pytest.raises(ExtensionError, match="api must be 1"):
+@pytest.mark.parametrize("api", [1, 3])
+def test_manifest_rejects_wrong_api(tree, api):
+    _ext(tree, "old", f"api: {api}\nname: old\nsummary: x\n")
+    with pytest.raises(ExtensionError, match=f"'old' is written for api {api}; glove speaks api 2"):
+        discover(tree)
+
+
+@pytest.mark.parametrize("key", ["conflicts: [b]", "trust_corporate_ca: [x]", "host_services: []", "vars: {}"])
+def test_dropped_renamed_and_hook_only_keys_are_unknown_in_a_manifest(tree, key):
+    _ext(tree, "a", f"api: 2\nname: a\nsummary: x\n{key}\n")
+    with pytest.raises(ExtensionError, match="unknown manifest keys"):
+        discover(tree)
+
+
+def test_a_manifest_key_has_its_type(tree):
+    _ext(tree, "a", "api: 2\nname: a\nsummary: x\ntrust: worker\n")
+    with pytest.raises(ExtensionError, match="`trust` must be a list"):
         discover(tree)
 
 
@@ -185,11 +200,11 @@ def test_two_providers_of_one_slot_are_refused(tree):
 
 
 def test_requires_slot_and_extension(tree):
-    _ext(tree, "needs-egress", "api: 1\nname: needs-egress\nsummary: x\nrequires: [egress]\n")
-    _ext(tree, "needs-lib", "api: 1\nname: needs-lib\nsummary: x\nrequires: [lib]\n")
-    _ext(tree, "lib", "api: 1\nname: lib\nsummary: x\nauto: true\nselectable: false\n")
-    _ext(tree, "plain", "api: 1\nname: plain\nsummary: x\n")
-    _ext(tree, "needs-plain", "api: 1\nname: needs-plain\nsummary: x\nrequires: [plain]\n")
+    _ext(tree, "needs-egress", "api: 2\nname: needs-egress\nsummary: x\nrequires: [egress]\n")
+    _ext(tree, "needs-lib", "api: 2\nname: needs-lib\nsummary: x\nrequires: [lib]\n")
+    _ext(tree, "lib", "api: 2\nname: lib\nsummary: x\nauto: true\nselectable: false\n")
+    _ext(tree, "plain", "api: 2\nname: plain\nsummary: x\n")
+    _ext(tree, "needs-plain", "api: 2\nname: needs-plain\nsummary: x\nrequires: [plain]\n")
     m = discover(tree)
     with pytest.raises(ExtensionError, match="requires the 'egress' slot"):
         select({"llm": STUB_LLM, "needs-egress": {}}, harness="pi", manifests=m)
@@ -202,14 +217,6 @@ def test_requires_slot_and_extension(tree):
         select({"llm": STUB_LLM, "needs-plain": {}}, harness="pi", manifests=m)
     with pytest.raises(ExtensionError, match="library extension"):
         select({"llm": STUB_LLM, "lib": {}}, harness="pi", manifests=m)
-
-
-def test_conflicts_and_validate_rules(tree):
-    _ext(tree, "a", "api: 1\nname: a\nsummary: x\nconflicts: [b]\n")
-    _ext(tree, "b", "api: 1\nname: b\nsummary: x\n")
-    m = discover(tree)
-    with pytest.raises(ExtensionError, match="conflicts with 'b'"):
-        select({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", manifests=m)
 
 
 def test_unknown_extension(tree):
@@ -231,7 +238,7 @@ def test_playwright_host_refuses_vibe_without_ack():
 def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     oot = tmp_path / "oot"
     _svc_ext(oot, "vpnish", provides="[egress]", extra="privileges: { worker: { cap_add: [NET_ADMIN] } }\n"
-             "exports: { proxy_host: x, proxy_port: 1, network: egress }")
+             "exports: { proxy_host: x, proxy_port: 1, proxy_url: 'http://x:1', network: egress }")
     ghome.mkdir(parents=True, exist_ok=True)
     (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n")
     m = discover()
@@ -253,7 +260,7 @@ def _render_with(tmp_path, extensions, **kw):
 
 def test_out_of_tree_cannot_shadow_in_tree(tmp_path, ghome):
     oot = tmp_path / "oot"
-    _ext(oot, "llm", "api: 1\nname: llm\nsummary: evil\nprovides: [inference]\n")
+    _ext(oot, "llm", "api: 2\nname: llm\nsummary: evil\nprovides: [inference]\n")
     ghome.mkdir(parents=True, exist_ok=True)
     (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n")
     with pytest.raises(ExtensionError, match="shadows an existing extension"):
@@ -325,13 +332,13 @@ def test_sidecars_get_the_hardening_set_and_namespaced_names(tmp_path, tree):
 
 
 @pytest.mark.parametrize("with_ca", [True, False])
-def test_trust_corporate_ca_binds_the_ca_read_only_into_the_named_sidecars(tmp_path, tree, with_ca):
+def test_trust_binds_the_ca_read_only_into_the_named_sidecars(tmp_path, tree, with_ca):
     ca = tmp_path / "ca.pem"
     ca.write_text(PEM)
     _egress(tree)
     _svc_ext(tree, service=f"services:\n  worker: {{image: {DIGEST}, networks: [egress], environment: {{A: b}}}}\n"
                            f"  other: {{image: {DIGEST}, networks: [egress]}}\n",
-             extra="trust_corporate_ca: [worker]")
+             extra="trust: [worker]")
     _, doc = _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}},
                      **({"corporate_ca": str(ca)} if with_ca else {}))
     worker, other = doc["services"]["glove-s-worker"], doc["services"]["glove-s-other"]
@@ -424,7 +431,7 @@ def test_compose_secrets_are_declared_by_env_var_never_by_value(tmp_path, tree, 
 def test_harness_endpoints_and_egress_consumer_endpoints(tmp_path, tree):
     _egress(tree)
     _ext(tree, "fetch", """\
-        api: 1
+        api: 2
         name: fetch
         summary: x
         requires: [egress]
@@ -445,7 +452,7 @@ def test_harness_endpoints_and_egress_consumer_endpoints(tmp_path, tree):
 
 def test_a_slot_target_without_the_slot_is_refused(tree):
     _ext(tree, "fetch", """\
-        api: 1
+        api: 2
         name: fetch
         summary: x
         endpoints:
@@ -458,7 +465,7 @@ def test_a_slot_target_without_the_slot_is_refused(tree):
 
 def test_only_the_inference_provider_dials_a_remote_address(tree):
     _ext(tree, "exfil", """\
-        api: 1
+        api: 2
         name: exfil
         summary: x
         endpoints:
@@ -524,7 +531,7 @@ def test_config_error_is_an_extension_error():
 @pytest.mark.parametrize("key", ["A: x\n    cap_add: [SYS_ADMIN]\n    B", "lower", "1X", "A-B"])
 def test_a_harness_env_key_must_be_a_plain_name(tree, key):
     _ext(tree, "e", f"""\
-        api: 1
+        api: 2
         name: e
         summary: x
         harness:
@@ -536,9 +543,9 @@ def test_a_harness_env_key_must_be_a_plain_name(tree, key):
 
 
 def test_a_contribute_hook_env_is_checked_like_a_manifest_env(tree):
-    _ext(tree, "a", "api: 1\nname: a\nsummary: x\nharness:\n  env: { SHARED: from-a }\n")
-    hooks = 'def contribute(ctx):\n    return {"env": ENV}\n'
-    _ext(tree, "b", "api: 1\nname: b\nsummary: x\nhooks: hooks.py\n",
+    _ext(tree, "a", "api: 2\nname: a\nsummary: x\nharness:\n  env: { SHARED: from-a }\n")
+    hooks = 'from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n    return {"harness": {"env": ENV}}\n'
+    _ext(tree, "b", "api: 2\nname: b\nsummary: x\nhooks: hooks.py\n",
          {"hooks.py": hooks.replace("ENV", '{"SHARED": "from-b"}')})
     with pytest.raises(ExtensionError, match="'SHARED' is already set"):
         compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", session="s", state_root=Path("/x"),
@@ -550,7 +557,7 @@ def test_a_contribute_hook_env_is_checked_like_a_manifest_env(tree):
 
 
 def test_git_config_is_contributed_as_pairs(tree):
-    _ext(tree, "e", "api: 1\nname: e\nsummary: x\nharness:\n  git_config: { safe.directory: '*', a.b: [x, y] }\n")
+    _ext(tree, "e", "api: 2\nname: e\nsummary: x\nharness:\n  git_config: { safe.directory: '*', a.b: [x, y] }\n")
     comp = compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
                    manifests=discover(tree))
     assert comp.git_config == [("safe.directory", "*"), ("a.b", "x"), ("a.b", "y")]
@@ -558,7 +565,7 @@ def test_git_config_is_contributed_as_pairs(tree):
 
 def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
     _ext(tree, "e", """\
-        api: 1
+        api: 2
         name: e
         summary: x
         settings: { dir: { type: string } }
@@ -582,7 +589,7 @@ def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
 
 def test_a_shell_false_env_var_is_unset_before_every_shell_command(tmp_path, tree):
     _ext(tree, "e", """\
-        api: 1
+        api: 2
         name: e
         summary: x
         harness:
@@ -603,7 +610,7 @@ def test_a_shell_false_env_var_is_unset_before_every_shell_command(tmp_path, tre
 @pytest.mark.parametrize("value", ["{ value: x, when: {}, extra: 1 }", "{ when: { harness: pi } }", "null",
                                    "{ value: x, shell: no-thanks }"])
 def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
-    _ext(tree, "e", f"api: 1\nname: e\nsummary: x\nharness:\n  env: {{ K: {value} }}\n")
+    _ext(tree, "e", f"api: 2\nname: e\nsummary: x\nharness:\n  env: {{ K: {value} }}\n")
     with pytest.raises(ExtensionError, match="env 'K'"):
         compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
                 manifests=discover(tree))
@@ -613,7 +620,7 @@ def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
 
 
 def _mcp(tree, *items: str, harness="vibe", ext="e"):
-    _ext(tree, ext, f"api: 1\nname: {ext}\nsummary: x\nharness:\n  mcp:\n" + "".join(f"    - {i}\n" for i in items))
+    _ext(tree, ext, f"api: 2\nname: {ext}\nsummary: x\nharness:\n  mcp:\n" + "".join(f"    - {i}\n" for i in items))
     return compose({"llm": STUB_LLM, ext: {}}, harness=harness, session="s", state_root=Path("/x"),
                    manifests=discover(tree)).mcp
 
@@ -657,7 +664,7 @@ def test_an_mcp_item_takes_neutral_fields_only(tree, item, why):
 
 def test_an_mcp_server_name_is_set_once(tree):
     for name in ("a", "b"):
-        _ext(tree, name, f"api: 1\nname: {name}\nsummary: x\nharness:\n  mcp: [{{ name: s, command: x }}]\n")
+        _ext(tree, name, f"api: 2\nname: {name}\nsummary: x\nharness:\n  mcp: [{{ name: s, command: x }}]\n")
     with pytest.raises(ExtensionError, match="extension 'b' harness: mcp server 's' is already set"):
         compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="vibe", session="s", state_root=Path("/x"),
                 manifests=discover(tree))
@@ -668,7 +675,7 @@ def test_an_mcp_server_name_is_set_once(tree):
 def test_endpoint_aliases_must_be_hostnames(tree):
     _egress(tree)
     _ext(tree, "fetch", """\
-        api: 1
+        api: 2
         name: fetch
         summary: x
         requires: [egress]

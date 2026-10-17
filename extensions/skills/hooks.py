@@ -46,6 +46,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from glove.api import HookContext, hook
 from glove.image import STAGE_IGNORE
 from glove.naming import HOST_GLOB
 
@@ -143,26 +144,28 @@ def plugin_vars(name: str) -> dict[str, str]:
     return {"CLAUDE_PLUGIN_ROOT": f"{ROOT}/{name}", "CLAUDE_PLUGIN_DATA": f"{DATA}/{name}"}
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
-    out: dict[str, Any] = {"image": [], "skills": [], "mcp": [], "env": {}}
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
+    h: dict[str, Any] = {"image": [], "skills": [], "mcp": [], "env": {}}  # its `harness:`
+    out: dict[str, Any] = {"harness": h}
     plugins = [_plugin(ctx, name, raw) for name, raw in (s.get("plugins") or {}).items()]
     scripts = [x for p in plugins for x in p["scripts"] if not (p["relay"] and x.path in p["relay"].shims)]
     if scripts:  # before the plugins: a plugin edit never rebuilds this
-        out["image"].append({"run": [_uv_layer(str(s["python"]), scripts)]})
-        out["env"].update(UV_OFFLINE="1", UV_NO_INDEX="1", UV_FIND_LINKS=WHEELS, UV_PYTHON=PYTHON,
+        h["image"].append({"run": [_uv_layer(str(s["python"]), scripts)]})
+        h["env"].update(UV_OFFLINE="1", UV_NO_INDEX="1", UV_FIND_LINKS=WHEELS, UV_PYTHON=PYTHON,
                           UV_PYTHON_DOWNLOADS="never", UV_CACHE_DIR="/tmp/glove-uv")
     for p in plugins:
-        out["skills"] += p["skills"]
+        h["skills"] += p["skills"]
         for k, v in p["env"].items():
-            if k in out["env"]:
+            if k in h["env"]:
                 raise SkillsError(f"skills.plugins: env {k!r} is set by two plugins (or by glove)")
-            out["env"][k] = v
-        out["mcp"] += p["mcp"]
-    if any(m["transport"] == "stdio" for m in out["mcp"]):
-        out["image"].append({"copy": [["bin/glove-confine", CONFINE]], "run": [f"chmod 0755 {CONFINE}"]})
+            h["env"][k] = v
+        h["mcp"] += p["mcp"]
+    if any(m["transport"] == "stdio" for m in h["mcp"]):
+        h["image"].append({"copy": [["bin/glove-confine", CONFINE]], "run": [f"chmod 0755 {CONFINE}"]})
     if plugins:  # one layer for every plugin: core renders it last
-        out["image"].append({"copy_host": [c for p in plugins for c in p["copy"]],
+        h["image"].append({"copy_host": [c for p in plugins for c in p["copy"]],
                              "run": [_bake(plugins)]})
     relays = [p["relay"] for p in plugins if p["relay"]]
     if relays:
@@ -176,7 +179,7 @@ def _relay_contrib(relays: list[Relay]) -> dict[str, Any]:
     return {
         "channels": {r.service: {"services": [r.service]} for r in relays},
         "privileges": {r.service: {"work": True} for r in relays if r.work},
-        "trust_corporate_ca": [r.service for r in relays],
+        "trust": [r.service for r in relays],
         # like github's: a gate in front of the egress proxy (observe) labels
         # the plugin's flows `client: skill-<name>`
         "endpoints": {f"{r.service}-egress": {
@@ -200,7 +203,8 @@ def _relay_contrib(relays: list[Relay]) -> dict[str, Any]:
     }
 
 
-def diagnose(ctx: dict[str, Any], check: dict[str, Any], run) -> str | None:
+@hook
+def diagnose(ctx: HookContext, check: dict[str, Any], run) -> str | None:
     """A relay's failed check: most likely a credential that expired."""
     service = str(check.get("service", ""))
     if check.get("kind") != "exec-ok" or not service.startswith(SERVICE):
@@ -210,7 +214,8 @@ def diagnose(ctx: dict[str, Any], check: dict[str, Any], run) -> str | None:
             "a new one and reloads the relay (the harness keeps running); `glove skills status` checks again")
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
     """Every relay's secrets, resolved now, in memory, for its sidecar's
     environment at `compose up`; a `files:` template rendered with its own."""
     env: dict[str, str] = {}
@@ -219,9 +224,9 @@ def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
     return {"env": env}
 
 
-def relays(ctx: dict[str, Any], only: str | None = None) -> list[Relay]:
+def relays(ctx: HookContext, only: str | None = None) -> list[Relay]:
     """The plugins' relays (`only`: that plugin's), checked."""
-    return [_plugin(ctx, name, raw)["relay"] for name, raw in (ctx["settings"].get("plugins") or {}).items()
+    return [_plugin(ctx, name, raw)["relay"] for name, raw in (ctx.settings.get("plugins") or {}).items()
             if (only is None or name == only) and isinstance(raw, dict) and raw.get("relay")]
 
 
@@ -252,21 +257,22 @@ def relay_env(relay: Relay, resolve_secret) -> dict[str, str]:
     return out
 
 
-def materialize(ctx: dict[str, Any]) -> None:
+@hook
+def materialize(ctx: HookContext) -> None:
     """Each plugin's `${CLAUDE_PLUGIN_DATA}`, in the session's /work; a relayed
     plugin's staged copy under relay/<name>/ in the extension's state, which
     its sidecar binds read-only (a snapshot, like the image's)."""
     import shutil
 
-    work = ctx["work"]["host"]
-    staged = Path(ctx["state_dir"]) / "relay"
+    work = str(ctx.work_dir or "")
+    staged = Path(ctx.state_dir) / "relay"
     shutil.rmtree(staged, ignore_errors=True)
-    for name in ctx["settings"].get("plugins") or {}:
+    for name in ctx.settings.get("plugins") or {}:
         if work:
             Path(work, Path(DATA).name, name).mkdir(mode=0o755, parents=True, exist_ok=True)
     for relay in relays(ctx):
         name = relay.name
-        p = _plugin(ctx, name, ctx["settings"]["plugins"][name])
+        p = _plugin(ctx, name, ctx.settings["plugins"][name])
         for src, at in p["copy"]:
             dst = staged / name / Path(at).relative_to(p["dest"])
             dst.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -279,14 +285,14 @@ def materialize(ctx: dict[str, Any]) -> None:
 _CHECKED: dict[tuple, dict[str, Any]] = {}  # contribute, materialize and launch_env read a plugin once
 
 
-def _plugin(ctx: dict[str, Any], name: Any, raw: Any) -> dict[str, Any]:
-    key = (str(ctx.get("session_dir")), str(ctx["work"]["host"]), name, json.dumps(raw, sort_keys=True, default=str))
+def _plugin(ctx: HookContext, name: Any, raw: Any) -> dict[str, Any]:
+    key = (str(ctx.session_dir), str(ctx.work_dir or ""), name, json.dumps(raw, sort_keys=True, default=str))
     if key not in _CHECKED:
         _CHECKED[key] = _check_plugin(ctx, name, raw)
     return _CHECKED[key]
 
 
-def _check_plugin(ctx: dict[str, Any], name: Any, raw: Any) -> dict[str, Any]:
+def _check_plugin(ctx: HookContext, name: Any, raw: Any) -> dict[str, Any]:
     from glove.mounts import existing_host_path
 
     where = f"skills.plugins.{name}"
@@ -297,7 +303,7 @@ def _check_plugin(ctx: dict[str, Any], name: Any, raw: Any) -> dict[str, Any]:
     if extra := sorted(set(raw) - PLUGIN_KEYS):
         raise SkillsError(f"{where}: unknown keys {extra} (known: {sorted(PLUGIN_KEYS)})")
     try:
-        root = existing_host_path(ctx.get("session_dir"), raw["path"], "dir")
+        root = existing_host_path(ctx.session_dir, raw["path"], "dir")
     except ValueError as e:
         raise SkillsError(f"{where}: path {e}") from None
     dest = f"{ROOT}/{name}"
@@ -410,7 +416,7 @@ def _env(where: str, env: Any) -> dict[str, str]:
     return out
 
 
-def _relay(ctx: dict[str, Any], where: str, name: str, root: Path, raw: Any,
+def _relay(ctx: HookContext, where: str, name: str, root: Path, raw: Any,
            copy: list[tuple[Path, str]], scripts: list[Script]) -> Relay:
     """`relay: {commands: {<script>: {hosts, allow, out_flags, in_flags, env,
     files}}, check: [...], timeout}`, checked against the staged copy."""
@@ -501,7 +507,7 @@ def _side(plugin: str, cmd: str, kind: str, key: str) -> str:
     return f"SKILL_{plugin.replace('-', '_').upper()}_{digest}"
 
 
-def _refresh(ctx: dict[str, Any], refresh: dict[str, Path | None], where: str, ref: str, hook: str | None) -> None:
+def _refresh(ctx: HookContext, refresh: dict[str, Path | None], where: str, ref: str, hook: str | None) -> None:
     """Record `ref`'s refresh hook: one per secret, wherever it is used."""
     path = _session_file(ctx, f"{where}.refresh", hook) if hook else None
     if path and refresh.get(ref) not in (None, path):
@@ -556,23 +562,23 @@ def _relay_env(where: str, env: Any) -> dict[str, Any]:
     return out
 
 
-def _session_file(ctx: dict[str, Any], where: str, value: Any) -> Path:
+def _session_file(ctx: HookContext, where: str, value: Any) -> Path:
     """A file in the session directory (a template, a refresh hook), never one
     an agent can write (`work/`)."""
     from glove.mounts import overlaps
 
-    session = Path(ctx["session_dir"] or ".")
+    session = Path(ctx.session_dir or ".")
     if not isinstance(value, str) or value.startswith(("/", "~")) or ".." in Path(value).parts:
         raise SkillsError(f"{where}: a relative path in the session directory (local/…), got {value!r}")
     path = session / value
     if not path.is_file() or not Path(os.path.realpath(path)).is_relative_to(os.path.realpath(session)):
         raise SkillsError(f"{where}: {value} is not a file in the session directory")
-    if ctx["work"]["host"] and overlaps(path, Path(ctx["work"]["host"])):
+    if ctx.work_dir and overlaps(path, ctx.work_dir):
         raise SkillsError(f"{where}: {value} is in work/, which the agent can write; keep it in local/")
     return path
 
 
-def _mcp(ctx: dict[str, Any], where: str, name: str, root: Path, raw: dict,
+def _mcp(ctx: HookContext, where: str, name: str, root: Path, raw: dict,
          pythons: dict[str, str]) -> list[dict[str, Any]]:
     """The plugin's `.mcp.json` servers as neutral `mcp` items (core checks
     their fields), each with the `tools` the session file allows (the tool
@@ -590,7 +596,7 @@ def _mcp(ctx: dict[str, Any], where: str, name: str, root: Path, raw: dict,
     tools = raw.get("tools") or {}
     if not isinstance(tools, dict) or set(tools) - set(servers):
         raise SkillsError(f"{where}: tools maps a server of {sorted(servers)} to its tools")
-    if "mcp" not in ctx["renders"]:
+    if "mcp" not in ctx.renders:
         return []
     values = plugin_vars(name)
     out = []

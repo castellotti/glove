@@ -170,7 +170,7 @@ image: the image's own roots, then the CA. It sets `SSL_CERT_FILE`,
 `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` to that path, each only
 if `env:` doesn't set it. Changing the PEM rebuilds the image on the next `up`.
 The `github` relay and `webfetch`'s fetcher trust the CA too: core binds the same
-file read-only into them (`trust_corporate_ca:` in their manifests), and they build
+file read-only into them (`trust:` in their manifests), and they build
 the same kind of bundle in their own `/tmp`. The browser
 sidecar is configured separately: set `playwright: {ca: …}` as well (see Browser
 below). Unset, nothing renders differently.
@@ -642,7 +642,7 @@ extensions:
 ## Extensions
 
 An extension is a directory under `extensions/` with an `extension.yml`
-manifest (`api: 1`): its settings schema, the endpoints (forwarders) the
+manifest (`api: 2`): its settings schema, the endpoints (forwarders) the
 harness may reach, image layers, harness contributions (MCP servers, skills, a
 harness's own code), a brief for the agent, and optionally hardened sidecars.
 Core validates all of it:
@@ -667,7 +667,7 @@ Core validates all of it:
   than its own session state, its outputs and inputs (below), and all of
   `work/` only with the `work` privilege (`github`'s sidecar, which pushes the
   agent's checkout); never a path inside `work/`. The services a manifest's
-  `trust_corporate_ca:` names get the session's `corporate_ca` from core, bound
+  `trust:` names get the session's `corporate_ca` from core, bound
   read-only at `/etc/glove/corporate-ca.pem` and never SELinux-relabelled, with
   `GLOVE_CORPORATE_CA` naming it; the image builds its own bundle from it. A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
@@ -742,12 +742,14 @@ Core validates all of it:
     `tools` (a list or comma-separated) names the tools that code registers;
     they join the tool inventory, and Pi refuses any it doesn't name.
 
-  Any other key is an error. A `contribute` hook may add `image` layers,
-  `env`, `skills` (container paths in the image) and `mcp` items, taken as
-  given; and, for services its fragment renders from settings (`vars`, below),
-  `channels`, `privileges` and `trust_corporate_ca` entries, checked like the
-  manifest's (the manifest's own entry for a name wins), plus `endpoints`,
-  `verify` checks, `secret_refs` (label → `keychain:`/`env:` reference: the
+  Any other key is an error. A `contribute` hook returns manifest keys
+  computed at plan time (glove/manifest.py `KEYS` says which): under
+  `harness:`, `image` layers, `env`, `skills` (container paths in the image)
+  and `mcp` items, taken as given; and, for services its fragment renders from
+  settings (`vars`, below), `channels`, `privileges`, `trust`, `exports` and
+  `endpoints` entries, checked like the manifest's (lists add to the
+  manifest's; a name both set is refused, unless the manifest's entry is
+  `when:`-excluded), plus `verify` checks, `secret_refs` (label → `keychain:`/`env:` reference: the
   secrets nested deeper than a `secret` setting, which `glove check` verifies
   exist like the others) and `egress_hosts` (the names its sidecars reach, `*.x`
   for subdomains: `glove check` warns when an egress that filters by name, such
@@ -766,6 +768,18 @@ Core validates all of it:
   `output.<name>.path`/`input.<name>.path` (where a sidecar sees it),
   `exports` and `vars` (what the extension's `contribute` hook computed for
   it, e.g. one relay sidecar per plugin).
+- **Hooks** (`hooks: hooks.py`) are host Python that core calls at fixed
+  points: `contribute` (plan time), `materialize`, `forwarder` (the `forwarder`
+  slot's provider), `launch_env`, `resolve`, `diagnose` and `doctor(ctx, probe)`.
+  Each is marked `@hook` (`from glove.api import hook`; an unknown name fails at
+  import, an unmarked one is refused) and gets a read-only `HookContext`
+  (`ctx.settings`, `ctx.slot`, `ctx.state_dir`, …); what it returns is checked.
+  The session and work directories are in it only when the manifest gives a
+  reason (a `path` setting, `mounts`, `outputs`/`inputs`, a `work` privilege, or
+  `host_files: true`) and the extension is trusted. That is hygiene, not a
+  sandbox: a hook runs with your rights. An extension imports only `glove.api`
+  from core (`tests/test_api_surface.py` lists it), loading as the package
+  `glove_ext.<name>`, so it imports its own files relatively.
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.

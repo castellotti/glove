@@ -632,7 +632,7 @@ def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, m
     (home / "config.yml").unlink()
     ext = tmp_path / "exts" / "bad"
     ext.mkdir(parents=True)
-    (ext / "extension.yml").write_text("api: 1\nname: bad\nsummary: x\ncli: cli.py\n")
+    (ext / "extension.yml").write_text("api: 2\nname: bad\nsummary: x\ncli: cli.py\n")
     (ext / "cli.py").write_text("raise RuntimeError('boom')\n")
     monkeypatch.setattr("glove.extensions.discover", lambda: discover(tmp_path / "exts"))
     cli._mount_extension_clis()

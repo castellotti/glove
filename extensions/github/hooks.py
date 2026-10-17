@@ -21,6 +21,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from glove.api import HookContext, hook
+
 GITHUB = "github.com"
 TOKEN_VAR = "RELAY_GITHUB_TOKEN"
 # a DNS name, lower case, not an IP literal and not github.com (that is `token`)
@@ -60,10 +62,11 @@ def hosts(settings: dict[str, Any]) -> dict[str, tuple[str, str]]:
     return out
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
     from glove.extensions import load_module
 
-    s = ctx["settings"]
+    s = ctx.settings
     served = hosts(s)
     settings = {"allow": s.get("allow") or [], "git": s["git"], "hosts": {h: var for h, (_, var) in served.items()}}
     fence = load_module(Path(__file__).resolve().parent / "relay_policy.py", "github").fence_hosts(settings)
@@ -76,9 +79,10 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
     env = {}
-    for host, (ref, var) in hosts(ctx["settings"]).items():
+    for host, (ref, var) in hosts(ctx.settings).items():
         token = resolve_secret(ref).strip()
         if not token:
             raise ValueError(f"github: the token for {host} resolves to an empty value")

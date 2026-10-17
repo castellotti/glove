@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: ssh
 summary: ssh to named LAN hosts from shell commands — relayed to a sidecar that holds the key in an agent; the sandbox never sees it or gets a route.
 requires: [relay]

@@ -45,6 +45,8 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
+from glove.api import HookContext, hook
+
 PROVIDERS = Path(__file__).parent / "providers"
 CATALOG_KEYS = frozenset({
     "name", "api", "host", "base_path", "default_port", "locations", "auth", "headers", "models_endpoint",
@@ -208,14 +210,15 @@ def _capabilities(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, An
     return {k: caps.get(k) for k in CAPABILITY_KEYS}
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
     cat = load_provider(s["provider"])
-    auth, headers = _auth(s, cat, ctx.get("harness", ""))
+    auth, headers = _auth(s, cat, ctx.harness)
     if auth.get("required") and not s.get("api_key"):
         raise LlmError(f"llm: provider {cat['name']!r} needs `api_key: keychain:<service>`")
     r = route(s, cat)
-    session = ctx["session"]["id"]
+    session = ctx.session["id"]
     if r["location"] == "host":
         target: dict[str, Any] = {"host_port": r["port"]}
     else:
@@ -267,9 +270,10 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"endpoints": endpoints, "exports": exports}
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
     """The key, resolved in memory at `glove up`, for llm-auth only."""
-    s = ctx["settings"]
+    s = ctx.settings
     if not injected(s):
         return {}
     key = resolve_secret(s["api_key"]).strip()
@@ -351,11 +355,12 @@ def _pick_model(model: str, ids: list[str], cat: dict[str, Any]) -> str:
     return model
 
 
-def resolve(ctx: dict[str, Any], exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
+@hook
+def resolve(ctx: HookContext, exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
     """Resolve `model: auto` / `capabilities: auto`. Returns (exports, notes).
     `probe(url, method=, body=)` → (status, text) via a throwaway container holding
     no key (llm-auth adds it)."""
-    cat = load_provider(ctx["settings"]["provider"])
+    cat = load_provider(ctx.settings["provider"])
     root = _server_root(exports["base_url"], cat)
     notes: list[str] = []
     out = dict(exports)
@@ -414,14 +419,15 @@ def server_check(s: dict[str, Any], cat: dict[str, Any], r: dict[str, Any], prob
                                                         f"lists no models, so {model} is not checked")
 
 
-def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:
-    s = ctx["settings"]
+@hook
+def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
+    s = ctx.settings
     try:
         cat = load_provider(s["provider"])
         r = route(s, cat)
     except LlmError as e:
         return [("llm", "fail", str(e))]
     checks = [("llm", "ok", f"{s['provider']} at {r['location']} {r['host']}:{r['port']}")]
-    if ctx.get("probe"):
-        checks.append(server_check(s, cat, r, ctx["probe"]))
+    if probe:
+        checks.append(server_check(s, cat, r, probe))
     return checks
