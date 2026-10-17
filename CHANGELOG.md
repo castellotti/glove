@@ -6,6 +6,12 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **Guardrails for a small core (contributors).** `tests/test_core_budget.py`
+  holds core to its line budget; `tests/test_layering.py` checks that extensions
+  and harness adapters import from core only `glove.api`, and only the extensions
+  they `require` (today's exceptions are listed, and the list only shrinks).
+  Rules: CLAUDE.md P1–P5.
+
 - **vpn: `location` picks where a register hook's server is.** A
   `register_hook` session (`provider: custom`) had no way to choose its server
   from the session file: gluetun's `countries`/`cities`/`hostnames` filter a

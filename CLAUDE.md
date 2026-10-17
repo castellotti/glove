@@ -43,6 +43,22 @@ and glove's own `apply-seccomp` re-denies namespaces/mounts below srt.
   so and mark it "untested" rather than claiming it works.
 - Keep `README.md` and `CHANGELOG.md` current with each change.
 
+## Keeping core tight (P1–P5)
+
+- **P1 — admission.** Code goes in core (`glove/`) only if it enforces a security invariant that must not
+  be delegated, or at least two in-tree extensions or harnesses need it *and* moving it there removes more
+  lines than it adds. Otherwise it stays in the extension; shared code goes in a library extension
+  (`auto: true, selectable: false`, like `gate`) or, for a small primitive, in `glove.api`.
+- **P2 — ratchet.** `tests/test_core_budget.py` fails when core outgrows `CORE_BUDGET`. Raise it only
+  after asking, with a one-line reason in the round's results; lower it when core shrinks.
+- **P3 — backlog.** Each TODO item names its bucket and a trigger. An altitude finding proposing a core
+  mechanism must pass P1, or it is a won't-do in the round's results. A round ends with no more open
+  refinement items than it started with, unless the user agrees.
+- **P4 — one path per capability.** An extension offers a capability through one generic mechanism (MCP,
+  an endpoint, a channel); a harness-native path only for a unique advantage.
+- **P5 — STATUS is current.** Each phase ends by updating `docs/planning/STATUS.md` (round, phase,
+  commit, core lines, test count).
+
 ## Change workflow (always)
 
 Work in rounds: **one branch and one PR per round**, never stacked PRs (stacked
@@ -54,7 +70,7 @@ merges once left #20–#24 off `main`). A round's plan lives in `docs/planning/`
    Findings are fixed **in the phase**; one goes to `docs/planning/TODO.md`
    only when it needs a spike, a user decision, or work outside the phase.
 3. Ask, then commit the phase.
-4. Update the planning documents: results go into the completed plan, and what
+4. Update the planning documents (P5): results go into the completed plan, and what
    future plans need goes into theirs. Won't-do items go in the round's
    results, never in TODO.md. Add every deferred finding, untested check and
    missing test to TODO.md, and prune the items the phase implemented.

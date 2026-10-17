@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 LINT_IMPORTS = Path(sys.executable).parent / "lint-imports"
@@ -48,3 +51,151 @@ def test_contract_catches_a_core_to_extension_import(tmp_path):
     r = _run(tmp_path, "--config", ".importlinter")
     assert r.returncode != 0
     assert "BROKEN" in r.stdout
+
+
+# --- Extension contracts. An AST scan of every non-test module under extensions/ and harnesses/:
+# from core they import only `glove.api`; an extension imports another only if it requires it (any
+# form, `when:` ignored); a harness adapter imports no extension. KNOWN holds the edges that predate
+# `glove.api`; it only shrinks, to empty once every extension and adapter is migrated.
+
+KNOWN = frozenset({
+    "extensions/filter/cli.py -> glove.registry",
+    "extensions/github/hooks.py -> glove.config",
+    "extensions/github/hooks.py -> glove.extensions",
+    "extensions/observe/cli.py -> glove.registry",
+    "extensions/observe/cli.py -> glove.sessiondir",
+    "extensions/playwright/cli.py -> glove.config",
+    "extensions/playwright/cli.py -> glove.extensions",
+    "extensions/playwright/cli.py -> glove.naming",
+    "extensions/playwright/cli.py -> glove.session",
+    "extensions/playwright/cli.py -> glove.sessiondir",
+    "extensions/playwright/hooks.py -> glove.cafile",
+    "extensions/playwright/hooks.py -> glove.extensions",
+    "extensions/playwright/host/login.py -> glove.config",
+    "extensions/playwright/host/login.py -> glove.naming",
+    "extensions/rag/cli.py -> glove.config",
+    "extensions/rag/cli.py -> glove.extensions",
+    "extensions/rag/cli.py -> glove.mounts",
+    "extensions/rag/cli.py -> glove.sessiondir",
+    "extensions/skills/cli.py -> glove.config",
+    "extensions/skills/cli.py -> glove.extensions",
+    "extensions/skills/cli.py -> glove.naming",
+    "extensions/skills/cli.py -> glove.session",
+    "extensions/skills/cli.py -> glove.sessiondir",
+    "extensions/skills/hooks.py -> glove.config",
+    "extensions/skills/hooks.py -> glove.enforcers",
+    "extensions/skills/hooks.py -> glove.image",
+    "extensions/skills/hooks.py -> glove.mounts",
+    "extensions/skills/hooks.py -> glove.naming",
+    "extensions/skills/hooks.py -> glove.toolchains",
+    "harnesses/claude-code/adapter.py -> glove.config",
+    "harnesses/claude-code/adapter.py -> glove.enforcers",
+    "harnesses/claude-code/adapter.py -> glove.extensions",
+    "harnesses/claude-code/adapter.py -> glove.harnessconfig",
+    "harnesses/claude-code/adapter.py -> glove.mounts",
+    "harnesses/claude-code/adapter.py -> glove.naming",
+    "harnesses/pi/adapter.py -> glove.extensions",
+    "harnesses/pi/adapter.py -> glove.harnessconfig",
+    "harnesses/pi/adapter.py -> glove.image",
+    "harnesses/vibe/adapter.py -> glove.harnessconfig",
+})
+
+
+def _imports(path: Path, root: Path) -> list[str]:
+    """`top.second` of every module `path` imports (e.g. `glove.config`), relative imports resolved."""
+    base = list(path.relative_to(root).parent.parts)
+    out = []
+    for node in ast.walk(ast.parse(path.read_text(), str(path))):
+        if isinstance(node, ast.Import):
+            out += [a.name for a in node.names]
+        # (an import above the top package fails at run time; nothing to check)
+        elif isinstance(node, ast.ImportFrom) and node.level <= len(base):
+            mod = node.module
+            if node.level:
+                mod = ".".join(base[: len(base) - node.level + 1] + ([mod] if mod else []))
+            out += [f"{mod}.{a.name}" for a in node.names]
+    return list(dict.fromkeys(".".join(m.split(".")[:2]) for m in out))
+
+
+def _requires(root: Path) -> dict[str, set[str]]:
+    """Each extension's `requires` closure by extension name (slots and `when:` ignored)."""
+    exts = {p.parent.name: p for p in (root / "extensions").glob("*/extension.yml")}
+    direct = {}
+    for name, p in exts.items():
+        reqs = (yaml.safe_load(p.read_text()) or {}).get("requires") or []
+        direct[name] = {r if isinstance(r, str) else r.get("extension") for r in reqs} & exts.keys()
+    closure = {}
+    for name in exts:
+        seen, todo = set(), list(direct[name])
+        while todo:
+            n = todo.pop()
+            if n not in seen:
+                seen.add(n)
+                todo += direct[n]
+        closure[name] = seen
+    return closure
+
+
+def contract_violations(root: Path = REPO) -> set[str]:
+    """`<file> -> <module>` for each import that breaks a contract."""
+    reqs = _requires(root)
+    out = set()
+    for top in ("extensions", "harnesses"):
+        for path in (root / top).rglob("*.py"):
+            where = path.relative_to(root)
+            if "tests" in where.parts:
+                continue
+            for mod in _imports(path, root):
+                first, _, second = mod.partition(".")
+                own = where.parts[1] if len(where.parts) > 2 else ""  # extensions/<own>/...
+                if (
+                    (first == "glove" and second != "api")
+                    or (first == "extensions" and top == "harnesses")
+                    or (first == "extensions" and own and second not in {own, *reqs.get(own, ())})
+                ):
+                    out.add(f"{where} -> {mod}")
+    return out
+
+
+def test_extensions_use_only_the_public_api_and_their_requirements():
+    found = contract_violations()
+    assert not found - KNOWN, (
+        "new imports break the extension contracts (from core, import only glove.api; import only "
+        "extensions you require; adapters import no extension):\n" + "\n".join(sorted(found - KNOWN)))
+    assert not KNOWN - found, "fixed; remove from KNOWN:\n" + "\n".join(sorted(KNOWN - found))
+
+
+def _toy(tmp_path: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    return tmp_path
+
+
+def test_contract_catches_private_core_and_adapter_imports(tmp_path):
+    root = _toy(tmp_path, {
+        "extensions/a/extension.yml": "name: a\n",
+        "extensions/a/hooks.py": "from glove.api import secret\nimport glove.session\n",
+        "extensions/a/tests/test_a.py": "from glove.session import x\n",
+        "extensions/__init__.py": "from extensions.a import hooks\n",
+        "extensions/b/extension.yml": "# nothing yet\n",
+        "harnesses/h/adapter.py": "from glove import naming\nfrom extensions.a import hooks\n",
+    })
+    assert contract_violations(root) == {
+        "extensions/a/hooks.py -> glove.session",
+        "harnesses/h/adapter.py -> glove.naming",
+        "harnesses/h/adapter.py -> extensions.a",
+    }
+
+
+def test_contract_allows_imports_along_requires_only(tmp_path):
+    root = _toy(tmp_path, {
+        "extensions/gate/extension.yml": "name: gate\n",
+        "extensions/observe/extension.yml": "name: observe\nrequires: [gate, egress]\n",
+        "extensions/filter/extension.yml": "name: filter\nrequires:\n  - {extension: observe, when: {x: 1}}\n",
+        "extensions/filter/cli.py": "from extensions.gate.netgate import w\nfrom . import netrules\n",
+        "extensions/observe/__init__.py": "from .hooks import x\nfrom ..gate import lib\n",
+        "extensions/gate/lib.py": "from extensions.observe import hooks\n",
+    })
+    assert contract_violations(root) == {"extensions/gate/lib.py -> extensions.observe"}
