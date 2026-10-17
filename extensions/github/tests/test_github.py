@@ -317,8 +317,8 @@ def test_the_relay_sidecar(tmp_path, observe):
                                          "target": "/run/glove/github"}
     assert plan.composition.privileges["github/gh"] == [{"work": True}]
     assert svc["environment"]["RELAY_GITHUB_TOKEN"] is None  # filled at `compose up`, never in the file
-    assert svc["command"][2:] == ["--channel", "/run/glove/github", "--policy", "/opt/glove/github/relay_policy.py",
-                                  "--work", "/work"]
+    assert svc["command"] == ["relayd", "--channel", "/run/glove/github",
+                              "--policy", "/opt/glove/github/relay_policy.py", "--work", "/work"]
     assert svc["healthcheck"]["test"] == ["CMD", "test", "-p", "/run/glove/github/door"]
     assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == DEFAULT
     assert svc["image"].startswith("glove/ext-relay-relayd:")

@@ -33,7 +33,7 @@ Egress fence: children reach the network only through an in-process CONNECT
 proxy on 127.0.0.1 that tunnels to the session's egress proxy (`--upstream`)
 and refuses every host the policy does not name, whatever argv got through.
 
-`relayd.py --call <channel> <command> args…` is a client (the protocol above,
+`relayd --call <channel> <command> args…` is a client (the protocol above,
 in Python), for a check run inside the sidecar: it goes through the policy like
 any request.
 
@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--call"]:
         if len(argv) < 3:
-            raise SystemExit("usage: relayd.py --call <channel> <command> [args…]")
+            raise SystemExit("usage: relayd --call <channel> <command> [args…]")
         sys.exit(call(argv[1], argv[2:]))
     ap = argparse.ArgumentParser(prog="relayd")
     ap.add_argument("--channel", required=True)

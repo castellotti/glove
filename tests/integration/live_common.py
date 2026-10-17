@@ -371,7 +371,7 @@ def live_session(directory: str, *, logs: str | None = None,
             print(f"== glove-{sid}-{logs} log (last lines)\n" + "".join(
                 f"    {ln}\n" for ln in container_log(s.rt, f"glove-{sid}-{logs}").splitlines()[-25:]))
         if kept():
-            print(f"== KEEP: {s.plan.project} left running (glove down {sd.root})")
+            print(f"== KEEP: {s.plan.project} left running (GLOVE_HOME={os.environ.get('GLOVE_HOME', '~/.glove')} glove down {sd.root})")
         else:
             teardown(sid, provider=s.rt, wipe=True)
     if not started:  # nothing to run the block against: the driver ends here

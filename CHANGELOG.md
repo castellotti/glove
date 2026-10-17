@@ -32,6 +32,14 @@ All notable changes to glove are documented here.
   `.glove/playwright-login/` (it holds signed-in cookies) is deleted at the next
   login. In a session not yet launched, `login` now creates `.glove/` private
   (0700) and git-ignored.
+- **`relayd` is a command in the relay image.** A relay sidecar runs
+  `relayd --channel …` (github, ssh, skills relays) instead of naming
+  `/opt/glove/relay/relayd.py`; an out-of-tree consumer of the `relay` library
+  should do the same.
+- Test drivers: with `KEEP=1`, `driver_init`'s exit trap keeps the temp dir (the
+  kept stack's session dir, `GLOVE_HOME` and observe export) and the stub, and
+  prints how to tear them down; a driver's own `ON_EXIT` (e.g. its Keychain
+  cleanup) still runs.
 
 ### Added
 

@@ -199,7 +199,7 @@ def test_the_relay_sidecar_and_its_forwarders(tmp_path, observe):
     targets = {v["target"] for v in svc["volumes"]}
     assert "/work" not in targets and {"/opt/glove/ssh/known_hosts", "/run/glove/ssh"} <= targets
     assert svc["environment"]["RELAY_SSH_KEY"] is None
-    assert svc["command"][2:] == ["--channel", "/run/glove/ssh", "--policy", "/opt/glove/ssh/relay_policy.py"]
+    assert svc["command"] == ["relayd", "--channel", "/run/glove/ssh", "--policy", "/opt/glove/ssh/relay_policy.py"]
     assert svc["healthcheck"]["test"] == ["CMD", "test", "-p", "/run/glove/ssh/door"]
     assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == Req([]).settings  # each host with its forwarder
     assert "github/gh" not in plan.composition.privileges and "ssh/ssh" not in plan.composition.privileges

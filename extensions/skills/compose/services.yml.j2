@@ -10,7 +10,7 @@ services:
   # network at all). Either network is internal, so it has no other way out.
   {{ r.service }}:
     image: "{{ libs.relay.images.relayd }}"
-    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel[r.service].path }}",
+    command: ["relayd", "--channel", "{{ channel[r.service].path }}",
               "--policy", "{{ r.policy }}"{% if r.work %}, "--work", "{{ work.target }}"{% endif %}]
 {% if hop.interposed %}
     networks: [skillnet]

@@ -72,7 +72,6 @@ PLUGIN_KEYS = frozenset({"path", "skills", "env", "mcp", "tools", "relay"})
 RELAY_KEYS = frozenset({"commands", "check", "timeout"})
 COMMAND_KEYS = frozenset({"hosts", "allow", "out_flags", "in_flags", "env", "files"})
 RELAY_POLICY = "/opt/glove/skills/relay_policy.py"  # where the sidecar sees relay_policy.py
-RELAYD = "/opt/glove/relay/relayd.py"  # in relay's image
 RELAY_CLIENT = "/opt/glove/bin/glove-relay"  # relay's client, in the harness image
 SERVICE = "skill-"  # a relay's sidecar (and channel): skill-<plugin>
 CHECK_TIMEOUT = 60  # seconds a check may take (a hung one would hold up `glove up`)
@@ -128,7 +127,7 @@ class Relay(NamedTuple):
     def check_argv(self, argv: list[str]) -> list[str]:
         """A check, run inside the sidecar through the relay (its policy, its
         fences) as the agent's calls go; stopped after CHECK_TIMEOUT."""
-        return ["timeout", str(CHECK_TIMEOUT), "python3", RELAYD, "--call", self.channel, *argv]
+        return ["timeout", str(CHECK_TIMEOUT), "relayd", "--call", self.channel, *argv]
 
 
 class Script(NamedTuple):

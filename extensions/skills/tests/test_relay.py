@@ -62,8 +62,8 @@ def test_the_relay_sidecar(tmp_path, plugin):
     assert svc["read_only"] is True and svc["cap_drop"] == ["ALL"] and svc["user"] != "0:0"
     assert "ports" not in svc and "secrets" not in svc
     assert svc["image"].startswith("glove/ext-relay-relayd:")  # the relay library, added for it
-    assert svc["command"][2:] == ["--channel", "/run/glove/skill-demo", "--policy", hooks.RELAY_POLICY,
-                                  "--work", "/work"]
+    assert svc["command"] == ["relayd", "--channel", "/run/glove/skill-demo", "--policy", hooks.RELAY_POLICY,
+                              "--work", "/work"]
     vols = {v["target"]: v for v in svc["volumes"]}
     assert vols["/work"]["source"] == os.path.realpath(tmp_path / "work")  # out_flags: the `work` privilege
     assert plan.composition.privileges["skills/skill-demo"] == [{"work": True}]
@@ -93,7 +93,7 @@ def test_the_relay_sidecar(tmp_path, plugin):
     checks = [item for ext, item in plan.composition.verify if ext == "skills"]
     assert checks[0] == {"name": "skill-demo-up", "kind": "container-healthy", "service": "skill-demo"}
     assert checks[1] == {"name": "skill-demo-check-1", "kind": "exec-ok", "service": "skill-demo", "warn": True,
-                         "timeout": 70, "argv": ["timeout", "60", "python3", hooks.RELAYD, "--call",
+                         "timeout": 70, "argv": ["timeout", "60", "relayd", "--call",
                                                  "/run/glove/skill-demo",
                                                  "scripts/api.py", "search", "glove"]}
 

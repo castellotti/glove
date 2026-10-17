@@ -6,7 +6,7 @@ services:
   # (glove-<id>-ssh-<name>), each dialling exactly that host.
   ssh:
     image: "{{ libs.relay.images.relayd }}"
-    command: ["python3", "/opt/glove/relay/relayd.py", "--channel", "{{ channel.ssh.path }}",
+    command: ["relayd", "--channel", "{{ channel.ssh.path }}",
               "--policy", "/opt/glove/ssh/relay_policy.py"]
     networks: [sshnet]
     environment:
