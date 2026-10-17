@@ -45,7 +45,7 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
-from glove.api import HookContext, hook
+from glove.api import HookContext, hook, scoped
 
 PROVIDERS = Path(__file__).parent / "providers"
 CATALOG_KEYS = frozenset({
@@ -232,7 +232,7 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     alias = r["alias"] if not injected(s) or serve_tls else None
     port = AUTH_PORT if injected(s) and not alias and r["location"] == "internet" else r["listen_port"]
     base = (f"{r['scheme']}://{_hostport(alias, port, r['scheme'])}" if alias
-            else f"http://glove-{session}-llm:{port}")
+            else f"http://{scoped(session, 'llm')}:{port}")
     endpoints = {"llm": {"port": port, "harness": True, "target": target, "aliases": [alias] if alias else [],
                          "observe": observe}}
     inject = None
@@ -242,7 +242,7 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
         endpoints["llm-upstream"] = {"port": r["port"], "harness": False, "target": target,
                                      "listen_networks": ["llmauth"], "observe": observe}
         inject = {
-            "upstream": f"glove-{session}-llm-upstream:{r['port']}",
+            "upstream": f"{scoped(session, 'llm-upstream')}:{r['port']}",
             "tls_name": r["host"] if r["scheme"] == "https" else "",
             "serve_tls": serve_tls,
             "host": _hostport(r["host"], r["port"], r["scheme"]),

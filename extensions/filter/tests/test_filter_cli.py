@@ -20,7 +20,7 @@ def ghome(tmp_path, monkeypatch):
     """A launched session with the filter grant: glove created control/<id>/."""
     g = tmp_path / "ghome"
     monkeypatch.setenv("GLOVE_HOME", str(g))
-    wd = make_session(tmp_path / "wd")  # a launched session: .glove/id holds its id
+    wd = make_session(tmp_path / "wd", "  observe: {}\n  filter: {}\n")  # launched: .glove/id holds its id
     (wd / ".glove").mkdir()
     (wd / ".glove" / "id").write_text(CLI_ID + "\n")
     (g / "control" / CLI_ID).mkdir(parents=True, mode=0o700)

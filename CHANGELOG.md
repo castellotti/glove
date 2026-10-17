@@ -8,7 +8,7 @@ All notable changes to glove are documented here.
 
 - **Extensions speak `api: 2` (breaking for out-of-tree extensions and
   adapters).** A manifest says `api: 2`; `api: 1` is refused with a pointer to
-  the README. Hooks are marked `@hook` from `glove.api` and get a read-only
+  the new author's guide, [docs/extensions.md](docs/extensions.md). Hooks are marked `@hook` from `glove.api` and get a read-only
   `HookContext` (`ctx.settings`, not `ctx["settings"]`); `doctor` takes
   `(ctx, probe)`; a `contribute` hook returns its harness parts under
   `harness:`, and a name it sets that the manifest also sets (and doesn't
@@ -21,14 +21,24 @@ All notable changes to glove are documented here.
   reads (`egress`: `proxy_url`, `exit_identity`, `shares`, …; `inference`) are
   type-checked after `contribute` and after `resolve`. Harness adapters take
   one `AdapterContext` (`render_home(actx, home_dir)`). New for extension CLIs:
-  `glove.api.ext_session` and `reload_sidecar`.
+  `glove.api.ext_session` and `reload_sidecar`; an extension imports nothing
+  from core but `glove.api`, and its own files relatively.
+
+- **An extension's CLI refuses a session that doesn't enable it.**
+  `glove observe status` in a session without `observe`, or `glove filter …`
+  without `filter`, now says so instead of reporting an empty export.
+  `glove playwright login` keeps its browser profile (with `--keep-profile`)
+  under `.glove/ext/playwright/login-profile/`; one kept at the old
+  `.glove/playwright-login/` (it holds signed-in cookies) is deleted at the next
+  login. In a session not yet launched, `login` now creates `.glove/` private
+  (0700) and git-ignored.
 
 ### Added
 
 - **Guardrails for a small core (contributors).** `tests/test_core_budget.py`
   holds core to its line budget; `tests/test_layering.py` checks that extensions
   and harness adapters import from core only `glove.api`, and only the extensions
-  they `require` (today's exceptions are listed, and the list only shrinks).
+  they `require`.
   Rules: CLAUDE.md P1–P5.
 
 - **vpn: `location` picks where a register hook's server is.** A

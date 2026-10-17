@@ -1,17 +1,20 @@
 """The `api: 2` extension interface: `@hook` and `call_hook` (glove/hooks.py),
 what a hook may return and see, the slot-export schemas (glove/manifest.py),
-and `ext_session`/`reload_sidecar` (glove/extsession.py)."""
+`ext_session`/`reload_sidecar` (glove/extsession.py), and that
+docs/extensions.md names each of them."""
 
 from __future__ import annotations
 
 import shutil
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from helpers import STUB_LLM, make_session
 
+import glove.api
 from glove.api import ExtSession, ext_session, hook, reload_sidecar
 from glove.extensions import (
     IN_TREE_DIR,
@@ -23,7 +26,8 @@ from glove.extensions import (
     discover,
     hook_context,
 )
-from glove.manifest import ExtensionError, check_slot_exports
+from glove.hooks import HOOKS
+from glove.manifest import KEYS, SLOT_EXPORTS, ExtensionError, check_slot_exports
 
 MARKED = "from glove.api import hook\n\n\n@hook\n"
 
@@ -202,6 +206,8 @@ EGRESS = {"proxy_host": "p", "proxy_port": 8888, "proxy_url": "http://p:8888"}
     ({k: v for k, v in EGRESS.items() if k != "proxy_url"}, r"need \['proxy_url'\]"),
     ({**EGRESS, "proxy_port": "8888"}, "proxy_port must be int"),
     ({**EGRESS, "exit_identity": {"url": "https://x/", "file": "ip"}}, "exit_identity is"),
+    ({**EGRESS, "exit_identity": {"source": "s", "volume": "exit"}}, "exit_identity is"),
+    ({**EGRESS, "exit_identity": "vpn-endpoint"}, "exit_identity must be dict"),
     ({**EGRESS, "shares": "exit"}, "shares must be list"),
     ({**EGRESS, "shares": [1]}, "shares is a list of volume names"),
     ({**EGRESS, "anonymising": "yes"}, "anonymising must be bool"),
@@ -244,6 +250,21 @@ def test_ext_session_is_refused_before_a_launch_and_for_an_extension_not_enabled
     assert s.container("skill-x") == f"glove-{SID}-skill-x"
 
 
+@pytest.mark.parametrize("value", ["true", "x", "[1]"])
+def test_ext_session_refuses_settings_that_are_not_a_mapping(tmp_path, value):
+    d = make_session(tmp_path / "s", f"  playwright: {value}\n")
+    with pytest.raises(ExtensionError, match="'playwright': settings must be a mapping"):
+        ext_session("playwright", d, launched=False)
+
+
+def test_its_state_dir_is_private_in_a_never_launched_session(tmp_path):
+    d = make_session(tmp_path / "s", "  skills: {}\n")
+    state = ext_session("skills", d, launched=False).state_dir()
+    assert state == d / ".glove" / "ext" / "skills" and state.is_dir()
+    assert oct((d / ".glove").stat().st_mode & 0o777) == "0o700" and oct(state.stat().st_mode & 0o777) == "0o700"
+    assert (d / ".glove" / ".gitignore").read_text().endswith("*\n") and not (d / ".glove" / "id").exists()
+
+
 def test_rendered_reads_the_last_compose_and_export_dirs_are_the_owners(session, monkeypatch, tmp_path):
     (session / ".glove" / "id").write_text(SID)
     s = ext_session("observe", session)
@@ -260,15 +281,29 @@ def test_rendered_reads_the_last_compose_and_export_dirs_are_the_owners(session,
 def test_reload_sidecar_refuses_a_stopped_service_and_reports_an_unhealthy_one(session, monkeypatch):
     (session / ".glove" / "id").write_text(SID)
     s = ext_session("skills", session)
-    calls = []
+    calls, health = [], iter(["starting", "healthy"])
     monkeypatch.setattr(ExtSession, "running", lambda self, service: service == "up")
-    monkeypatch.setattr("glove.session.recreate_sidecar",
-                        lambda *a, **k: calls.append((a, k)) or (None if a[3].endswith("-up") else "why"))
+    monkeypatch.setattr("glove.extsession.subprocess.run",
+                        lambda argv, **k: calls.append((argv, k["env"])) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr("glove.extsession.time.sleep", lambda _: None)
+    monkeypatch.setattr("glove.verify._health", lambda rt, container: next(health, "unhealthy"))
     with pytest.raises(ExtensionError, match=f"glove-{SID}-down is not running"):
         reload_sidecar(s, "down", {})
     assert not calls
     reload_sidecar(s, "up", {"K": "v"}, wait=5)
-    assert calls[-1] == ((s.runtime, SID, s.compose_file, f"glove-{SID}-up", {"K": "v"}), {"wait": 5})
-    monkeypatch.setattr("glove.session.recreate_sidecar", lambda *a, **k: "x did not become healthy; `docker logs x`")
-    with pytest.raises(ExtensionError, match="`docker logs x`"):
+    argv, env = calls[-1]
+    assert argv[-5:] == ["up", "-d", "--no-deps", "--force-recreate", f"glove-{SID}-up"] and env["K"] == "v"
+    with pytest.raises(ExtensionError, match=f"did not become healthy; `{s.runtime} logs glove-{SID}-up`"):
+        reload_sidecar(s, "up", {}, wait=2)
+    monkeypatch.setattr("glove.extsession.subprocess.run", lambda argv, **k: SimpleNamespace(returncode=3))
+    with pytest.raises(ExtensionError, match="failed \\(exit 3\\)"):
         reload_sidecar(s, "up", {})
+
+
+# --- docs/extensions.md ---------------------------------------------------------------
+
+
+def test_the_authors_guide_names_every_key_hook_export_and_api_name():
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "extensions.md").read_text()
+    names = {*KEYS, *HOOKS, *SLOT_EXPORTS, *(k for ks in SLOT_EXPORTS.values() for k in ks), *glove.api.__all__}
+    assert not sorted(n for n in names if f"`{n}`" not in doc and f"`{n}(" not in doc)

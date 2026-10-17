@@ -346,13 +346,13 @@ def test_reload_only_while_the_relay_is_as_rendered(tmp_path, plugin):
     _, doc = _render(tmp_path)
     ctx = hook_ctx(session_dir=tmp_path, work_dir=tmp_path / "work")
     relay = hooks._plugin(ctx, "demo", {"path": "skills/demo", "relay": {"commands": COMMANDS}})["relay"]
-    assert cli.rendered_as(doc, "glove-s-skill-demo", relay)
+    assert cli.rendered_as(doc["services"]["glove-s-skill-demo"], relay)
     commands = copy.deepcopy(COMMANDS)
     commands["scripts/aaa.py"] = commands["scripts/api.py"]  # sorts first: every index moves
     _write(plugin / "scripts" / "aaa.py", API, 0o755)
     moved = hooks._plugin(ctx, "demo", {"path": "skills/demo", "relay": {"commands": commands}})["relay"]
-    assert not cli.rendered_as(doc, "glove-s-skill-demo", moved)
-    assert not cli.rendered_as({}, "glove-s-skill-demo", relay)
+    assert not cli.rendered_as(doc["services"]["glove-s-skill-demo"], moved)
+    assert not cli.rendered_as({}, relay)
 
 
 def test_file_flags_are_rewritten_inside_work(policy, work):

@@ -5,6 +5,7 @@ recreates one of its sidecars with an env the caller resolved."""
 from __future__ import annotations
 
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,7 @@ from . import sessiondir as sdm
 from .extensions import EXPORT_ROOTS, Manifest, declares_host_paths, discover, load_module, validate_settings
 from .hooks import HookContext
 from .manifest import ExtensionError
-from .naming import scoped
+from .naming import project_name, scoped
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,11 @@ class ExtSession:
             raise ExtensionError(f"extension {self.name!r} does not own the {root!r} export root")
         return export_dirs(self.id)[root]
 
+    def state_dir(self) -> Path:
+        """Its own state dir (`.glove/ext/<name>`), created 0700 in a private `.glove/`."""
+        sdm.ensure_private(sdm.SessionDir(self.root))
+        return sdm.ensure_dir(self.context().state_dir)
+
     def context(self) -> HookContext:
         """A hook context outside a launch: its settings and the host paths its
         manifest declares."""
@@ -88,12 +94,21 @@ def ext_session(name: str, directory: Path | None = None, *, launched: bool = Tr
 
 
 def reload_sidecar(s: ExtSession, service: str, env: Mapping[str, str], *, wait: int = 30) -> None:
-    """Recreate one running sidecar with `env` (resolved by the caller, held in
-    memory) and nothing else; wait until it is healthy."""
-    from .session import recreate_sidecar
+    """Recreate one running sidecar with `env` (resolved by the caller, held in memory) and
+    nothing else, so the agent's conversation keeps going; wait until it is healthy."""
+    from .session import _compose_base, compose_process_env
+    from .verify import _health
 
     container = s.container(service)
     if not s.running(service):
         raise ExtensionError(f"{container} is not running; `glove up` starts it")
-    if (why := recreate_sidecar(s.runtime, s.id or "", s.compose_file, container, dict(env), wait=wait)) is not None:
-        raise ExtensionError(why)
+    r = subprocess.run([*_compose_base(s.runtime, project_name(s.id or ""), s.compose_file), "up", "-d",
+                        "--no-deps", "--force-recreate", container],
+                       env=compose_process_env(s.runtime, dict(env)), check=False)
+    if r.returncode != 0:
+        raise ExtensionError(f"recreating {container} failed (exit {r.returncode})")
+    for _ in range(wait):
+        if _health(s.runtime, container) == "healthy":
+            return
+        time.sleep(1)
+    raise ExtensionError(f"{container} did not become healthy; `{s.runtime} logs {container}`")

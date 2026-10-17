@@ -46,9 +46,20 @@ import tomllib
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from glove.api import HookContext, hook
-from glove.image import STAGE_IGNORE
-from glove.naming import HOST_GLOB
+from glove.api import (
+    HOST_GLOB,
+    STAGE_IGNORE,
+    HookContext,
+    apt_bootstrap,
+    existing_host_path,
+    hook,
+    is_secret_env_name,
+    is_secret_ref,
+    overlaps,
+    render_value,
+    run_body,
+    uv_steps,
+)
 
 ROOT = "/opt/glove/plugins"
 DATA = "/work/.glove-plugin-data"
@@ -231,9 +242,6 @@ def relays(ctx: HookContext, only: str | None = None) -> list[Relay]:
 
 
 def relay_env(relay: Relay, resolve_secret) -> dict[str, str]:
-    from jinja2 import StrictUndefined, TemplateError
-    from jinja2.sandbox import ImmutableSandboxedEnvironment
-
     cache: dict[str, str] = {}  # one Keychain read per secret, however often it is used
 
     def value(ref: str) -> str:
@@ -243,17 +251,17 @@ def relay_env(relay: Relay, resolve_secret) -> dict[str, str]:
                 raise SkillsError(f"skills.plugins.{relay.name}.relay: {ref} resolves to an empty value")
         return cache[ref]
 
-    jinja = ImmutableSandboxedEnvironment(undefined=StrictUndefined, keep_trailing_newline=True)
     out = {}
     for var, spec in relay.secrets.items():
         if isinstance(spec, str):
             out[var] = value(spec)
             continue
+        where = f"skills.plugins.{relay.name}.relay: {spec['template']}"
         try:
-            out[var] = jinja.from_string(spec["template"].read_text()).render(
-                secrets={k: value(ref) for k, ref in spec["secrets"].items()})
-        except (TemplateError, OSError) as e:
-            raise SkillsError(f"skills.plugins.{relay.name}.relay: {spec['template']}: {e}") from None
+            text = spec["template"].read_text()
+        except OSError as e:
+            raise SkillsError(f"{where}: {e}") from None
+        out[var] = render_value(text, {"secrets": {k: value(ref) for k, ref in spec["secrets"].items()}}, where)
     return out
 
 
@@ -264,15 +272,14 @@ def materialize(ctx: HookContext) -> None:
     its sidecar binds read-only (a snapshot, like the image's)."""
     import shutil
 
-    work = str(ctx.work_dir or "")
     staged = Path(ctx.state_dir) / "relay"
     shutil.rmtree(staged, ignore_errors=True)
-    for name in ctx.settings.get("plugins") or {}:
-        if work:
-            Path(work, Path(DATA).name, name).mkdir(mode=0o755, parents=True, exist_ok=True)
-    for relay in relays(ctx):
-        name = relay.name
-        p = _plugin(ctx, name, ctx.settings["plugins"][name])
+    for name, raw in (ctx.settings.get("plugins") or {}).items():
+        if ctx.work_dir:
+            Path(ctx.work_dir, Path(DATA).name, name).mkdir(mode=0o755, parents=True, exist_ok=True)
+        if not (isinstance(raw, dict) and raw.get("relay")):
+            continue
+        p = _plugin(ctx, name, raw)
         for src, at in p["copy"]:
             dst = staged / name / Path(at).relative_to(p["dest"])
             dst.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -293,8 +300,6 @@ def _plugin(ctx: HookContext, name: Any, raw: Any) -> dict[str, Any]:
 
 
 def _check_plugin(ctx: HookContext, name: Any, raw: Any) -> dict[str, Any]:
-    from glove.mounts import existing_host_path
-
     where = f"skills.plugins.{name}"
     if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise SkillsError(f"skills.plugins: a plugin name is [a-z0-9-], starting with a letter or digit; got {name!r}")
@@ -398,9 +403,6 @@ def _script(where: str, name: str, data: bytes, path: str) -> Script | None:
 def _env(where: str, env: Any) -> dict[str, str]:
     """Plain values for the harness env (shell commands see them too): never a
     secret, by name or by reference — secrets never enter the harness."""
-    from glove.config import is_secret_ref
-    from glove.enforcers.base import is_secret_env_name
-
     if env is None:
         return {}
     if not isinstance(env, dict):
@@ -524,8 +526,6 @@ def _strings(where: str, spec: dict, key: str, pattern: re.Pattern, what: str) -
 
 def _secret_spec(where: str, value: Any) -> tuple[str, str | None]:
     """`keychain:<svc>` | `env:<VAR>` | `{secret: …, refresh: local/<hook>}`."""
-    from glove.config import is_secret_ref
-
     ref, hook = (value.get("secret"), value.get("refresh")) if isinstance(value, dict) else (value, None)
     if (not isinstance(ref, str) or not is_secret_ref(ref) or (isinstance(value, dict) and set(value) -
                                                                {"secret", "refresh"})):
@@ -539,9 +539,6 @@ def _secret_spec(where: str, value: Any) -> tuple[str, str | None]:
 def _relay_env(where: str, env: Any) -> dict[str, Any]:
     """A relayed command's env: plain values, or secrets (as `_secret_spec`;
     a secret-shaped name must be one: no literal secret in the session file)."""
-    from glove.config import is_secret_ref
-    from glove.enforcers.base import is_secret_env_name
-
     if env is None:
         return {}
     if not isinstance(env, dict):
@@ -565,8 +562,6 @@ def _relay_env(where: str, env: Any) -> dict[str, Any]:
 def _session_file(ctx: HookContext, where: str, value: Any) -> Path:
     """A file in the session directory (a template, a refresh hook), never one
     an agent can write (`work/`)."""
-    from glove.mounts import overlaps
-
     session = Path(ctx.session_dir or ".")
     if not isinstance(value, str) or value.startswith(("/", "~")) or ".." in Path(value).parts:
         raise SkillsError(f"{where}: a relative path in the session directory (local/…), got {value!r}")
@@ -643,8 +638,6 @@ def _bake(plugins: list[dict[str, Any]]) -> str:
     (only those files are rewritten), each `uv run --script` shebang on its
     interpreter, `bin/` linked (`ln -s` without -f: a name the image already
     has fails the build)."""
-    from glove.toolchains import run_body
-
     steps = []
     for p in plugins:
         sed = " ".join(f"-e 's|\\${{{k}}}|{v}|g'" for k, v in plugin_vars(p["name"]).items())
@@ -668,9 +661,6 @@ def _uv_layer(python: str, scripts: list[Script]) -> str:
     (resolved with hashes; wheels only: an sdist-only dependency fails the
     build here), and an env per set of dependencies installed from it. Keyed
     only on the Python and the dependency sets, never a script's bytes."""
-    from glove.image import apt_bootstrap
-    from glove.toolchains import run_body, uv_steps
-
     uv = f"{UV}/bin/uv"
     venv = "/tmp/glove-wheels"
     steps = [apt_bootstrap("curl", ("ca-certificates", "curl")),

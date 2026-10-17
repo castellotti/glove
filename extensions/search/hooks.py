@@ -22,7 +22,7 @@ from typing import Any
 
 import yaml
 
-from glove.api import HookContext, hook
+from glove.api import HookContext, hook, scoped
 
 SETTINGS = Path(__file__).parent / "settings"
 
@@ -217,7 +217,7 @@ def settings_doc(ctx: HookContext, secret_key: str) -> dict[str, Any]:
     doc: dict[str, Any] = {"use_default_settings": {"engines": {"remove": remove}} if remove else True}
     doc.update(base)
     doc.setdefault("server", {})["secret_key"] = secret_key
-    doc["valkey"] = {"url": f"valkey://glove-{ctx.session['id']}-valkey:6379/0"}
+    doc["valkey"] = {"url": f"valkey://{scoped(ctx.session['id'], 'valkey')}:6379/0"}
     # using_tor_proxy stays off even for Tor: SearXNG accepts it only with
     # socks5h:// proxies, and every consumer here uses the one HTTP proxy_url
     # (privoxy for Tor). tor.yml carries the longer timeouts instead.

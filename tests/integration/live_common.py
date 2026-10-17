@@ -318,10 +318,13 @@ class LiveSession:
                                                               "connectors": list(connectors)}))
         return re.findall(r"\d+\. ([\w.]+)", out.split("All Connector Capabilities", 1)[-1])
 
-    def sh(self, cmd: str) -> str:
-        """One shell command through the agent's own tool: what the model saw."""
-        out = self.call(self.bash_tool, {"command": cmd})
-        return tool_result(out)
+    def sh(self, cmd: str, *, echo: bool = False, tail: int = 300) -> str:
+        """One shell command through the agent's own tool: what the model saw
+        (`echo`: printed, the command and the output's last `tail` chars)."""
+        out = tool_result(self.call(self.bash_tool, {"command": cmd}))
+        if echo:
+            print(f"    $ {cmd[:100]}\n      {out[-tail:]}", flush=True)
+        return out
 
     def tui(self, rows: int, cols: int) -> Tui:
         """The harness as `glove up` attaches it, on a pty."""

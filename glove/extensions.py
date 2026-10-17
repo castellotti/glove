@@ -264,6 +264,8 @@ def _coerce_setting(ext: str, key: str, spec: dict, value: Any) -> Any:
 
 def validate_settings(m: Manifest, given: dict[str, Any] | None) -> dict[str, Any]:
     """The extension's settings with defaults applied; unknown keys are an error."""
+    if given is not None and not isinstance(given, dict):
+        raise ExtensionError(f"extension {m.name!r}: settings must be a mapping (use `{m.name}: {{}}` for none)")
     given = dict(given or {})
     schema = m.settings_schema
     unknown = set(given) - set(schema)
@@ -714,8 +716,6 @@ def select(
             raise ExtensionError(f"unknown extension {name!r}; known: {', '.join(sorted(manifests)) or '(none)'}")
         if not m.selectable:
             raise ExtensionError(f"extension {name!r} is a library extension and cannot be selected directly")
-        if given is not None and not isinstance(given, dict):
-            raise ExtensionError(f"extension {name!r}: settings must be a mapping (use `{name}: {{}}` for none)")
         chosen[name] = Active(m, validate_settings(m, given))
 
     def ctx_of(a: Active, slots: dict[str, Active]) -> dict[str, Any]:

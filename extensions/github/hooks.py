@@ -18,10 +18,11 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
-from glove.api import HookContext, hook
+from glove.api import HookContext, hook, is_secret_ref
+
+from . import relay_policy
 
 GITHUB = "github.com"
 TOKEN_VAR = "RELAY_GITHUB_TOKEN"
@@ -33,8 +34,6 @@ _HOST = re.compile(rf"(?=.{{1,253}}$)(?!\d+(\.\d+)*$){_LABEL}(\.{_LABEL})+")
 def hosts(settings: dict[str, Any]) -> dict[str, tuple[str, str]]:
     """Every host the relay serves → (its token reference, the env var the
     token arrives in), github.com first when `token` is set."""
-    from glove.config import is_secret_ref
-
     out: dict[str, tuple[str, str]] = {}
     if settings.get("token"):
         out[GITHUB] = (settings["token"], TOKEN_VAR)
@@ -64,12 +63,10 @@ def hosts(settings: dict[str, Any]) -> dict[str, tuple[str, str]]:
 
 @hook
 def contribute(ctx: HookContext) -> dict[str, Any]:
-    from glove.extensions import load_module
-
     s = ctx.settings
     served = hosts(s)
     settings = {"allow": s.get("allow") or [], "git": s["git"], "hosts": {h: var for h, (_, var) in served.items()}}
-    fence = load_module(Path(__file__).resolve().parent / "relay_policy.py", "github").fence_hosts(settings)
+    fence = relay_policy.fence_hosts(settings)
     return {
         "vars": {"settings": settings, "tokens": [var for _, var in served.values()]},
         # what the fence tunnels to, for `glove check` against a filtering egress

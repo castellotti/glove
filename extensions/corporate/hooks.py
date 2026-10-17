@@ -15,7 +15,7 @@ import shutil
 import subprocess
 from typing import Any
 
-from glove.api import HookContext, hook
+from glove.api import HookContext, hook, scoped
 
 _GLOB = re.compile(r"[a-z0-9*?._-]{1,253}")
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
@@ -126,6 +126,6 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
         "endpoints": {t["name"]: {"port": t["port"], "target": {"address": t["to"], "via": "wan"},
                                   "observe": {"scope": "direct"}} for t in tcp},
         "verify": [{"name": "probe", "kind": "http-ok", "url": probe, "network": "egress", "retries": 5,
-                    "interval": 3, "proxy": f"http://glove-{ctx.session['id']}-corporate-proxy:8888",
+                    "interval": 3, "proxy": f"http://{scoped(ctx.session['id'], 'corporate-proxy')}:8888",
                     "service": "corporate-proxy"}] if probe else [],
     }

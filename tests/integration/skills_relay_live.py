@@ -28,6 +28,7 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import os
@@ -84,10 +85,7 @@ def main(directory: str) -> int:
     if CORPORATE:
         check_egress(directory)
     with live_session(directory, logs="skill-demo") as s, api_stand_in(s) as stub:
-        def sh(cmd: str) -> str:
-            out = s.sh(cmd)
-            print(f"    $ {cmd[:100]}\n      {out[-300:]}", flush=True)
-            return out
+        sh = functools.partial(s.sh, echo=True)
 
         def skills(*args: str) -> subprocess.CompletedProcess:
             r = glove("skills", *args, "--dir", str(s.sd.root))

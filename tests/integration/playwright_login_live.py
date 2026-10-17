@@ -98,7 +98,7 @@ def _checks(s, browse, seen: list[str], stub: str, port: str, services: dict[str
     check("the state holds corp.test's cookies only (the tracker's and chat.test's left out)",
           "2 cookie(s) for corp.test" in flat and "tracker.test (1)" in flat and "chat.test (1)" in flat, flat[-300:])
     check("login printed no value", not any(v in out for v in VALUES))
-    check("the login profile is gone", not (s.sd.state / "playwright-login").exists())
+    check("the login profile is gone", not (s.sd.ext / "playwright" / "login-profile").exists())
     state = json.loads(resolve_secret(f"keychain:{services['PWL_STATE']}"))
     sso = next((c for c in state["cookies"] if c.get("name") == "sso"), {})
     check("the stored SSO cookie: HttpOnly, for the parent domain",

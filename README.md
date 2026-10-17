@@ -645,7 +645,9 @@ An extension is a directory under `extensions/` with an `extension.yml`
 manifest (`api: 2`): its settings schema, the endpoints (forwarders) the
 harness may reach, image layers, harness contributions (MCP servers, skills, a
 harness's own code), a brief for the agent, and optionally hardened sidecars.
-Core validates all of it:
+Core validates all of it. To write one, see
+[docs/extensions.md](docs/extensions.md) (the manifest keys, hooks, `glove.api`
+and an extension's CLI).
 
 - **Settings** are typed; unknown keys, `<set-me>` placeholders and literal
   secrets are errors. Secrets are `keychain:`/`env:` references, resolved in

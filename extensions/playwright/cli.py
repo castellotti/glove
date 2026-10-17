@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import json
 import shutil
 import subprocess
@@ -32,11 +31,9 @@ import webbrowser
 from pathlib import Path
 
 import typer
-import yaml
 from rich.console import Console
 
-from glove import sessiondir as sdm
-from glove.naming import scoped
+from glove.api import ConfigError, ExtSession, ext_session, keychain_set, reload_sidecar, resolve_secret
 
 app = typer.Typer(add_completion=False,
                   help="The playwright browser: watch or drive it (novnc), sign in on the host and hand the "
@@ -54,38 +51,11 @@ def _fail(msg: str) -> typer.Exit:
     return typer.Exit(1)
 
 
-@functools.cache
-def _hooks():
-    from glove.extensions import load_module
-
-    return load_module(Path(__file__).resolve().parent / "hooks.py", "playwright")
-
-
-def _find(directory: Path | None) -> tuple[sdm.SessionDir, dict]:
-    """(the session dir, playwright settings as written)."""
+def _session(directory: Path | None, *, launched: bool = True) -> ExtSession:
     try:
-        sd = sdm.find(directory)
-        raw = sdm.load_file(sd)
-    except sdm.SessionError as e:
+        return ext_session("playwright", directory, launched=launched)
+    except ConfigError as e:
         raise _fail(str(e)) from e
-    pw = (raw.get("extensions") or {}).get("playwright")
-    if not isinstance(pw, dict):
-        raise _fail(f"{sd.file}: the playwright extension is not enabled")
-    return sd, pw
-
-
-def _session(directory: Path | None) -> tuple[str, str, dict]:
-    """(runtime command, sidecar container, playwright settings as written)."""
-    sd, pw = _find(directory)
-    sid = sd.read_id()
-    if sid is None:
-        raise _fail(f"{sd.root} has never been launched (no .glove/id)")
-    return sdm.session_provider(sd), scoped(sid, "pw"), pw
-
-
-def _running(runtime: str, container: str) -> bool:
-    r = subprocess.run([runtime, "inspect", "-f", "{{.State.Running}}", container], capture_output=True, text=True)
-    return r.returncode == 0 and r.stdout.strip() == "true"
 
 
 def allowed(head: bytes, port: int) -> bool:
@@ -169,12 +139,13 @@ def view(
     no_open: bool = typer.Option(False, "--no-open", help="print the URL instead of opening it"),
 ) -> None:
     """Watch the novnc browser in your own browser, through a transient loopback tunnel."""
-    runtime, container, pw = _session(directory)
-    if pw.get("mode") != "novnc":
+    s = _session(directory)
+    runtime, container, pw = s.runtime, s.container("pw"), s.settings
+    if pw["mode"] != "novnc":
         raise _fail("`view` needs `playwright: {mode: novnc}` (this session's browser has no display)")
-    if control and pw.get("allow_control") is not True:
+    if control and pw["allow_control"] is not True:
         raise _fail("--control needs `allow_control: true` in the session's playwright settings")
-    if not _running(runtime, container):
+    if not s.running("pw"):
         raise _fail(f"{container} is not running — `glove up` first")
     r = subprocess.run([runtime, "exec", container, "cat", f"/tmp/vnc/{'full' if control else 'view'}"],
                        capture_output=True, text=True)
@@ -189,23 +160,22 @@ def view(
 @app.command("status")
 def status(directory: Path | None = DIR_OPT) -> None:
     """The browser mode and whether its sidecar is running."""
-    runtime, container, pw = _session(directory)
-    mode = pw.get("mode", "headless")
+    s = _session(directory)
+    mode = s.settings["mode"]
     if mode == "host":
         console.print("mode host: the browser runs on this machine (host services)")
         return
-    state = "running" if _running(runtime, container) else "not running"
-    console.print(f"mode {mode}: {container} {state}")
-    if pw.get("storage_state"):
-        console.print(_state_status(pw["storage_state"]))
+    console.print(f"mode {mode}: {s.container('pw')} {'running' if s.running('pw') else 'not running'}")
+    if s.settings.get("storage_state"):
+        console.print(_state_status(s, s.settings["storage_state"]))
 
 
-def _state_status(ref: str) -> str:
+def _state_status(s: ExtSession, ref: str) -> str:
     """The stored session's cookie lifetimes (never a value)."""
-    from glove.config import ConfigError, resolve_secret
+    from .host import login as lg
 
     try:
-        n, session, first = _hooks().host_module("login").expiry(_hooks().load_state(ref, resolve_secret))
+        n, session, first = lg.expiry(s.hooks.load_state(ref, resolve_secret))
     except (ConfigError, ValueError) as e:
         return f"storage_state {ref}: [red]unreadable[/red] ({str(e)[:120] or 'not a storage state'})"
     head = f"storage_state {ref}: {n} cookie(s), {session} for the browser session only"
@@ -231,21 +201,24 @@ def login(
 ) -> None:
     """Sign in with a dedicated Chrome on this machine, then store the session
     (storage_state) and the named values (login.capture) in the Keychain."""
-    from glove.config import ConfigError, keychain_set
+    from .host import cdp
+    from .host import chrome as host_chrome
+    from .host import login as lg
 
-    sd, pw = _find(directory)
+    s = _session(directory, launched=False)
     try:
-        spec = _hooks().login_spec(pw)
+        spec = s.hooks.login_spec(s.settings)
     except ValueError as e:
         raise _fail(str(e)) from e
     if spec is None:
-        raise _fail(f"{sd.file}: set playwright.login (start_url, domains, capture) first")
-    exe = _hooks().host_module("chrome").chrome_executable()
+        raise _fail(f"{s.file}: set playwright.login (start_url, domains, capture) first")
+    exe = host_chrome.chrome_executable()
     if exe is None:
         raise _fail("no Chrome/Chromium on this machine (`npx playwright install chromium`)")
-    lg, cdp = _hooks().host_module("login"), _hooks().host_module("cdp")
-    sd.state.mkdir(mode=0o700, exist_ok=True)
-    profile = sd.state / "playwright-login"   # never bound into a container
+    state = s.state_dir()
+    # where a kept profile (signed-in cookies) lived before api 2: never left behind (TODO R19.G: drop)
+    shutil.rmtree(s.root / ".glove" / "playwright-login", ignore_errors=True)
+    profile = state / "login-profile"   # never bound into a container
     if profile.exists() and not keep_profile:
         shutil.rmtree(profile)
     profile.mkdir(mode=0o700, exist_ok=True)
@@ -294,39 +267,30 @@ def login(
     if spec.captures:
         console.print("[dim]a plugin relay using a captured value: `glove skills reload <plugin>`[/dim]")
     if export is not None and not no_reload:
-        _reload_if_running(sd, pw)
+        _reload_if_running(s)
 
 
 @app.command("reload")
 def reload(directory: Path | None = DIR_OPT) -> None:
     """Recreate the browser sidecar with the stored session read again
     (after `glove playwright login`); the agent's conversation keeps going."""
-    sd, pw = _find(directory)
-    if not _reload_if_running(sd, pw):
+    if not _reload_if_running(_session(directory, launched=False)):
         raise typer.Exit(1)
 
 
-def _reload_if_running(sd: sdm.SessionDir, pw: dict) -> bool:
-    from glove.config import ConfigError, resolve_secret
-    from glove.session import recreate_sidecar
-
-    sid = sd.read_id()
-    runtime, container = sdm.session_provider(sd), scoped(sid, "pw") if sid else ""
-    if not container or not sd.compose.is_file() or not _running(runtime, container):
+def _reload_if_running(s: ExtSession) -> bool:
+    if s.id is None or not s.running("pw"):
         console.print("[dim]the browser sidecar is not running: the next `glove up` starts it with the stored "
                       "session[/dim]")
         return False
-    rendered = ((yaml.safe_load(sd.compose.read_text()) or {}).get("services") or {}).get(container) or {}
-    if not pw.get("storage_state") or "PW_STORAGE_STATE" not in (rendered.get("environment") or {}):
+    ref = s.settings.get("storage_state")
+    if not ref or "PW_STORAGE_STATE" not in (s.rendered("pw").get("environment") or {}):
         err.print("[red]error:[/red] the running sidecar was started without storage_state; `glove up` applies it")
         return False
     try:
-        env = _hooks().state_env(pw["storage_state"], resolve_secret)
+        reload_sidecar(s, "pw", s.hooks.state_env(ref, resolve_secret), wait=90)
     except (ConfigError, ValueError) as e:
         err.print(f"[red]error:[/red] {e}")
         return False
-    if (why := recreate_sidecar(runtime, sid, sd.compose, container, env, wait=90)) is not None:
-        err.print(f"[red]error:[/red] {why}")
-        return False
-    console.print(f"[green]✓[/green] {container} recreated: new pages start from the stored session")
+    console.print(f"[green]✓[/green] {s.container('pw')} recreated: new pages start from the stored session")
     return True

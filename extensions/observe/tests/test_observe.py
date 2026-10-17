@@ -248,8 +248,9 @@ def test_no_exit_identity_without_a_polling_gate(tmp_path):
     for other in ({"observed": False}, {"harness": False}, {"mode": "tcp"},
                   {"route": {"kind": "corporate", "upstream": "direct"}}):
         assert not hooks._polled(hook_ctx(forwarders=[{**fwd, **other}]))
-    for bad in ("vpn-endpoint", {"url": "http://x/"}, {"url": "https://"}, {**FILE, "file": "../ip"},
-                {"source": "s", "volume": "exit"}, {**TOR_CHECK, **FILE}):
+    # its shape is the slot schema's (tests/test_api.py); its values are checked here
+    for bad in ({"url": "http://x/"}, {"url": "https://"}, {"url": None}, {**FILE, "file": "../ip"},
+                {**FILE, "file": None}):
         with pytest.raises(ValueError, match="must be"):
             hooks.exit_identity(hook_ctx(settings={"exit_identity": "auto"}, slot={"egress": {"exit_identity": bad}}))
 
@@ -452,7 +453,7 @@ def test_unobserved_session_has_no_exports_and_null_grants(ghome, tmp_path, monk
     row = json.loads((ghome / "registry.json").read_text())["sessions"][0]
     assert row["grants"] == {"observe": None, "filter": None}
     out = runner.invoke(app, ["observe", "status"])
-    assert out.exit_code == 1 and "not observed" in out.output
+    assert out.exit_code == 1 and "observe extension is not enabled" in " ".join(out.output.split())
 
 
 def test_observe_status_and_flows(ghome, tmp_path, monkeypatch):

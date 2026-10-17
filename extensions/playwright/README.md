@@ -184,7 +184,7 @@ glove playwright status    # also: how many cookies, and when the first expires 
 ```
 
 - **`login`** starts a **dedicated** Chrome on your machine: a fresh profile
-  under `.glove/playwright-login/`, deleted afterwards (`--keep-profile` keeps
+  under `.glove/ext/playwright/login-profile/`, deleted afterwards (`--keep-profile` keeps
   it for the next login). Your own Chrome and its profile are never touched.
   glove drives it over **CDP on a pipe** (`--remote-debugging-pipe`), so it
   opens no debugging port that another local process could reach. Sign in, and

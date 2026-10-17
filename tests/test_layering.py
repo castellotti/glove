@@ -55,40 +55,7 @@ def test_contract_catches_a_core_to_extension_import(tmp_path):
 
 # --- Extension contracts. An AST scan of every non-test module under extensions/ and harnesses/:
 # from core they import only `glove.api`; an extension imports another only if it requires it (any
-# form, `when:` ignored); a harness adapter imports no extension. KNOWN holds the edges that predate
-# `glove.api`; it only shrinks, to empty once every extension and adapter is migrated.
-
-KNOWN = frozenset({
-    "extensions/filter/cli.py -> glove.registry",
-    "extensions/github/hooks.py -> glove.config",
-    "extensions/github/hooks.py -> glove.extensions",
-    "extensions/observe/cli.py -> glove.registry",
-    "extensions/observe/cli.py -> glove.sessiondir",
-    "extensions/playwright/cli.py -> glove.config",
-    "extensions/playwright/cli.py -> glove.extensions",
-    "extensions/playwright/cli.py -> glove.naming",
-    "extensions/playwright/cli.py -> glove.session",
-    "extensions/playwright/cli.py -> glove.sessiondir",
-    "extensions/playwright/hooks.py -> glove.cafile",
-    "extensions/playwright/hooks.py -> glove.extensions",
-    "extensions/playwright/host/login.py -> glove.config",
-    "extensions/playwright/host/login.py -> glove.naming",
-    "extensions/rag/cli.py -> glove.config",
-    "extensions/rag/cli.py -> glove.extensions",
-    "extensions/rag/cli.py -> glove.mounts",
-    "extensions/rag/cli.py -> glove.sessiondir",
-    "extensions/skills/cli.py -> glove.config",
-    "extensions/skills/cli.py -> glove.extensions",
-    "extensions/skills/cli.py -> glove.naming",
-    "extensions/skills/cli.py -> glove.session",
-    "extensions/skills/cli.py -> glove.sessiondir",
-    "extensions/skills/hooks.py -> glove.config",
-    "extensions/skills/hooks.py -> glove.enforcers",
-    "extensions/skills/hooks.py -> glove.image",
-    "extensions/skills/hooks.py -> glove.mounts",
-    "extensions/skills/hooks.py -> glove.naming",
-    "extensions/skills/hooks.py -> glove.toolchains",
-})
+# form, `when:` ignored); a harness adapter imports no extension.
 
 
 def _imports(path: Path, root: Path) -> list[str]:
@@ -149,10 +116,9 @@ def contract_violations(root: Path = REPO) -> set[str]:
 
 def test_extensions_use_only_the_public_api_and_their_requirements():
     found = contract_violations()
-    assert not found - KNOWN, (
-        "new imports break the extension contracts (from core, import only glove.api; import only "
-        "extensions you require; adapters import no extension):\n" + "\n".join(sorted(found - KNOWN)))
-    assert not KNOWN - found, "fixed; remove from KNOWN:\n" + "\n".join(sorted(KNOWN - found))
+    assert not found, (
+        "imports break the extension contracts (from core, import only glove.api; import only "
+        "extensions you require; adapters import no extension):\n" + "\n".join(sorted(found)))
 
 
 def _toy(tmp_path: Path, files: dict[str, str]) -> Path:

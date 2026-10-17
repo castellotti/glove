@@ -146,7 +146,7 @@ def _open(dir_arg: Path | None, *, register: bool = True, check_runtime: bool = 
     sd = sdm.find(dir_arg)
     raw = sdm.load_file(sd)
     if register:
-        sid, _ = sdm.ensure_state(sd)
+        sid = sdm.ensure_state(sd)
         subnet = _sync_registry(sd, sid, raw, check_runtime=check_runtime).subnet
     else:  # read-only callers (check): never create state or registry rows
         sid = sd.read_id() or sdm.new_id(sd.root.name)

@@ -24,6 +24,7 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
@@ -44,10 +45,7 @@ def main(directory: str) -> int:
     check("`glove check`: the corporate egress admits both hosts and their subdomains",
           "github egress" in out and "corporate admits" in out and "does not admit" not in out, out[-600:])
     with live_session(directory, logs="gh") as s:
-        def sh(cmd: str) -> str:
-            out = s.sh(cmd)
-            print(f"    $ {cmd[:100]}\n      {out[-300:]}", flush=True)
-            return out
+        sh = functools.partial(s.sh, echo=True)
 
         image = yaml.safe_load(s.sd.compose.read_text())["services"][f"{s.prefix}-gh"]["image"]
         with stand_in(s, image, ["python3", "/stub.py", "443", "/fx/stub.pem", "/fx/stub.key", "/fx/repo.git"],

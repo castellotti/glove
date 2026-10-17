@@ -70,10 +70,9 @@ def exit_identity(ctx: HookContext) -> dict[str, str] | None:
     ex = (ctx.slot.get("egress") or {}).get("exit_identity")
     if not ex:
         return None
-    ok = isinstance(ex, dict) and (
-        (set(ex) == {"url"} and _url_ok(ex["url"]))
-        or (set(ex) == {"source", "volume", "file"}
-            and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", str(ex[k])) for k in ex)))
+    # its keys are the slot schema's; the values reach the poller's config
+    ok = _url_ok(ex["url"]) if "url" in ex else all(
+        isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", x) for x in ex.values())
     if not ok:
         raise ValueError("the egress's exit_identity export must be {url: https://…} or "
                          f"{{source, volume, file}}, got {ex!r}")
@@ -81,6 +80,8 @@ def exit_identity(ctx: HookContext) -> dict[str, str] | None:
 
 
 def _url_ok(url: Any) -> bool:
+    if not isinstance(url, str):
+        return False
     try:
         check_url(url)
     except ValueError:
