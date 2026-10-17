@@ -427,21 +427,19 @@ def prepare_harness(sd, cfg, plan) -> None:
 def _resolve_extensions(plan, provider: str) -> None:
     """Run each active extension's `resolve` hook (after sidecars are up) and
     refresh the model descriptor from the inference slot's resolved exports."""
+    from functools import partial
+
     from .extensions import base_context
     from .harnessconfig import harness_model
-    from .session import probe_http
+    from .session import probe_http, with_headers
 
     comp = plan.composition
     for a in comp.active:
         if a.hooks is None or not hasattr(a.hooks, "resolve"):
             continue
-        ex = a.exports
-
-        def probe(url, method="GET", body=None, _ex=ex):
-            return probe_http(provider, plan, url, method=method, body=body, headers=_ex.get("probe_headers") or {})
-
         try:
-            a.exports, notes = a.hooks.resolve(base_context(comp, a), ex, probe)
+            probe = with_headers(partial(probe_http, provider, plan), a.exports)
+            a.exports, notes = a.hooks.resolve(base_context(comp, a), a.exports, probe)
         except ValueError as e:
             raise ConfigError(str(e)) from e
         for n in notes:

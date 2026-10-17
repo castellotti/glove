@@ -85,10 +85,12 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
     """Selection/settings validation plus each extension's own `doctor` hook.
     ``comp``: the session plan's composition, when it already built one;
     ``session_dir`` resolves relative path settings when it did not;
-    ``probe``: ``probe(url, headers, host_gateway=)`` → (status, text), a GET of
-    what the session reaches from a throwaway container, never the host
-    (``ctx["probe"]``; None: a hook contacts nothing)."""
+    ``probe``: ``probe(url, method=, body=, headers=)`` → (status, text), a
+    request to what the session reaches from a throwaway container, never the
+    host; a hook gets it as ``ctx["probe"](url, method=, body=)``, as at launch,
+    with its own ``probe_headers`` export (None: a hook contacts nothing)."""
     from .extensions import base_context, compose
+    from .session import with_headers
 
     if comp is None:
         try:
@@ -102,7 +104,7 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
     checks = [Check("extensions", "ok", ", ".join(f"{a.name} ({a.manifest.taint})" for a in comp.active))]
     for a in comp.active:
         if a.hooks is not None and hasattr(a.hooks, "doctor"):
-            ctx = {**base_context(comp, a), "probe": probe}
+            ctx = {**base_context(comp, a), "probe": probe and with_headers(probe, a.exports)}
             checks += [Check(n, st, d) for n, st, d in a.hooks.doctor(ctx)]
         checks += egress_host_checks(comp, a)
     return checks

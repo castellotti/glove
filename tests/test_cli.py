@@ -372,14 +372,14 @@ def test_check_asks_the_llm_server_only_from_a_container(home, tmp_path, monkeyp
     from glove import session
 
     asked = []
-    monkeypatch.setattr(session, "probe_direct", lambda provider, url, headers=None, host_gateway=False:
-                        asked.append((provider, url)) or (200, '{"data": [{"id": "m"}]}'))
+    monkeypatch.setattr(session, "probe_direct", lambda provider, url, **kw:
+                        asked.append((provider, url, kw)) or (200, '{"data": [{"id": "m"}]}'))
     monkeypatch.setattr("glove.doctor.run_doctor", lambda **k: [])  # no runtime probes here
     d = make_session(tmp_path / "s", llm=_lan())
     result = runner.invoke(app, ["check", str(d)])
     assert result.exit_code == 0, result.output
     assert "llm server" in result.output and "serves m" in result.output
-    assert asked == [("docker", "http://example.test:8080/v1/models")]
+    assert asked == [("docker", "http://example.test:8080/v1/models", {"method": "GET", "body": None, "headers": {}})]
     for flag in ("--offline", "--no-container"):  # neither runs a container: nothing is asked
         result = runner.invoke(app, ["check", str(d), flag])
         assert result.exit_code == 0 and "llm server" not in result.output, result.output

@@ -95,15 +95,27 @@ def test_probe_direct_runs_a_hardened_curl_on_the_default_bridge(monkeypatch):
     from glove.verify import PROBE_IMAGE
 
     calls = _run(monkeypatch, "200 0\n{}")
-    assert session.probe_direct("docker", "http://x/v1/models", {"v": "1"}) == (200, "{}")
+    assert session.probe_direct("docker", "http://x/v1/models", headers={"v": "1"}) == (200, "{}")
     cmd = calls[0]
     assert cmd[cmd.index("--network") + 1] == "bridge" and "--add-host" not in cmd and "--userns" not in cmd
     assert cmd[cmd.index("--user") + 1] == "65534:65534" and "--cap-drop" in cmd and "--read-only" in cmd
     assert cmd[-3] == PROBE_IMAGE
     script = cmd[-1]
-    assert "for w in 0;" in script and "curl -4 -sS -m 10 " in script and "-H 'v: 1'" in script
-    session.probe_direct("docker", "http://host.docker.internal:1/", host_gateway=True)
-    assert calls[1][calls[1].index("--add-host") + 1] == "host.docker.internal:host-gateway"
+    assert "for w in 0;" in script and "curl -4 -sS -m 20 " in script and "-H 'v: 1'" in script
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:11434/v1/models", "http://localhost:11434/v1/models"])
+def test_probe_direct_reaches_this_machine_as_a_host_gateway_forwarder(monkeypatch, url):
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append((cmd, kw["env"]["U"]))
+        return subprocess.CompletedProcess(cmd, 0, "200 0\n", "")
+    monkeypatch.setattr(session.subprocess, "run", run)
+    session.probe_direct("docker", url)
+    cmd, dialled = seen[0]
+    assert cmd[cmd.index("--add-host") + 1] == "host.docker.internal:host-gateway"
+    assert dialled == "http://host.docker.internal:11434/v1/models"
 
 
 def test_probe_direct_without_a_container_runtime_is_no_answer():
@@ -116,3 +128,19 @@ def test_a_hung_probe_container_is_no_answer(monkeypatch):
         raise subprocess.TimeoutExpired(cmd, kw["timeout"])
     monkeypatch.setattr(session.subprocess, "run", run)
     assert session.probe_direct("docker", "http://x/") == (0, "the probe container timed out")
+
+
+def test_check_hands_a_hook_cores_probe_with_its_own_headers():
+    """As at launch: the extension's `probe_headers` export (here an oauth
+    block's beta header too), and nothing the hook chooses."""
+    from glove.doctor import extension_checks
+
+    asked = []
+
+    def probe(url, method="GET", body=None, headers=None):
+        asked.append(headers)
+        return 401, ""
+    checks = extension_checks({"llm": {"provider": "anthropic", "auth": "oauth", "api_key": "keychain:t",
+                                       "model": "claude-x"}}, harness="claude-code", probe=probe)
+    assert any(c.name == "llm server" and c.status == "ok" for c in checks), checks
+    assert asked and all(h.get("anthropic-beta") and h.get("anthropic-version") for h in asked)

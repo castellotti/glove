@@ -144,8 +144,8 @@ server from the host):
 
 ## `glove check`: the server answers
 
-`glove check` asks the server for `/v1/models` with the launch probe's public
-headers, without the key, and fails when it does not answer, when `model:` is
+`glove check` asks the server for `/v1/models` as the launch does (the same
+public headers, the same model rule), without the key, and fails when it does not answer, when `model:` is
 not listed, or (`model: auto`) when it lists other than exactly one. With
 `api_key` set, a 401/403 still counts as an answer; a server that lists no
 models is taken at its word, as at launch. Like every other probe, it runs in a
