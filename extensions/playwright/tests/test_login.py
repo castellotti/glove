@@ -358,6 +358,24 @@ def test_login_stopped_stores_nothing(tmp_path, monkeypatch, capsys):
     assert not legacy.exists()
 
 
+def test_login_keep_profile_moves_a_profile_kept_before_api_2(tmp_path, monkeypatch):
+    d = _session(tmp_path, LOGIN)
+    legacy = d / ".glove" / "playwright-login"
+    (legacy / "Default").mkdir(parents=True)
+    (legacy / "Default" / "Cookies").write_text("signed in")
+    monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: _Chrome(exe, args))
+    monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
+
+    def interrupt(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+    with pytest.raises(typer.Exit):
+        cli.login(directory=d, keep_profile=True, no_reload=True, headless=True, chrome_args=[])
+    profile = d / ".glove" / "ext" / "playwright" / "login-profile"
+    assert not legacy.exists() and (profile / "Default" / "Cookies").read_text() == "signed in"
+
+
 @pytest.mark.parametrize(("login", "state", "match"), [
     (None, None, "set playwright.login"),
     (LOGIN, "env:X", "must be keychain"),

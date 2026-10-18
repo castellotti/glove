@@ -12,14 +12,15 @@ All notable changes to glove are documented here.
   `HookContext` (`ctx.settings`, not `ctx["settings"]`); `doctor` takes
   `(ctx, probe)`; a `contribute` hook returns its harness parts under
   `harness:`, and a name it sets that the manifest also sets (and doesn't
-  `when:`-exclude) is refused instead of one silently winning. Every hook's
+  `when:`-exclude, for `privileges` too) is refused instead of one silently winning. Every hook's
   result is checked, and a `ValueError` it raises names the extension and the
   hook. `trust_corporate_ca:` is now `trust:`; `conflicts:` and the manifest's
   `host_services:` are gone (a hook may still contribute `host_services`).
   The session and work directories reach a hook only when its manifest gives a
   reason (`host_files: true` is new; `skills` sets it). The slot exports core
   reads (`egress`: `proxy_url`, `exit_identity`, `shares`, …; `inference`) are
-  type-checked after `contribute` and after `resolve`. Harness adapters take
+  type-checked after `contribute` and after `resolve` (a templated int or bool,
+  `"{{ settings.port }}"`, is read back as one). Harness adapters take
   one `AdapterContext` (`render_home(actx, home_dir)`). New for extension CLIs:
   `glove.api.ext_session` and `reload_sidecar`; an extension imports nothing
   from core but `glove.api`, and its own files relatively.
@@ -29,8 +30,8 @@ All notable changes to glove are documented here.
   without `filter`, now says so instead of reporting an empty export.
   `glove playwright login` keeps its browser profile (with `--keep-profile`)
   under `.glove/ext/playwright/login-profile/`; one kept at the old
-  `.glove/playwright-login/` (it holds signed-in cookies) is deleted at the next
-  login. In a session not yet launched, `login` now creates `.glove/` private
+  `.glove/playwright-login/` (it holds signed-in cookies) is moved there by
+  the next `login --keep-profile`, and deleted by a `login` without it. In a session not yet launched, `login` now creates `.glove/` private
   (0700) and git-ignored.
 - **`relayd` is a command in the relay image.** A relay sidecar runs
   `relayd --channel …` (github, ssh, skills relays) instead of naming

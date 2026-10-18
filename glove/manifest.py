@@ -120,11 +120,23 @@ SLOT_EXPORTS: dict[str, dict[str, tuple]] = {
 REQUIRED_EXPORTS = {"egress": ("proxy_host", "proxy_port", "proxy_url"), "inference": ("base_url", "api", "model")}
 
 
-def check_slot_exports(slot: str, provider: str, exports: dict[str, Any]) -> None:
+def _coerce(v: Any, types: tuple) -> Any:
+    """A templated int or bool export renders as a string: read it back."""
+    s = v.strip().lower() if isinstance(v, str) else ""
+    if bool in types and s in ("true", "false"):
+        return s == "true"
+    return int(s) if int in types and s.lstrip("-").isdigit() else v
+
+
+def check_slot_exports(slot: str, provider: str, exports: dict[str, Any]) -> dict[str, Any]:
+    """`exports`, checked against the slot's schema, with a templated int or
+    bool export (`"{{ settings.port }}"`) read back as one."""
     where = f"extension {provider!r}: the {slot} slot's exports"
+    schema = SLOT_EXPORTS.get(slot, {})
+    exports = {k: _coerce(v, schema[k]) if k in schema else v for k, v in exports.items()}
     if missing := [k for k in REQUIRED_EXPORTS.get(slot, ()) if exports.get(k) in (None, "")]:
         raise ExtensionError(f"{where} need {missing}")
-    for k, types in SLOT_EXPORTS.get(slot, {}).items():
+    for k, types in schema.items():
         v = exports.get(k)
         if v is not None and not _is(v, types):
             raise ExtensionError(f"{where}: {k} must be {' or '.join(t.__name__ for t in types)}, got {v!r}")
@@ -134,3 +146,4 @@ def check_slot_exports(slot: str, provider: str, exports: dict[str, Any]) -> Non
             raise ExtensionError(f"{where}: exit_identity is {{url: https://…}} or {{source:, volume:, file:}}")
         if not all(isinstance(x, str) for x in exports.get("shares") or []):
             raise ExtensionError(f"{where}: shares is a list of volume names")
+    return exports

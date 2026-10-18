@@ -36,7 +36,7 @@ API = {
     "mcp_server": "(where: 'str', item: 'Any') -> 'dict[str, Any]'",
     "render_value": "(value: 'Any', ctx: 'dict[str, Any]', where: 'str' = '') -> 'Any'",
     "tool_names": "(where: 'str', tools: 'Any') -> 'list[str]'",
-    "ExtSession": "dataclass(name, root, file, work, id, runtime, compose_file, settings, hooks, manifest)",
+    "ExtSession": "dataclass(name, root, file, work, id, runtime, compose_file, settings, manifest)",
     "ext_session": "(name: 'str', directory: 'Path | None' = None, *, launched: 'bool' = True) -> 'ExtSession'",
     "reload_sidecar": "(s: 'ExtSession', service: 'str', env: 'Mapping[str, str]', *, wait: 'int' = 30) -> 'None'",
 }

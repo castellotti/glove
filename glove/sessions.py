@@ -25,7 +25,7 @@ def sessions_dir(profile: HarnessProfile, home_dir: Path) -> Path:
     the same mapping `harnessconfig` uses to seed that dir), then appends the
     harness's `sessions_subdir` (Pi/Vibe use `sessions/`; Claude Code uses
     `projects/`)."""
-    return Path(home_dir) / rel_config_home(profile) / profile.sessions_subdir
+    return Path(home_dir) / rel_config_home(profile.config_home_path) / profile.sessions_subdir
 
 
 @dataclass(frozen=True)

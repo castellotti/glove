@@ -5,6 +5,7 @@ docs/extensions.md names each of them."""
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 import textwrap
 from pathlib import Path
@@ -25,8 +26,9 @@ from glove.extensions import (
     declares_host_paths,
     discover,
     hook_context,
+    load_module,
 )
-from glove.hooks import HOOKS
+from glove.hooks import HOOKS, validate_result
 from glove.manifest import KEYS, SLOT_EXPORTS, ExtensionError, check_slot_exports
 
 MARKED = "from glove.api import hook\n\n\n@hook\n"
@@ -129,6 +131,32 @@ def test_a_manifest_entry_its_when_excludes_leaves_the_name_to_the_hook(tree):
         _compose(tree, "h", harness="vibe")
 
 
+def test_a_privilege_its_when_excludes_leaves_the_service_to_the_hook(tree):
+    _ext(tree, "h", "privileges:\n  svc: [{ low_ports: true, when: { harness: vibe } }]\n",
+         MARKED + "def contribute(ctx):\n    return {'privileges': {'svc': {'work': True}}}\n")
+    a = _compose(tree, "h").by_name("h")
+    assert a.spec("privileges", {"harness": "pi"})["svc"] == {"work": True}
+    with pytest.raises(ExtensionError, match=r"privileges: \['svc'\] set by both"):
+        _compose(tree, "h", harness="vibe")
+
+
+def test_a_doctor_hook_may_report_what_core_checks_do():
+    for status in ("ok", "info", "skip", "warn", "fail"):
+        validate_result("doctor", "h", [("x", status, "d")])
+    with pytest.raises(ExtensionError, match="status in"):
+        validate_result("doctor", "h", [("x", "great", "d")])
+
+
+def test_an_extension_loaded_from_another_directory_imports_its_own_helpers(tmp_path):
+    hooks = {}
+    for which in ("one", "two"):
+        (tmp_path / which).mkdir()
+        _ext(tmp_path / which, "h", hooks="from . import helper\n")
+        (tmp_path / which / "h" / "helper.py").write_text(f"WHICH = {which!r}\n")
+        hooks[which] = load_module(tmp_path / which / "h" / "hooks.py", "h")
+    assert (hooks["one"].helper.WHICH, hooks["two"].helper.WHICH) == ("one", "two")
+
+
 def test_list_keys_concatenate(tree):
     _ext(tree, "h", "trust: [a]\n", MARKED + "def contribute(ctx):\n    return {'trust': ['b']}\n")
     assert _compose(tree, "h").by_name("h").spec("trust") == ["a", "b"]
@@ -168,6 +196,9 @@ def _manifest(raw: dict, *, out_of_tree: bool = False, trusted: bool = True) -> 
     ({"host_files": True}, True, True),
 ])
 def test_host_paths_reach_a_hook_only_when_declared(raw, session_dir, work_dir):
+    # a `work` privilege its contribute hook returned counts for the hooks after it
+    assert declares_host_paths(_manifest({}), work=True, contributed={"privileges": raw.get("privileges", {})}) \
+        is bool(raw.get("privileges"))
     assert declares_host_paths(_manifest(raw)) is session_dir
     assert declares_host_paths(_manifest(raw), work=True) is work_dir
     # never for an untrusted out-of-tree extension, whatever it declares
@@ -195,6 +226,10 @@ def test_only_the_forwarder_provider_sees_the_forwarders_and_grants(tree):
     fwd, llm = hook_context(comp, comp.by_name("fwd")), hook_context(comp, comp.by_name("llm"))
     assert (fwd.forwarders, dict(fwd.grants)) == (({"service": "llm"},), {"filter": False})
     assert (llm.forwarders, dict(llm.grants)) == ((), {})
+    a = comp.by_name("fwd")
+    a.manifest = dataclasses.replace(a.manifest, out_of_tree=True, trusted=False)
+    stranger = hook_context(comp, a)
+    assert (stranger.forwarders, dict(stranger.grants)) == ((), {})
 
 
 # --- slot exports -------------------------------------------------------------------
@@ -204,7 +239,7 @@ EGRESS = {"proxy_host": "p", "proxy_port": 8888, "proxy_url": "http://p:8888"}
 
 @pytest.mark.parametrize(("exports", "match"), [
     ({k: v for k, v in EGRESS.items() if k != "proxy_url"}, r"need \['proxy_url'\]"),
-    ({**EGRESS, "proxy_port": "8888"}, "proxy_port must be int"),
+    ({**EGRESS, "proxy_port": "eighty"}, "proxy_port must be int"),
     ({**EGRESS, "exit_identity": {"url": "https://x/", "file": "ip"}}, "exit_identity is"),
     ({**EGRESS, "exit_identity": {"source": "s", "volume": "exit"}}, "exit_identity is"),
     ({**EGRESS, "exit_identity": "vpn-endpoint"}, "exit_identity must be dict"),
@@ -215,6 +250,16 @@ EGRESS = {"proxy_host": "p", "proxy_port": 8888, "proxy_url": "http://p:8888"}
 def test_an_egress_exports_what_core_reads_typed(exports, match):
     with pytest.raises(ExtensionError, match=match):
         check_slot_exports("egress", "e", exports)
+
+
+def test_a_templated_int_or_bool_export_is_read_back_as_one():
+    # `"{{ settings.port }}"` renders as a string
+    out = check_slot_exports("egress", "e", {**EGRESS, "proxy_port": "3128", "anonymising": "True",
+                                              "proxy_host": "1"})
+    assert (out["proxy_port"], out["anonymising"], out["proxy_host"]) == (3128, True, "1")
+    out = check_slot_exports("inference", "i", {"base_url": "http://x", "api": "a", "model": "true",
+                                                 "api_key_injected": "false"})
+    assert (out["model"], out["api_key_injected"]) == ("true", False)
 
 
 def test_well_formed_exports_and_a_providers_own_keys_pass():

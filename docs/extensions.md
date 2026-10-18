@@ -143,7 +143,7 @@ is optional.
 | `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands; values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
 | `resolve` | `(ctx, exports, probe)` | `up`, once the sidecars are healthy | only through `probe` | `(exports, notes)` |
 | `diagnose` | `(ctx, check, run)` | `up`, after one of its verify checks failed | `run(service, argv)` in its own sidecars | a hint, or `None` |
-| `doctor` | `(ctx, probe)` | `doctor`, `check` | `probe`, `None` offline | `[(name, status, detail)]`, status `ok`, `warn` or `fail` |
+| `doctor` | `(ctx, probe)` | `doctor`, `check` | `probe`, `None` offline | `[(name, status, detail)]`, status `ok`, `info`, `skip`, `warn` or `fail` |
 
 - A forwarder's `service` may set only `image`, `command`, `entrypoint`,
   `environment`, `volumes`, `tmpfs`, `depends_on`, `healthcheck`, `init`,
@@ -172,9 +172,9 @@ those of the fragment's template context.
 | `images`, `libs` | image tags: its own, and its libraries' |
 | `mount`, `output`, `input` | as in the fragment, when declared |
 | `session_dir` | the session directory, **only if** the manifest declares a reason: a `path` setting, `mounts`, `outputs`/`inputs`, or `host_files: true` |
-| `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` |
+| `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` (a `work` privilege its `contribute` hook returns counts for the hooks after it) |
 | `export_dirs` | the export roots it owns (in-tree only) |
-| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider |
+| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted) |
 
 An untrusted out-of-tree extension never gets `session_dir`, `work_dir`,
 `export_dirs`, `forwarders` or `grants`. **This is hygiene, not a sandbox.** A
@@ -201,8 +201,9 @@ out-of-tree extension that needs shared code ships it itself.
 
 Core and other extensions read some of a slot provider's `exports`. These are
 checked by type (`glove/manifest.py` `SLOT_EXPORTS`) after `contribute` and
-again after `resolve`. Keys not listed are allowed, and only the provider's
-own templates read them.
+again after `resolve`. A templated int or bool (`proxy_port: "{{ settings.port }}"`)
+renders as a string, and is read back as one. Keys not listed are allowed, and
+only the provider's own templates read them.
 
 | slot | key | type |
 |---|---|---|
@@ -267,7 +268,7 @@ def reload(directory: Path | None = DIR_OPT) -> None:
   - `runtime` (`docker` or `podman`);
   - `compose_file`;
   - `settings` (validated, defaults applied);
-  - `hooks` (its `hooks.py`, or `None`);
+  - `hooks` (its `hooks.py`, or `None`; loaded the first time it is read);
   - `manifest`.
 
   It has these methods:

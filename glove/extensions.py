@@ -179,7 +179,12 @@ def load_module(path: Path, name: str) -> ModuleType:
     pkg = f"glove_ext.{name.replace('-', '_')}"
     root = next((d for d in path.parents if (d / MANIFEST).is_file()), path.parent)
     sys.modules.setdefault("glove_ext", ModuleType("glove_ext")).__path__ = []
-    sys.modules.setdefault(pkg, ModuleType(pkg)).__path__ = [str(root)]  # the extension's own directory
+    if getattr(sys.modules.get(pkg), "__path__", None) != [str(root)]:
+        # another directory of that name loaded first: `from . import x` must find this one's
+        for k in [k for k in sys.modules if k == pkg or k.startswith(f"{pkg}.")]:
+            del sys.modules[k]
+        sys.modules[pkg] = ModuleType(pkg)
+        sys.modules[pkg].__path__ = [str(root)]  # the extension's own directory
     spec = importlib.util.spec_from_file_location(f"{pkg}.{path.stem}", path)
     if spec is None or spec.loader is None:
         raise ExtensionError(f"extension {name!r}: cannot load {path}")
@@ -353,8 +358,10 @@ def render_value(value: Any, ctx: dict[str, Any], where: str = "") -> Any:
 
 
 def _entry_active(ctx: dict[str, Any]):
-    """Whether a mapping entry's `when:` matches (for `merge_names`)."""
-    return lambda spec: when_matches(spec.get("when") if isinstance(spec, dict) else None, ctx)
+    """Whether a mapping entry's `when:` matches, or (a list of items, as in
+    `privileges`) any item's does (for `merge_names`)."""
+    return lambda spec: any(when_matches(s.get("when") if isinstance(s, dict) else None, ctx)
+                            for s in (spec if isinstance(spec, list) else [spec]))
 
 
 def active_items(items: list | None, ctx: dict[str, Any]) -> list:
@@ -489,18 +496,20 @@ class Active:
     def name(self) -> str:
         return self.manifest.name
 
-    def spec(self, key: str) -> Any:
+    def spec(self, key: str, ctx: dict[str, Any] | None = None) -> Any:
         """A manifest key with what its `contribute` hook added (`KEYS` says
-        how; a name both set is refused)."""
+        how; a name both set is refused, unless the manifest's entry is
+        `when:`-excluded under `ctx`)."""
         mine, more = self.manifest.raw.get(key), self.contributed.get(key)
         if KEYS[key].merge == "cat":
             return [*(mine or []), *(more or [])]
-        return merge_names(f"extension {self.name!r} {key}", mine, more)
+        active = _entry_active(ctx) if ctx is not None else lambda _spec: True
+        return merge_names(f"extension {self.name!r} {key}", mine, more, active=active)
 
     def set_exports(self, exports: dict[str, Any]) -> None:
         """Its exports, checked against the schema of each slot it provides."""
         for s in self.manifest.provides:
-            check_slot_exports(s, self.name, exports)
+            exports = check_slot_exports(s, self.name, exports)
         self.exports = exports
 
 
@@ -1175,18 +1184,21 @@ def _host_services(comp: Composition, a: Active, ctx: dict) -> None:
         ))
 
 
-def declares_host_paths(m: Manifest, *, work: bool = False) -> bool:
+def declares_host_paths(m: Manifest, *, work: bool = False, contributed: dict | None = None) -> bool:
     """Whether a hook of `m` gets the session dir (or, with `work`, the work
     dir) in its context: trusted, and its manifest names a reason — outputs
     or inputs, `host_files: true`, and a `path` setting or `mounts` (session
-    dir) or a `work` privilege (work dir)."""
+    dir) or a `work` privilege (work dir), its own or one its `contribute`
+    hook returned (`contributed`, seen by the hooks that run after it)."""
     raw = m.raw
     if not m.trusted:
         return False
     if raw.get("host_files") or raw.get("outputs") or raw.get("inputs"):
         return True
     if work:
-        return any(isinstance(p, dict) and p.get("work") for v in (raw.get("privileges") or {}).values()
+        privileges = [*(raw.get("privileges") or {}).values(),
+                      *((contributed or {}).get("privileges") or {}).values()]
+        return any(isinstance(p, dict) and p.get("work") for v in privileges
                    for p in (v if isinstance(v, list) else [v]))
     return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") == "path"
                                           for x in (raw.get("settings") or {}).values())
@@ -1199,12 +1211,12 @@ _SHARED = ("harness", "session", "names", "slot", "endpoint", "own_endpoints", "
 def hook_context(comp: Composition, a: Active) -> HookContext:
     """`a`'s hook context: see `HookContext`."""
     t = base_context(comp, a)
-    forwarder = comp.slots.get("forwarder") is a
+    forwarder = comp.slots.get("forwarder") is a and a.manifest.trusted
     return HookContext(
         name=a.name, settings=a.settings, renders=t["renders"], trusted=a.manifest.trusted,
         active=[x.name for x in comp.active], state_dir=comp.state_dir(a.name), assets=a.manifest.path,
         session_dir=comp.session_dir if declares_host_paths(a.manifest) else None,
-        work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True) else None,
+        work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True, contributed=a.contributed) else None,
         export_dirs={r: comp.export_dirs[r] for r in comp.export_access(a) if r in comp.export_dirs},
         forwarders=[dict(f) for f in comp.forwarders] if forwarder else [],
         grants=dict(comp.grants) if forwarder else {},
@@ -1259,7 +1271,7 @@ def compose(
         ctx = base_context(comp, a)
         a.contributed = contributed = call_hook(comp, a, "contribute") or {}
         where = f"extension {a.name!r}"
-        a.spec("privileges")  # no name set twice
+        a.spec("privileges", ctx)  # no name set twice
         if not all(isinstance(x, str) for x in a.spec("trust")):
             raise ExtensionError(f"{where}: `trust` lists its services")
         a.set_exports(merge_names(f"{where} exports",

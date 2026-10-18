@@ -8,6 +8,7 @@ import subprocess
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -31,8 +32,13 @@ class ExtSession:
     runtime: str  # docker | podman
     compose_file: Path  # what the last `glove up` rendered
     settings: Mapping[str, Any]  # validated, defaults applied
-    hooks: ModuleType | None  # its hooks.py, helpers included
     manifest: Manifest
+
+    @cached_property
+    def hooks(self) -> ModuleType | None:
+        """Its hooks.py, helpers included: loaded only by a CLI that calls them."""
+        m = self.manifest
+        return load_module(m.hooks_path, self.name) if m.hooks_path else None
 
     def container(self, service: str) -> str:
         return scoped(self.id or "", service)
@@ -89,7 +95,6 @@ def ext_session(name: str, directory: Path | None = None, *, launched: bool = Tr
     return ExtSession(
         name=name, root=sd.root, file=sd.file, work=sd.work, id=sid, runtime=sdm.session_provider(sd),
         compose_file=sd.compose, settings=validate_settings(m, given[name]), manifest=m,
-        hooks=load_module(m.hooks_path, name) if m.hooks_path else None,
     )
 
 

@@ -69,7 +69,7 @@ def seccomp_profiles() -> set[str]:
 
 
 def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
-    raw = a.spec("privileges").get(short)
+    raw = a.spec("privileges", _ctx(comp, a)).get(short)
     items = raw if isinstance(raw, list) else [raw] if raw else []
     merged: dict[str, Any] = {}
     for p in _active_items(items, _ctx(comp, a)):

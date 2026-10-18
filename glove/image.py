@@ -23,6 +23,7 @@ from .harness import HarnessProfile, adapter_call
 
 if TYPE_CHECKING:
     from .extensions import Composition
+    from .harnessconfig import AdapterContext
     from .toolchains import Toolchain
 
 LAYER_KEYS = frozenset({"apt", "pip", "npm", "copy", "copy_host", "run"})
@@ -100,7 +101,8 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile,
 
 
 def render_dockerfile(
-    base_tag: str, profile: HarnessProfile, comp: Composition, toolchains: Sequence[Toolchain] = (),
+    base_tag: str, profile: HarnessProfile, comp: Composition, actx: AdapterContext,
+    toolchains: Sequence[Toolchain] = (),
 ) -> tuple[str | None, list[tuple[str, Path]]]:
     """(Dockerfile text, [(ext, staged source)]) for the derived image: the
     extensions' contributions, the session's `toolchains` (after them, so
@@ -122,9 +124,7 @@ def render_dockerfile(
 
     extension_layers(host=False)
     # the harness's own image contributions (e.g. Pi's `-e` extensions)
-    from .harnessconfig import adapter_context
-
-    body, sources = adapter_call(profile, "image_lines", adapter_context(comp), default=([], []))
+    body, sources = adapter_call(profile, "image_lines", actx, default=([], []))
     lines += body
     staged += sources
     for ext, src, dest in comp.skills:

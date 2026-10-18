@@ -83,7 +83,7 @@ FORWARDER_KEYS = frozenset({
     "image", "command", "entrypoint", "environment", "volumes", "tmpfs", "depends_on", "healthcheck", "init",
     "restart", "stop_grace_period", "stop_signal", "labels",
 })
-DOCTOR_STATUS = frozenset({"ok", "warn", "fail"})
+DOCTOR_STATUS = frozenset({"ok", "info", "skip", "warn", "fail"})  # as core's doctor.Check
 
 
 def _forwarder(out: Any) -> str | None:

@@ -123,7 +123,7 @@ class AdapterContext:
 
     def config_dir(self, home_dir: Path) -> Path:
         """The config dir under the session home on the host."""
-        return home_dir / Path(self.config_home).relative_to(CONTAINER_HOME)
+        return home_dir / rel_config_home(self.config_home)
 
     def skill_link_lines(self, directory: str) -> list[str]:
         """Dockerfile lines baking `skill_links` into `directory` (none without skills)."""
@@ -136,7 +136,8 @@ class AdapterContext:
 
 def adapter_context(comp: Composition, cfg: Config | None = None, plan: SessionPlan | None = None) -> AdapterContext:
     """The adapter's context for `comp`, with the session's `harness_config`
-    when `cfg` is given and the late fields when `plan` is."""
+    when `cfg` is given and the late fields when `plan` is. The extensions'
+    rendered parts come from the context the plan already built, when it has one."""
     from .extensions import active_items, render_value
 
     def section(a, data: Any, ctx: dict) -> HarnessSection:
@@ -145,26 +146,30 @@ def adapter_context(comp: Composition, cfg: Config | None = None, plan: SessionP
         return HarnessSection(a.name, a.manifest.path, render_value(data, ctx, f"extension {a.name!r} harness"))
 
     profile = get_profile(comp.harness)
-    late: dict[str, Any] = {}
-    if plan is not None:
-        from .enforcers.base import TOOLS_FILE, write_roots
-
-        late = {
-            "model": plan.model, "wrapped": "tool-wrapper.argv" in plan.policies,
-            "tool_policy": json.loads(plan.policies[TOOLS_FILE]) if TOOLS_FILE in plan.policies else None,
-            "write_roots": tuple(write_roots(plan)), "working_dir": plan.mount_plan.working_dir,
-            "harness_hosts": tuple(h for sc in plan.network.sidecars if sc.harness
-                                   for h in (scoped(plan.session, sc.role), *sc.aliases, *sc.impl_aliases)),
-        }
-    return AdapterContext(
+    mine = {"harness_config": MappingProxyType({k: v for k, v in (cfg.harness_config if cfg else {}).items()
+                                                if k not in profile.opt_ins}),
+            "enforcer": cfg.enforcer if cfg else ""}
+    if plan is not None and plan.adapter is not None:
+        return with_plan(replace(plan.adapter, **mine), plan)
+    actx = AdapterContext(
         session=comp.session, config_home=profile.config_home_path, transcript_subdir=profile.transcript_subdir,
-        sessions_subdir=profile.sessions_subdir,
-        harness_config=MappingProxyType({k: v for k, v in (cfg.harness_config if cfg else {}).items()
-                                         if k not in profile.opt_ins}),
-        enforcer=cfg.enforcer if cfg else "", mcp=tuple(comp.mcp), skills=tuple(d for _, _, d in comp.skills),
-        skill_links=tuple(comp.skill_links()),
-        sections=tuple(section(*item) for item in comp.harness_items),
-        **late,
+        sessions_subdir=profile.sessions_subdir, mcp=tuple(comp.mcp), skills=tuple(d for _, _, d in comp.skills),
+        skill_links=tuple(comp.skill_links()), sections=tuple(section(*item) for item in comp.harness_items),
+        **mine,
+    )
+    return with_plan(actx, plan) if plan is not None else actx
+
+
+def with_plan(actx: AdapterContext, plan: SessionPlan) -> AdapterContext:
+    """`actx` with the late fields of `plan` (cheap: nothing is rendered again)."""
+    from .enforcers.base import TOOLS_FILE, write_roots
+
+    return replace(
+        actx, model=plan.model, wrapped="tool-wrapper.argv" in plan.policies,
+        tool_policy=json.loads(plan.policies[TOOLS_FILE]) if TOOLS_FILE in plan.policies else None,
+        write_roots=tuple(write_roots(plan)), working_dir=plan.mount_plan.working_dir,
+        harness_hosts=tuple(h for sc in plan.network.sidecars if sc.harness
+                            for h in (scoped(plan.session, sc.role), *sc.aliases, *sc.impl_aliases)),
     )
 
 
@@ -249,9 +254,10 @@ def render_home(cfg: Config, plan: SessionPlan, home_dir: Path) -> list[Path]:
     return written
 
 
-def rel_config_home(profile: HarnessProfile) -> Path:
-    """The harness config dir relative to the host home (strips CONTAINER_HOME)."""
-    return Path(profile.config_home_path).relative_to(CONTAINER_HOME)
+def rel_config_home(config_home: str) -> Path:
+    """A harness config dir (`HarnessProfile.config_home_path`) relative to the
+    host home (strips CONTAINER_HOME)."""
+    return Path(config_home).relative_to(CONTAINER_HOME)
 
 
 def _write_context_file(cfg: Config, plan: SessionPlan, home_dir: Path) -> Path:
