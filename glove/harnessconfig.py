@@ -134,10 +134,10 @@ class AdapterContext:
                 + " && ".join(f"ln -s {q(dest)} {q(f'{directory}/{name}')}" for name, dest in self.skill_links)]
 
 
-def adapter_context(comp: Composition, cfg: Config | None = None, plan: SessionPlan | None = None) -> AdapterContext:
+def adapter_context(comp: Composition, cfg: Config | None = None) -> AdapterContext:
     """The adapter's context for `comp`, with the session's `harness_config`
-    when `cfg` is given and the late fields when `plan` is. The extensions'
-    rendered parts come from the context the plan already built, when it has one."""
+    when `cfg` is given; `with_plan` adds the late fields (`SessionPlan.adapter`
+    is this, built once)."""
     from .extensions import active_items, render_value
 
     def section(a, data: Any, ctx: dict) -> HarnessSection:
@@ -146,26 +146,29 @@ def adapter_context(comp: Composition, cfg: Config | None = None, plan: SessionP
         return HarnessSection(a.name, a.manifest.path, render_value(data, ctx, f"extension {a.name!r} harness"))
 
     profile = get_profile(comp.harness)
-    mine = {"harness_config": MappingProxyType({k: v for k, v in (cfg.harness_config if cfg else {}).items()
-                                                if k not in profile.opt_ins}),
-            "enforcer": cfg.enforcer if cfg else ""}
-    if plan is not None and plan.adapter is not None:
-        return with_plan(replace(plan.adapter, **mine), plan)
-    actx = AdapterContext(
+    return AdapterContext(
         session=comp.session, config_home=profile.config_home_path, transcript_subdir=profile.transcript_subdir,
         sessions_subdir=profile.sessions_subdir, mcp=tuple(comp.mcp), skills=tuple(d for _, _, d in comp.skills),
         skill_links=tuple(comp.skill_links()), sections=tuple(section(*item) for item in comp.harness_items),
-        **mine,
+        **_cfg_fields(profile, cfg),
     )
-    return with_plan(actx, plan) if plan is not None else actx
 
 
-def with_plan(actx: AdapterContext, plan: SessionPlan) -> AdapterContext:
-    """`actx` with the late fields of `plan` (cheap: nothing is rendered again)."""
+def _cfg_fields(profile: HarnessProfile, cfg: Config | None) -> dict[str, Any]:
+    """The context's fields that come from the session's config."""
+    return {"harness_config": MappingProxyType({k: v for k, v in (cfg.harness_config if cfg else {}).items()
+                                                if k not in profile.opt_ins}),
+            "enforcer": cfg.enforcer if cfg else ""}
+
+
+def with_plan(actx: AdapterContext, plan: SessionPlan, cfg: Config | None = None) -> AdapterContext:
+    """`actx` with the late fields of `plan`, and `cfg`'s when given (cheap:
+    nothing is rendered again)."""
     from .enforcers.base import TOOLS_FILE, write_roots
 
     return replace(
-        actx, model=plan.model, wrapped="tool-wrapper.argv" in plan.policies,
+        actx, **(_cfg_fields(plan.profile, cfg) if cfg is not None else {}),
+        model=plan.model, wrapped="tool-wrapper.argv" in plan.policies,
         tool_policy=json.loads(plan.policies[TOOLS_FILE]) if TOOLS_FILE in plan.policies else None,
         write_roots=tuple(write_roots(plan)), working_dir=plan.mount_plan.working_dir,
         harness_hosts=tuple(h for sc in plan.network.sidecars if sc.harness
@@ -248,7 +251,7 @@ def render_home(cfg: Config, plan: SessionPlan, home_dir: Path) -> list[Path]:
     """
     home_dir.mkdir(parents=True, exist_ok=True)
     # the harness's native config (its adapter: harnesses/<name>/adapter.py)
-    written: list[Path] = adapter_call(plan.profile, "render_home", adapter_context(plan.composition, cfg, plan),
+    written: list[Path] = adapter_call(plan.profile, "render_home", with_plan(plan.adapter, plan, cfg),
                                        home_dir, default=[])
     written.append(_write_context_file(cfg, plan, home_dir))
     return written

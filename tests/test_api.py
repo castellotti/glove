@@ -197,7 +197,7 @@ def _manifest(raw: dict, *, out_of_tree: bool = False, trusted: bool = True) -> 
 ])
 def test_host_paths_reach_a_hook_only_when_declared(raw, session_dir, work_dir):
     # a `work` privilege its contribute hook returned counts for the hooks after it
-    assert declares_host_paths(_manifest({}), work=True, contributed={"privileges": raw.get("privileges", {})}) \
+    assert declares_host_paths(_manifest({}), work=True, privileges=raw.get("privileges", {})) \
         is bool(raw.get("privileges"))
     assert declares_host_paths(_manifest(raw)) is session_dir
     assert declares_host_paths(_manifest(raw), work=True) is work_dir

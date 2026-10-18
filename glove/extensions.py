@@ -503,8 +503,8 @@ class Active:
         mine, more = self.manifest.raw.get(key), self.contributed.get(key)
         if KEYS[key].merge == "cat":
             return [*(mine or []), *(more or [])]
-        active = _entry_active(ctx) if ctx is not None else lambda _spec: True
-        return merge_names(f"extension {self.name!r} {key}", mine, more, active=active)
+        return merge_names(f"extension {self.name!r} {key}", mine, more,
+                           **({"active": _entry_active(ctx)} if ctx is not None else {}))
 
     def set_exports(self, exports: dict[str, Any]) -> None:
         """Its exports, checked against the schema of each slot it provides."""
@@ -1148,10 +1148,7 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
     trust: <file>, when: …}}` — a directory shared by the harness and those
     sidecars (`Channel`). A new edge into the harness, so a privilege: in-tree
     or trusted extensions only."""
-    channels = merge_names(f"extension {a.name!r} channels", a.manifest.raw.get("channels"),
-                           a.contributed.get("channels"),
-                           active=_entry_active(ctx))
-    for name, spec in channels.items():
+    for name, spec in a.spec("channels", ctx).items():
         where = f"extension {a.name!r} channel {name!r}"
         if (not _NAME.fullmatch(str(name)) or not isinstance(spec, dict)
                 or set(spec) - {"services", "read_only", "trust", "when"}
@@ -1184,21 +1181,20 @@ def _host_services(comp: Composition, a: Active, ctx: dict) -> None:
         ))
 
 
-def declares_host_paths(m: Manifest, *, work: bool = False, contributed: dict | None = None) -> bool:
+def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | None = None) -> bool:
     """Whether a hook of `m` gets the session dir (or, with `work`, the work
     dir) in its context: trusted, and its manifest names a reason — outputs
     or inputs, `host_files: true`, and a `path` setting or `mounts` (session
-    dir) or a `work` privilege (work dir), its own or one its `contribute`
-    hook returned (`contributed`, seen by the hooks that run after it)."""
+    dir) or a `work` privilege (work dir): the manifest's, or `privileges`
+    (`Active.spec`'s, with what its `contribute` hook returned)."""
     raw = m.raw
     if not m.trusted:
         return False
     if raw.get("host_files") or raw.get("outputs") or raw.get("inputs"):
         return True
     if work:
-        privileges = [*(raw.get("privileges") or {}).values(),
-                      *((contributed or {}).get("privileges") or {}).values()]
-        return any(isinstance(p, dict) and p.get("work") for v in privileges
+        privileges = raw.get("privileges") if privileges is None else privileges
+        return any(isinstance(p, dict) and p.get("work") for v in (privileges or {}).values()
                    for p in (v if isinstance(v, list) else [v]))
     return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") == "path"
                                           for x in (raw.get("settings") or {}).values())
@@ -1216,7 +1212,8 @@ def hook_context(comp: Composition, a: Active) -> HookContext:
         name=a.name, settings=a.settings, renders=t["renders"], trusted=a.manifest.trusted,
         active=[x.name for x in comp.active], state_dir=comp.state_dir(a.name), assets=a.manifest.path,
         session_dir=comp.session_dir if declares_host_paths(a.manifest) else None,
-        work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True, contributed=a.contributed) else None,
+        work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True,
+                                                      privileges=a.spec("privileges", t)) else None,
         export_dirs={r: comp.export_dirs[r] for r in comp.export_access(a) if r in comp.export_dirs},
         forwarders=[dict(f) for f in comp.forwarders] if forwarder else [],
         grants=dict(comp.grants) if forwarder else {},
@@ -1285,9 +1282,7 @@ def compose(
             if not (spec or {}).get("internal", True):
                 raise ExtensionError(f"extension {a.name!r}: private network {net!r} must be internal")
             comp.networks[net] = {"internal": True, "owner": a.name}
-        endpoints = merge_names(f"{where} endpoints", a.manifest.raw.get("endpoints"), contributed.get("endpoints"),
-                                active=_entry_active(ctx))
-        for name, spec in endpoints.items():
+        for name, spec in a.spec("endpoints", ctx).items():
             if not when_matches(spec.get("when"), ctx):
                 continue
             ep = _endpoint(comp, a, name, render_value(spec, ctx, f"extension {a.name!r} endpoint {name!r}"))

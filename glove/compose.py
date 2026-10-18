@@ -69,10 +69,11 @@ def seccomp_profiles() -> set[str]:
 
 
 def _privileges(comp: Composition, a: Active, short: str) -> dict[str, Any]:
-    raw = a.spec("privileges", _ctx(comp, a)).get(short)
+    ctx = _ctx(comp, a)
+    raw = a.spec("privileges", ctx).get(short)
     items = raw if isinstance(raw, list) else [raw] if raw else []
     merged: dict[str, Any] = {}
-    for p in _active_items(items, _ctx(comp, a)):
+    for p in _active_items(items, ctx):
         unknown = set(p) - PRIVILEGE_KEYS - PRIVILEGE_META
         if unknown:
             raise ExtensionError(f"extension {a.name!r} service {short!r}: unknown privilege(s) {sorted(unknown)}")

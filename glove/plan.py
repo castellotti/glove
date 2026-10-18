@@ -26,7 +26,7 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
-from .harnessconfig import CONTAINER_HOME, INJECTED_KEY, AdapterContext, adapter_context
+from .harnessconfig import CONTAINER_HOME, INJECTED_KEY, AdapterContext, adapter_context, with_plan
 from .mounts import (
     Mount,
     MountPlan,
@@ -480,6 +480,7 @@ def build_session_plan(
         corporate_ca_host_path=corporate_ca,
         trusted_cas=trusted_cas,
         toolchains=toolchains,
+        adapter=actx,
     )
     if plan.model is not None and plan.model.api_key_env:
         # The harness never holds a key: its variable gets a placeholder and the
@@ -495,7 +496,6 @@ def build_session_plan(
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
     # collect enforcer env/caps. The adapter may extend the entry (Pi loads
     # capability code as `-e <path>`).
-    plan.adapter = actx
     entry = [*profile.entry, *adapter_call(profile, "entry_args", actx, default=[])]
     # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
     # wrapper prefix. session_id=None ⇒ continue-last.
@@ -507,7 +507,7 @@ def build_session_plan(
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
-    plan.system_files = adapter_call(profile, "system_files", adapter_context(comp, cfg, plan), default={})
+    plan.system_files = adapter_call(profile, "system_files", with_plan(actx, plan), default={})
     validate_system_files(plan)  # a bad adapter fails at `plan`, not at `up`
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)

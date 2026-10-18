@@ -28,7 +28,7 @@ from . import sessiondir as sdm
 from .config import ConfigError
 from .hardening import HardeningError
 from .harness import adapter_call, known_harnesses
-from .harnessconfig import adapter_context, render_home
+from .harnessconfig import render_home
 from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
@@ -556,7 +556,7 @@ def _print_extensions(plan) -> None:
         console.print(f"    mcp server ({ext}): {item.get('name')}")
     for ext, _src, dest in comp.skills:
         console.print(f"    skill ({ext}): {dest}")
-    for line in adapter_call(plan.profile, "describe", adapter_context(comp), default=[]):
+    for line in adapter_call(plan.profile, "describe", plan.adapter, default=[]):
         console.print(f"    {line}")
     for key, privs in comp.privileges.items():
         console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")
