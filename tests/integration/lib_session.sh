@@ -33,7 +33,7 @@ driver_cleanup() {
 
 driver_kept() {
   echo "== KEEP: $TMPROOT kept. Tear down with:"
-  echo "   GLOVE_HOME=$GLOVE_HOME uv run glove down $S${STUB:+; kill $STUB}"
+  echo "   GLOVE_HOME=$GLOVE_HOME uv run glove down --wipe $S${STUB:+; kill $STUB}"
   echo "   chmod -R u+w $TMPROOT && rm -rf $TMPROOT"
 }
 

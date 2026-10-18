@@ -38,8 +38,9 @@ All notable changes to glove are documented here.
   should do the same.
 - Test drivers: with `KEEP=1`, `driver_init`'s exit trap keeps the temp dir (the
   kept stack's session dir, `GLOVE_HOME` and observe export) and the stub, and
-  prints how to tear them down; a driver's own `ON_EXIT` (e.g. its Keychain
-  cleanup) still runs.
+  prints how to tear them down (`glove down --wipe`, as the drivers' own
+  teardown does); a driver's own `ON_EXIT` (e.g. its Keychain cleanup) still
+  runs. `test_observe.sh` no longer reports a kept stack as leftovers.
 
 ### Added
 
