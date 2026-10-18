@@ -174,7 +174,7 @@ def test_relay_is_a_library(tmp_path):
 
 
 def test_the_call_client_speaks_the_protocol(tmp_path, capfd):
-    """`relayd.py --call`: the request glove-relay makes (argv NUL-terminated,
+    """`relayd --call`: the request glove-relay makes (argv NUL-terminated,
     cwd, FIFOs 1/2/rc, the id on the door), its output and exit code relayed."""
     chan = tmp_path / "chan"
     (chan / "req").mkdir(parents=True)
@@ -202,3 +202,10 @@ def test_the_call_client_speaks_the_protocol(tmp_path, capfd):
     out, err = capfd.readouterr()
     assert out == "hello\n" and err == "warn\n"
     assert list((chan / "req").iterdir()) == []  # its request dir is gone
+
+
+def test_the_image_has_relayd_on_path():
+    """Consumers run `relayd` (compose `command:`, skills' checks), not a path."""
+    dockerfile = (HERE / "image" / "Dockerfile").read_text()
+    assert "relayd.py /usr/local/bin/relayd" in dockerfile
+    assert (HERE / "image" / "relayd.py").read_text().startswith("#!/usr/bin/env python3\n")

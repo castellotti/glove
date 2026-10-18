@@ -83,7 +83,7 @@ def _manifest(tmp_path: Path, name: str, body: str) -> Path:
 
 
 GOOD = """\
-api: 1
+api: 2
 name: h
 image: glove/h:1
 version: 1.0.0
@@ -104,7 +104,7 @@ def test_a_minimal_manifest_loads(tmp_path):
 @pytest.mark.parametrize("body,dirname", [
     (GOOD + "extra: 1\n", "h"),                        # unknown key
     (GOOD.replace("image: glove/h:1\n", ""), "h"),     # missing key
-    (GOOD.replace("api: 1", "api: 2"), "h"),           # wrong api
+    (GOOD.replace("api: 2", "api: 3"), "h"),           # wrong api
     (GOOD, "other"),                                   # name ≠ directory
     (GOOD + "contributions: [tools]\n", "h"),          # unknown contribution
     (GOOD + "protect: ['../x/']\n", "h"),            # outside the working dir
@@ -193,7 +193,7 @@ def _plan_with(tmp_path, monkeypatch, harness_section: str, harness: str = "pi")
     tree = tmp_path / "exts"
     shutil.copytree(IN_TREE_DIR / "llm", tree / "llm", ignore=shutil.ignore_patterns("tests", "__pycache__"))
     (tree / "x" / "code").mkdir(parents=True)
-    (tree / "x" / "extension.yml").write_text(f"api: 1\nname: x\nsummary: x\nharness:\n{harness_section}")
+    (tree / "x" / "extension.yml").write_text(f"api: 2\nname: x\nsummary: x\nharness:\n{harness_section}")
     real = plan_mod.compose
     monkeypatch.setattr(plan_mod, "compose", lambda *a, **k: real(*a, **{**k, "manifests": discover(tree)}))
     cfg = make_cfg(harness=harness, name="s", workdir=str(tmp_path), extensions={"x": {}})

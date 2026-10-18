@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: vpn
 summary: Route all session egress through a gluetun VPN tunnel (WireGuard or OpenVPN); route vpn.
 provides: [egress]

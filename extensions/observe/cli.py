@@ -9,8 +9,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from glove import registry
-from glove import sessiondir as sdm
+from glove.api import ConfigError, ExtSession, ext_session
 
 app = typer.Typer(add_completion=False, help="Network observability: gate status and flow records.")
 console = Console(highlight=False)
@@ -19,22 +18,18 @@ err = Console(stderr=True)
 DIR_OPT = typer.Option(None, "--dir", help="session directory (default: the nearest one)")
 
 
-def session_id(directory: Path | None) -> str:
-    """The session id of `directory` (or the nearest session dir); exits 1 if none."""
+def session(directory: Path | None, name: str = "observe") -> ExtSession:
+    """The launched session at `directory` (or the nearest one) that enables
+    extension `name`; exits 1 if none."""
     try:
-        sd = sdm.find(directory)
-    except sdm.SessionError as e:
+        return ext_session(name, directory)
+    except ConfigError as e:
         err.print(f"[red]error:[/red] {e}")
         raise typer.Exit(1) from e
-    sid = sd.read_id()
-    if sid is None:
-        err.print(f"[red]error:[/red] {sd.root} has never been launched (no .glove/id)")
-        raise typer.Exit(1)
-    return sid
 
 
-def net_dir(sid: str) -> Path:
-    return registry.observe_dir(sid) / "net"
+def net_dir(s: ExtSession) -> Path:
+    return s.export_dir("observe") / "net"
 
 
 @app.command("status")
@@ -43,15 +38,15 @@ def status(
     json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
 ) -> None:
     """Gate health, record mode, services, upstream and resolver state."""
-    from extensions.observe.netview import render_status, summarize
+    from .netview import render_status, summarize
 
-    sid = session_id(directory)
-    ndir = net_dir(sid)
+    s = session(directory)
+    ndir = net_dir(s)
     summary = summarize(ndir)
     if json_out:
         console.print_json(json.dumps(summary))
         return
-    for line in render_status(sid, ndir, summary):
+    for line in render_status(s.id, ndir, summary):
         console.print(line)
     if not summary["observed"]:
         raise typer.Exit(1)
@@ -65,11 +60,11 @@ def flows(
     tail: int | None = typer.Option(None, "--tail", "-n", help="only the last N records"),
 ) -> None:
     """Print the session's flow records (rotated files first, then live)."""
-    from extensions.observe.netview import follow_records, format_record, iter_records
+    from .netview import follow_records, format_record, iter_records
 
-    ndir = net_dir(session_id(directory))
+    ndir = net_dir(session(directory))
     if not ndir.is_dir():
-        err.print(f"[red]error:[/red] no net/ dir at {ndir} — add `observe: {{}}` to the session's extensions")
+        err.print(f"[red]error:[/red] no net/ dir at {ndir}: `glove up` creates it")
         raise typer.Exit(1)
 
     def emit(rec: dict) -> None:

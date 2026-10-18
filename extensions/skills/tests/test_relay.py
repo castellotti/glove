@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import PEM, make_cfg, render
+from helpers import PEM, hook_ctx, make_cfg, render
 
 from glove.extensions import ExtensionError, launch_env, load_module, materialize
 
@@ -62,8 +62,8 @@ def test_the_relay_sidecar(tmp_path, plugin):
     assert svc["read_only"] is True and svc["cap_drop"] == ["ALL"] and svc["user"] != "0:0"
     assert "ports" not in svc and "secrets" not in svc
     assert svc["image"].startswith("glove/ext-relay-relayd:")  # the relay library, added for it
-    assert svc["command"][2:] == ["--channel", "/run/glove/skill-demo", "--policy", hooks.RELAY_POLICY,
-                                  "--work", "/work"]
+    assert svc["command"] == ["relayd", "--channel", "/run/glove/skill-demo", "--policy", hooks.RELAY_POLICY,
+                              "--work", "/work"]
     vols = {v["target"]: v for v in svc["volumes"]}
     assert vols["/work"]["source"] == os.path.realpath(tmp_path / "work")  # out_flags: the `work` privilege
     assert plan.composition.privileges["skills/skill-demo"] == [{"work": True}]
@@ -93,7 +93,7 @@ def test_the_relay_sidecar(tmp_path, plugin):
     checks = [item for ext, item in plan.composition.verify if ext == "skills"]
     assert checks[0] == {"name": "skill-demo-up", "kind": "container-healthy", "service": "skill-demo"}
     assert checks[1] == {"name": "skill-demo-check-1", "kind": "exec-ok", "service": "skill-demo", "warn": True,
-                         "timeout": 70, "argv": ["timeout", "60", "python3", hooks.RELAYD, "--call",
+                         "timeout": 70, "argv": ["timeout", "60", "relayd", "--call",
                                                  "/run/glove/skill-demo",
                                                  "scripts/api.py", "search", "glove"]}
 
@@ -195,7 +195,7 @@ def test_launch_resolves_the_secrets_and_renders_a_file_in_memory(tmp_path, plug
     assert env[ws] == '{"token": "xo-2"}\n'
     settings = json.loads(doc["services"]["glove-s-skill-demo"]["environment"]["RELAY_SETTINGS"])
     assert settings["commands"]["scripts/api.py"]["files"] == {".config/ws.json": ws}
-    ctx = {"settings": {}, "session_dir": tmp_path, "work": {"host": str(tmp_path / "work")}, "renders": []}
+    ctx = hook_ctx(session_dir=tmp_path, work_dir=tmp_path / "work")
     relay = hooks._plugin(ctx, "demo", {"path": "skills/demo", "relay": {"commands": commands}})["relay"]
     assert relay.refresh == {"keychain:test-api-pat": None, "keychain:test-ws": tmp_path / "local" / "mint.sh"}
     # one secret, used twice: its hook counts wherever it is given
@@ -225,9 +225,9 @@ def test_the_brief_names_the_relayed_scripts(tmp_path, plugin):
 
 
 def test_a_failed_check_suggests_a_refresh():
-    hint = hooks.diagnose({}, {"kind": "exec-ok", "service": "skill-demo"}, None)
+    hint = hooks.diagnose(hook_ctx(), {"kind": "exec-ok", "service": "skill-demo"}, None)
     assert "glove skills refresh demo" in hint
-    assert hooks.diagnose({}, {"kind": "exec-ok", "service": "other"}, None) is None
+    assert hooks.diagnose(hook_ctx(), {"kind": "exec-ok", "service": "other"}, None) is None
 
 
 # --- the policy --------------------------------------------------------------------
@@ -344,15 +344,15 @@ def test_without_work_a_name_in_the_relays_cwd_is_refused(policy, tmp_path):
 def test_reload_only_while_the_relay_is_as_rendered(tmp_path, plugin):
     cli = load_module(HERE / "cli.py", "skills")
     _, doc = _render(tmp_path)
-    ctx = {"settings": {}, "session_dir": tmp_path, "work": {"host": str(tmp_path / "work")}, "renders": []}
+    ctx = hook_ctx(session_dir=tmp_path, work_dir=tmp_path / "work")
     relay = hooks._plugin(ctx, "demo", {"path": "skills/demo", "relay": {"commands": COMMANDS}})["relay"]
-    assert cli.rendered_as(doc, "glove-s-skill-demo", relay)
+    assert cli.rendered_as(doc["services"]["glove-s-skill-demo"], relay)
     commands = copy.deepcopy(COMMANDS)
     commands["scripts/aaa.py"] = commands["scripts/api.py"]  # sorts first: every index moves
     _write(plugin / "scripts" / "aaa.py", API, 0o755)
     moved = hooks._plugin(ctx, "demo", {"path": "skills/demo", "relay": {"commands": commands}})["relay"]
-    assert not cli.rendered_as(doc, "glove-s-skill-demo", moved)
-    assert not cli.rendered_as({}, "glove-s-skill-demo", relay)
+    assert not cli.rendered_as(doc["services"]["glove-s-skill-demo"], moved)
+    assert not cli.rendered_as({}, relay)
 
 
 def test_file_flags_are_rewritten_inside_work(policy, work):

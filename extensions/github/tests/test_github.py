@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import PEM, make_cfg, render
+from helpers import PEM, hook_ctx, make_cfg, render
 
 from glove.extensions import ExtensionError, load_module
 
@@ -317,8 +317,8 @@ def test_the_relay_sidecar(tmp_path, observe):
                                          "target": "/run/glove/github"}
     assert plan.composition.privileges["github/gh"] == [{"work": True}]
     assert svc["environment"]["RELAY_GITHUB_TOKEN"] is None  # filled at `compose up`, never in the file
-    assert svc["command"][2:] == ["--channel", "/run/glove/github", "--policy", "/opt/glove/github/relay_policy.py",
-                                  "--work", "/work"]
+    assert svc["command"] == ["relayd", "--channel", "/run/glove/github",
+                              "--policy", "/opt/glove/github/relay_policy.py", "--work", "/work"]
     assert svc["healthcheck"]["test"] == ["CMD", "test", "-p", "/run/glove/github/door"]
     assert json.loads(svc["environment"]["RELAY_SETTINGS"]) == DEFAULT
     assert svc["image"].startswith("glove/ext-relay-relayd:")
@@ -421,10 +421,10 @@ def make_cfg_plan(tmp_path, exts):
 
 def test_launch_env_resolves_the_token_in_memory():
     hooks = load_module(HERE / "hooks.py", "github")
-    assert hooks.launch_env({"settings": {"token": "keychain:svc"}}, lambda ref: "tok\n") == {
+    assert hooks.launch_env(hook_ctx(settings={"token": "keychain:svc"}), lambda ref: "tok\n") == {
         "env": {"RELAY_GITHUB_TOKEN": "tok"}}
     with pytest.raises(ValueError, match="empty"):
-        hooks.launch_env({"settings": {"token": "env:X"}}, lambda ref: " ")
+        hooks.launch_env(hook_ctx(settings={"token": "env:X"}), lambda ref: " ")
 
 
 def test_shims_are_valid_bash():
@@ -548,17 +548,17 @@ def test_hosts_are_checked(settings, why):
 def test_contribute_names_each_hosts_token_and_its_reference():
     s = {"token": "keychain:gh", "hosts": [{"host": "GHE.corp.example", "token": "keychain:ghe"}], "allow": None,
          "git": ["fetch"]}
-    assert hooks.contribute({"settings": s}) == {
+    assert hooks.contribute(hook_ctx(settings=s)) == {
         "vars": {"settings": {"allow": [], "git": ["fetch"], "hosts": {"github.com": "RELAY_GITHUB_TOKEN",
                                                                        "ghe.corp.example": "RELAY_GITHUB_TOKEN_1"}},
                  "tokens": ["RELAY_GITHUB_TOKEN", "RELAY_GITHUB_TOKEN_1"]},
         "egress_hosts": [*(f"*{h}" if h.startswith(".") else h for h in policy.GITHUB_HOSTS), "ghe.corp.example",
                          "*.ghe.corp.example"],
         "secret_refs": {"hosts.ghe.corp.example": "keychain:ghe"}}  # `token`: core checks it (a secret setting)
-    assert hooks.launch_env({"settings": s}, lambda ref: f"{ref}-value\n") == {
+    assert hooks.launch_env(hook_ctx(settings=s), lambda ref: f"{ref}-value\n") == {
         "env": {"RELAY_GITHUB_TOKEN": "keychain:gh-value", "RELAY_GITHUB_TOKEN_1": "keychain:ghe-value"}}
     with pytest.raises(ValueError, match=r"ghe\.corp\.example resolves to an empty value"):
-        hooks.launch_env({"settings": s}, lambda ref: "" if ref == "keychain:ghe" else "x")
+        hooks.launch_env(hook_ctx(settings=s), lambda ref: "" if ref == "keychain:ghe" else "x")
 
 
 def test_the_sidecar_gets_a_token_per_host(tmp_path):

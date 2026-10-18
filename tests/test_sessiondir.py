@@ -27,8 +27,8 @@ def test_ids_are_sanitised_dirnames_plus_six_hex(name, prefix):
 
 def test_ensure_state_is_idempotent_and_private(tmp_path):
     sd = sdm.SessionDir(make_session(tmp_path / "s"))
-    sid, created = sdm.ensure_state(sd)
-    assert created and sdm.ensure_state(sd) == (sid, False)
+    sid = sdm.ensure_state(sd)
+    assert (sd.state / "id").read_text() == sid + "\n" and sdm.ensure_state(sd) == sid
     assert (sd.state / ".gitignore").read_text().endswith("*\n")  # never committed with a repo
     (sd.state / "id").write_text("../../etc\n")  # a tampered id is not trusted
     assert sd.read_id() is None

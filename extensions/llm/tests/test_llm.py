@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import STUB_LLM, make_cfg, render
+from helpers import STUB_LLM, hook_ctx, make_cfg, render
 
 from glove.config import ConfigError
 from glove.extensions import IN_TREE_DIR, ExtensionError, load_module
@@ -244,7 +244,7 @@ def test_the_key_reaches_llm_auth_only_at_launch(tmp_path, monkeypatch):
     plan, _, _ = _plan(tmp_path, **{**SCENARIOS["lan"], "api_key": "env:MY_KEY"})
     assert secret_env(plan) == {"LLM_AUTH_KEY": "sk-real"}
     with pytest.raises(hooks.LlmError, match="empty"):
-        hooks.launch_env({"settings": {"api_key": "env:E", "auth": "api-key"}}, lambda ref: " ")
+        hooks.launch_env(hook_ctx(settings={"api_key": "env:E", "auth": "api-key"}), lambda ref: " ")
 
 
 @pytest.mark.parametrize(("provider", "endpoint", "want"), [
@@ -348,9 +348,9 @@ PROPS = {"default_generation_settings": {"n_ctx": 65536}, "modalities": {"vision
 def _resolve(tmp_path, server, **s):
     plan, _, _ = _plan(tmp_path, **s)
     a = plan.composition.slots["inference"]
-    from glove.extensions import base_context
+    from glove.extensions import hook_context
 
-    return hooks.resolve(base_context(plan.composition, a), a.exports, server)
+    return hooks.resolve(hook_context(plan.composition, a), a.exports, server)
 
 
 def test_model_auto_with_one_model_and_capability_probe(tmp_path):
@@ -576,7 +576,7 @@ def test_doctor_contacts_the_server_only_through_cores_probe():
     def probe(url, **_):
         calls.append(url)
         return _models("q")(url)
-    ctx = {"settings": LAN, "harness": "pi"}
-    assert [c[0] for c in hooks.doctor(ctx)] == ["llm"]
-    assert [c[1] for c in hooks.doctor({**ctx, "probe": probe})] == ["ok", "ok"] and calls
+    ctx = hook_ctx(settings=LAN, harness="pi")
+    assert [c[0] for c in hooks.doctor(ctx, None)] == ["llm"]
+    assert [c[1] for c in hooks.doctor(ctx, probe)] == ["ok", "ok"] and calls
     assert not hasattr(hooks, "urllib")  # the host never dials the endpoint itself

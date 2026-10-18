@@ -23,5 +23,6 @@ RUN case "$TARGETARCH" in amd64) sum=$GH_SHA256_AMD64;; arm64) sum=$GH_SHA256_AR
     && rm -rf /tmp/gh.tar.gz /tmp/gh_* \
     && gh --version && git --version && ssh -V
 
-COPY relayd.py /opt/glove/relay/relayd.py
-CMD ["python3", "/opt/glove/relay/relayd.py", "--help"]
+# `relayd` on PATH: consumers name the command, not where it lives
+COPY --chmod=0755 relayd.py /usr/local/bin/relayd
+CMD ["relayd", "--help"]

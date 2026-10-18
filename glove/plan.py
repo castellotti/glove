@@ -26,7 +26,7 @@ from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
 from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
-from .harnessconfig import CONTAINER_HOME, INJECTED_KEY
+from .harnessconfig import CONTAINER_HOME, INJECTED_KEY, AdapterContext, adapter_context, with_plan
 from .mounts import (
     Mount,
     MountPlan,
@@ -92,6 +92,9 @@ class SessionPlan:
     # system_mounts with (host dir, container dir) once written.
     system_files: dict[str, dict[str, str]] = field(default_factory=dict)
     system_mounts: list[tuple[str, str]] = field(default_factory=list)
+    # The adapter's context without the late fields (harnessconfig.adapter_context),
+    # built once: every later adapter call adds the plan's fields to it.
+    adapter: AdapterContext | None = field(default=None, repr=False, compare=False)
     # Empty files/dirs bound read-only over missing protected paths (set by the
     # CLI once materialised; placeholders are skipped while it is None).
     placeholder_host_dir: str | None = None
@@ -449,7 +452,8 @@ def build_session_plan(
 
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
     base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
-    derived_df, staged = render_dockerfile(base, profile, comp, toolchains)
+    actx = adapter_context(comp, cfg)
+    derived_df, staged = render_dockerfile(base, profile, comp, actx, toolchains)
     derived = content_hash(derived_df, staged) if derived_df is not None else None
     image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
@@ -476,6 +480,7 @@ def build_session_plan(
         corporate_ca_host_path=corporate_ca,
         trusted_cas=trusted_cas,
         toolchains=toolchains,
+        adapter=actx,
     )
     if plan.model is not None and plan.model.api_key_env:
         # The harness never holds a key: its variable gets a placeholder and the
@@ -491,18 +496,18 @@ def build_session_plan(
     # Ring-1: render policies, wrap the (extension-augmented) harness entry,
     # collect enforcer env/caps. The adapter may extend the entry (Pi loads
     # capability code as `-e <path>`).
-    entry = [*profile.entry, *adapter_call(profile, "entry_args", comp, default=[])]
+    entry = [*profile.entry, *adapter_call(profile, "entry_args", actx, default=[])]
     # Resume flag goes on `entry` (post-`--`, inside the sandbox), never on the
     # wrapper prefix. session_id=None ⇒ continue-last.
     if resume or session_id is not None:
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
     plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
-    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, comp), indent=2) + "\n"
+    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, actx), indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)
-    plan.system_files = adapter_call(profile, "system_files", cfg, plan, default={})
+    plan.system_files = adapter_call(profile, "system_files", with_plan(actx, plan), default={})
     validate_system_files(plan)  # a bad adapter fails at `plan`, not at `up`
     plan.command = enforcer.wrap_harness(plan, entry)
     plan.enforcer_env = enforcer.compose_env(plan)

@@ -16,8 +16,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from extensions.gate.netgate.policy import PolicyError, parse_bytes, read_file, sha256_hex
-from extensions.observe.cli import DIR_OPT, net_dir, session_id
-from glove import registry
+from extensions.observe.cli import DIR_OPT, net_dir, session
 
 app = typer.Typer(add_completion=False, help="Network rules (the filter grant): block, unblock, show, validate.")
 console = Console(highlight=False)
@@ -32,8 +31,8 @@ def _fail(msg: str) -> typer.Exit:
 def _rules_target(directory: Path | None) -> tuple[str, Path]:
     """(session id, rules.json path). The id is both the rules file's `env`
     and its `session` (Layman handoff §3)."""
-    sid = session_id(directory)
-    return sid, registry.control_dir(sid) / "rules.json"
+    s = session(directory, "filter")
+    return s.id, s.export_dir("control") / "rules.json"
 
 
 @app.command("block")
@@ -50,7 +49,7 @@ def block(
     Rules apply to new connections within ~1s; --terminate also cuts matching
     established ones. glove's built-in SSRF guard runs first and cannot be
     overridden by an allow rule."""
-    from extensions.filter.netrules import block_rule, load, save
+    from .netrules import block_rule, load, save
 
     try:
         sid, path = _rules_target(directory)
@@ -69,7 +68,7 @@ def unblock(
     directory: Path | None = DIR_OPT,
 ) -> None:
     """Remove rules by id or by the exact target they match."""
-    from extensions.filter.netrules import load, remove, save
+    from .netrules import load, remove, save
 
     try:
         sid, path = _rules_target(directory)
@@ -144,12 +143,13 @@ def rules(
     json_out: bool = typer.Option(False, "--json", help="print the rules document"),
 ) -> None:
     """Show the effective rules, their provenance, and the gates' load result."""
-    from extensions.filter.netrules import load
     from extensions.gate.netgate.writer import read_json_dict
+
+    from .netrules import load
 
     sid, path = _rules_target(directory)
     if not path.parent.is_dir():
-        raise _fail(f"{sid} has no filter grant (no {path.parent}); add `filter: {{}}` and run `glove up`")
+        raise _fail(f"{sid} has no filter grant (no {path.parent}); `glove up` creates it")
     try:
         data, problem = load(path, sid, sid), None
     except PolicyError as e:
@@ -157,7 +157,7 @@ def rules(
     if json_out:
         console.print_json(json.dumps(data or {"error": problem}))
         return
-    status = read_json_dict(net_dir(sid) / "status.json") or {}
+    status = read_json_dict(net_dir(session(directory)) / "status.json") or {}
     console.print(f"[bold]{sid}[/bold]  [dim]{path}[/dim]")
     if problem:
         console.print(f"  [red]rules.json is invalid:[/red] {problem}")

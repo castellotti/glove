@@ -13,10 +13,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from glove import sessiondir as sdm
-from glove.config import ConfigError
-from glove.extensions import discover, validate_settings
-from glove.mounts import host_path
+from glove.api import ConfigError, ext_session, host_path
 
 app = typer.Typer(add_completion=False, help="Offline RAG (kstore): host-side helpers.")
 err = Console(stderr=True)
@@ -29,18 +26,11 @@ FASTEMBED = "fastembed==0.8.1"
 def rag_settings(directory: Path | None) -> tuple[Path, str]:
     """(models_dir resolved on the host, embed_model) from the session file."""
     try:
-        sd = sdm.find(directory)
-        raw = sdm.load_file(sd)
-    except sdm.SessionError as e:
-        err.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1) from e
-    rag = (raw.get("extensions") or {}).get("rag")
-    try:
-        settings = validate_settings(discover()["rag"], rag if isinstance(rag, dict) else {})
+        s = ext_session("rag", directory, launched=False)
     except ConfigError as e:
-        err.print(f"[red]error:[/red] {sd.file}: {e} (set `extensions: {{rag: {{models_dir: <dir>}}}}`)")
+        err.print(f"[red]error:[/red] {e} (set `extensions: {{rag: {{models_dir: <dir>}}}}`)")
         raise typer.Exit(1) from e
-    return host_path(sd.root, settings["models_dir"]), settings["embed_model"]
+    return host_path(s.root, s.settings["models_dir"]), s.settings["embed_model"]
 
 
 @app.command("fetch-model")

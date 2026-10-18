@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import functools
 import json
 import subprocess
 import sys
@@ -21,11 +20,17 @@ from pathlib import Path
 from typing import Any
 
 import typer
-import yaml
 from rich.console import Console
 
-from glove import sessiondir as sdm
-from glove.naming import scoped
+from glove.api import (
+    ConfigError,
+    ExtSession,
+    ext_session,
+    keychain_service,
+    keychain_set,
+    reload_sidecar,
+    resolve_secret,
+)
 
 app = typer.Typer(add_completion=False, help="The credentials of the plugins' relays: check, refresh, reload.")
 console = Console(highlight=False)
@@ -40,52 +45,27 @@ def _fail(msg: str) -> typer.Exit:
     return typer.Exit(1)
 
 
-@functools.cache
-def _hooks():
-    from glove.extensions import load_module
-
-    return load_module(Path(__file__).resolve().parent / "hooks.py", "skills")
-
-
-class _Session:
-    def __init__(self, directory: Path | None):
-        try:
-            self.sd = sdm.find(directory)
-            raw = sdm.load_file(self.sd)
-        except sdm.SessionError as e:
-            raise _fail(str(e)) from e
-        self.sid = self.sd.read_id()
-        if self.sid is None:
-            raise _fail(f"{self.sd.root} has never been launched (no .glove/id)")
-        self.settings = (raw.get("extensions") or {}).get("skills")
-        if not isinstance(self.settings, dict):
-            raise _fail(f"{self.sd.file}: the skills extension is not enabled")
-        self.runtime = sdm.session_provider(self.sd)
-
-    def relays(self, only: str | None = None) -> list[Any]:
-        ctx = {"settings": self.settings, "session_dir": self.sd.root, "work": {"host": str(self.sd.work)},
-               "renders": []}
-        try:
-            found = _hooks().relays(ctx, only)
-        except ValueError as e:
-            raise _fail(str(e)) from e
-        if only is not None and not found:
-            raise _fail(f"no plugin {only!r} with a relay (skills.plugins.{only}.relay)")
-        return found
-
-    def container(self, relay) -> str:
-        return scoped(self.sid, relay.service)
-
-    def running(self, relay) -> bool:
-        r = subprocess.run([self.runtime, "inspect", "-f", "{{.State.Running}}", self.container(relay)],
-                           capture_output=True, text=True, check=False)
-        return r.returncode == 0 and r.stdout.strip() == "true"
-
-
-def _check(s: _Session, relay, argv: list[str]) -> int:
-    cmd = [s.runtime, "exec", s.container(relay), *relay.check_argv(argv)]
+def _session(directory: Path | None) -> ExtSession:
     try:
-        return subprocess.run(cmd, capture_output=True, timeout=_hooks().CHECK_TIMEOUT + 10, check=False).returncode
+        return ext_session("skills", directory)
+    except ConfigError as e:
+        raise _fail(str(e)) from e
+
+
+def _relays(s: ExtSession, only: str | None = None) -> list[Any]:
+    try:
+        found = s.hooks.relays(s.context(), only)
+    except ValueError as e:
+        raise _fail(str(e)) from e
+    if only is not None and not found:
+        raise _fail(f"no plugin {only!r} with a relay (skills.plugins.{only}.relay)")
+    return found
+
+
+def _check(s: ExtSession, relay, argv: list[str]) -> int:
+    cmd = [s.runtime, "exec", s.container(relay.service), *relay.check_argv(argv)]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=s.hooks.CHECK_TIMEOUT + 10, check=False).returncode
     except subprocess.TimeoutExpired:
         return 124
 
@@ -94,15 +74,15 @@ def _check(s: _Session, relay, argv: list[str]) -> int:
 def status(plugin: str | None = typer.Argument(None, help="one plugin (default: every relay)"),
            directory: Path | None = DIR_OPT) -> None:
     """Run each relay's checks: `ok`, or how it failed (output withheld)."""
-    s = _Session(directory)
-    relays = s.relays(plugin)
+    s = _session(directory)
+    relays = _relays(s, plugin)
     if not relays:
         console.print("no plugin has a relay")
         return
     failed = 0
     for relay in relays:
-        if not s.running(relay):
-            console.print(f"[red]✗[/red] {relay.name}: {s.container(relay)} is not running (`glove up`)")
+        if not s.running(relay.service):
+            console.print(f"[red]✗[/red] {relay.name}: {s.container(relay.service)} is not running (`glove up`)")
             failed += 1
             continue
         if not relay.checks:
@@ -120,33 +100,29 @@ def status(plugin: str | None = typer.Argument(None, help="one plugin (default: 
 @app.command("reload")
 def reload(plugin: str = PLUGIN, directory: Path | None = DIR_OPT) -> None:
     """Resolve the relay's secrets again and recreate only its sidecar."""
-    s = _Session(directory)
-    _reload(s, s.relays(plugin)[0])
+    s = _session(directory)
+    _reload(s, _relays(s, plugin)[0])
 
 
-def _reload(s: _Session, relay) -> None:
-    from glove.config import ConfigError, resolve_secret
-    from glove.session import recreate_sidecar
-
-    if not s.sd.compose.is_file() or not s.running(relay):
-        raise _fail(f"{s.container(relay)} is not running; `glove up` starts it with the current secrets")
-    if not rendered_as(yaml.safe_load(s.sd.compose.read_text()) or {}, s.container(relay), relay):
+def _reload(s: ExtSession, relay) -> None:
+    if not s.running(relay.service):
+        raise _fail(f"{s.container(relay.service)} is not running; `glove up` starts it with the current secrets")
+    if not rendered_as(s.rendered(relay.service), relay):
         raise _fail(f"skills.plugins.{relay.name}.relay changed since the last `glove up`; `glove up` applies it "
                     "(a reload only re-resolves the secrets)")
     try:
-        env = _hooks().relay_env(relay, resolve_secret)
+        env = s.hooks.relay_env(relay, resolve_secret)
+        reload_sidecar(s, relay.service, env)
     except (ConfigError, ValueError) as e:
         raise _fail(str(e)) from e
-    if (why := recreate_sidecar(s.runtime, s.sid, s.sd.compose, s.container(relay), env)) is not None:
-        raise _fail(why)
-    console.print(f"[green]✓[/green] {s.container(relay)} reloaded")
+    console.print(f"[green]✓[/green] {s.container(relay.service)} reloaded")
 
 
-def rendered_as(compose: dict, container: str, relay) -> bool:
-    """Whether the compose project the last `glove up` rendered has this relay
-    as it is now: its secrets go by name into that, and a command added or
-    moved since renames them (one command's secret would reach another's)."""
-    env = ((compose.get("services") or {}).get(container) or {}).get("environment") or {}
+def rendered_as(service: dict, relay) -> bool:
+    """Whether the relay's sidecar as the last `glove up` rendered it is this
+    relay as it is now: its secrets go by name into that, and a command added
+    or moved since renames them (one command's secret would reach another's)."""
+    env = service.get("environment") or {}
     return (json.loads(env.get("RELAY_SETTINGS") or "null") == relay.settings
             and {k for k, v in env.items() if v is None} == set(relay.secrets))
 
@@ -160,10 +136,8 @@ def refresh(
 ) -> None:
     """Store new values for the relay's Keychain secrets (its refresh hooks,
     else a prompt), then reload it."""
-    from glove.config import ConfigError, keychain_service, keychain_set
-
-    s = _Session(directory)
-    relay = s.relays(plugin)[0]
+    s = _session(directory)
+    relay = _relays(s, plugin)[0]
     refs = {ref: hook for ref, hook in relay.refresh.items() if keychain_service(ref)}
     if secret is not None:
         if f"keychain:{secret}" not in refs:
@@ -179,9 +153,9 @@ def refresh(
             console.print(f"[bold]{service}[/bold]: a new value (no refresh hook)")
             value = None
         else:
-            console.print(f"[bold]{service}[/bold]: running {hook.relative_to(s.sd.root)}")
+            console.print(f"[bold]{service}[/bold]: running {hook.relative_to(s.root)}")
             # stdout is the secret (kept in memory); stderr is the hook's own talk
-            r = subprocess.run([str(hook), service], cwd=s.sd.root, stdout=subprocess.PIPE, text=True, check=False)
+            r = subprocess.run([str(hook), service], cwd=s.root, stdout=subprocess.PIPE, text=True, check=False)
             value = r.stdout.strip()
             if r.returncode != 0 or not value:
                 raise _fail(f"{hook.name} {'exited ' + str(r.returncode) if r.returncode else 'printed nothing'}; "
@@ -194,7 +168,8 @@ def refresh(
             raise _fail(f"storing {service} failed (exit {rc})")
         console.print(f"[green]✓[/green] {service} stored")
     if not no_reload:
-        if s.running(relay):
+        if s.running(relay.service):
             _reload(s, relay)
         else:
-            console.print(f"[dim]{s.container(relay)} is not running: the next `glove up` uses the new values[/dim]")
+            console.print(f"[dim]{s.container(relay.service)} is not running: the next `glove up` uses the new "
+                          "values[/dim]")

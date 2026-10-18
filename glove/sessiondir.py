@@ -153,18 +153,22 @@ def new_id(dirname: str) -> str:
     return f"{sanitize(dirname)}-{secrets.token_hex(3)}"
 
 
-def ensure_state(sd: SessionDir) -> tuple[str, bool]:
-    """Create ``.glove/`` (0700) and its id if missing. Returns (id, created)."""
+def ensure_private(sd: SessionDir) -> Path:
+    """``.glove/``, created 0700 and git-ignored if missing."""
     ensure_dir(sd.state)
     ignore = sd.state / ".gitignore"
     if not ignore.exists():
         ignore.write_text("# glove session state: never commit\n*\n")
-    sid = sd.read_id()
-    if sid is not None:
-        return sid, False
-    sid = new_id(sd.root.name)
-    (sd.state / "id").write_text(sid + "\n")
-    return sid, True
+    return sd.state
+
+
+def ensure_state(sd: SessionDir) -> str:
+    """Create ``.glove/`` (0700) and its id if missing; returns the id."""
+    ensure_private(sd)
+    if (sid := sd.read_id()) is None:
+        sid = new_id(sd.root.name)
+        (sd.state / "id").write_text(sid + "\n")
+    return sid
 
 
 # --- the session file -----------------------------------------------------------
@@ -386,7 +390,7 @@ def materialize(spec: str, dest: Path) -> tuple[SessionDir, str]:
             elif not target.exists():
                 shutil.copy2(entry, target)
         sd.work.mkdir(exist_ok=True)
-        sid, _ = ensure_state(sd)
+        sid = ensure_state(sd)
         sd.template_record.write_text(yaml.safe_dump({"source": source, "sha256": digest(text)}, sort_keys=False))
         return sd, sid
 

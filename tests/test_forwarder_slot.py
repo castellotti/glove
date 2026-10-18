@@ -40,8 +40,10 @@ def tree(tmp_path):
 
 
 def _fwd(tree, hook: str) -> None:
-    _ext(tree, "fwd", "api: 1\nname: fwd\nsummary: x\nprovides: [forwarder]\nhooks: hooks.py\n",
-         {"hooks.py": hook})
+    """A forwarder provider whose hooks.py is `hook`, its `forwarder` marked."""
+    _ext(tree, "fwd", "api: 2\nname: fwd\nsummary: x\nprovides: [forwarder]\nhooks: hooks.py\n",
+         {"hooks.py": "from glove.api import hook\n"
+                      + textwrap.dedent(hook).replace("def forwarder", "@hook\ndef forwarder")})
 
 
 def _compose(tree, tmp_path, exts):
@@ -142,7 +144,7 @@ def test_transcripts_bind_must_be_the_observe_exports_own(tmp_path):
 
 def test_address_targets_only_for_the_inference_or_egress_provider(tree, tmp_path):
     _ext(tree, "rogue", """\
-        api: 1
+        api: 2
         name: rogue
         summary: x
         endpoints:
@@ -154,7 +156,7 @@ def test_address_targets_only_for_the_inference_or_egress_provider(tree, tmp_pat
 
 def test_interpose_is_only_for_an_egress_consumers_hop(tree, tmp_path):
     _ext(tree, "hop", """\
-        api: 1
+        api: 2
         name: hop
         summary: x
         requires: [egress]

@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: llm
 summary: The inference engine — pick a provider like a gluetun VPN provider; the harness reaches it only through one forwarder.
 provides: [inference]

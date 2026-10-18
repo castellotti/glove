@@ -146,7 +146,7 @@ def _open(dir_arg: Path | None, *, register: bool = True, check_runtime: bool = 
     sd = sdm.find(dir_arg)
     raw = sdm.load_file(sd)
     if register:
-        sid, _ = sdm.ensure_state(sd)
+        sid = sdm.ensure_state(sd)
         subnet = _sync_registry(sd, sid, raw, check_runtime=check_runtime).subnet
     else:  # read-only callers (check): never create state or registry rows
         sid = sd.read_id() or sdm.new_id(sd.root.name)
@@ -429,19 +429,17 @@ def _resolve_extensions(plan, provider: str) -> None:
     refresh the model descriptor from the inference slot's resolved exports."""
     from functools import partial
 
-    from .extensions import base_context
+    from .extensions import call_hook
     from .harnessconfig import harness_model
     from .session import probe_http, with_headers
 
     comp = plan.composition
     for a in comp.active:
-        if a.hooks is None or not hasattr(a.hooks, "resolve"):
+        if "resolve" not in a.hooks:
             continue
-        try:
-            probe = with_headers(partial(probe_http, provider, plan), a.exports)
-            a.exports, notes = a.hooks.resolve(base_context(comp, a), a.exports, probe)
-        except ValueError as e:
-            raise ConfigError(str(e)) from e
+        probe = with_headers(partial(probe_http, provider, plan), a.exports)
+        exports, notes = call_hook(comp, a, "resolve", a.exports, probe)
+        a.set_exports(exports)
         for n in notes:
             console.print(f"  [cyan]{a.name}:[/cyan] {n}")
     if "inference" in comp.slots:
@@ -558,7 +556,7 @@ def _print_extensions(plan) -> None:
         console.print(f"    mcp server ({ext}): {item.get('name')}")
     for ext, _src, dest in comp.skills:
         console.print(f"    skill ({ext}): {dest}")
-    for line in adapter_call(plan.profile, "describe", comp, default=[]):
+    for line in adapter_call(plan.profile, "describe", plan.adapter, default=[]):
         console.print(f"    {line}")
     for key, privs in comp.privileges.items():
         console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")

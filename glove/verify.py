@@ -301,7 +301,7 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
     comp = plan.composition
     if not comp.verify:
         return
-    from .extensions import _hook_ctx
+    from .extensions import call_hook
 
     def run(service: str, argv: list[str]) -> tuple[int, str]:  # for a diagnose hook
         return sidecar_exec(provider, plan.session, service, argv, 60)
@@ -312,10 +312,8 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
             say(f"    ✓ {run_check(provider, plan, ext, item, say)}")
         except VerifyError as e:
             a = comp.by_name(ext)
-            if a is not None and a.hooks is not None and hasattr(a.hooks, "diagnose"):
-                hint = a.hooks.diagnose(_hook_ctx(comp, a), item, run)
-                if hint:
-                    e = VerifyError(f"{e}\n{hint}", service=e.service)
+            if a is not None and (hint := call_hook(comp, a, "diagnose", item, run)):
+                e = VerifyError(f"{e}\n{hint}", service=e.service)
             if item.get("warn") is True:
                 say(f"    ⚠ {e} (a warning: the session starts anyway)")
                 continue

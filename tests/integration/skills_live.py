@@ -22,6 +22,7 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 from pathlib import Path
@@ -35,10 +36,7 @@ def main(directory: str) -> int:
     with live_session(directory) as s:
         harness = s.cfg.harness
 
-        def sh(cmd: str) -> str:
-            out = s.sh(cmd)
-            print(f"    $ {cmd[:100]}\n      {out[-300:]}", flush=True)
-            return out
+        sh = functools.partial(s.sh, echo=True)
 
         print("== the plugin's scripts")
         out = sh(f"{ROOT}/scripts/hello.py")

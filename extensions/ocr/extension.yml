@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: ocr
 summary: Text from images and scanned PDFs, offline — tesseract, ocrmypdf, poppler and a `glove-ocr` command, baked into the harness image.
 settings:

@@ -12,10 +12,11 @@ It brings two things:
   `/opt/glove/bin/glove-relay`. Usage: `glove-relay <channel> <command> args…`.
   Consumers install one wrapper per command; for example, `github`'s `gh` runs
   `exec /opt/glove/bin/glove-relay github gh "$@"`.
-- **The `relayd` image** (`image/`): `relayd.py` (the sidecar half), plus git,
-  ssh and the official `gh` that relayed commands run. The base image is pinned by
-  digest and the `gh` release by version and SHA-256. Each consumer runs this
-  image with its own policy file, bound read-only.
+- **The `relayd` image** (`image/`): `relayd.py` (the sidecar half, installed as
+  the `relayd` command on the image's PATH), plus git, ssh and the official `gh`
+  that relayed commands run. The base image is pinned by digest and the `gh`
+  release by version and SHA-256. Each consumer runs this image with its own
+  policy file, bound read-only.
 
 ## The channel: files and FIFOs, not a socket
 
@@ -69,7 +70,7 @@ for the child. It checks the file it actually opened, through that file's
 `/proc` link, so swapping in a symlink afterwards doesn't help. `req.directory`
 validates a destination under `/work`.
 
-`relayd.py --call <channel> <command> args…` is a client of the same
+`relayd --call <channel> <command> args…` is a client of the same
 protocol, for a check run inside the sidecar (`docker exec`): the request goes
 through the policy and the fences like the agent's.
 

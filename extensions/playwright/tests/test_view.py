@@ -59,7 +59,7 @@ def test_view_refusals(tmp_path, capsys, pw, args, match):
 
 def test_a_stopped_sidecar_is_reported(tmp_path, capsys, monkeypatch):
     d = _session(tmp_path, "{mode: novnc}")
-    monkeypatch.setattr(cli, "_running", lambda *a: False)
+    monkeypatch.setattr("glove.extsession.ExtSession.running", lambda self, service: False)
     with pytest.raises(typer.Exit):
         cli.view(directory=d, control=False, no_open=True)
     assert "glove-s-abc123-pw is not running" in capsys.readouterr().err.replace("\n", " ")

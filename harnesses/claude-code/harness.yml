@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: claude-code
 summary: Anthropic's Claude Code CLI (native binary), signed in with an API key or a subscription token.
 # 0.2.0: native binary + ring-1 enforcer (nono, glove-pty, glove-cc-prefix) only.

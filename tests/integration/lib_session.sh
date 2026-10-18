@@ -16,11 +16,25 @@
 #     TMPROOT (`chmod -R u+w` first: a session dir holds read-only placeholders;
 #     once more after a pause: Docker Desktop's file share can hold a bind's
 #     source briefly after `compose down`); a driver's own cleanup goes in
-#     ON_EXIT (a command, run first)
+#     ON_EXIT (a command, run first, always: a kept stack resolved its secrets at
+#     launch). With KEEP set, TMPROOT and the stub stay (a kept stack binds the
+#     session dir, GLOVE_HOME and the observe export, and may use the stub); how
+#     to tear it down is printed instead.
 driver_init() {
   TMPROOT="$(mktemp -d)"; S="$TMPROOT/${1:-session}"; export GLOVE_HOME="$TMPROOT/gh"; STUB=; ON_EXIT=
-  trap '[ -n "$ON_EXIT" ] && $ON_EXIT; [ -n "$STUB" ] && kill "$STUB" 2>/dev/null; chmod -R u+w "$TMPROOT" 2>/dev/null
-        rm -rf "$TMPROOT" 2>/dev/null || { sleep 3; rm -rf "$TMPROOT"; }' EXIT
+  trap '[ -n "$ON_EXIT" ] && $ON_EXIT; if [ -n "${KEEP:-}" ]; then driver_kept; else driver_cleanup; fi' EXIT
+}
+
+driver_cleanup() {
+  [ -n "$STUB" ] && kill "$STUB" 2>/dev/null
+  chmod -R u+w "$TMPROOT" 2>/dev/null
+  rm -rf "$TMPROOT" 2>/dev/null || { sleep 3; rm -rf "$TMPROOT"; }
+}
+
+driver_kept() {
+  echo "== KEEP: $TMPROOT kept. Tear down with:"
+  echo "   GLOVE_HOME=$GLOVE_HOME uv run glove down --wipe $S${STUB:+; kill $STUB}"
+  echo "   chmod -R u+w $TMPROOT && rm -rf $TMPROOT"
 }
 
 #   image_driver

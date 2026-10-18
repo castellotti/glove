@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: direct
 summary: Egress straight to the internet through a small HTTP proxy — no tunnel, no anonymity (route direct).
 provides: [egress]

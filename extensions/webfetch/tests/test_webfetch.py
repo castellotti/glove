@@ -94,8 +94,9 @@ def test_downloads_put_the_fetcher_on_every_harness(tmp_path, harness):
     assert {"webdownload-mcp", "webdownload-egress"} <= {e.name for e in comp.endpoints}
     if harness == "pi":
         assert plan.environment["GLOVE_DOWNLOAD_MCP_URL"] == "http://glove-s-webdownload-mcp:8000/mcp"
+        from glove.harnessconfig import adapter_context
         from harnesses.pi.adapter import tool_names
-        assert {"web_fetch", "web_download", "web_download_status"} <= set(tool_names(comp))
+        assert {"web_fetch", "web_download", "web_download_status"} <= set(tool_names(adapter_context(comp)))
     else:
         assert comp.mcp[-1][1]["name"] == "webdownload"
         assert comp.mcp[-1][1]["tools"] == ["web_download", "web_download_status"]

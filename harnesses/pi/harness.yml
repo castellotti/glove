@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: pi
 summary: Pi coding agent (earendil-works/pi-coding-agent).
 # 0.5.0: minimal base — harness + ring-1 enforcer (baked nono binary, glove-pty,

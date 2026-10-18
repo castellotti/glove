@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import base64
 import gzip
+import importlib
 import json
 import sys
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import typer
@@ -19,9 +22,9 @@ from glove.extensions import IN_TREE_DIR, ExtensionError, launch_env, load_modul
 
 PW = IN_TREE_DIR / "playwright"
 cli = load_module(PW / "cli.py", "playwright")
-hooks = cli._hooks()  # the instances the CLI uses, so patching them reaches it
-lg = hooks.host_module("login")
-cdp = hooks.host_module("cdp")
+hooks = load_module(PW / "hooks.py", "playwright")
+# the modules the CLI imports (its package is glove_ext.playwright), so patching them reaches it
+lg, cdp, host_chrome = (importlib.import_module(f"glove_ext.playwright.host.{m}") for m in ("login", "cdp", "chrome"))
 
 LOGIN = {"start_url": "https://wiki.corp.example/", "domains": ["*.corp.example", "corp.example", "idp.example"],
          "capture": {"chat-d": {"cookie": {"domain": "chat.example", "name": "d"}},
@@ -316,8 +319,8 @@ def test_login_stores_the_filtered_state_and_captures(tmp_path, monkeypatch, cap
     monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: made.append(_Chrome(exe, args)) or made[-1])
     monkeypatch.setattr(cdp, "cookies", cookies)
     monkeypatch.setattr(cdp, "local_storage", lambda chrome, wanted: {o: v for o, v in STORAGE.items() if wanted(o)})
-    monkeypatch.setattr(hooks.host_module("chrome"), "chrome_executable", lambda: "/bin/chrome")
-    monkeypatch.setattr("glove.config.keychain_set", lambda svc, v=None: stored.update({svc: v}) or 0)
+    monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
+    monkeypatch.setattr(cli, "keychain_set", lambda svc, v=None: stored.update({svc: v}) or 0)
     presses = iter(["", "", ""])  # then StopIteration: a regression fails, never hangs
     monkeypatch.setattr("builtins.input", lambda prompt="": next(presses))
     cli.login(directory=d, keep_profile=False, no_reload=True, headless=True, chrome_args=[])
@@ -332,15 +335,18 @@ def test_login_stores_the_filtered_state_and_captures(tmp_path, monkeypatch, cap
     (chrome,) = made
     assert chrome.closed and chrome.args[-1] == LOGIN["start_url"] and "--headless=new" in chrome.args
     profile = next(a for a in chrome.args if a.startswith("--user-data-dir=")).split("=", 1)[1]
-    assert profile.startswith(str(d / ".glove")) and not (d / ".glove" / "playwright-login").exists()
+    assert profile == str(d / ".glove" / "ext" / "playwright" / "login-profile") and not Path(profile).exists()
+    assert oct((d / ".glove").stat().st_mode & 0o777) == "0o700" and (d / ".glove" / ".gitignore").exists()
 
 
 def test_login_stopped_stores_nothing(tmp_path, monkeypatch, capsys):
     d = _session(tmp_path, LOGIN)
+    legacy = d / ".glove" / "playwright-login"  # a profile kept before api 2
+    (legacy / "Default").mkdir(parents=True)
     made, stored = [], {}
     monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: made.append(_Chrome(exe, args)) or made[-1])
-    monkeypatch.setattr(hooks.host_module("chrome"), "chrome_executable", lambda: "/bin/chrome")
-    monkeypatch.setattr("glove.config.keychain_set", lambda svc, v=None: stored.update({svc: v}) or 0)
+    monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
+    monkeypatch.setattr(cli, "keychain_set", lambda svc, v=None: stored.update({svc: v}) or 0)
 
     def interrupt(prompt=""):
         raise KeyboardInterrupt
@@ -349,6 +355,25 @@ def test_login_stopped_stores_nothing(tmp_path, monkeypatch, capsys):
     with pytest.raises(typer.Exit):
         cli.login(directory=d, keep_profile=False, no_reload=True, headless=False, chrome_args=[])
     assert "nothing stored" in capsys.readouterr().err and not stored and made[0].closed
+    assert not legacy.exists()
+
+
+def test_login_keep_profile_moves_a_profile_kept_before_api_2(tmp_path, monkeypatch):
+    d = _session(tmp_path, LOGIN)
+    legacy = d / ".glove" / "playwright-login"
+    (legacy / "Default").mkdir(parents=True)
+    (legacy / "Default" / "Cookies").write_text("signed in")
+    monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: _Chrome(exe, args))
+    monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
+
+    def interrupt(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+    with pytest.raises(typer.Exit):
+        cli.login(directory=d, keep_profile=True, no_reload=True, headless=True, chrome_args=[])
+    profile = d / ".glove" / "ext" / "playwright" / "login-profile"
+    assert not legacy.exists() and (profile / "Default" / "Cookies").read_text() == "signed in"
 
 
 @pytest.mark.parametrize(("login", "state", "match"), [
@@ -366,14 +391,14 @@ def test_status_shows_expiry_never_values(tmp_path, monkeypatch):
     soon = time.time() + 7200
     state = {"cookies": [{"name": "sso", "value": "S1", "expires": soon}, {"name": "w", "value": "W1",
                                                                          "expires": -1}]}
-    monkeypatch.setattr("glove.config.resolve_secret", lambda ref: json.dumps(state))
-    line = cli._state_status("keychain:corp-browser")
+    monkeypatch.setattr(cli, "resolve_secret", lambda ref: json.dumps(state))
+    line = cli._state_status(SimpleNamespace(hooks=hooks), "keychain:corp-browser")
     assert "2 cookie(s), 1 for the browser session only" in line and "(in 2.0 h)" in line
     assert "S1" not in line and "W1" not in line
     state["cookies"][0]["expires"] = time.time() - 60
-    assert "expired" in cli._state_status("keychain:corp-browser")
-    monkeypatch.setattr("glove.config.resolve_secret", lambda ref: "junk")
-    assert "unreadable" in cli._state_status("keychain:corp-browser")
+    assert "expired" in cli._state_status(SimpleNamespace(hooks=hooks), "keychain:corp-browser")
+    monkeypatch.setattr(cli, "resolve_secret", lambda ref: "junk")
+    assert "unreadable" in cli._state_status(SimpleNamespace(hooks=hooks), "keychain:corp-browser")
 
 
 # Every tool the pinned MCP defines, sorted by what it can do with a stored

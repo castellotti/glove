@@ -1,4 +1,4 @@
-api: 1
+api: 2
 name: search
 summary: Web search through a per-session SearXNG behind the egress slot — Pi's web_search extension / an MCP server (Vibe, Claude Code).
 requires: [egress]

@@ -208,13 +208,13 @@ def _tool_classes(raw: object, where: str) -> dict[str, tuple[str, ...]]:
     return out
 
 
-def tool_inventory(profile: HarnessProfile, tool_allow: list[str], comp) -> dict[str, list[str]]:
+def tool_inventory(profile: HarnessProfile, tool_allow: list[str], actx) -> dict[str, list[str]]:
     """The session's tool inventory (`tools.json`), every class: the harness's,
     with the passthrough tools the session's extensions add (the adapter's
     `tool_names`) and its own `harness_config.tools.allow` (`tool_allow`) in
     `allow`."""
     fixed = {n for c in TOOL_FIXED for n in profile.tools.get(c, ())}
-    added = [*adapter_call(profile, "tool_names", comp, default=[]), *tool_allow]
+    added = [*adapter_call(profile, "tool_names", actx, default=[]), *tool_allow]
     bad = [n for n in added if n in fixed or not TOOL_NAME.fullmatch(n)]
     if bad:
         raise ConfigError(f"tools {bad}: an added tool only passes through; {profile.name}'s shell, file-write "
@@ -234,8 +234,8 @@ def load_profile(path: Path) -> HarnessProfile:
         raise ConfigError(f"{where}: want a mapping")
     unknown = set(raw) - MANIFEST_KEYS
     missing = [k for k in REQUIRED_KEYS if k not in raw]
-    if unknown or missing or raw.get("api") != 1:
-        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}, missing {missing}, or api is not 1")
+    if unknown or missing or raw.get("api") != 2:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}, missing {missing}, or api is not 2")
     if raw["name"] != path.name:
         raise ConfigError(f"{where}: name {raw['name']!r} must match its directory {path.name!r}")
     version = str(raw["version"])

@@ -10,7 +10,6 @@ session's extension state, never shared across sessions.
 
 from __future__ import annotations
 
-import functools
 import json
 import re
 import shutil
@@ -18,6 +17,11 @@ import socket
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from glove.api import HookContext, hook, resolve_ca_file, scoped
+
+from .host import chrome
+from .host import login as lg
 
 HERE = Path(__file__).parent
 # The one Playwright pin: the sidecar image installs it from its lockfile and
@@ -36,14 +40,6 @@ CA_FILE = "corporate-ca.pem"
 STAGING = "/data/staging"
 
 
-@functools.cache
-def host_module(name: str):
-    """A module of host/ (leaf modules: chrome, login, cdp)."""
-    from glove.extensions import load_module
-
-    return load_module(HERE / "host" / f"{name}.py", "playwright")
-
-
 # With a stored session in the browser, the tools that read (or replace) its
 # cookies and storage would hand them to the model: refused in `tools`. So are
 # a request's details (its Cookie header), a trace (every request's headers,
@@ -58,7 +54,7 @@ STATE_ENV_MAX = 120_000
 
 def login_spec(settings: dict[str, Any]):
     """`login` and `storage_state` checked (host/login.py), or None."""
-    return host_module("login").spec(settings.get("login"), settings.get("storage_state"))
+    return lg.spec(settings.get("login"), settings.get("storage_state"))
 
 
 def check_storage_state(settings: dict[str, Any]) -> None:
@@ -112,12 +108,12 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def host_ports(ctx: dict[str, Any]) -> dict[str, int]:
+def host_ports(ctx: HookContext) -> dict[str, int]:
     """This session's host MCP and CDP ports: the settings when given, else the
     ones recorded at the first launch, else two free loopback ports (recorded by
     `materialize`). Stable per session, so a kept Chrome is found again."""
-    s = ctx["settings"]
-    recorded = Path(ctx["state"]) / PORTS_FILE
+    s = ctx.settings
+    recorded = ctx.state_dir / PORTS_FILE
     try:
         saved = json.loads(recorded.read_text())
     except (OSError, ValueError):
@@ -129,20 +125,19 @@ def host_ports(ctx: dict[str, Any]) -> dict[str, int]:
     return {"mcp": int(mcp), "cdp": int(cdp)}
 
 
-def corporate_ca(ctx: dict[str, Any]) -> Path | None:
+def corporate_ca(ctx: HookContext) -> Path | None:
     """The `ca` setting as a validated host path (sidecar modes only: host mode
     runs the host's Chrome, which already has the host's trust store). The same
     checks as the harness's `corporate_ca` (glove/cafile.py)."""
-    from glove.cafile import resolve_ca_file
-
-    s = ctx["settings"]
+    s = ctx.settings
     if not s.get("ca") or s["mode"] == "host":
         return None
-    return resolve_ca_file("playwright.ca", s["ca"], ctx.get("session_dir"))
+    return resolve_ca_file("playwright.ca", s["ca"], ctx.session_dir)
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    s = ctx.settings
     login = login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
     check_storage_state(s)
     if s["mode"] != "host":
@@ -153,10 +148,9 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
         start = urlsplit(login.start_url).hostname or ""
         return {"egress_hosts": sorted({start, *login.domains} - {""})}
     ports = host_ports(ctx)
-    state = Path(ctx["state"])
-    chrome = host_module("chrome")
+    state = ctx.state_dir
     exe = chrome.chrome_executable() or chrome.DEFAULT_CHROME
-    host = f"glove-{ctx['session']['id']}-browser"
+    host = scoped(ctx.session["id"], "browser")
     return {
         "exports": {"host_ports": ports},
         "endpoints": {
@@ -205,12 +199,13 @@ def chromium_policy(settings: dict[str, Any]) -> dict[str, Any]:
     return {} if "browser_evaluate" in settings["tools"] else {"URLBlocklist": ["javascript://*"]}
 
 
-def materialize(ctx: dict[str, Any]) -> None:
-    s = ctx["settings"]
-    state = Path(ctx["state_dir"])
+@hook
+def materialize(ctx: HookContext) -> None:
+    s = ctx.settings
+    state = Path(ctx.state_dir)
     (state / "output").mkdir(mode=0o700, exist_ok=True)
     if s["mode"] == "host":
-        ports = ctx["slot"]["browser"]["host_ports"]
+        ports = ctx.slot["browser"]["host_ports"]
         (state / PORTS_FILE).write_text(json.dumps(ports) + "\n")
         return
     (state / "mcp.json").write_text(json.dumps(mcp_config(s), indent=1) + "\n")
@@ -226,24 +221,26 @@ def materialize(ctx: dict[str, Any]) -> None:
     (state / "downloading").mkdir(mode=0o700, exist_ok=True)
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
-    s = ctx["settings"]
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
+    s = ctx.settings
     return {"env": state_env(s["storage_state"], resolve_secret)} if s.get("storage_state") else {}
 
 
-def doctor(ctx: dict[str, Any]) -> list[tuple[str, str, str]]:
+@hook
+def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
     checks = []
-    if ctx["settings"].get("login"):
-        path = host_module("chrome").chrome_executable()
+    if ctx.settings.get("login"):
+        path = chrome.chrome_executable()
         checks.append(("playwright login: browser", "ok" if path else "warn",
                        path or "no Chrome/Chromium found for `glove playwright login`"))
-    if ctx["settings"]["mode"] != "host":
+    if ctx.settings["mode"] != "host":
         return checks
     for tool in ("node", "npx"):
         p = shutil.which(tool)
         detail = p or f"absent — needed for {PLAYWRIGHT_MCP} mcp"
         checks.append((f"playwright host: {tool}", "ok" if p else "warn", detail))
-    path, kind = host_module("chrome").discover_chrome()
+    path, kind = chrome.discover_chrome()
     if kind == "system":
         checks.append(("playwright host: browser", "ok", f"system Chrome/Chromium ({path})"))
     elif kind == "cft":

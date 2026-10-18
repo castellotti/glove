@@ -22,6 +22,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from glove.api import HookContext, hook
+
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}\Z")
 USER = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}\Z")
 HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\Z")
@@ -50,10 +52,12 @@ def hosts(settings: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _known_hosts(ctx: dict[str, Any]) -> Path:
+def _known_hosts(ctx: HookContext) -> Path:
     """The named known_hosts file (core's `up` always passes the session directory)."""
-    rel = ctx["settings"]["known_hosts"]
-    sd = Path(ctx["session_dir"]).resolve()
+    rel = ctx.settings["known_hosts"]
+    if ctx.session_dir is None:
+        raise ValueError("ssh.known_hosts needs the session directory (an untrusted copy never gets it)")
+    sd = Path(ctx.session_dir).resolve()
     path = (sd / rel).resolve()
     if not path.is_relative_to(sd) or not path.is_file():
         raise ValueError(f"ssh.known_hosts: {rel!r} is not a file in the session directory "
@@ -61,11 +65,12 @@ def _known_hosts(ctx: dict[str, Any]) -> Path:
     return path
 
 
-def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
-    if ctx.get("session_dir") is not None:
+@hook
+def contribute(ctx: HookContext) -> dict[str, Any]:
+    if ctx.session_dir is not None:
         _known_hosts(ctx)  # fail at `glove check`, not at launch
     endpoints = {}
-    for h in hosts(ctx["settings"]):
+    for h in hosts(ctx.settings):
         endpoints[f"ssh-{h['name']}"] = {
             "harness": False,
             "port": 22,  # the forwarder's, whatever the host's (RELAY_SETTINGS carries it)
@@ -76,12 +81,14 @@ def contribute(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"endpoints": endpoints}
 
 
-def materialize(ctx: dict[str, Any]) -> None:
-    shutil.copyfile(_known_hosts(ctx), Path(ctx["state_dir"]) / "known_hosts")
+@hook
+def materialize(ctx: HookContext) -> None:
+    shutil.copyfile(_known_hosts(ctx), Path(ctx.state_dir) / "known_hosts")
 
 
-def launch_env(ctx: dict[str, Any], resolve_secret) -> dict[str, Any]:
-    key = resolve_secret(ctx["settings"]["key"]).strip()
+@hook
+def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
+    key = resolve_secret(ctx.settings["key"]).strip()
     if not key:
         raise ValueError("ssh.key resolves to an empty value")
     return {"env": {"RELAY_SSH_KEY": key}}

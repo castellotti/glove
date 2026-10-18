@@ -50,7 +50,6 @@ from pathlib import Path
 from live_common import check, inspect, live_session, mcp_client_argv, offered_tools, summary, wait_for
 
 from glove.extensions import image_tag
-from glove.session import recreate_sidecar
 
 HERE = Path(__file__).parent
 # downloads/uploads (`downloads: work`, `uploads: work`)
@@ -198,7 +197,12 @@ def main(directory: str) -> int:
             with holding("https://example.com") as (_, held_ok):
                 killed = subprocess.run([rt, "rm", "-f", f"{s}-pw"], capture_output=True, text=True)  # browser open
                 left = lock.is_symlink()
-            again = recreate_sidecar(rt, live.sid, sd.compose, f"{s}-pw", live.secrets, wait=120)
+            # `compose up` of the removed sidecar (reload_sidecar refuses one not running)
+            up = subprocess.run([*live.base, "up", "-d", "--no-deps", "--force-recreate", f"{s}-pw"], env=live.env,
+                                capture_output=True, text=True)
+            healthy = wait_for(lambda: inspect(rt, f"{s}-pw").get("State", {}).get("Health", {}).get("Status")
+                               == "healthy", timeout=120)
+            again = None if up.returncode == 0 and healthy else f"rc={up.returncode} {up.stderr.strip()[-120:]}"
             out = mcp([["browser_navigate", {"url": "https://example.com"}]])
             check("a recreated sidecar opens the persistent profile a killed one left locked",
                   held_ok and killed.returncode == 0 and left and again is None and "Page URL: https://example.com" in out,

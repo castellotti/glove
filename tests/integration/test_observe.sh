@@ -35,6 +35,7 @@ echo "== runtime $RT, route $ROUTE"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )
 RC=$?
 SID="$(cat "$S/.glove/id" 2>/dev/null)"
+[ -n "${KEEP:-}" ] && exit $RC
 LEFT="$($RT ps -aq --filter name=glove-$SID-)$($RT network ls -q --filter name=glove-$SID-)$($RT volume ls -q --filter name=glove-$SID-)"
 if [ -n "$LEFT" ]; then echo "  FAIL leftovers: $LEFT"; RC=1; else echo "  PASS nothing left running"; fi
 exit $RC
