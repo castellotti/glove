@@ -29,7 +29,6 @@ from .config import ConfigError
 from .hardening import HardeningError
 from .harness import adapter_call, known_harnesses
 from .harnessconfig import render_home
-from .hostsvc import describe_host_services, start_host_services, stop_host_services
 from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
@@ -334,7 +333,6 @@ def plan_cmd(
         console.print(f"    [bold]resolved at last launch[/bold] ({resolved.get('at', '?')}): model {m.get('model')}, "
                       f"vision={m.get('vision')}, context={m.get('context_window')}")
     _print_summary(plan, home_files)
-    describe_host_services(cfg, sid, sd.state)
 
 
 @app.command()
@@ -350,6 +348,7 @@ def up(
     import subprocess
     from functools import partial
 
+    from .extsession import run_teardown
     from .plan import secret_env
     from .session import SubnetTaken, launch
 
@@ -361,12 +360,18 @@ def up(
         if secrets is None:  # the checks and the secrets don't depend on the subnet: once
             try:
                 preflight(sd, cfg, plan)
-                # Resolve secret references (keychain:/env:) now, in memory, so a
-                # missing key fails before anything starts.
-                secrets = secret_env(plan)
             except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
                 raise _fail(str(e)) from e
-            start_host_services(cfg, sid, sd.state)
+            try:
+                # Resolve secret references (keychain:/env:) now, in memory, so a
+                # missing key fails before any container starts.
+                secrets = secret_env(plan)
+            except BaseException as e:  # Ctrl-C and a hook's bug too
+                for w in run_teardown(sd, sid, cfg.provider, cfg.extensions):  # what a launch_env started
+                    err.print(f"[yellow]warn:[/yellow] {w}")
+                if isinstance(e, ConfigError | ValueError | OSError):
+                    raise _fail(str(e)) from e
+                raise
         # Only transcripts written at/after launch belong to this run (see the hint).
         launched_at = time.time()
         try:
@@ -644,16 +649,13 @@ def check(
 
 
 def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
+    from .extsession import run_teardown
     from .session import teardown
 
     cfg, _ = sdm.read_effective(sd.effective)
     provider = provider or sdm.session_provider(sd, cfg)
-    if cfg is not None and cfg.host_services:
-        console.print("[bold]stopping host services…[/bold]")
-        try:
-            stop_host_services(cfg, sid, sd.state)
-        except Exception as e:
-            err.print(f"[yellow]warn:[/yellow] host-service teardown skipped: {e}")
+    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
+        err.print(f"[yellow]warn:[/yellow] {w}")
     teardown(sid, provider=provider, wipe=wipe)
     if mark:
         _mark_downloads(sd)
@@ -942,9 +944,6 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
                       "(srt strong)")
     console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
     _print_extensions(plan)
-    hs = [x.name for x in cfg.host_services]
-    if hs:
-        console.print(f"  [dim]host services (run on host): {hs}[/dim]")
     if not plan.policies:
         console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")
     else:

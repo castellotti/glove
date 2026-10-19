@@ -40,7 +40,6 @@ KEYS = {
     "vars": Key(None, "add"),  # the extension's own compose fragment ({{ vars.x }})
     "egress_hosts": Key(None, "cat"),  # names its sidecars reach (doctor: does the egress admit them?)
     "secret_refs": Key(None, "add"),  # label → secret ref, for the plan's list of secrets
-    "host_services": Key(None, "cat"),  # until R16.C moves them into playwright
 }
 # What a hook's `harness:` may hold: image layers (only these may `copy_host`),
 # env, skills (container paths), mcp items and a brief (its text, not a template).

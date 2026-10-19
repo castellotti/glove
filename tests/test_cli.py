@@ -630,7 +630,6 @@ def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypa
 
     monkeypatch.setattr("glove.session.launch", launch)
     monkeypatch.setattr("glove.cli._resolve_extensions", lambda *a, **k: None)
-    monkeypatch.setattr("glove.cli.start_host_services", lambda *a, **k: None)
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0
     resolved = yaml.safe_load(eff.read_text())["resolved"]
     assert resolved["extensions"] == {"corp": {"routes": ["10.0.0.0/8"]}} and resolved["model"]
@@ -659,13 +658,31 @@ def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypa
     d = make_session(tmp_path / "s")
     started, inspected = [], []
     monkeypatch.setattr("glove.session.launch", lambda *a, **k: started.append(1))
-    monkeypatch.setattr("glove.cli.start_host_services", lambda *a: started.append("host"))
     monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: inspected.append(a))
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("chrome", "fail", "absent")])
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 1 and "chrome: absent" in result.output and not started
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
+
+
+def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_path, monkeypatch):
+    from glove.config import ConfigError
+
+    d = make_session(tmp_path / "s")
+    events = []
+
+    def missing(plan):
+        raise ConfigError("keychain: no such item")
+
+    monkeypatch.setattr("glove.session.launch", lambda *a, **k: events.append("launched"))
+    monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: None)
+    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [])
+    monkeypatch.setattr("glove.plan.secret_env", missing)
+    monkeypatch.setattr("glove.extsession.run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 1 and "no such item" in result.output and "warn: w" in result.output
+    assert events == [{"llm"}]  # torn down, never launched
 
 
 def test_files_left_in_an_old_work_subdir_are_pointed_out(home, tmp_path):

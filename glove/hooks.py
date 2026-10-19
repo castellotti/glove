@@ -125,8 +125,8 @@ RESULTS: dict[str, Callable[[Any], str | None]] = {
     "resolve": _resolve,
     "diagnose": lambda out: None if out is None or isinstance(out, str) else "want a hint (a string) or None",
     "doctor": _doctor,
+    "teardown": lambda out: None if out is None else "want None",
 }
-# teardown (R16.C) joins with its first consumer
 HOOKS = frozenset(RESULTS)
 
 

@@ -17,7 +17,7 @@ import yaml
 
 from . import sessiondir as sdm
 from .extensions import EXPORT_ROOTS, Manifest, declares_host_paths, discover, load_module, validate_settings
-from .hooks import HookContext
+from .hooks import HookContext, hooks_of, validate_result
 from .manifest import ExtensionError
 from .naming import project_name, scoped
 
@@ -92,10 +92,33 @@ def ext_session(name: str, directory: Path | None = None, *, launched: bool = Tr
     m = discover().get(name)
     if name not in given or m is None:
         raise ExtensionError(f"{sd.file}: the {name} extension is not enabled")
-    return ExtSession(
-        name=name, root=sd.root, file=sd.file, work=sd.work, id=sid, runtime=sdm.session_provider(sd),
-        compose_file=sd.compose, settings=validate_settings(m, given[name]), manifest=m,
-    )
+    return _session(sd, sid, sdm.session_provider(sd), m, given[name])
+
+
+def _session(sd: sdm.SessionDir, sid: str | None, runtime: str, m: Manifest, raw: Any) -> ExtSession:
+    return ExtSession(name=m.name, root=sd.root, file=sd.file, work=sd.work, id=sid, runtime=runtime,
+                      compose_file=sd.compose, settings=validate_settings(m, raw), manifest=m)
+
+
+def run_teardown(sd: sdm.SessionDir, sid: str, runtime: str, given: Mapping[str, Any]) -> list[str]:
+    """Run the `teardown` hook of each extension the last launch enabled (`given`:
+    its settings then), so what it started on the host stops; a warning per failure."""
+    try:
+        found = discover()
+    except ExtensionError as e:  # `glove down` goes on: its containers still stop
+        return [f"teardown hooks skipped: {e}"]
+    warnings = []
+    for name, raw in given.items():
+        if (m := found.get(name)) is None:
+            continue
+        try:
+            s = _session(sd, sid, runtime, m, raw)
+            fn = hooks_of(s.hooks, name).get("teardown") if s.hooks else None
+            if fn is not None:
+                validate_result("teardown", name, fn(s.context()))
+        except Exception as e:  # likewise
+            warnings.append(f"extension {name!r}: teardown: {e}")
+    return warnings
 
 
 def reload_sidecar(s: ExtSession, service: str, env: Mapping[str, str], *, wait: int = 30) -> None:

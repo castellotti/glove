@@ -353,8 +353,6 @@ def build_session_plan(
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
         corporate_ca=ca, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
     )
-    own = {h.name for h in comp.host_services}
-    cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
 
     mount_plan = compute_mounts(
         cfg.workdir,

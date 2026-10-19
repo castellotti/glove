@@ -11,7 +11,7 @@
       .glove/             0700; only home/ and enforcer/ are ever mounted
         id                stable session id: <dirname>-<6 hex>
         compose.yml  effective.yml  baseline.yml  template.yml
-        home/  enforcer/  ext/<name>/  placeholders/  host-logs/
+        home/  enforcer/  ext/<name>/  placeholders/
 
 Deleting the directory deletes the session; what outlives it is its registry
 row and what an extension explicitly exported (``~/.glove/observe/<id>/``),
@@ -55,8 +55,9 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 FILE_KEYS = frozenset({
     "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_config",
     "env", "git_config", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
-    "protect_ide_files", "allow_root", "allow_sensitive", "host_services",
+    "protect_ide_files", "allow_root", "allow_sensitive",
 })
+_NO_HOST = "a session starts no host processes; `playwright: {mode: host}` runs the host's Chrome"
 MOVED_KEYS = {
     "name": "the session is the directory; its id is in .glove/id",
     "workdir": "/work is the session's work/ directory",
@@ -65,7 +66,8 @@ MOVED_KEYS = {
     "services": "forwarders come only from extensions",
     "observe": "network observability is an extension: `extensions: {observe: {}}` (plus `filter: {}` for rules)",
     "config_home_source": "the harness home is .glove/home",
-    "host_setup": "use host_services",
+    "host_setup": _NO_HOST,
+    "host_services": _NO_HOST,
     "provider": "set `runtime`",
     "rebuild": "pass `glove up --rebuild`",
     "toolchains": "an extension now: `extensions: {toolchains: {blocks: [...]}}`",

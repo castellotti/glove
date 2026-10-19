@@ -38,23 +38,6 @@ class AddDir:
 
 
 @dataclass
-class HostService:
-    """A host-side helper glove starts in a detached tmux session.
-
-    These run on the host (outside the sandbox) using host trust the container
-    deliberately lacks — e.g. the headed Chrome and Playwright MCP of the
-    `playwright` extension's host mode. `command` may use placeholders glove
-    expands: {session}, {workdir}, {home}.
-    """
-
-    name: str
-    command: str
-    ready_port: int | None = None  # glove waits for / dedupes on this port
-    ready_timeout: float = 60.0  # seconds to wait for ready_port
-    keep: bool = False  # leave running after `glove down` (e.g. Chrome)
-
-
-@dataclass
 class Config:
     harness: str = ""  # a harnesses/<name> plugin; session files must name one
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
@@ -96,10 +79,6 @@ class Config:
     # harness should trust *in addition to* the public roots; bound read-only.
     # A public certificate, never a secret. Relative to the session dir.
     corporate_ca: str | None = None
-    # Host-side helpers glove auto-starts in detached tmux sessions:
-    # SSH model tunnel, headed Chrome, Playwright MCP. Managed lifecycle:
-    # port-deduped, health-checked, torn down on `glove down` (unless keep).
-    host_services: list[HostService] = field(default_factory=list)
     # Extra packages baked into the harness image on top of its defaults, so the
     # sandboxed agent has the tools a session needs (the box has no egress to
     # install them at runtime). Changing these yields a distinct image tag.
@@ -298,17 +277,13 @@ def _coerce(data: dict[str, Any]) -> Config:
     """Build a Config from a plain mapping, coercing nested structures."""
     data = dict(data)  # shallow copy; we pop as we go
     add_dirs_raw = data.pop("add_dirs", []) or []
-    host_services_raw = data.pop("host_services", []) or []
     # v2 forwarder machinery, still present in effective.yml files written
     # before v3 M5: forwarders come only from extensions now.
-    for legacy in ("services", "net", "observe"):
+    # (host_services: an effective.yml before round 16)
+    for legacy in ("services", "net", "observe", "host_services"):
         data.pop(legacy, None)
 
     add_dirs = [_coerce_add_dir(x) for x in add_dirs_raw]
-    host_services = [
-        x if isinstance(x, HostService) else HostService(**x)
-        for x in host_services_raw
-    ]
 
     limits_raw = data.pop("limits", None)
     known = set(Config.__dataclass_fields__)
@@ -318,7 +293,6 @@ def _coerce(data: dict[str, Any]) -> Config:
 
     cfg = Config(**data)
     cfg.add_dirs = add_dirs
-    cfg.host_services = host_services
     if limits_raw is not None:
         cfg.limits = _coerce_limits(limits_raw)
     return cfg

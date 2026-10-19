@@ -6,6 +6,21 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Host services belong to `playwright` (breaking for session files).** The
+  session key `host_services:` is refused with a pointer: a session file can
+  no longer run host commands. `playwright`'s host mode starts its Chrome and
+  MCP itself (in its `launch_env` hook, still in tmux, now logging under
+  `.glove/ext/playwright/host-logs/` without tmux) and stops them in the new
+  `teardown` hook, which `glove down` and `glove rm` run for each extension
+  the last launch enabled (a failure is a warning), and `glove up` when a
+  secret then fails to resolve. `glove check` lists the host commands (as
+  `info`) instead of `glove plan`. The `pi-remote-llm` example's SSH tunnel
+  is now opened by hand before `glove up`. **Before upgrading, `glove down`
+  any running session that uses `host_services:`** (or playwright host mode
+  without tmux): the new glove no longer knows to stop them. `glove doctor` drops its ssh/node/npx checks (playwright's host
+  mode checks node and npx itself). For extension authors: `host_services`
+  is no longer a hook result.
+
 - **observe computes `session.json`'s `next` itself.** Core no longer reads an
   endpoint's `observe` mapping: the forwarder provider's context gives each
   forwarder its `endpoint` (what its `forwarder` hook was told, which now

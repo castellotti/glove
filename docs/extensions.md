@@ -113,7 +113,6 @@ time. A manifest may not set them.
 | `vars` | map | `add` | the extension's own fragment reads them as `{{ vars.x }}` |
 | `egress_hosts` | list of hosts (`*.x` for subdomains) | `cat` | the names its sidecars reach; `glove check` warns when a filtering egress doesn't admit one |
 | `secret_refs` | map label → secret reference | `add` | secrets nested deeper than a `secret` setting, which `glove check` verifies exist |
-| `host_services` | list | `cat` | host-side services (playwright's host mode); this key will move into that extension |
 
 ## Hooks
 
@@ -142,10 +141,17 @@ is optional.
 | `contribute` | `(ctx)` | planning (`check`, `plan`, `up`, `doctor`), in dependency order | read host files | manifest keys (`hook` column above) |
 | `materialize` | `(ctx)` | rendering (`plan`, `up`) | write under `ctx.state_dir` (and its export dirs) | `None` |
 | `forwarder` | `(ctx, endpoint)` | the network plan; the `forwarder` slot's provider only | nothing (pure) | `{service, facts, aliases}`, or `None` for core's own forwarder |
-| `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands; values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
+| `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands, start host processes (stopped by its `teardown`, also when `glove up` then fails before compose starts); values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
 | `resolve` | `(ctx, exports, probe)` | `up`, once the sidecars are healthy | only through `probe` | `(exports, notes)` |
 | `diagnose` | `(ctx, check, run)` | `up`, after one of its verify checks failed | `run(service, argv)` in its own sidecars | a hint, or `None` |
 | `doctor` | `(ctx, probe)` | `doctor`, `check` | `probe`, `None` offline | `[(name, status, detail)]`, status `ok`, `info`, `skip`, `warn` or `fail` |
+| `teardown` | `(ctx)` | `down`, `rm`, before the containers stop | stop what its `launch_env` started on the host | `None` |
+
+- `teardown` runs outside a launch: its context is a CLI's (the settings the
+  last `glove up` used, the session id, `state_dir` and the host paths its
+  manifest declares), with no plan behind it, and possibly when `launch_env`
+  never ran or only partly ran: stop only what is running. A failure is a
+  warning; the containers still stop.
 
 - A forwarder's `service` may set only `image`, `command`, `entrypoint`,
   `environment`, `volumes`, `tmpfs`, `depends_on`, `healthcheck`, `init`,
@@ -293,8 +299,9 @@ def reload(directory: Path | None = DIR_OPT) -> None:
 ## Migrating from `api: 1`
 
 - `api: 2` in `extension.yml`.
-- `trust_corporate_ca:` → `trust:`. `conflicts:` and the manifest's
-  `host_services:` are gone.
+- `trust_corporate_ca:` → `trust:`. `conflicts:` and `host_services:` are
+  gone: an extension that runs something on the host starts it in
+  `launch_env` and stops it in `teardown`.
 - Mark each hook `@hook`. Read `ctx.settings`, not `ctx["settings"]`.
   `ctx["state"]` is `ctx.state_dir`.
 - `doctor(ctx)` → `doctor(ctx, probe)`.

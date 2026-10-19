@@ -36,7 +36,7 @@ import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from .config import HostService, git_config_pairs, is_secret_ref
+from .config import git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
 from .hooks import HookContext, hooks_of, validate_result
@@ -540,7 +540,6 @@ class Composition:
     briefs: list[tuple[str, str, bool]] = field(default_factory=list)  # (ext, text, a template)
     channels: list[Channel] = field(default_factory=list)
     outputs: list[Output] = field(default_factory=list)
-    host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
     secrets: dict[str, tuple[str, str]] = field(default_factory=dict)  # compose name → (ext, setting)
@@ -1173,19 +1172,6 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
                                      read_only=spec.get("read_only", False), trust=spec.get("trust")))
 
 
-def _host_services(comp: Composition, a: Active, ctx: dict) -> None:
-    """What its contribute hook returned for `host_services` (R16.C moves them
-    into playwright)."""
-    for item in active_items(a.contributed.get("host_services"), ctx):
-        require_trust(a, f"extension {a.name!r}: a host service")
-        r = render_value(item, ctx, f"extension {a.name!r} host service")
-        comp.host_services.append(HostService(
-            name=f"{a.name}-{r['name']}", command=str(r["command"]),
-            ready_port=int(r["ready_port"]) if r.get("ready_port") not in (None, "") else None,
-            keep=str(r.get("keep", False)).lower() in ("true", "1"),
-        ))
-
-
 def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | None = None) -> bool:
     """Whether a hook of `m` gets the session dir (or, with `work`, the work
     dir) in its context: trusted, and its manifest names a reason — outputs
@@ -1312,7 +1298,6 @@ def compose(
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx, contributed.get("harness") or {})
-        _host_services(comp, a, ctx)
         for item in active_items(a.spec("verify"), ctx):
             if not isinstance(item, dict) or item.get("kind") not in VERIFY_KINDS:
                 raise ExtensionError(f"extension {a.name!r}: verify {item!r} needs a kind in {sorted(VERIFY_KINDS)}")

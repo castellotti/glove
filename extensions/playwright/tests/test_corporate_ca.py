@@ -65,12 +65,6 @@ def test_never_the_session_file_or_private_state(tmp_path):
         _plan(tmp_path, ca=".glove/ca.pem")
 
 
-def test_host_mode_ignores_ca(tmp_path):
-    # no validation, no staging: the host's Chrome has the host's trust store already
-    plan = _plan(tmp_path, mode="host", ca="missing.pem", port=18931, cdp_port=19222)
-    assert not any("corporate" in str(h.command) for h in plan.composition.host_services)
-
-
 def test_entrypoint_imports_into_nss_in_both_modes_and_never_bypasses():
     src = (PW / "image" / "glove-pw-start").read_text()
     assert 'certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"' in src

@@ -11,7 +11,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,20 +22,6 @@ if TYPE_CHECKING:
 
 # Docker Desktop's default File sharing list when no explicit key is set.
 _DEFAULT_FILE_SHARING = ["/Users", "/Volumes", "/private", "/tmp", "/var/folders"]
-
-
-def _host_tool_checks() -> list[Check]:
-    checks: list[Check] = []
-    for tool, why in (
-        ("ssh", "host_services: SSH model tunnel"),
-        ("node", "host_services: Playwright MCP/server"),
-        ("npx", "host_services: Playwright MCP/server"),
-    ):
-        path = shutil.which(tool)
-        checks.append(
-            Check(f"host tool: {tool}", "ok" if path else "warn", path or f"absent — needed for {why}")
-        )
-    return checks
 
 
 def _file_sharing_check() -> Check:
@@ -153,7 +138,6 @@ def run_doctor(
     # the whole home via the machine mount, so the hint is misleading there.
     if runtime == "docker":
         checks.append(_file_sharing_check())
-    checks.extend(_host_tool_checks())
     return checks
 
 
