@@ -22,6 +22,7 @@ an export root). No other host path reaches a template.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import ipaddress
 import re
@@ -1206,7 +1207,7 @@ def hook_context(comp: Composition, a: Active) -> HookContext:
         work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True,
                                                       privileges=a.spec("privileges", t)) else None,
         export_dirs={r: comp.export_dirs[r] for r in comp.export_access(a) if r in comp.export_dirs},
-        forwarders=[dict(f) for f in comp.forwarders] if forwarder else [],
+        forwarders=copy.deepcopy(comp.forwarders) if forwarder else [],  # their endpoints nest
         grants=dict(comp.grants) if forwarder else {},
         enforcer=comp.enforcer, enforcer_options=comp.enforcer_options,
         **{k: t[k] for k in _SHARED},

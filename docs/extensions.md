@@ -87,7 +87,8 @@ Legend:
 ### `harness:`
 
 - `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`, `env` (image
-  `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`). Only a hook's
+  `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`; never git's
+  `GIT_CONFIG_*`: use `git_config`). Only a hook's
   layers may `copy_host`. Layers render in extension order, then those with
   `stage: late` (e.g. the toolchains), then those that `copy_host`.
 - `env`: `{VAR: value}` or `{VAR: {value, when, shell: false}}`. A variable is

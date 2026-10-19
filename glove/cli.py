@@ -369,7 +369,7 @@ def up(
             except BaseException as e:  # Ctrl-C and a hook's bug too
                 for w in run_teardown(sd, sid, cfg.provider, cfg.extensions):  # what a launch_env started
                     err.print(f"[yellow]warn:[/yellow] {w}")
-                if isinstance(e, ConfigError | ValueError | OSError):
+                if isinstance(e, ConfigError | ValueError | OSError | NotImplementedError | subprocess.SubprocessError):
                     raise _fail(str(e)) from e
                 raise
         # Only transcripts written at/after launch belong to this run (see the hint).
@@ -637,8 +637,8 @@ def check(
                             f"{drift[0]} changed since `glove new`; review with `glove new --diff`"))
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
-        checks += extension_checks(cfg.extensions, harness=cfg.harness,
-                                   comp=plan.composition if plan is not None else None, session_dir=sd.root,
+        checks += extension_checks(cfg.extensions, harness=cfg.harness, comp=plan and plan.composition,
+                                   session_dir=sd.root, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
                                    probe=None if offline or no_container else partial(probe_direct, cfg.provider))
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))

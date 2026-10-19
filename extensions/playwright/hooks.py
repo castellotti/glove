@@ -150,8 +150,10 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
         start = urlsplit(login.start_url).hostname or ""
         return {"egress_hosts": sorted({start, *login.domains} - {""})}
     ports = host_ports(ctx)
+    # what `glove up` will run outside the sandbox: shown by `glove plan`/`policy`, kept in effective.yml
+    ran = {f"runs on the host ({svc.name})": svc.command for svc in host_services(ctx, ports)}
     return {
-        "exports": {"host_ports": ports},
+        "exports": {"host_ports": ports, "resolved": ran},
         "endpoints": {
             "browser": {"port": 8931, "target": {"host_port": ports["mcp"]}, "observe": {"tool": "browser"}},
         },
@@ -230,7 +232,10 @@ def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
 
 @hook
 def teardown(ctx: HookContext) -> None:
-    # whatever the mode now: a session switched away from host mode may still run them
+    # whatever the mode now: a session switched away from host mode may still run them;
+    # none without the ports every host-mode launch records
+    if not (ctx.state_dir / PORTS_FILE).exists():
+        return
     hs.stop(host_services(ctx, host_ports(ctx)), ctx.session["id"], ctx.state_dir)
 
 

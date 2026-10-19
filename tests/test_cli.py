@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from glove import registry as reg
 from glove.cli import app
+from glove.config import ConfigError
 
 runner = CliRunner()
 
@@ -666,14 +667,17 @@ def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypa
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
 
 
-def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_path, monkeypatch):
-    from glove.config import ConfigError
-
+@pytest.mark.parametrize(("error", "said"), [
+    (lambda: ConfigError("keychain: no such item"), "no such item"),
+    (lambda: NotImplementedError("not on this host"), "not on this host"),
+    (lambda: subprocess.CalledProcessError(1, ["tmux", "new-session"]), "returned non-zero exit status 1"),
+])
+def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_path, monkeypatch, error, said):
     d = make_session(tmp_path / "s")
     events = []
 
     def missing(plan):
-        raise ConfigError("keychain: no such item")
+        raise error()
 
     monkeypatch.setattr("glove.session.launch", lambda *a, **k: events.append("launched"))
     monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: None)
@@ -681,7 +685,8 @@ def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_
     monkeypatch.setattr("glove.plan.secret_env", missing)
     monkeypatch.setattr("glove.extsession.run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
     result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 1 and "no such item" in result.output and "warn: w" in result.output
+    assert result.exit_code == 1 and said in result.output and "warn: w" in result.output
+    assert "Traceback" not in result.output
     assert events == [{"llm"}]  # torn down, never launched
 
 

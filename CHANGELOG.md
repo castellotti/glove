@@ -13,11 +13,13 @@ All notable changes to glove are documented here.
   `.glove/ext/playwright/host-logs/` without tmux) and stops them in the new
   `teardown` hook, which `glove down` and `glove rm` run for each extension
   the last launch enabled (a failure is a warning), and `glove up` when a
-  secret then fails to resolve. `glove check` lists the host commands (as
-  `info`) instead of `glove plan`. The `pi-remote-llm` example's SSH tunnel
+  secret then fails to resolve. `glove plan` and `glove policy` show the host
+  commands (under `resolved (playwright)`, also kept in `effective.yml`), and
+  `glove check` lists them (as `info`). The `pi-remote-llm` example's SSH tunnel
   is now opened by hand before `glove up`. **Before upgrading, `glove down`
-  any running session that uses `host_services:`** (or playwright host mode
-  without tmux): the new glove no longer knows to stop them. `glove doctor` drops its ssh/node/npx checks (playwright's host
+  any running session that uses `host_services:`**: the new glove no longer
+  knows to stop them (playwright host mode's, started by an older glove, it
+  still stops). `glove doctor` drops its ssh/node/npx checks (playwright's host
   mode checks node and npx itself). For extension authors: `host_services`
   is no longer a hook result.
 
@@ -38,7 +40,8 @@ All notable changes to glove are documented here.
   refused. `enforcer_options.nono.browsers` without a block that bakes
   `browsers:` is refused only when the extension is selected; `glove plan`
   shows the enforcer options not at their defaults. For extension authors: an
-  image layer may set `env` (image `ENV`) and `stage: late`, a `contribute`
+  image layer may set `env` (image `ENV`; git's config variables stay
+  glove's) and `stage: late`, a `contribute`
   hook may return a `brief` (plain text), the hook context has `enforcer` and
   `enforcer_options`, and `glove.api` adds `fetch_steps`, `exposes_private` and
   `tools_run_browsers`.

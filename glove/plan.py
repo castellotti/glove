@@ -374,7 +374,8 @@ def build_session_plan(
 
     # glove alone sets git's config env vars (GIT_CONFIG_PARAMETERS, below)
     for source, env in (("the harness profile", profile.default_env), ("the session's `env:`", cfg.env),
-                        ("an extension's env", comp.harness_env)):
+                        ("an extension's env", [*comp.harness_env, *(k for _, la in comp.image_layers
+                                                                       for k in la.get("env") or {})])):
         owned = sorted(k for k in env if GIT_CONFIG_ENV.fullmatch(str(k)))
         if owned:
             raise ConfigError(f"{source} sets {owned[0]}: git config goes in the session's `git_config:` "

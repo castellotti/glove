@@ -279,8 +279,8 @@ def _coerce(data: dict[str, Any]) -> Config:
     add_dirs_raw = data.pop("add_dirs", []) or []
     # v2 forwarder machinery, still present in effective.yml files written
     # before v3 M5: forwarders come only from extensions now.
-    # (host_services: an effective.yml before round 16)
-    for legacy in ("services", "net", "observe", "host_services"):
+    # (toolchains, host_services: an effective.yml before round 16)
+    for legacy in ("services", "net", "observe", "toolchains", "host_services"):
         data.pop(legacy, None)
 
     add_dirs = [_coerce_add_dir(x) for x in add_dirs_raw]

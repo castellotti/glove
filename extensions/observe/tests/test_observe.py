@@ -194,6 +194,19 @@ def test_a_skipped_gate_keeps_its_place_in_next(tmp_path, skip):
     assert _next(list(fw.values()))["search"] == ["searxng-egress"] and not fw[skip]["observed"]
 
 
+def test_a_hook_editing_a_forwarders_endpoint_changes_no_other_hooks_view(tmp_path):
+    from glove.extensions import hook_context
+
+    comp = plan_for(tmp_path).composition
+    observe = next(a for a in comp.active if a.name == "observe")
+    ctx = hook_context(comp, observe)
+    for f in ctx.forwarders:
+        if f["endpoint"]:
+            f["endpoint"]["listen_networks"].clear()
+    assert list(hook_context(comp, observe).forwarders) == comp.forwarders
+    assert any(f["endpoint"] and f["endpoint"]["listen_networks"] for f in comp.forwarders)
+
+
 def test_searxng_settings_point_at_the_hop(tmp_path):
     plan = plan_for(tmp_path)
     materialize(plan.composition)

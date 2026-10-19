@@ -65,11 +65,11 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
-def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None,
-                     session_dir: Path | None = None, probe=None) -> list[Check]:
+def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None, probe=None,
+                     **session) -> list[Check]:
     """Selection/settings validation plus each extension's own `doctor` hook.
-    ``comp``: the session plan's composition, when it already built one;
-    ``session_dir`` resolves relative path settings when it did not;
+    ``comp``: the session plan's composition, when it already built one; ``session``:
+    its `session_dir` (relative path settings), `enforcer` and `enforcer_options` when it did not;
     ``probe``: ``probe(url, method=, body=, headers=)`` → (status, text), a
     request to what the session reaches from a throwaway container, never the
     host; a `doctor(ctx, probe)` hook calls ``probe(url, method=, body=)``, as at
@@ -81,8 +81,7 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
         try:
             # Stand-in paths: nothing is created; export roots only need to render
             # (observe/filter fragments bind them).
-            comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"),
-                           session_dir=session_dir,
+            comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"), **session,
                            export_dirs={r: Path("/nonexistent") / r for r in ("observe", "control")})
         except ValueError as e:
             return [Check("extensions", "fail", str(e))]

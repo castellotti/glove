@@ -252,5 +252,6 @@ def test_host_services_are_no_longer_a_session_key(tmp_path):
         sdm.load_file(sdm.SessionDir(d))
     # an effective.yml written before they were removed still reads
     eff = tmp_path / "effective.yml"
-    eff.write_text("config: {harness: pi, host_services: [{name: t, command: sleep 1}]}\nresolved: {}\n")
+    eff.write_text("config: {harness: pi, toolchains: [], host_services: [{name: t, command: sleep 1}]}\n"
+                   "resolved: {}\n")
     assert sdm.read_effective(eff)[0].harness == "pi"

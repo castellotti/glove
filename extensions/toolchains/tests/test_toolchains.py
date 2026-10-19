@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import CHROMIUM, NODE, make_cfg, make_session
+from helpers import CHROMIUM, NODE, STUB_LLM, make_cfg, make_session
 
 from extensions.toolchains import toolchains as tcs
 from glove import sessiondir as sdm
@@ -537,3 +537,12 @@ def test_vibe_hook_always_runs_on_the_image_python(tmp_path, toolchains):
     assert 'command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks
 
 
+
+
+def test_glove_check_composes_the_toolchains_with_the_sessions_enforcer(tmp_path):
+    from glove.doctor import extension_checks
+
+    # no session plan (it failed): `glove check` composes on its own
+    checks = extension_checks({"llm": STUB_LLM, "toolchains": {"blocks": [PY]}}, harness="pi", session_dir=tmp_path,
+                              enforcer="srt")
+    assert checks[0].status == "ok", checks[0].detail

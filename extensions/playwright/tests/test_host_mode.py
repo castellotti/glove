@@ -8,7 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from helpers import make_cfg
+from helpers import make_cfg, make_session
 
 from glove import sessiondir as sdm
 from glove.extensions import IN_TREE_DIR, ExtensionError, hook_context, launch_env, load_module, materialize
@@ -119,6 +119,10 @@ def test_sidecar_modes_start_nothing_on_the_host(tmp_path, tmux):
 def test_glove_down_stops_them_unless_the_browser_is_kept(tmp_path, tmux, keep, killed, capsys):
     sd = sdm.SessionDir(tmp_path)
     tmux.running = {"glove-s-0a0b0c-host-playwright-chrome", "glove-s-0a0b0c-host-playwright-mcp"}
+    run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host", "keep_browser": True}})
+    assert not tmux.calls and not capsys.readouterr().out  # host mode never launched: nothing to stop
+    (sd.ext / "playwright").mkdir(parents=True)
+    (sd.ext / "playwright" / "host-ports.json").write_text('{"mcp": 40001, "cdp": 40002}\n')
     run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host", "keep_browser": keep}, "direct": {}})
     assert [c[-1] for c in tmux.calls] == [f"glove-s-0a0b0c-host-playwright-{n}" for n in killed]
     assert capsys.readouterr().out.count(": stopped") == len(killed)
@@ -130,8 +134,27 @@ def test_glove_down_stops_them_unless_the_browser_is_kept(tmp_path, tmux, keep, 
     assert ": stopped" not in capsys.readouterr().out  # nothing was running: says nothing
 
 
+def test_glove_down_stops_a_host_service_started_before_round_16(tmp_path, monkeypatch, capsys):
+    hs = sys.modules["glove_ext.playwright.host.services"]
+    sd = sdm.SessionDir(tmp_path)
+    (sd.ext / "playwright").mkdir(parents=True)
+    (sd.ext / "playwright" / "host-ports.json").write_text('{"mcp": 40001, "cdp": 40002}\n')
+    old = sd.state / "host-logs"  # core's, without tmux
+    old.mkdir()
+    (old / "playwright-chrome.pid").write_text("4242")
+    killed = []
+    monkeypatch.setattr(hs.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(hs.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(hs.os, "killpg", lambda pgid, sig: killed.append(pgid))
+    run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
+    assert killed == [4242] and not (old / "playwright-chrome.pid").exists()
+    assert "playwright chrome: stopped" in capsys.readouterr().out
+
+
 def test_a_failing_teardown_is_a_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(sys.modules["glove_ext.playwright.host.services"], "stop", lambda *a: 1 / 0)
+    (sdm.SessionDir(tmp_path).ext / "playwright").mkdir(parents=True)
+    (sdm.SessionDir(tmp_path).ext / "playwright" / "host-ports.json").write_text("{}\n")
     warnings = run_teardown(sdm.SessionDir(tmp_path), "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
     assert warnings == ["extension 'playwright': teardown: division by zero"]
 
@@ -140,6 +163,18 @@ def test_a_failing_teardown_is_a_warning(tmp_path, monkeypatch):
 
     monkeypatch.setattr("glove.extsession.discover", broken)
     assert run_teardown(sdm.SessionDir(tmp_path), "s", "docker", {}) == ["teardown hooks skipped: bad manifest"]
+
+
+def test_glove_plan_and_policy_show_what_runs_on_the_host(tmp_path):
+    from typer.testing import CliRunner
+
+    from glove.cli import app
+
+    d = make_session(tmp_path / "s", "  playwright: {mode: host}\n")
+    for cmd in ("plan", "policy"):
+        out = " ".join(CliRunner().invoke(app, [cmd, str(d)]).output.split())  # as wrapped to any width
+        assert "resolved (playwright): runs on the host (chrome) = " in out, out
+        assert "runs on the host (mcp) = npx -y playwright-core@" in out
 
 
 def test_glove_check_shows_what_runs_on_the_host(tmp_path):

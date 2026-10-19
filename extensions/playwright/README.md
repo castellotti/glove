@@ -250,7 +250,8 @@ through the `browser` forwarder.
 They run in tmux (`tmux attach -t glove-<id>-host-playwright-chrome`, or
 `-mcp`); without tmux, as background processes logging under
 `.glove/ext/playwright/host-logs/`. One whose port already answers is reused.
-`glove down` stops both, except Chrome with `keep_browser: true`.
+`glove down` stops both, except Chrome with `keep_browser: true`. `glove plan`
+and `glove policy` show both commands before you launch.
 
 **Exposure.** This is the highest-exposure mode: the browser runs as you, on
 your desktop, with your network, and any local process can drive its CDP port

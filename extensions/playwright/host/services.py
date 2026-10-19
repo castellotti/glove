@@ -85,11 +85,12 @@ def stop(services: list[Service], session: str, state_dir: Path) -> None:
             continue
         stopped = have_tmux and subprocess.run(["tmux", "kill-session", "-t", _tmux(session, name)],
                                                capture_output=True, check=False).returncode == 0
-        pidfile = state_dir / LOGS / f"{name}.pid"
-        if pidfile.exists():
-            with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
-                os.killpg(os.getpgid(int(pidfile.read_text())), 15)
-                stopped = True
-            pidfile.unlink(missing_ok=True)
+        # (the second: a launch before round 16, core's `.glove/host-logs`)
+        for pidfile in (state_dir / LOGS / f"{name}.pid", state_dir.parents[1] / LOGS / f"playwright-{name}.pid"):
+            if pidfile.exists():
+                with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
+                    os.killpg(os.getpgid(int(pidfile.read_text())), 15)
+                    stopped = True
+                pidfile.unlink(missing_ok=True)
         if stopped:
             print(f"  • playwright {name}: stopped")
