@@ -25,6 +25,7 @@ from glove.runtimes.docker import DockerRuntime
 runner = CliRunner()
 SID = "ps"
 PI_SEARCH = {"direct": {}, "search": {}, "webfetch": {}}
+HOOKS = load_module(IN_TREE_DIR / "observe" / "hooks.py", "observe")
 
 
 def plan_for(tmp_path, *, exts=None, observe=None, home=None, add_dirs=None, harness="pi"):
@@ -150,7 +151,39 @@ def test_searxng_reaches_egress_only_through_its_gate(tmp_path):
 ])
 def test_next_names_the_gates_a_hop_feeds(tmp_path, exts, harness, want):
     plan = plan_for(tmp_path, exts=exts, harness=harness)
-    assert {f["service"]: f["next"] for f in plan.composition.forwarders} == want
+    assert _next(plan.composition.forwarders) == want
+
+
+_next = HOOKS.next_gates
+
+
+def _fw(service, *, harness=True, kind="service", net=None, listen=(), observe=None, endpoint=True):
+    ep = {"target_kind": kind, "target_network": net, "listen_networks": list(listen), "observe": observe}
+    return {"service": service, "harness": harness, "endpoint": ep if endpoint else None}
+
+
+def test_next_follows_declared_feeds_over_shared_networks():
+    fw = [_fw("a", net="n", observe={"feeds": ["a-egress"]}), _fw("b", net="n"),
+          _fw("a-egress", harness=False, kind="slot", listen=["n"]),
+          _fw("b-egress", harness=False, kind="slot", listen=["n"])]
+    assert _next(fw) == {"a": ["a-egress"], "b": ["a-egress", "b-egress"], "a-egress": [], "b-egress": []}
+
+
+def test_an_aliased_second_hop_has_no_next(tmp_path):
+    # 1ac: the `-out` hop dials the provider's real name; it has no endpoint, so no `next`
+    plan = plan_for(tmp_path, exts={"llm": {"provider": "openai-compatible", "location": "internet",
+                                            "endpoint": "https://llm.example.com/v1"}})
+    fw = {f["service"]: f for f in plan.composition.forwarders}
+    assert fw["llm-out"]["endpoint"] is None and fw["llm"]["endpoint"]["target_kind"] != "service"
+    assert not any(_next(list(fw.values())).values()) and _next([_fw("x-out", endpoint=False)]) == {"x-out": []}
+
+
+@pytest.mark.parametrize("feeds", ["e", [1], {"e": 1}, ["e", "typo"], ["h"], ["e", "a"]])
+def test_observe_feeds_must_name_other_egress_endpoints(feeds):
+    # not a list, a name that isn't rendered, a harness hop, or itself
+    fw = [_fw("a", harness=False, observe={"feeds": feeds}), _fw("e", harness=False, kind="slot"), _fw("h")]
+    with pytest.raises(ValueError, match=r"endpoint 'a': observe\.feeds must list"):
+        _next(fw)
 
 
 @pytest.mark.parametrize("skip", ["searxng-egress", "search"])
@@ -158,7 +191,7 @@ def test_a_skipped_gate_keeps_its_place_in_next(tmp_path, skip):
     # a skipped egress gate still carries the traffic (socat, unrecorded: observed false)
     plan = plan_for(tmp_path, observe={"skip": [skip]})
     fw = {f["service"]: f for f in plan.composition.forwarders}
-    assert fw["search"]["next"] == ["searxng-egress"] and not fw[skip]["observed"]
+    assert _next(list(fw.values()))["search"] == ["searxng-egress"] and not fw[skip]["observed"]
 
 
 def test_searxng_settings_point_at_the_hop(tmp_path):
@@ -233,26 +266,24 @@ TOR_CHECK = {"url": "https://check.torproject.org/api/ip"}
     ("none", {"exit_identity": FILE}, "none"),
 ])
 def test_session_json_names_the_exit_source(setting, egress, fact):
-    hooks = load_module(IN_TREE_DIR / "observe" / "hooks.py", "observe")
     ctx = hook_ctx(settings={"exit_identity": setting}, slot={"egress": egress})
-    assert hooks._exit_fact(hooks.exit_identity(ctx)) == fact
+    assert HOOKS._exit_fact(HOOKS.exit_identity(ctx)) == fact
 
 
 def test_no_exit_identity_without_a_polling_gate(tmp_path):
     # the proxy endpoint skipped: no gate polls, so session.json claims nothing
     _, doc, _ = render(tmp_path, exts=VPN, observe={"skip": ["proxy"]})
     assert not any("--exit-file" in s["command"] for s in gates(doc).values())
-    hooks = load_module(IN_TREE_DIR / "observe" / "hooks.py", "observe")
     fwd = {"harness": True, "observed": True, "mode": "http-proxy", "route": {"kind": "vpn", "upstream": "x:1"}}
-    assert hooks._polled(hook_ctx(forwarders=[fwd]))
+    assert HOOKS._polled(hook_ctx(forwarders=[fwd]))
     for other in ({"observed": False}, {"harness": False}, {"mode": "tcp"},
                   {"route": {"kind": "corporate", "upstream": "direct"}}):
-        assert not hooks._polled(hook_ctx(forwarders=[{**fwd, **other}]))
+        assert not HOOKS._polled(hook_ctx(forwarders=[{**fwd, **other}]))
     # its shape is the slot schema's (tests/test_api.py); its values are checked here
     for bad in ({"url": "http://x/"}, {"url": "https://"}, {"url": None}, {**FILE, "file": "../ip"},
                 {**FILE, "file": None}):
         with pytest.raises(ValueError, match="must be"):
-            hooks.exit_identity(hook_ctx(settings={"exit_identity": "auto"}, slot={"egress": {"exit_identity": bad}}))
+            HOOKS.exit_identity(hook_ctx(settings={"exit_identity": "auto"}, slot={"egress": {"exit_identity": bad}}))
 
 
 def test_a_forwarder_reads_only_the_egress_exit_volume(tmp_path):

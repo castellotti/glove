@@ -34,7 +34,8 @@ from .netgate import (
 # (e.g. the llm extension's annotation) always wins.
 DEFAULT_TOOLS = {"proxy": "web_fetch", "search": "web_search", "browser": "browser", "llm": "llm"}
 HOST_GATEWAY_NAMES = frozenset({"host.docker.internal", "host.containers.internal"})
-ANNOTATION_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route", "client"})
+# `feeds` is observe's (session.json `next`), not the gate's
+ANNOTATION_KEYS = frozenset({"mode", "tool", "scope", "upstream", "route", "client", "feeds"})
 
 
 @dataclass(frozen=True)

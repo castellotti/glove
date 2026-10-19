@@ -6,6 +6,14 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **observe computes `session.json`'s `next` itself.** Core no longer reads an
+  endpoint's `observe` mapping: the forwarder provider's context gives each
+  forwarder its `endpoint` (what its `forwarder` hook was told, which now
+  includes `target_network` and `listen_networks`), and an endpoint may declare `observe: {feeds:
+  [<egress endpoint>, ...]}` instead of observe inferring it from shared
+  networks. webfetch declares it, replacing the rule that matched gates by
+  `observe.tool`. `next` is unchanged for every in-tree session.
+
 - **`toolchains` is an extension (breaking for session files).** The session
   key `toolchains:` is refused with a pointer; the same list goes under
   `extensions: {toolchains: {blocks: [...]}}` (the `claude-code` template is

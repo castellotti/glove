@@ -817,7 +817,11 @@ harness hop to the egress flows it causes: `search` and `search-mcp` →
 `webdownload-egress`, `browser` → `browser-egress`, `llm` → `llm-upstream` when
 glove injects the key. A skipped egress gate is still listed (`observed:
 false`). It is `[]` for a hop whose target is not a sidecar (`proxy`,
-`github-egress`, `ssh-<name>`) and for the egress forwarders themselves.
+`github-egress`, `ssh-<name>`), for a second hop (`<name>-out`) and for the
+egress forwarders themselves (their target is the egress proxy). observe infers
+it from the networks a hop's target shares with the egress forwarders; an
+endpoint whose sidecar has several names them in `observe: {feeds: [...]}`
+(webfetch's two fetcher hops).
 
 With `transcripts: true`, glove binds `~/.glove/observe/<id>/transcripts/` over
 the harness's transcript directory (Pi `.pi/agent/sessions`, Vibe

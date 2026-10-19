@@ -67,7 +67,7 @@ Legend:
 | `host_files` | bool | | | yes | the hooks read files in the session directory that no other key declares (see [the context](#the-context)) |
 | `validate` | list of `{when, error}` or `{when, require, message}` | items | | | cross-setting rules, checked when the session is planned |
 | `exports` | map | | `add` | | values other extensions and templates read; a slot's are typed ([slot exports](#slot-exports)) |
-| `endpoints` | map name → `{port, target, harness, aliases, listen_networks, observe, interpose}` | entries | `add` | `host_port`, `address` | a forwarder. `target` is one of `service` (+ `network`), `slot`, `host_port`, `address` (+ `via: llm\|wan\|lan`) |
+| `endpoints` | map name → `{port, target, harness, aliases, listen_networks, observe, interpose}` | entries | `add` | `host_port`, `address` | a forwarder. `target` is one of `service` (+ `network`), `slot`, `host_port`, `address` (+ `via: llm\|wan\|lan`). `observe` is the forwarder provider's annotation (observe's gate: `mode`, `tool`, `client`, …; `feeds` names the egress endpoints its target dials out on, when its network has several) |
 | `networks` | map name → `{internal, when}` | entries | | | the extension's own networks; private ones are internal |
 | `services` | path to a compose fragment (Jinja) | in the template | | | its sidecars; core adds the hardening set and refuses security keys |
 | `images` | map name → `{build}` | | | | sidecar images, tagged by content |
@@ -176,7 +176,7 @@ those of the fragment's template context.
 | `session_dir` | the session directory, **only if** the manifest declares a reason: a `path` setting, `mounts`, `outputs`/`inputs`, or `host_files: true` |
 | `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` (a `work` privilege its `contribute` hook returns counts for the hooks after it) |
 | `export_dirs` | the export roots it owns (in-tree only) |
-| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted) |
+| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted); each forwarder's `endpoint` is what its `forwarder` hook was told (none for a second hop) |
 | `enforcer`, `enforcer_options` | the session's enforcer and its options (defaults applied), read-only |
 
 An untrusted out-of-tree extension never gets `session_dir`, `work_dir`,
