@@ -43,7 +43,6 @@ from .runtimes.seccomp import default_profile_path, nested_userns_profile_path
 
 if TYPE_CHECKING:
     from .harnessconfig import ModelDescriptor
-    from .toolchains import Toolchain
 
 FORWARDER_DIR = Path(__file__).parent / "forwarder"
 
@@ -112,8 +111,6 @@ class SessionPlan:
     # Container paths of the extra CAs the harness trusts (corporate_ca's, a
     # channel's `trust`): its NODE_EXTRA_CA_CERTS, and the launch probe's trust.
     trusted_cas: list[str] = field(default_factory=list)
-    # `toolchains`: the validated blocks baked into the derived image ([]: unset).
-    toolchains: list[Toolchain] = field(default_factory=list)
 
     @property
     def project(self) -> str:
@@ -354,7 +351,7 @@ def build_session_plan(
         session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
-        corporate_ca=ca,
+        corporate_ca=ca, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
     )
     own = {h.name for h in comp.host_services}
     cfg.host_services = [*(h for h in cfg.host_services if h.name not in own), *comp.host_services]
@@ -398,20 +395,6 @@ def build_session_plan(
         *(("safe.directory", r) for r in session_roots), *comp.git_config,
         *git_config_pairs(cfg.git_config, "git_config"),
     ])
-    toolchains: list[Toolchain] = []
-    if cfg.toolchains:
-        from . import toolchains as tcs
-
-        # checked at plan time, so `glove check` fails early (every mount
-        # target is /work, /mnt/… or the home: none can shadow tcs.ROOT)
-        toolchains = tcs.resolve(cfg.toolchains, sd_path)
-        for k, v in tcs.harness_env(toolchains).items():
-            if k in comp.harness_env:
-                raise ConfigError(f"toolchains: env {k!r} is also set by an extension")
-            environment.setdefault(k, v)
-    if cfg.enforcer_options["nono"]["browsers"] and not any(tc.browsers for tc in toolchains):
-        raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "
-                          "`toolchains` block bakes `browsers:`; drop the option or add the browsers")
     corporate_ca = str(comp.corporate_ca) if comp.corporate_ca else None
     trusted_cas = list(comp.trusted_cas)
     if corporate_ca:
@@ -453,7 +436,7 @@ def build_session_plan(
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
     base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
     actx = adapter_context(comp, cfg)
-    derived_df, staged = render_dockerfile(base, profile, comp, actx, toolchains)
+    derived_df, staged = render_dockerfile(base, profile, comp, actx)
     derived = content_hash(derived_df, staged) if derived_df is not None else None
     image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
 
@@ -479,7 +462,6 @@ def build_session_plan(
         derived_staged=staged,
         corporate_ca_host_path=corporate_ca,
         trusted_cas=trusted_cas,
-        toolchains=toolchains,
         adapter=actx,
     )
     if plan.model is not None and plan.model.api_key_env:

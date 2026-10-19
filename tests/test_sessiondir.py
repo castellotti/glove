@@ -269,4 +269,4 @@ def test_claude_code_template_plans_once_filled(tmp_path, monkeypatch):
     assert {"direct", "webfetch", "playwright", "github", "relay", "observe", "filter"} <= {a.name for a in comp.active}
     assert comp.by_name("ssh") is None
     assert "/proc" in json.loads(plan.policies["tool.json"])["filesystem"]["read"]  # browsers in shell commands
-    assert [tc["lang"] for tc in cfg.toolchains] == ["python", "node"]
+    assert [tc["lang"] for tc in cfg.extensions["toolchains"]["blocks"]] == ["python", "node"]

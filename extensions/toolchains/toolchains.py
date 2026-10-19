@@ -1,12 +1,12 @@
 """Version-pinned language toolchains baked into the derived harness image.
 
-The session file's optional ``toolchains:`` list declares, per ecosystem, an
-exact runtime version, a package manager from a closed set, and optionally a
-project whose dependencies are installed lockfile-strict. Everything is
-installed at **build time** (the image build has network; the harness at run
-time has none) into the derived image (glove/image.py), so the tag is
-content-addressed by the block and the project's manifest + lockfile — only
-those are baked, so editing the project's source never rebuilds its installs.
+The extension's ``blocks:`` list declares, per ecosystem, an exact runtime
+version, a package manager from a closed set, and optionally a project whose
+dependencies are installed lockfile-strict. Everything is installed at **build
+time** (the image build has network; the harness at run time has none) as
+image layers of the derived image, so its tag is content-addressed by the
+block and the project's manifest + lockfile — only those are baked, so editing
+the project's source never rebuilds its installs.
 
 Two rules shape the layout:
 
@@ -39,20 +39,21 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
-from .config import ConfigError
-from .image import _apt_bootstrap, _q, staged_name
+from glove.api import (
+    ConfigError,
+    apt_bootstrap,
+    existing_host_path,
+    exposes_private,
+    fetch_steps,
+    run_body,
+    tools_run_browsers,
+    uv_steps,
+)
 
 ROOT = "/opt/glove/toolchains"
 BLOCK_KEYS = frozenset({"lang", "version", "manager", "project", "install", "packages", "browsers",
                         "config_files", "install_flags"})
-
-# uv drives Python installs (interpreter, venv, `sync`). Pinned with its release
-# checksums so the build trusts no download it did not expect.
-UV_VERSION = "0.12.22"
-UV_SHA256 = {
-    "x86_64": "b9980552309f09c15172b8be828555e375097f16deb459795ce7bfd200380f0b",
-    "aarch64": "6f66a14e8239871fb477f9746c941fedfa77e8fe28a8bc7c07e1dc7f53a66712",
-}
+Layer = dict[str, Any]  # an image layer (`harness.image`): `run`, `copy_host`, `env`, `stage`
 
 # A package token: a name with an optional version/extras/specifier. Never an
 # option (leading `-`) and never whitespace; quoted on render regardless.
@@ -124,11 +125,6 @@ class Toolchain:
         return f"{ROOT}/{self.lang}"
 
     @property
-    def label(self) -> str:
-        """The build-context directory its project files are staged under."""
-        return f"toolchain-{self.lang}"
-
-    @property
     def project_dir(self) -> str:
         return f"{self.prefix}/project"
 
@@ -159,7 +155,7 @@ class Manager:
 
 
 class Handler:
-    """One ecosystem: validation facts plus block → (image lines by phase, env, PATH, brief)."""
+    """One ecosystem: validation facts plus block → (image layers by phase, env, PATH, brief)."""
 
     lang: str
     version_re: re.Pattern
@@ -168,8 +164,8 @@ class Handler:
     default_manager: str
     browsers: frozenset[str] = frozenset()
 
-    def phases(self, tc: Toolchain) -> tuple[list[str], list[str], list[str]]:
-        """(runtime, global tools, project) Dockerfile lines: rendered phase by
+    def phases(self, tc: Toolchain) -> tuple[list[Layer], list[Layer], list[Layer]]:
+        """(runtime, global tools, project) image layers: rendered phase by
         phase across blocks, so the slow-changing layers come first."""
         raise NotImplementedError
 
@@ -188,49 +184,18 @@ class Handler:
     def install(self, tc: Toolchain, **fields: str) -> str:
         """The project install command (`{…}` fields filled) plus the block's `install_flags`."""
         cmd = self.managers[tc.manager].modes[tc.install].cmd.format(**fields)
-        return f"{cmd} {_q(tc.install_flags)}" if tc.install_flags else cmd
+        return f"{cmd} {shlex.join(tc.install_flags)}" if tc.install_flags else cmd
 
 
-def run_step(prefix: str, *steps: str) -> str:
-    """A build step that leaves everything it wrote under `prefix` readable by
-    the (non-root) harness, touching only what needs it (a blanket `chmod -R`
-    would copy every file of earlier layers up into this one)."""
-    return "RUN " + run_body(prefix, *steps)
+def run_step(prefix: str, *steps: str) -> Layer:
+    """A layer running `steps`, leaving what they wrote under `prefix` readable."""
+    return {"run": [run_body(prefix, *steps)]}
 
 
-def run_body(prefix: str, *steps: str) -> str:
-    """`run_step` without the `RUN` (an extension image layer's `run` item)."""
-    readable = (f"find {prefix} \\( ! -perm -a+r -o -perm /a+x ! -perm -a+x \\) "
-                "-exec chmod a+rX {} +")
-    return " \\\n    && ".join([*steps, readable])
-
-
-def _fetch_steps(arch: dict[str, str], name: str, url: str, verify: str, dest: str, member: str = "") -> list[str]:
-    """Download tarball `name` (`$a`/`$t`/`$s` set per dpkg arch by `arch`)
-    from `url`, check it with `verify`, and unpack it (or one `member`) into `dest`."""
-    cases = " ".join(f"{d}) {v};;" for d, v in arch.items())
-    return [
-        f'case "$(dpkg --print-architecture)" in {cases} '
-        '*) echo "glove toolchains: unsupported architecture" >&2; exit 1;; esac',
-        f'f="{name}" && cd /tmp',
-        f'curl -fsSLO "{url}/$f"',
-        verify,
-        f"mkdir -p {dest}",
-        f'tar -xzf "$f" -C {dest} --strip-components=1 --no-same-owner' + (f' "{member}"' if member else ""),
-        'rm "$f"',
-    ]
-
-
-def uv_steps(prefix: str) -> list[str]:
-    """Build steps: the pinned uv (checksum-verified) into `<prefix>/bin`."""
-    return _fetch_steps({d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
-                        "uv-$t-unknown-linux-gnu.tar.gz",
-                        f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
-                        'echo "$s  $f" | sha256sum -c -', f"{prefix}/bin", member="uv-$t-unknown-linux-gnu/uv")
-
-
-def _copy_project(tc: Toolchain) -> str:
-    return f"COPY {json.dumps([*(staged_name(tc.label, f) for f in tc.project_files), tc.project_dir + '/'])}"
+def _project_layer(tc: Toolchain, *steps: str) -> Layer:
+    """Bake the project's manifest + lockfile (never its tree), then run `steps` there."""
+    return {"copy_host": [[str(f), f"{tc.project_dir}/{f.name}"] for f in tc.project_files],
+            **run_step(tc.prefix, *steps)}
 
 
 class NodeHandler(Handler):
@@ -269,11 +234,11 @@ class NodeHandler(Handler):
     def _global_playwright(self, tc: Toolchain) -> bool:
         return any(p == n or p.startswith(f"{n}@") for p in tc.packages for n in self.PLAYWRIGHT)
 
-    def phases(self, tc: Toolchain) -> tuple[list[str], list[str], list[str]]:
+    def phases(self, tc: Toolchain) -> tuple[list[Layer], list[Layer], list[Layer]]:
         v = tc.version
         rt = self.runtime(tc)
         path = f"export PATH={rt}/bin:$PATH"
-        runtime = [run_step(tc.prefix, *_fetch_steps(
+        runtime = [run_step(tc.prefix, *fetch_steps(
             {"amd64": "a=x64", "arm64": "a=arm64"}, f"node-v{v}-linux-$a.tar.gz", f"https://nodejs.org/dist/v{v}",
             f'curl -fsSL "https://nodejs.org/dist/v{v}/SHASUMS256.txt" | grep " $f\\$" | sha256sum -c -', rt))]
         globals_ = ([f"{tc.manager}@{tc.manager_version or 'latest'}"] if tc.manager != "npm" else []) \
@@ -281,20 +246,19 @@ class NodeHandler(Handler):
         # `<prefix>/lib/node` is in the pinned node's global require path, so `require`
         # finds what it links from any directory: the project's deps, else the global packages
         link = [] if tc.project_spec or not tc.packages else [f"ln -s {rt}/lib/node_modules {rt}/lib/node"]
-        tools = [run_step(tc.prefix, path, f"npm install -g {_NPM_FLAGS} {_q(globals_)}", "rm -rf /tmp/npm-cache",
-                          *link)] if globals_ else []
+        tools = [run_step(tc.prefix, path, f"npm install -g {_NPM_FLAGS} {shlex.join(globals_)}",
+                          "rm -rf /tmp/npm-cache", *link)] if globals_ else []
         project = []
         if tc.project_spec:
-            project += [_copy_project(tc), run_step(tc.prefix, path, f"cd {tc.project_dir}",
-                                                    self.install(tc),
-                                                    "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
-                                                    f"ln -s {tc.project_dir}/node_modules {rt}/lib/node")]
+            project.append(_project_layer(tc, path, f"cd {tc.project_dir}", self.install(tc),
+                                          "rm -rf /tmp/npm-cache /tmp/pnpm-store /tmp/yarn-cache",
+                                          f"ln -s {tc.project_dir}/node_modules {rt}/lib/node"))
         if tc.browsers:
             # --with-deps apt-installs the engines' shared libraries (build runs as root)
             # the project's own playwright when it has one, else the global from `packages`
             cli = f"{tc.project_dir}/node_modules/.bin/playwright" if tc.project_playwright else "playwright"
             project.append(run_step(tc.prefix, path, f"PLAYWRIGHT_BROWSERS_PATH={self.browsers_dir(tc)} "
-                                                     f"{cli} install --with-deps {_q(tc.browsers)}",
+                                                     f"{cli} install --with-deps {shlex.join(tc.browsers)}",
                                     "rm -rf /var/lib/apt/lists/*"))
         return runtime, tools, project
 
@@ -354,7 +318,7 @@ class PythonHandler(Handler):
     def venv(self, tc: Toolchain) -> str:
         return f"{tc.prefix}/venv"
 
-    def phases(self, tc: Toolchain) -> tuple[list[str], list[str], list[str]]:
+    def phases(self, tc: Toolchain) -> tuple[list[Layer], list[Layer], list[Layer]]:
         p = tc.prefix
         venv = self.venv(tc)
         fields = {"uv": f"{p}/bin/uv", "py": f"{venv}/bin/python", "v": shlex.quote(tc.version)}
@@ -369,9 +333,9 @@ class PythonHandler(Handler):
         manager = self.managers[tc.manager]
         project = []
         if tc.project_files:
-            project += [_copy_project(tc), run_step(p, env, f"cd {tc.project_dir}", self.install(tc, **fields))]
+            project.append(_project_layer(tc, env, f"cd {tc.project_dir}", self.install(tc, **fields)))
         if tc.packages:  # after the project: `uv sync` is exact and would remove them
-            project.append(run_step(p, env, manager.add.format(**fields, pkgs=_q(tc.packages))))
+            project.append(run_step(p, env, manager.add.format(**fields, pkgs=shlex.join(tc.packages))))
         return runtime, [], project
 
     def path(self, tc: Toolchain) -> list[str]:
@@ -421,7 +385,7 @@ def _credential(path: Path) -> str | None:
 
 
 def _parse_block(i: int, raw: Any) -> Toolchain:
-    where = f"toolchains[{i}]"
+    where = f"blocks[{i}]"
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: must be a mapping (lang, version, manager, …)")
     unknown = sorted(set(raw) - BLOCK_KEYS)
@@ -431,7 +395,7 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
     h = HANDLERS.get(lang) if isinstance(lang, str) else None
     if h is None:
         raise ConfigError(f"{where}: `lang` must be one of {sorted(HANDLERS)}, got {lang!r}")
-    where = f"toolchains[{i}] ({lang})"
+    where = f"blocks[{i}] ({lang})"
     version = raw.get("version")
     if isinstance(version, int | float) and not isinstance(version, bool):
         raise ConfigError(f"{where}: quote `version` (YAML reads {version!r} as a number): \"{version}\"")
@@ -496,14 +460,14 @@ def _parse_block(i: int, raw: Any) -> Toolchain:
 
 
 def parse(raw: list | None) -> list[Toolchain]:
-    """The blocks (Config has checked it is a list), validated without touching
-    the filesystem (`project` unresolved)."""
+    """The blocks (the setting is a list), validated without touching the
+    filesystem (`project` unresolved)."""
     blocks = [_parse_block(i, b) for i, b in enumerate(raw or [])]
     seen: dict[str, int] = {}
     for i, tc in enumerate(blocks):
         if tc.lang in seen:
-            raise ConfigError(f"toolchains[{i}]: a second `lang: {tc.lang}` block (the first is "
-                              f"toolchains[{seen[tc.lang]}]); both would install into {tc.prefix} and set the "
+            raise ConfigError(f"blocks[{i}]: a second `lang: {tc.lang}` block (the first is "
+                              f"blocks[{seen[tc.lang]}]); both would install into {tc.prefix} and set the "
                               "same PATH/env")
         seen[tc.lang] = i
     return blocks
@@ -529,15 +493,12 @@ def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
     the session dir, symlinks), is a directory exposing no private path, and has
     the files its install mode needs plus its `config_files` — regular files,
     which are what is baked, and never a config file carrying a credential."""
-    from .mounts import existing_host_path
-    from .sessiondir import exposes_private
-
     out = []
     for i, tc in enumerate(parse(raw)):
         if tc.project_spec is None:
             out.append(tc)
             continue
-        where = f"toolchains[{i}] ({tc.lang}) project"
+        where = f"blocks[{i}] ({tc.lang}) project"
         try:
             project = existing_host_path(session_dir, tc.project_spec, "dir")
         except ValueError as e:
@@ -571,7 +532,7 @@ def resolve(raw: list | None, session_dir: Path | None) -> list[Toolchain]:
             files.append(found)
         tc = replace(tc, project=project, project_files=tuple(files),
                      project_playwright=tc.lang == "node" and _depends_on_playwright(project))
-        h.check(tc, f"toolchains[{i}] ({tc.lang})")
+        h.check(tc, f"blocks[{i}] ({tc.lang})")
         out.append(tc)
     return out
 
@@ -591,30 +552,23 @@ def harness_env(blocks: Sequence[Toolchain]) -> dict[str, str]:
     return out
 
 
-def dockerfile_lines(blocks: Sequence[Toolchain]) -> tuple[list[str], list[tuple[str, Path]]]:
-    """(Dockerfile lines, [(label, staged project file)]) for the derived image:
-    every block's runtime, then their global tools, then their project installs,
-    so bumping a lockfile never re-downloads a runtime."""
-    lines = [f"# toolchains: {', '.join(f'{tc.lang} {tc.version}' for tc in blocks)}",
-             _apt_bootstrap("curl", ("ca-certificates", "curl"))]
+def image_layers(blocks: Sequence[Toolchain]) -> list[Layer]:
+    """The derived image's layers, all `stage: late` (after every other
+    extension's, so their PATH never affects another build step): every
+    block's runtime, then their global tools, then their project installs, so
+    bumping a lockfile never re-downloads a runtime; then the PATH."""
     phases = [HANDLERS[tc.lang].phases(tc) for tc in blocks]
-    for n in range(3):
-        for tc, ph in zip(blocks, phases, strict=True):
-            if n == 0:
-                lines.append(f"# toolchain: {tc.lang} {tc.version} ({tc.manager}"
-                             + (f", install: {tc.install}" if tc.install else "") + ")")
-            lines += ph[n]
-    lines.append(f"ENV PATH={':'.join(path_entries(blocks))}:$PATH")
-    return lines, [(tc.label, f) for tc in blocks for f in tc.project_files]
+    layers = [{"run": [apt_bootstrap("curl", ("ca-certificates", "curl"))]},
+              *(layer for n in range(3) for ph in phases for layer in ph[n]),
+              {"env": {"PATH": f"{':'.join(path_entries(blocks))}:$PATH"}}]
+    return [{**layer, "stage": "late"} for layer in layers]
 
 
-def brief(blocks: Sequence[Toolchain], enforcer: str, options: dict[str, dict]) -> str:
+def brief(blocks: Sequence[Toolchain], enforcer: str, options: Any) -> str:
     """The context-file section telling the agent what is baked in (`options`:
     the session's normalized `enforcer_options`)."""
-    from .enforcers import tools_run_browsers
-
     browsers_ok = tools_run_browsers(enforcer, options)
-    lines = ["## Toolchains", "",
+    lines = ["### Toolchains", "",
              "Baked into this image at build time (shell commands have no network, so nothing can be "
              f"installed now). Everything lives under `{ROOT}` (read-only):", ""]
     for tc in blocks:

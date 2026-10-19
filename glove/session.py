@@ -119,8 +119,7 @@ def build_harness(
         ctx_dir = Path(ctx)
         stage_context(ctx_dir, staged)
         (ctx_dir / "Dockerfile").write_text(dockerfile)
-        names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}
-                                 | {tc.label for tc in plan.toolchains}))
+        names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}))
         console.print(f"[bold]composing extension image[/bold] {final_tag}  (extensions: {names})")
         subprocess.run(
             [provider, "build", "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir)],

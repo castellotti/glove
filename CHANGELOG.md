@@ -6,6 +6,20 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`toolchains` is an extension (breaking for session files).** The session
+  key `toolchains:` is refused with a pointer; the same list goes under
+  `extensions: {toolchains: {blocks: [...]}}` (the `claude-code` template is
+  updated). Its layers are `stage: late`, so the image keeps its layer order;
+  a project's manifest and lockfile are now baked like any extension's
+  `copy_host`, so a project under a read-write mount (`/work` included) is
+  refused. `enforcer_options.nono.browsers` without a block that bakes
+  `browsers:` is refused only when the extension is selected; `glove plan`
+  shows the enforcer options not at their defaults. For extension authors: an
+  image layer may set `env` (image `ENV`) and `stage: late`, a `contribute`
+  hook may return a `brief` (plain text), the hook context has `enforcer` and
+  `enforcer_options`, and `glove.api` adds `fetch_steps`, `exposes_private` and
+  `tools_run_browsers`.
+
 - **Extensions speak `api: 2` (breaking for out-of-tree extensions and
   adapters).** A manifest says `api: 2`; `api: 1` is refused with a pointer to
   the new author's guide, [docs/extensions.md](docs/extensions.md). Hooks are marked `@hook` from `glove.api` and get a read-only

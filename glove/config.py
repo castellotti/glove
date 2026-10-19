@@ -105,11 +105,6 @@ class Config:
     # install them at runtime). Changing these yields a distinct image tag.
     apt_packages: list[str] = field(default_factory=list)
     pip_packages: list[str] = field(default_factory=list)
-    # Version-pinned language toolchains (glove/toolchains.py): each block is a
-    # mapping {lang, version, manager, project, install, packages, browsers,
-    # config_files, install_flags}, validated by the planner and baked into the
-    # derived image. Empty: nothing.
-    toolchains: list[dict[str, Any]] = field(default_factory=list)
     # Resource bounds (ring 0) and the ring-1 tool policy knobs.
     limits: Limits = field(default_factory=Limits)
     tools: dict[str, Any] = field(default_factory=dict)
@@ -316,11 +311,6 @@ def _coerce(data: dict[str, Any]) -> Config:
     ]
 
     limits_raw = data.pop("limits", None)
-    if data.get("toolchains") is None:
-        data.pop("toolchains", None)
-    elif not isinstance(data["toolchains"], list):
-        raise ConfigError("`toolchains` must be a list of blocks ({lang, version, manager, …})")
-
     known = set(Config.__dataclass_fields__)
     unknown = set(data) - known
     if unknown:

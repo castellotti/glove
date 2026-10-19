@@ -64,6 +64,8 @@ class HookContext:
     export_dirs: Mapping[str, Path] = _EMPTY  # the in-tree owner of an export root
     forwarders: tuple[Mapping[str, Any], ...] = ()  # the forwarder slot's provider, once planned
     grants: Mapping[str, Any] = _EMPTY
+    enforcer: str = ""  # the session's, and its normalized `enforcer_options`
+    enforcer_options: Mapping[str, Any] = _EMPTY
 
     def __post_init__(self) -> None:
         for f in fields(self):

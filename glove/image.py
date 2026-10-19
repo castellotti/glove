@@ -12,10 +12,11 @@ the image".
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shlex
 import shutil
-from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -24,18 +25,18 @@ from .harness import HarnessProfile, adapter_call
 if TYPE_CHECKING:
     from .extensions import Composition
     from .harnessconfig import AdapterContext
-    from .toolchains import Toolchain
 
-LAYER_KEYS = frozenset({"apt", "pip", "npm", "copy", "copy_host", "run"})
+LAYER_KEYS = frozenset({"apt", "pip", "npm", "copy", "copy_host", "run", "env", "stage"})
 # Never staged or hashed: host build output and caches (a host node_modules or
 # .venv is the wrong OS/arch, and would poison the content hash), and macOS's
 # Finder metadata.
 STAGE_IGNORE = ("node_modules", "__pycache__", ".venv", ".git", ".DS_Store")
+ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*\Z")  # an env name glove renders (image ENV, harness env)
 
 
 def _q(pkgs) -> str:
     """Shell-quote package tokens (pip version specifiers carry `<`/`>`/`;`)."""
-    return " ".join(shlex.quote(str(p)) for p in pkgs)
+    return shlex.join(map(str, pkgs))
 
 
 def _apt_bootstrap(probe: str, pkgs) -> str:
@@ -50,6 +51,47 @@ def apt_bootstrap(probe: str, pkgs) -> str:
             "&& rm -rf /var/lib/apt/lists/*)")
 
 
+def run_body(prefix: str, *steps: str) -> str:
+    """A `run` item that leaves everything it wrote under `prefix` readable by
+    the (non-root) harness, touching only what needs it (a blanket `chmod -R`
+    would copy every file of earlier layers up into this one)."""
+    readable = (f"find {prefix} \\( ! -perm -a+r -o -perm /a+x ! -perm -a+x \\) "
+                "-exec chmod a+rX {} +")
+    return " \\\n    && ".join([*steps, readable])
+
+
+def fetch_steps(arch: dict[str, str], name: str, url: str, verify: str, dest: str, member: str = "") -> list[str]:
+    """Build steps: download tarball `name` (`$a`/`$t`/`$s` set per dpkg arch by
+    `arch`) from `url`, check it with `verify`, and unpack it (or one `member`) into `dest`."""
+    cases = " ".join(f"{d}) {v};;" for d, v in arch.items())
+    return [
+        f'case "$(dpkg --print-architecture)" in {cases} '
+        '*) echo "glove: unsupported architecture" >&2; exit 1;; esac',
+        f'f="{name}" && cd /tmp',
+        f'curl -fsSLO "{url}/$f"',
+        verify,
+        f"mkdir -p {dest}",
+        f'tar -xzf "$f" -C {dest} --strip-components=1 --no-same-owner' + (f' "{member}"' if member else ""),
+        'rm "$f"',
+    ]
+
+
+# uv, pinned with its release checksums so the build trusts no download it did not expect.
+UV_VERSION = "0.12.22"
+UV_SHA256 = {
+    "x86_64": "b9980552309f09c15172b8be828555e375097f16deb459795ce7bfd200380f0b",
+    "aarch64": "6f66a14e8239871fb477f9746c941fedfa77e8fe28a8bc7c07e1dc7f53a66712",
+}
+
+
+def uv_steps(prefix: str) -> list[str]:
+    """Build steps: the pinned uv (checksum-verified) into `<prefix>/bin`."""
+    return fetch_steps({d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
+                       "uv-$t-unknown-linux-gnu.tar.gz",
+                       f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
+                       'echo "$s  $f" | sha256sum -c -', f"{prefix}/bin", member="uv-$t-unknown-linux-gnu/uv")
+
+
 def staged_name(ext: str, src: Path) -> str:
     """Build-context path a source is staged at, namespaced by extension."""
     return f"{ext}/{src.name}"
@@ -60,10 +102,14 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile,
     """(Dockerfile lines, [(label, staged source)]) for one layer. A `copy`
     source is a path inside the extension; a `copy_host` source (only from a
     `contribute` hook: a manifest's is refused) an absolute host path the hook
-    checked, staged under `<ext><its destination's parent>`."""
+    checked, staged under `<ext><its destination's parent>`; `env` image ENV
+    lines (Docker expands `$VAR` in a value, so one may extend another:
+    `$PATH`). `stage: late`: see `render_dockerfile`."""
     unknown = set(layer) - LAYER_KEYS
     if unknown:
         raise ValueError(f"extension {ext!r}: unknown image layer keys {sorted(unknown)}")
+    if layer.get("stage") not in (None, "late"):
+        raise ValueError(f"extension {ext!r}: image layer `stage` is `late` or unset, got {layer['stage']!r}")
     lines: list[str] = []
     sources: list[tuple[str, Path]] = []
     if layer.get("apt"):
@@ -97,32 +143,44 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile,
         lines.append(f"COPY {staged_name(label, path)} {dst}")
     for cmd in layer.get("run") or []:
         lines.append(f"RUN {cmd}")
+    for k, v in (layer.get("env") or {}).items():
+        if not ENV_VAR.fullmatch(str(k)) or "\n" in str(v):
+            raise ValueError(f"extension {ext!r}: image env {k!r}: a name, and a value on one line")
+        lines.append(f"ENV {k}={json.dumps(str(v), ensure_ascii=False)}")
     return lines, sources
+
+
+def _stage(layer: dict) -> int:
+    """0: early, 1: `stage: late`, 2: copies a host tree."""
+    return 1 if layer.get("stage") else 2 if layer.get("copy_host") else 0
 
 
 def render_dockerfile(
     base_tag: str, profile: HarnessProfile, comp: Composition, actx: AdapterContext,
-    toolchains: Sequence[Toolchain] = (),
 ) -> tuple[str | None, list[tuple[str, Path]]]:
     """(Dockerfile text, [(ext, staged source)]) for the derived image: the
-    extensions' contributions, the session's `toolchains` (after them, so
-    their PATH never affects an extension's build step), the layers that copy
-    host trees (a user's checkouts change often: an edit rebuilds nothing
-    else), then the `corporate_ca` bundle (last: a new CA rebuilds no
+    extensions' contributions, their late ones (`stage: late`, e.g. the
+    toolchains, whose PATH never affects an earlier build step), the layers
+    that copy host trees (a user's checkouts change often: an edit rebuilds
+    nothing else), then the `corporate_ca` bundle (last: a new CA rebuilds no
     toolchain layer). (None, []) when nothing contributes: the session runs
     the base image."""
     lines = [f"# Generated by glove — derived image: {base_tag} + extensions.", f"FROM {base_tag}"]
     staged: list[tuple[str, Path]] = []
 
-    def extension_layers(host: bool) -> None:
+    env_set: dict[str, str] = {}  # image ENV name → the extension setting it
+
+    def extension_layers(stage: int) -> None:
         for ext, layer in comp.image_layers:
-            if bool(layer.get("copy_host")) == host:
+            if _stage(layer) == stage:
+                if both := sorted(k for k in layer.get("env") or {} if env_set.setdefault(k, ext) != ext):
+                    raise ValueError(f"extension {ext!r}: image env {both} is already set by another extension")
                 lines.append(f"# extension: {ext}")
                 body, sources = _layer_lines(ext, layer, profile, comp.by_name(ext).manifest.path)
                 lines.extend(body)
                 staged.extend(sources)
 
-    extension_layers(host=False)
+    extension_layers(0)
     # the harness's own image contributions (e.g. Pi's `-e` extensions)
     body, sources = adapter_call(profile, "image_lines", actx, default=([], []))
     lines += body
@@ -132,13 +190,8 @@ def render_dockerfile(
             staged.append((ext, src))
             lines.append(f"# extension: {ext} (skill)")
             lines.append(f"COPY {staged_name(ext, src)} {dest}")
-    if toolchains:
-        from .toolchains import dockerfile_lines
-
-        body, sources = dockerfile_lines(toolchains)
-        lines += body
-        staged += sources
-    extension_layers(host=True)
+    extension_layers(1)
+    extension_layers(2)
     if comp.corporate_ca is not None:  # validated (glove/cafile.py): certificates only
         from .cafile import CA_BUNDLE_PATH, SYSTEM_ROOTS
 

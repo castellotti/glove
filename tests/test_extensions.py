@@ -521,6 +521,52 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     assert "Pillow" in plan2.derived_dockerfile
 
 
+def test_an_image_layer_sets_env_and_may_be_late(tmp_path):
+    from glove.harness import get_profile
+    from glove.image import _layer_lines
+
+    def lines(layer):
+        return _layer_lines("e", layer, get_profile("pi"), tmp_path)[0]
+
+    assert lines({"env": {"PATH": "/opt/x/bin:$PATH"}, "stage": "late"}) == ['ENV PATH="/opt/x/bin:$PATH"']
+    assert lines({"env": {"GREETING": "café"}, "stage": None}) == ['ENV GREETING="café"']  # null: unset
+    for bad in ({"lower": "x"}, {"A": "x\nRUN id"}):
+        with pytest.raises(ValueError, match="image env"):
+            lines({"env": bad})
+    with pytest.raises(ValueError, match="`stage` is `late` or unset"):
+        lines({"run": ["true"], "stage": "early"})
+
+
+def test_an_image_env_name_is_set_by_one_extension(tree):
+    for name in ("a", "b"):
+        _ext(tree, name, f"api: 2\nname: {name}\nsummary: x\nharness:\n  image:\n    '*': {{env: {{PATH: /{name}}}}}\n")
+    comp = compose({"llm": STUB_LLM, "a": {}, "b": {}}, harness="pi", session="s", state_root=Path("/x"),
+                   manifests=discover(tree))
+    from glove.harness import get_profile
+    from glove.image import render_dockerfile
+
+    with pytest.raises(ValueError, match=r"image env \['PATH'\] is already set by another extension"):
+        render_dockerfile("base", get_profile("pi"), comp, None)
+
+
+def test_a_hook_cannot_change_the_enforcer_options(tree):
+    hooks = ('from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n'
+             '    ctx.enforcer_options["nono"]["browsers"] = True\n')
+    _ext(tree, "e", "api: 2\nname: e\nsummary: x\nhooks: hooks.py\n", {"hooks.py": hooks})
+    with pytest.raises(TypeError):
+        compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=discover(tree))
+
+
+def test_a_contributed_brief_is_its_text_not_a_template(tree):
+    hooks = ('from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n'
+             '    return {"harness": {"brief": "- {{ settings.x }} stays as written."}}\n')
+    _ext(tree, "e", "api: 2\nname: e\nsummary: x\nhooks: hooks.py\n", {"hooks.py": hooks})
+    comp = compose({"llm": STUB_LLM, "e": {}}, harness="pi", session="s", state_root=Path("/x"),
+                   manifests=discover(tree))
+    assert ("e", "- {{ settings.x }} stays as written.") in comp.rendered_briefs()
+
+
 def test_config_error_is_an_extension_error():
     assert issubclass(ExtensionError, ConfigError)
 

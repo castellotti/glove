@@ -86,8 +86,10 @@ Legend:
 
 ### `harness:`
 
-- `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`. Only a hook's
-  layers may `copy_host`.
+- `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`, `env` (image
+  `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`). Only a hook's
+  layers may `copy_host`. Layers render in extension order, then those with
+  `stage: late` (e.g. the toolchains), then those that `copy_host`.
 - `env`: `{VAR: value}` or `{VAR: {value, when, shell: false}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
@@ -99,7 +101,7 @@ Legend:
   adapter reads. Core renders it, applying `when:`, before the adapter sees it.
 
 A `contribute` hook's `harness:` may hold `image`, `env`, `skills` (container
-paths) and `mcp`.
+paths), `mcp` and `brief` (its text, taken as is: not a template).
 
 ### Hook-only keys
 
@@ -175,6 +177,7 @@ those of the fragment's template context.
 | `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` (a `work` privilege its `contribute` hook returns counts for the hooks after it) |
 | `export_dirs` | the export roots it owns (in-tree only) |
 | `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted) |
+| `enforcer`, `enforcer_options` | the session's enforcer and its options (defaults applied), read-only |
 
 An untrusted out-of-tree extension never gets `session_dir`, `work_dir`,
 `export_dirs`, `forwarders` or `grants`. **This is hygiene, not a sandbox.** A
@@ -232,9 +235,10 @@ signatures, so a change is deliberate.
 | errors | `ConfigError`, `ExtensionError` (a `ConfigError`; both print as one line) |
 | the hook protocol | `HookContext`, `hook` |
 | secrets (values stay in memory) | `resolve_secret`, `is_secret_ref`, `keychain_service`, `keychain_set`, `is_secret_env_name` |
-| host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `resolve_ca_file` |
+| host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `exposes_private` (a path the harness must never see, e.g. `.glove/`), `resolve_ca_file` |
 | naming | `scoped(session_id, name)` (`glove-<id>-<name>`, a container, network or volume of the session), `HOST_GLOB` |
-| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `uv_steps` |
+| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_steps` |
+| the session's enforcer | `tools_run_browsers(enforcer, options)` (can Chromium start in a shell command?) |
 | rendering, with core's checks | `render_value`, `active_items`, `tool_names`, `mcp_server` |
 | an extension's CLI | `ext_session`, `ExtSession`, `reload_sidecar` |
 

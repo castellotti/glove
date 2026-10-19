@@ -311,9 +311,18 @@ def plan_cmd(
                                                            overrides=frozenset(iknow))
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise _fail(str(e)) from e
+    import json
+
+    from .enforcers import OPTION_SECTIONS
+
+    # the options of the enforcer's own sections not at their defaults (nono.browsers widens ring 1: /proc)
+    changed = ", ".join(f"{e}.{k}: {json.dumps(v)}" for e, opts in cfg.enforcer_options.items()
+                        if e in cfg.enforcer.split("+")
+                        for k, v in opts.items() if v != OPTION_SECTIONS[e][k]["default"])
     console.print(
         f"[bold]session:[/bold] {sid}  [bold]dir:[/bold] {sd.root}  [bold]harness:[/bold] {cfg.harness}  "
-        f"[bold]enforcer:[/bold] {cfg.enforcer}  [bold]subnet:[/bold] {cfg.subnet or '-'}")
+        f"[bold]enforcer:[/bold] {cfg.enforcer}{f' ({changed})' if changed else ''}  "
+        f"[bold]subnet:[/bold] {cfg.subnet or '-'}")
     console.print(f"[dim]compose project written to {sd.compose}[/dim]")
     if compose:
         console.print()

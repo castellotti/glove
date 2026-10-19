@@ -131,7 +131,7 @@ def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
     """`enforcer_options: {nono: {browsers: true}}`: Chromium needs /proc in the tool
     profile (read-only); off by default, and the harness side is unchanged."""
     def policies(**kw):
-        return _plan(tmp_path, enforcer=enforcer, toolchains=[CHROMIUM], **kw).policies
+        return _plan(tmp_path, enforcer=enforcer, extensions={"toolchains": {"blocks": [CHROMIUM]}}, **kw).policies
 
     off, on = policies(), policies(enforcer_options={"nono": {"browsers": True}})
     assert "/proc" not in json.loads(off["tool.json"])["filesystem"]["read"]
@@ -154,12 +154,6 @@ def test_browsers_option_grants_proc_to_commands_only(tmp_path, enforcer):
 def test_enforcer_options_are_checked_under_every_enforcer(tmp_path, enforcer, options, match):
     with pytest.raises(ConfigError, match=match):
         _plan(tmp_path, enforcer=enforcer, enforcer_options=options)
-
-
-def test_browsers_without_baked_browsers_is_refused(tmp_path):
-    # /proc for a Chromium no toolchain bakes: a grant with nothing to use it
-    with pytest.raises(ConfigError, match="no `toolchains` block bakes `browsers:`"):
-        _plan(tmp_path, enforcer_options={"nono": {"browsers": True}})
 
 
 def test_enforcer_options_are_filled_with_the_defaults(tmp_path):

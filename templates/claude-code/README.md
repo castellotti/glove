@@ -18,9 +18,10 @@ glove check && glove up
   `api_key` at another Keychain service and relaunch.
 - **GitHub.** Use a fine-grained token scoped to the repositories this session
   works on. `extensions/github/README.md` lists what is relayed and refused.
-- **Shell commands are offline.** The toolchains are baked at build time, so add
-  what a project needs there (or `project:` for its lockfile). Local Playwright
-  works from a shell command because of `enforcer_options: {nono: {browsers:
-  true}}`; README "Toolchains" says what that opens.
+- **Shell commands are offline.** The `toolchains` extension's blocks are baked
+  at build time, so add what a project needs there (or `project:` for its
+  lockfile). Local Playwright works from a shell command because of
+  `enforcer_options: {nono: {browsers: true}}`; `extensions/toolchains/README.md`
+  says what that opens.
 - **ssh** to LAN hosts is commented out; `extensions/ssh/README.md` explains the
   key and `known_hosts`.

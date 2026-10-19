@@ -1,0 +1,12 @@
+api: 2
+name: toolchains
+summary: Version-pinned language toolchains (Node, Python) and their project dependencies, baked into the harness image at build time.
+settings:
+  # [{lang, version, manager, project, install, packages, browsers, config_files,
+  # install_flags}] — see README.md. Order is install and PATH order; one block per lang.
+  blocks: { type: list, default: [] }
+# contribute: check each block (and its project, relative to the session dir) and
+# return its image layers, env and brief
+hooks: hooks.py
+# its hook reads each block's project (session dir)
+host_files: true

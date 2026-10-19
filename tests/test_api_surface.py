@@ -15,7 +15,7 @@ API = {
     "ExtensionError": "class(ConfigError)",
     "HookContext": "dataclass(name, settings, harness, renders, trusted, session, names, slot, endpoint, "
                    "own_endpoints, active, state_dir, assets, images, libs, mount, output, input, session_dir, "
-                   "work_dir, export_dirs, forwarders, grants)",
+                   "work_dir, export_dirs, forwarders, grants, enforcer, enforcer_options)",
     "hook": "(fn: 'Callable') -> 'Callable'",
     "is_secret_env_name": "(name: 'str') -> 'bool'",
     "is_secret_ref": "(value: 'str') -> 'bool'",
@@ -23,6 +23,7 @@ API = {
     "keychain_set": "(service: 'str', secret: 'str | None' = None) -> 'int'",
     "resolve_secret": "(value: 'str') -> 'str'",
     "existing_host_path": "(root: 'Path | None', value: 'str', kind: 'str') -> 'Path'",
+    "exposes_private": "(root: 'Path | None', host: 'Path') -> 'tuple[Path, str] | None'",
     "host_path": "(root: 'Path | None', value: 'str') -> 'Path'",
     "overlaps": "(a: 'Path', b: 'Path') -> 'bool'",
     "resolve_ca_file": "(label: 'str', value: 'object', session_dir: 'Path | None') -> 'Path'",
@@ -30,8 +31,11 @@ API = {
     "scoped": "(session: 'str', name: 'str') -> 'str'",
     "STAGE_IGNORE": "tuple",
     "apt_bootstrap": "(probe: 'str', pkgs) -> 'str'",
+    "fetch_steps": "(arch: 'dict[str, str]', name: 'str', url: 'str', verify: 'str', dest: 'str', "
+                   "member: 'str' = '') -> 'list[str]'",
     "run_body": "(prefix: 'str', *steps: 'str') -> 'str'",
     "uv_steps": "(prefix: 'str') -> 'list[str]'",
+    "tools_run_browsers": "(enforcer: 'str', options: 'dict[str, dict[str, Any]]') -> 'bool'",
     "active_items": "(items: 'list | None', ctx: 'dict[str, Any]') -> 'list'",
     "mcp_server": "(where: 'str', item: 'Any') -> 'dict[str, Any]'",
     "render_value": "(value: 'Any', ctx: 'dict[str, Any]', where: 'str' = '') -> 'Any'",
