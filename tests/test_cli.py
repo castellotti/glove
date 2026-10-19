@@ -126,18 +126,16 @@ def test_plan_renders_under_dot_glove(home, tmp_path, monkeypatch):
     assert base == f"http://glove-{sid}-llm:8080/v1"
 
 
-def test_plan_shows_the_enforcer_options_off_their_defaults(home, tmp_path):
-    plain = runner.invoke(app, ["plan", str(make_session(tmp_path / "a"))], env={"COLUMNS": "300"})
-    assert plain.exit_code == 0 and "enforcer: nono+srt  subnet" in plain.output
-    d = make_session(tmp_path / "b", "enforcer_options: {nono: {browsers: true}}\n")
-    result = runner.invoke(app, ["plan", str(d)], env={"COLUMNS": "300"})
-    assert result.exit_code == 0, result.output
-    assert "enforcer: nono+srt (nono.browsers: true)  subnet" in result.output
+@pytest.mark.parametrize(("body", "shown"), [
+    ("", "enforcer: nono+srt  subnet"),
+    ("enforcer_options: {nono: {browsers: true}}\n", "enforcer: nono+srt (nono.browsers: true)  subnet"),
     # a section the enforcer never applies is not in effect, so not shown
-    d = make_session(tmp_path / "c", "enforcer: srt\nenforcer_options: {nono: {browsers: true}}\n")
-    result = runner.invoke(app, ["plan", str(d)], env={"COLUMNS": "300"})
+    ("enforcer: srt\nenforcer_options: {nono: {browsers: true}}\n", "enforcer: srt  subnet"),
+])
+def test_plan_shows_the_enforcer_options_off_their_defaults(home, tmp_path, body, shown):
+    result = runner.invoke(app, ["plan", str(make_session(tmp_path / "s", body))], env={"COLUMNS": "300"})
     assert result.exit_code == 0, result.output
-    assert "enforcer: srt  subnet" in result.output
+    assert shown in result.output
 
 
 def test_two_sessions_get_distinct_ids_projects_and_subnets(home, tmp_path):

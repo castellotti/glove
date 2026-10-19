@@ -12,7 +12,7 @@ from . import toolchains as tcs  # its `resolve` would read as the hook of that 
 
 @hook
 def contribute(ctx: HookContext) -> dict[str, Any]:
-    blocks = tcs.resolve(ctx.settings.get("blocks"), ctx.session_dir)
+    blocks = tcs.resolve(ctx.settings["blocks"], ctx.session_dir)
     # the grant widens ring 1 for Chromium only: never without a browser to start
     if ctx.enforcer_options["nono"]["browsers"] and not any(tc.browsers for tc in blocks):
         raise ConfigError("enforcer_options.nono.browsers grants shell commands /proc for Chromium, but no "

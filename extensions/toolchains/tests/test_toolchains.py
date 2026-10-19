@@ -528,15 +528,13 @@ def test_the_browsers_grant_needs_a_browser(tmp_path):
     _plan(tmp_path, enforcer_options=grant)
 
 
-@pytest.mark.parametrize("toolchains", [[], [PY]])
-def test_vibe_hook_always_runs_on_the_image_python(tmp_path, toolchains):
-    plan = _plan(tmp_path, harness="vibe", blocks=toolchains)
-    cfg = _cfg(tmp_path, harness="vibe", blocks=toolchains)
+@pytest.mark.parametrize("blocks", [[], [PY]])
+def test_vibe_hook_always_runs_on_the_image_python(tmp_path, blocks):
+    plan = _plan(tmp_path, harness="vibe", blocks=blocks)
+    cfg = _cfg(tmp_path, harness="vibe", blocks=blocks)
     render_home(cfg, plan, tmp_path / "home")
     hooks = (tmp_path / "home" / ".vibe" / "hooks.toml").read_text()
     assert 'command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks
-
-
 
 
 def test_glove_check_composes_the_toolchains_with_the_sessions_enforcer(tmp_path):

@@ -109,11 +109,11 @@ def run_teardown(sd: sdm.SessionDir, sid: str, runtime: str, given: Mapping[str,
         return [f"teardown hooks skipped: {e}"]
     warnings = []
     for name, raw in given.items():
-        if (m := found.get(name)) is None:
+        if (m := found.get(name)) is None or m.hooks_path is None:
             continue
         try:
             s = _session(sd, sid, runtime, m, raw)
-            fn = hooks_of(s.hooks, name).get("teardown") if s.hooks else None
+            fn = hooks_of(s.hooks, name).get("teardown")
             if fn is not None:
                 validate_result("teardown", name, fn(s.context()))
         except Exception as e:  # likewise

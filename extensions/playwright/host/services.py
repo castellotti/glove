@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from glove.api import scoped
+
 READY_TIMEOUT = 60.0  # seconds to wait for a service's port
 LOGS = "host-logs"  # in the extension's state dir: logs and pids without tmux
 
@@ -35,7 +37,7 @@ def _port_open(port: int) -> bool:
 
 
 def _tmux(session: str, name: str) -> str:
-    return f"glove-{session}-host-playwright-{name}"
+    return scoped(session, f"host-playwright-{name}")
 
 
 def _ready(port: int) -> bool:
@@ -79,18 +81,18 @@ def stop(services: list[Service], session: str, state_dir: Path) -> None:
     """Stop the services glove started, except the kept ones (a no-op for one not running)."""
     have_tmux = shutil.which("tmux") is not None
     for svc in services:
-        name = svc.name
         if svc.keep:
-            print(f"  • playwright {name}: keep_browser, left running")
+            print(f"  • playwright {svc.name}: keep_browser, left running")
             continue
-        stopped = have_tmux and subprocess.run(["tmux", "kill-session", "-t", _tmux(session, name)],
+        stopped = have_tmux and subprocess.run(["tmux", "kill-session", "-t", _tmux(session, svc.name)],
                                                capture_output=True, check=False).returncode == 0
         # (the second: a launch before round 16, core's `.glove/host-logs`)
-        for pidfile in (state_dir / LOGS / f"{name}.pid", state_dir.parents[1] / LOGS / f"playwright-{name}.pid"):
+        old = state_dir.parents[1] / LOGS / f"playwright-{svc.name}.pid"
+        for pidfile in (state_dir / LOGS / f"{svc.name}.pid", old):
             if pidfile.exists():
                 with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
                     os.killpg(os.getpgid(int(pidfile.read_text())), 15)
                     stopped = True
                 pidfile.unlink(missing_ok=True)
         if stopped:
-            print(f"  • playwright {name}: stopped")
+            print(f"  • playwright {svc.name}: stopped")

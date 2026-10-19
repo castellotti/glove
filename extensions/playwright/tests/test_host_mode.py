@@ -37,11 +37,19 @@ def _ports(plan):
     return hs["mcp"].port, hs["chrome"].port
 
 
+def _launched(tmp_path, ports='{"mcp": 40001, "cdp": 40002}'):
+    """A session dir host mode launched in (its recorded ports)."""
+    sd = sdm.SessionDir(tmp_path)
+    (sd.ext / "playwright").mkdir(parents=True, exist_ok=True)
+    (sd.ext / "playwright" / "host-ports.json").write_text(ports + "\n")
+    return sd
+
+
 def test_host_services_are_pinned_and_per_session(tmp_path):
     plan = _plan(tmp_path, ca="missing.pem")  # ignored: the host's Chrome has the host's trust store
     hs = _services(plan)
     assert set(hs) == {"chrome", "mcp"}
-    mcp_port, cdp_port = _ports(plan)
+    mcp_port, cdp_port = hs["mcp"].port, hs["chrome"].port
     assert mcp_port != cdp_port and not {mcp_port, cdp_port} & {8931, 9222}  # free ports, per session
     mcp = hs["mcp"].command
     assert "npx -y playwright-core@1.63.0 mcp " in mcp
@@ -121,8 +129,7 @@ def test_glove_down_stops_them_unless_the_browser_is_kept(tmp_path, tmux, keep, 
     tmux.running = {"glove-s-0a0b0c-host-playwright-chrome", "glove-s-0a0b0c-host-playwright-mcp"}
     run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host", "keep_browser": True}})
     assert not tmux.calls and not capsys.readouterr().out  # host mode never launched: nothing to stop
-    (sd.ext / "playwright").mkdir(parents=True)
-    (sd.ext / "playwright" / "host-ports.json").write_text('{"mcp": 40001, "cdp": 40002}\n')
+    _launched(tmp_path)
     run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host", "keep_browser": keep}, "direct": {}})
     assert [c[-1] for c in tmux.calls] == [f"glove-s-0a0b0c-host-playwright-{n}" for n in killed]
     assert capsys.readouterr().out.count(": stopped") == len(killed)
@@ -136,9 +143,7 @@ def test_glove_down_stops_them_unless_the_browser_is_kept(tmp_path, tmux, keep, 
 
 def test_glove_down_stops_a_host_service_started_before_round_16(tmp_path, monkeypatch, capsys):
     hs = sys.modules["glove_ext.playwright.host.services"]
-    sd = sdm.SessionDir(tmp_path)
-    (sd.ext / "playwright").mkdir(parents=True)
-    (sd.ext / "playwright" / "host-ports.json").write_text('{"mcp": 40001, "cdp": 40002}\n')
+    sd = _launched(tmp_path)
     old = sd.state / "host-logs"  # core's, without tmux
     old.mkdir()
     (old / "playwright-chrome.pid").write_text("4242")
@@ -153,16 +158,15 @@ def test_glove_down_stops_a_host_service_started_before_round_16(tmp_path, monke
 
 def test_a_failing_teardown_is_a_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(sys.modules["glove_ext.playwright.host.services"], "stop", lambda *a: 1 / 0)
-    (sdm.SessionDir(tmp_path).ext / "playwright").mkdir(parents=True)
-    (sdm.SessionDir(tmp_path).ext / "playwright" / "host-ports.json").write_text("{}\n")
-    warnings = run_teardown(sdm.SessionDir(tmp_path), "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
+    sd = _launched(tmp_path, "{}")
+    warnings = run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
     assert warnings == ["extension 'playwright': teardown: division by zero"]
 
     def broken():
         raise ExtensionError("bad manifest")
 
     monkeypatch.setattr("glove.extsession.discover", broken)
-    assert run_teardown(sdm.SessionDir(tmp_path), "s", "docker", {}) == ["teardown hooks skipped: bad manifest"]
+    assert run_teardown(sd, "s", "docker", {}) == ["teardown hooks skipped: bad manifest"]
 
 
 def test_glove_plan_and_policy_show_what_runs_on_the_host(tmp_path):

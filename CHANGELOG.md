@@ -9,7 +9,8 @@ All notable changes to glove are documented here.
 - **Host services belong to `playwright` (breaking for session files).** The
   session key `host_services:` is refused with a pointer: a session file can
   no longer run host commands. `playwright`'s host mode starts its Chrome and
-  MCP itself (in its `launch_env` hook, still in tmux, now logging under
+  MCP itself (in its `launch_env` hook, after its `storage_state` secret
+  resolves, still in tmux, now logging under
   `.glove/ext/playwright/host-logs/` without tmux) and stops them in the new
   `teardown` hook, which `glove down` and `glove rm` run for each extension
   the last launch enabled (a failure is a warning), and `glove up` when a

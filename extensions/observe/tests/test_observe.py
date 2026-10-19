@@ -151,10 +151,7 @@ def test_searxng_reaches_egress_only_through_its_gate(tmp_path):
 ])
 def test_next_names_the_gates_a_hop_feeds(tmp_path, exts, harness, want):
     plan = plan_for(tmp_path, exts=exts, harness=harness)
-    assert _next(plan.composition.forwarders) == want
-
-
-_next = HOOKS.next_gates
+    assert HOOKS.next_gates(plan.composition.forwarders) == want
 
 
 def _fw(service, *, harness=True, kind="service", net=None, listen=(), observe=None, endpoint=True):
@@ -166,7 +163,7 @@ def test_next_follows_declared_feeds_over_shared_networks():
     fw = [_fw("a", net="n", observe={"feeds": ["a-egress"]}), _fw("b", net="n"),
           _fw("a-egress", harness=False, kind="slot", listen=["n"]),
           _fw("b-egress", harness=False, kind="slot", listen=["n"])]
-    assert _next(fw) == {"a": ["a-egress"], "b": ["a-egress", "b-egress"], "a-egress": [], "b-egress": []}
+    assert HOOKS.next_gates(fw) == {"a": ["a-egress"], "b": ["a-egress", "b-egress"], "a-egress": [], "b-egress": []}
 
 
 def test_an_aliased_second_hop_has_no_next(tmp_path):
@@ -175,7 +172,8 @@ def test_an_aliased_second_hop_has_no_next(tmp_path):
                                             "endpoint": "https://llm.example.com/v1"}})
     fw = {f["service"]: f for f in plan.composition.forwarders}
     assert fw["llm-out"]["endpoint"] is None and fw["llm"]["endpoint"]["target_kind"] != "service"
-    assert not any(_next(list(fw.values())).values()) and _next([_fw("x-out", endpoint=False)]) == {"x-out": []}
+    assert not any(HOOKS.next_gates(list(fw.values())).values())
+    assert HOOKS.next_gates([_fw("x-out", endpoint=False)]) == {"x-out": []}
 
 
 @pytest.mark.parametrize("feeds", ["e", [1], {"e": 1}, ["e", "typo"], ["h"], ["e", "a"]])
@@ -183,7 +181,7 @@ def test_observe_feeds_must_name_other_egress_endpoints(feeds):
     # not a list, a name that isn't rendered, a harness hop, or itself
     fw = [_fw("a", harness=False, observe={"feeds": feeds}), _fw("e", harness=False, kind="slot"), _fw("h")]
     with pytest.raises(ValueError, match=r"endpoint 'a': observe\.feeds must list"):
-        _next(fw)
+        HOOKS.next_gates(fw)
 
 
 @pytest.mark.parametrize("skip", ["searxng-egress", "search"])
@@ -191,7 +189,7 @@ def test_a_skipped_gate_keeps_its_place_in_next(tmp_path, skip):
     # a skipped egress gate still carries the traffic (socat, unrecorded: observed false)
     plan = plan_for(tmp_path, observe={"skip": [skip]})
     fw = {f["service"]: f for f in plan.composition.forwarders}
-    assert _next(list(fw.values()))["search"] == ["searxng-egress"] and not fw[skip]["observed"]
+    assert HOOKS.next_gates(list(fw.values()))["search"] == ["searxng-egress"] and not fw[skip]["observed"]
 
 
 def test_a_hook_editing_a_forwarders_endpoint_changes_no_other_hooks_view(tmp_path):

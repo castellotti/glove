@@ -39,13 +39,8 @@ def _q(pkgs) -> str:
     return shlex.join(map(str, pkgs))
 
 
-def _apt_bootstrap(probe: str, pkgs) -> str:
-    """Apt-install `pkgs` unless the base image already has `probe`."""
-    return f"RUN {apt_bootstrap(probe, pkgs)}"
-
-
 def apt_bootstrap(probe: str, pkgs) -> str:
-    """`_apt_bootstrap` without the `RUN` (a step of a longer one)."""
+    """Apt-install `pkgs` unless the base image already has `probe` (a `RUN` body)."""
     return (f"command -v {probe} >/dev/null || (apt-get update "
             f"&& apt-get install -y --no-install-recommends {_q(pkgs)} "
             "&& rm -rf /var/lib/apt/lists/*)")
@@ -125,7 +120,7 @@ def _layer_lines(ext: str, layer: dict, profile: HarnessProfile,
                 f"requests pip packages {list(layer['pip'])}"
             )
         if profile.pip_bootstrap:
-            lines.append(_apt_bootstrap("pip3", profile.pip_bootstrap))
+            lines.append(f"RUN {apt_bootstrap('pip3', profile.pip_bootstrap)}")
         lines.append(f"RUN {' '.join(profile.pip_install)} {_q(layer['pip'])}")
     if layer.get("npm"):
         lines.append(f"RUN npm install -g {_q(layer['npm'])}")

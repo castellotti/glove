@@ -225,9 +225,10 @@ def materialize(ctx: HookContext) -> None:
 @hook
 def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
     s = ctx.settings
-    if s["mode"] == "host":
+    out = {"env": state_env(s["storage_state"], resolve_secret)} if s.get("storage_state") else {}
+    if s["mode"] == "host":  # after the secret: a bad reference starts nothing
         hs.start(host_services(ctx, ctx.slot["browser"]["host_ports"]), ctx.session["id"], ctx.state_dir)
-    return {"env": state_env(s["storage_state"], resolve_secret)} if s.get("storage_state") else {}
+    return out
 
 
 @hook

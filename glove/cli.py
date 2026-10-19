@@ -360,18 +360,17 @@ def up(
         if secrets is None:  # the checks and the secrets don't depend on the subnet: once
             try:
                 preflight(sd, cfg, plan)
-            except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
+                try:
+                    # Resolve secret references (keychain:/env:) now, in memory, so a
+                    # missing key fails before any container starts.
+                    secrets = secret_env(plan)
+                except BaseException:  # Ctrl-C and a hook's bug too
+                    for w in run_teardown(sd, sid, cfg.provider, cfg.extensions):  # what a launch_env started
+                        err.print(f"[yellow]warn:[/yellow] {w}")
+                    raise
+            except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError,
+                    subprocess.SubprocessError) as e:
                 raise _fail(str(e)) from e
-            try:
-                # Resolve secret references (keychain:/env:) now, in memory, so a
-                # missing key fails before any container starts.
-                secrets = secret_env(plan)
-            except BaseException as e:  # Ctrl-C and a hook's bug too
-                for w in run_teardown(sd, sid, cfg.provider, cfg.extensions):  # what a launch_env started
-                    err.print(f"[yellow]warn:[/yellow] {w}")
-                if isinstance(e, ConfigError | ValueError | OSError | NotImplementedError | subprocess.SubprocessError):
-                    raise _fail(str(e)) from e
-                raise
         # Only transcripts written at/after launch belong to this run (see the hint).
         launched_at = time.time()
         try:
