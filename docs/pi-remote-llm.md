@@ -28,10 +28,11 @@ off the host, no LAN, no mDNS. It reaches its model through **one forwarder**,
 - **`lan`**: the server is directly reachable on your network. Set
   `endpoint: <host>:<port>`; the forwarder dials exactly that address (over a
   session network the harness never joins).
-- **`host`** with an SSH tunnel: when the server is only reachable over SSH, the
-  example's `model-tunnel` host service runs
-  `ssh -N -L 127.0.0.1:8899:127.0.0.1:8080 <remote>` in tmux, and the model is
-  then at `location: host, endpoint: 127.0.0.1:8899`.
+- **`host`** with an SSH tunnel: when the server is only reachable over SSH,
+  open the tunnel before `glove up` with
+  `ssh -fN -L 127.0.0.1:8899:127.0.0.1:8080 <remote>`, and the model is then at
+  `location: host, endpoint: 127.0.0.1:8899`. glove starts no host processes
+  for a session (only `playwright`'s host mode runs the host's Chrome).
 
 `model: auto` takes the single model the server lists at `/v1/models`, and
 `capabilities: auto` asks the server for vision and context size (llama.cpp:

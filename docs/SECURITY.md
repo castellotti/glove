@@ -153,7 +153,9 @@ Every capability (the model, search, the browser, …) is an extension in
   which wraps nothing). Not a secret: shell commands have no network to use it
   on, and seeing it only invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
-  privilege exceptions, host ports or host services unless trusted.
+  privilege exceptions or host ports unless trusted. A session file can't run
+  host commands (`host_services:` is gone); an extension's hooks are host
+  Python with your rights, which only the extension's trust contains.
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
 - **Export roots** are the only session data outside the session directory, and
   core owns them: `~/.glove/observe/<id>/` exists only for the in-tree
@@ -1142,8 +1144,8 @@ Be precise about what "container root" means here:
 - **Kernel 0-days** — a Landlock/seccomp/namespace or hypervisor bug can defeat
   rings 0/1. Keep the host and Docker Desktop patched; prefer per-container VMs.
 - **A malicious or already-compromised host** — glove trusts the machine it runs
-  on. Host services (SSH tunnel, Chrome, Playwright) run with your full host
-  trust by design.
+  on. `playwright`'s host mode (Chrome and the Playwright MCP) runs with your
+  full host trust by design.
 - **Side channels** — timing, cache, `/proc` inference, etc. `srt.nested: strong`
   even exposes masked `/proc`/`/sys` to the whole container (documented, warned).
 - **Denial of service beyond the limits** — the pids/memory/cpu caps bound

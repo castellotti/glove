@@ -239,13 +239,19 @@ glove playwright status    # also: how many cookies, and when the first expires 
 
 ## Host mode
 
-glove starts two host services in tmux: a headed Chrome (system Chrome, else
-Playwright's Chrome for Testing) with a per-session profile under the
+`glove up` starts two processes on the host: a headed Chrome (system Chrome,
+else Playwright's Chrome for Testing) with a per-session profile under the
 session's extension state, and `npx -y playwright-core@1.63.0 mcp` attached to
 it over CDP with `--allowed-hosts glove-<id>-browser:<port>`. Both use free
 loopback ports picked at the first launch and kept for the session
 (`.glove/ext/playwright/host-ports.json`). The harness reaches the MCP only
 through the `browser` forwarder.
+
+They run in tmux (`tmux attach -t glove-<id>-host-playwright-chrome`, or
+`-mcp`); without tmux, as background processes logging under
+`.glove/ext/playwright/host-logs/`. One whose port already answers is reused.
+`glove down` stops both, except Chrome with `keep_browser: true`. `glove plan`
+and `glove policy` show both commands before you launch.
 
 **Exposure.** This is the highest-exposure mode: the browser runs as you, on
 your desktop, with your network, and any local process can drive its CDP port

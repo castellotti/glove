@@ -22,6 +22,7 @@ an export root). No other host path reaches a template.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import ipaddress
 import re
@@ -29,17 +30,18 @@ import secrets as pysecrets
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Any
 
 import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from .config import HostService, git_config_pairs, is_secret_ref
+from .config import git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
 from .hooks import HookContext, hooks_of, validate_result
+from .image import ENV_VAR as _ENV_VAR
 from .manifest import KEYS, ExtensionError, check_manifest, check_slot_exports, merge_names
 from .mounts import WORK_TARGET, check_path, host_path
 from .naming import project_name, scoped
@@ -66,7 +68,6 @@ EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")  # one path component, never `..`
-_ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*\Z")
 
 
 # A channel's directory in the harness and in the sidecars that serve it (see
@@ -537,10 +538,9 @@ class Composition:
     harness_items: list[tuple[Active, Any, dict]] = field(default_factory=list)
     # (ext, host dir, container path): read-only harness binds from `mounts:`
     harness_mounts: list[tuple[str, str, str]] = field(default_factory=list)
-    briefs: list[tuple[str, str]] = field(default_factory=list)
+    briefs: list[tuple[str, str, bool]] = field(default_factory=list)  # (ext, text, a template)
     channels: list[Channel] = field(default_factory=list)
     outputs: list[Output] = field(default_factory=list)
-    host_services: list[HostService] = field(default_factory=list)
     networks: dict[str, dict] = field(default_factory=dict)  # logical name → {internal, owner}
     fragments: list[tuple[Active, dict]] = field(default_factory=list)  # rendered compose docs
     secrets: dict[str, tuple[str, str]] = field(default_factory=dict)  # compose name → (ext, setting)
@@ -556,6 +556,8 @@ class Composition:
     corporate_ca: Path | None = None
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
+    enforcer: str = ""  # the session's (hooks only), and its normalized options
+    enforcer_options: dict[str, Any] = field(default_factory=dict)  # normalized, each section read-only
     # Export root → this session's host dir (created by the CLI, never here).
     export_dirs: dict[str, Path] = field(default_factory=dict)
     # Set once the network plan exists: one entry per forwarder (role, listen,
@@ -629,9 +631,10 @@ class Composition:
 
     def rendered_briefs(self) -> list[tuple[str, str]]:
         out = []
-        for ext, text in self.briefs:
-            a = self.by_name(ext)
-            out.append((ext, render_value(text, base_context(self, a), f"extension {ext!r} brief").strip()))
+        for ext, text, template in self.briefs:
+            if template:
+                text = render_value(text, base_context(self, self.by_name(ext)), f"extension {ext!r} brief")
+            out.append((ext, text.strip()))
         return [(e, t) for e, t in out if t]
 
 
@@ -1089,7 +1092,9 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[
                 raise ExtensionError(f"{where}: brief {path} not found")
             # rendered late (rendered_briefs): launch-time resolution (e.g. the
             # llm's `model: auto`) changes what a brief says
-            comp.briefs.append((a.name, path.read_text()))
+            comp.briefs.append((a.name, path.read_text(), True))
+    if contributed.get("brief"):
+        comp.briefs.append((a.name, contributed["brief"], False))
 
 
 def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
@@ -1168,19 +1173,6 @@ def _channels(comp: Composition, a: Active, ctx: dict) -> None:
                                      read_only=spec.get("read_only", False), trust=spec.get("trust")))
 
 
-def _host_services(comp: Composition, a: Active, ctx: dict) -> None:
-    """What its contribute hook returned for `host_services` (R16.C moves them
-    into playwright)."""
-    for item in active_items(a.contributed.get("host_services"), ctx):
-        require_trust(a, f"extension {a.name!r}: a host service")
-        r = render_value(item, ctx, f"extension {a.name!r} host service")
-        comp.host_services.append(HostService(
-            name=f"{a.name}-{r['name']}", command=str(r["command"]),
-            ready_port=int(r["ready_port"]) if r.get("ready_port") not in (None, "") else None,
-            keep=str(r.get("keep", False)).lower() in ("true", "1"),
-        ))
-
-
 def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | None = None) -> bool:
     """Whether a hook of `m` gets the session dir (or, with `work`, the work
     dir) in its context: trusted, and its manifest names a reason — outputs
@@ -1215,8 +1207,9 @@ def hook_context(comp: Composition, a: Active) -> HookContext:
         work_dir=comp.work_dir if declares_host_paths(a.manifest, work=True,
                                                       privileges=a.spec("privileges", t)) else None,
         export_dirs={r: comp.export_dirs[r] for r in comp.export_access(a) if r in comp.export_dirs},
-        forwarders=[dict(f) for f in comp.forwarders] if forwarder else [],
+        forwarders=copy.deepcopy(comp.forwarders) if forwarder else [],  # their endpoints nest
         grants=dict(comp.grants) if forwarder else {},
+        enforcer=comp.enforcer, enforcer_options=comp.enforcer_options,
         **{k: t[k] for k in _SHARED},
     )
 
@@ -1254,12 +1247,19 @@ def compose(
     export_dirs: dict[str, Path] | None = None,
     work_dir: Path | None = None,
     corporate_ca: Path | None = None,
+    enforcer: str = "",
+    enforcer_options: dict[str, dict] | None = None,
 ) -> Composition:
     """Select, order and render every extension's contribution for one session."""
+    from .enforcers import enforcer_options as normalized_options
+
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
                        session_dir=session_dir, work_dir=work_dir, corporate_ca=corporate_ca, subnet=subnet,
-                       export_dirs=dict(export_dirs or {}),
+                       export_dirs=dict(export_dirs or {}), enforcer=enforcer,
+                       # read-only all the way down: a hook never widens what plan.py renders
+                       enforcer_options={k: MappingProxyType(v) for k, v in (
+                           normalized_options({}) if enforcer_options is None else enforcer_options).items()},
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
         if a.manifest.hooks_path:
@@ -1299,7 +1299,6 @@ def compose(
         _harness_mounts(comp, a, base_context(comp, a))
         ctx = base_context(comp, a)
         _harness_contrib(comp, a, ctx, contributed.get("harness") or {})
-        _host_services(comp, a, ctx)
         for item in active_items(a.spec("verify"), ctx):
             if not isinstance(item, dict) or item.get("kind") not in VERIFY_KINDS:
                 raise ExtensionError(f"extension {a.name!r}: verify {item!r} needs a kind in {sorted(VERIFY_KINDS)}")

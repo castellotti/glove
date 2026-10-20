@@ -3,21 +3,20 @@ the derived harness image. Off by default — absent, nothing renders differentl
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from pathlib import Path
 
 import pytest
 import yaml
-from helpers import CHROMIUM, NODE, make_cfg, make_session
+from helpers import CHROMIUM, NODE, STUB_LLM, make_cfg, make_session
 
+from extensions.toolchains import toolchains as tcs
 from glove import sessiondir as sdm
-from glove import toolchains as tcs
-from glove.config import ConfigError, _coerce
+from glove.config import ConfigError
 from glove.enforcers.nono.policies import GLOVE_READ
 from glove.harness import base_image
 from glove.harnessconfig import build_environment_context, render_home
-from glove.image import content_hash, stage_context
+from glove.image import UV_SHA256, UV_VERSION, stage_context
 from glove.plan import build_session_plan
 from glove.runtimes.docker import DockerRuntime
 
@@ -26,16 +25,23 @@ PY = {"lang": "python", "version": "3.12"}
 MOUNT_ROOTS = ("/work", "/home/agent", "/mnt", "/etc/glove/enforcer")
 
 
-def _cfg(tmp_path, **kw):
+def _cfg(tmp_path, blocks=None, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     kw.setdefault("harness", "pi")
+    if blocks is not None:
+        kw["extensions"] = {"toolchains": {"blocks": blocks}}
     return make_cfg(workdir=str(work), name="s", **kw)
 
 
 def _plan(tmp_path, **kw):
     return build_session_plan(_cfg(tmp_path, **kw), home_dir=str(tmp_path / "h"),
                               state_dir=str(tmp_path / "ext"), session_dir=str(tmp_path))
+
+
+def _project_files(plan) -> list[Path]:
+    """The host files baked into the image (`copy_host`)."""
+    return [Path(src) for _ext, layer in plan.composition.image_layers for src, _ in layer.get("copy_host") or []]
 
 
 def _harness(plan, tmp_path) -> dict:
@@ -61,24 +67,15 @@ def _py_project(root: Path) -> Path:
 # --- config + session file -----------------------------------------------------------
 
 
-def test_config_key_defaults_empty_and_round_trips():
-    assert _coerce({}).toolchains == []
-    assert _coerce({"toolchains": None}).toolchains == []
-    cfg = _coerce({"toolchains": [NODE, PY]})
-    assert _coerce(yaml.safe_load(cfg.to_yaml())).toolchains == [NODE, PY]
-    with pytest.raises(ConfigError, match="must be a list"):
-        _coerce({"toolchains": {"lang": "node"}})
-    with pytest.raises(ConfigError, match="unknown config keys"):
-        _coerce({"toolchains": [], "toolchain": []})
-
-
-def test_session_file_accepts_the_key_and_still_refuses_bogus_ones(tmp_path):
+def test_the_old_session_key_points_at_the_extension(tmp_path):
     d = make_session(tmp_path / "a", "toolchains:\n  - {lang: node, version: \"22.11.0\"}\n")
-    sd = sdm.SessionDir(d)
-    assert sdm.to_config(sd, sdm.load_file(sd), "a-000000").toolchains == [NODE]
-    d = make_session(tmp_path / "b", "toolchains: []\nlanguages: []\n")
-    with pytest.raises(sdm.SessionError, match="unknown key"):
+    with pytest.raises(sdm.SessionError, match=r"toolchains: an extension now: `extensions: \{toolchains: "):
         sdm.load_file(sdm.SessionDir(d))
+
+
+def test_blocks_must_be_a_list(tmp_path):
+    with pytest.raises(ConfigError, match="must be a list"):
+        _plan(tmp_path, blocks={"lang": "node"})
 
 
 @pytest.mark.parametrize(("block", "match"), [
@@ -165,9 +162,9 @@ def test_defaults_are_lockfile_strict():
 # --- plan ---------------------------------------------------------------------------------
 
 
-def test_unset_leaves_plan_and_render_untouched(tmp_path):
-    plan = _plan(tmp_path)
-    assert plan.toolchains == []
+@pytest.mark.parametrize("blocks", [None, []])
+def test_unset_leaves_plan_and_render_untouched(tmp_path, blocks):
+    plan = _plan(tmp_path, blocks=blocks)
     assert plan.derived_dockerfile is None and plan.image == base_image(plan.profile)
     harness = _harness(plan, tmp_path)
     assert not {"VIRTUAL_ENV", "PLAYWRIGHT_BROWSERS_PATH", "PATH"} & set(harness["environment"])
@@ -176,21 +173,22 @@ def test_unset_leaves_plan_and_render_untouched(tmp_path):
 
 def test_node_block_renders_pinned_runtime_and_strict_install(tmp_path):
     _node_project(tmp_path / "app")
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app"}])
+    plan = _plan(tmp_path, blocks=[{**NODE, "project": "app"}])
     df = plan.derived_dockerfile
     assert "https://nodejs.org/dist/v22.11.0/$f" in df and "SHASUMS256.txt" in df and "sha256sum -c -" in df
     # only the manifest + lockfile are baked, never the project's tree
-    assert ('COPY ["toolchain-node/package.json", "toolchain-node/package-lock.json", '
-            '"/opt/glove/toolchains/node/project/"]') in df
+    project = "/opt/glove/toolchains/node/project"
+    for f in ("package.json", "package-lock.json"):
+        assert f"COPY toolchains{project}/{f} {project}/{f}" in df
     assert "npm ci --no-audit" in df
-    assert ("ENV PATH=/opt/glove/toolchains/node/22.11.0/bin:"
-            "/opt/glove/toolchains/node/project/node_modules/.bin:$PATH") in df
+    assert ('ENV PATH="/opt/glove/toolchains/node/22.11.0/bin:'
+            '/opt/glove/toolchains/node/project/node_modules/.bin:$PATH"') in df
     # deps resolve via the pinned node's global folder, not NODE_PATH (nono strips it)
     assert ("ln -s /opt/glove/toolchains/node/project/node_modules /opt/glove/toolchains/node/22.11.0/lib/node"
             in df)
     assert "NODE_PATH" not in plan.environment
     assert "PLAYWRIGHT_BROWSERS_PATH" not in plan.environment
-    assert [tc.project for tc in plan.toolchains] == [(tmp_path / "app").resolve()]
+    assert {f.parent for f in _project_files(plan)} == {(tmp_path / "app").resolve()}
     # Pi always runs on the image's own node (the pinned one is first on PATH)
     assert plan.profile.entry[:2] == ["/usr/local/bin/node", "/usr/local/bin/pi"]
     assert _harness(plan, tmp_path)["image"] == plan.image
@@ -198,7 +196,7 @@ def test_node_block_renders_pinned_runtime_and_strict_install(tmp_path):
 
 def test_node_managers_and_browsers(tmp_path):
     _node_project(tmp_path / "app", "pnpm-lock.yaml", deps={"@playwright/test": "1.50.0"})
-    plan = _plan(tmp_path, toolchains=[{**NODE, "manager": "pnpm@9.15.0", "project": "app",
+    plan = _plan(tmp_path, blocks=[{**NODE, "manager": "pnpm@9.15.0", "project": "app",
                                         "packages": ["typescript@5.6.3"], "browsers": ["chromium"]}])
     df = plan.derived_dockerfile
     # the manager and global packages in one step
@@ -208,14 +206,14 @@ def test_node_managers_and_browsers(tmp_path):
             "/opt/glove/toolchains/node/project/node_modules/.bin/playwright install --with-deps chromium") in df
     assert plan.environment["PLAYWRIGHT_BROWSERS_PATH"] == "/opt/glove/toolchains/node/browsers"
     # browsers via a global playwright, no project
-    plan = _plan(tmp_path, toolchains=[{**NODE, "packages": ["playwright@1.50.0"], "browsers": ["firefox"]}])
+    plan = _plan(tmp_path, blocks=[{**NODE, "packages": ["playwright@1.50.0"], "browsers": ["firefox"]}])
     assert " playwright install --with-deps firefox" in plan.derived_dockerfile
     # with no project, the global packages are what `require` finds from any directory
     assert "ln -s /opt/glove/toolchains/node/22.11.0/lib/node_modules /opt/glove/toolchains/node/22.11.0/lib/node" \
         in plan.derived_dockerfile
     # a project without playwright: the global one from `packages` installs the browsers
     _node_project(tmp_path / "plain")
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "plain", "packages": ["playwright@1.50.0"],
+    plan = _plan(tmp_path, blocks=[{**NODE, "project": "plain", "packages": ["playwright@1.50.0"],
                                         "browsers": ["chromium"]}])
     df = plan.derived_dockerfile
     assert "browsers playwright install --with-deps chromium" in df
@@ -224,40 +222,40 @@ def test_node_managers_and_browsers(tmp_path):
 
 def test_python_block_renders_uv_sync_into_a_venv(tmp_path):
     _py_project(tmp_path / "tool")
-    plan = _plan(tmp_path, harness="vibe", toolchains=[{**PY, "project": "tool", "packages": ["rich==13.9.4"]}])
+    plan = _plan(tmp_path, harness="vibe", blocks=[{**PY, "project": "tool", "packages": ["rich==13.9.4"]}])
     df = plan.derived_dockerfile
-    assert f"releases/download/{tcs.UV_VERSION}/$f" in df
-    assert all(sha in df for sha in tcs.UV_SHA256.values())
+    assert f"releases/download/{UV_VERSION}/$f" in df
+    assert all(sha in df for sha in UV_SHA256.values())
     assert "python install --no-bin 3.12" in df
     assert "uv sync --locked --no-install-project --python 3.12" in df
     assert "UV_PROJECT_ENVIRONMENT=/opt/glove/toolchains/python/venv" in df
     # seeded even for sync, so `pip` on PATH is the venv's
     assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
     assert "pip install --python /opt/glove/toolchains/python/venv/bin/python rich==13.9.4" in df
-    assert "ENV PATH=/opt/glove/toolchains/python/venv/bin:$PATH" in df
+    assert 'ENV PATH="/opt/glove/toolchains/python/venv/bin:$PATH"' in df
     assert plan.environment["VIRTUAL_ENV"] == "/opt/glove/toolchains/python/venv"
 
 
 def test_python_pip_requirements(tmp_path):
     (tmp_path / "tool").mkdir()
     (tmp_path / "tool" / "requirements.txt").write_text("rich==13.9.4\n")
-    plan = _plan(tmp_path, toolchains=[{**PY, "manager": "pip", "project": "tool"}])
+    plan = _plan(tmp_path, blocks=[{**PY, "manager": "pip", "project": "tool"}])
     df = plan.derived_dockerfile
     assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
     assert "/opt/glove/toolchains/python/venv/bin/python -m pip install --no-cache-dir -r requirements.txt" in df
 
 
 def test_block_order_is_install_and_path_order(tmp_path):
-    plan = _plan(tmp_path, toolchains=[PY, NODE])
+    plan = _plan(tmp_path, blocks=[PY, NODE])
     df = plan.derived_dockerfile
-    assert df.index("# toolchain: python") < df.index("# toolchain: node")
-    assert ("ENV PATH=/opt/glove/toolchains/python/venv/bin:/opt/glove/toolchains/node/22.11.0/bin:$PATH") in df
+    assert df.index("venv --seed") < df.index("nodejs.org/dist")
+    assert 'ENV PATH="/opt/glove/toolchains/python/venv/bin:/opt/glove/toolchains/node/22.11.0/bin:$PATH"' in df
 
 
 def test_layers_are_phased_across_blocks_and_never_chmod_everything(tmp_path):
     _node_project(tmp_path / "app")
     _py_project(tmp_path / "tool")
-    df = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "packages": ["tsx@4.19.2"]},
+    df = _plan(tmp_path, blocks=[{**NODE, "project": "app", "packages": ["tsx@4.19.2"]},
                                      {**PY, "project": "tool"}]).derived_dockerfile
     # every runtime, then global tools, then project installs: a lockfile bump rebuilds no runtime
     runtimes = max(df.index("nodejs.org/dist"), df.index("venv --seed"))
@@ -290,13 +288,13 @@ def test_project_validation(tmp_path, setup, block, match):
     (tmp_path / "work").mkdir(exist_ok=True)
     setup(tmp_path)
     with pytest.raises(ConfigError, match=match):
-        _plan(tmp_path, toolchains=[block])
+        _plan(tmp_path, blocks=[block])
 
 
 def test_session_file_is_never_a_project(tmp_path):
     (tmp_path / "glove-session.yml").write_text("glove: 3\n")
     with pytest.raises(ConfigError, match="is not a directory"):
-        _plan(tmp_path, toolchains=[{**NODE, "project": "glove-session.yml"}])
+        _plan(tmp_path, blocks=[{**NODE, "project": "glove-session.yml"}])
 
 
 # --- config_files + install_flags -------------------------------------------------------------
@@ -308,35 +306,34 @@ NPMRC = "registry = https://registry.example.com/npm/\nlink-workspace-packages =
 def test_config_files_are_baked_beside_the_manifest_before_the_install(tmp_path):
     app = _node_project(tmp_path / "app")
     (app / ".npmrc").write_text(NPMRC)
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
+    plan = _plan(tmp_path, blocks=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
     df = plan.derived_dockerfile
-    copy = ('COPY ["toolchain-node/package.json", "toolchain-node/package-lock.json", '
-            '"toolchain-node/.npmrc", "/opt/glove/toolchains/node/project/"]')
+    copy = "COPY toolchains/opt/glove/toolchains/node/project/.npmrc /opt/glove/toolchains/node/project/.npmrc"
     assert copy in df and df.index(copy) < df.index("npm ci")
-    assert (app / ".npmrc").resolve() in plan.toolchains[0].project_files
+    assert (app / ".npmrc").resolve() in _project_files(plan)
     dest = tmp_path / "ctx"
-    stage_context(dest, [("toolchain-node", f) for f in plan.toolchains[0].project_files])
-    assert (dest / "toolchain-node" / ".npmrc").read_text() == NPMRC
+    stage_context(dest, plan.derived_staged)
+    assert (dest / "toolchains/opt/glove/toolchains/node/project/.npmrc").read_text() == NPMRC
 
 
 def test_install_flags_are_appended_to_every_managers_install(tmp_path):
     _node_project(tmp_path / "app")
-    df = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "install_flags": [
+    df = _plan(tmp_path, blocks=[{**NODE, "project": "app", "install_flags": [
         "--legacy-peer-deps", "--registry=https://registry.example.com/npm/"]}]).derived_dockerfile
     assert ("npm ci --no-audit --no-fund --cache /tmp/npm-cache --legacy-peer-deps "
             "--registry=https://registry.example.com/npm/ \\\n") in df
     # only the project install: never the global tools step
     assert df.count("--legacy-peer-deps") == 1
     _node_project(tmp_path / "pn", "pnpm-lock.yaml")
-    df = _plan(tmp_path, toolchains=[{**NODE, "manager": "pnpm", "project": "pn",
+    df = _plan(tmp_path, blocks=[{**NODE, "manager": "pnpm", "project": "pn",
                                       "install_flags": ["--prefer-offline"]}]).derived_dockerfile
     assert "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store --prefer-offline \\\n" in df
     _py_project(tmp_path / "tool")
-    df = _plan(tmp_path, toolchains=[{**PY, "project": "tool", "install_flags": ["--no-dev"]}]).derived_dockerfile
+    df = _plan(tmp_path, blocks=[{**PY, "project": "tool", "install_flags": ["--no-dev"]}]).derived_dockerfile
     assert "uv sync --locked --no-install-project --python 3.12 --no-dev \\\n" in df
     (tmp_path / "req").mkdir()
     (tmp_path / "req" / "requirements.txt").write_text("rich\n")
-    df = _plan(tmp_path, toolchains=[{**PY, "manager": "pip", "project": "req",
+    df = _plan(tmp_path, blocks=[{**PY, "manager": "pip", "project": "req",
                                       "install_flags": ["--no-deps"]}]).derived_dockerfile
     assert "-m pip install --no-cache-dir -r requirements.txt --no-deps \\\n" in df
 
@@ -371,7 +368,7 @@ def test_install_flags_are_appended_to_every_managers_install(tmp_path):
 def test_config_file_validation(tmp_path, setup, config_files, match):
     setup(_node_project(tmp_path / "app"))
     with pytest.raises(ConfigError, match=match):
-        _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": config_files}])
+        _plan(tmp_path, blocks=[{**NODE, "project": "app", "config_files": config_files}])
 
 
 def test_config_file_credential_check_ignores_comments_and_values(tmp_path):
@@ -380,8 +377,8 @@ def test_config_file_credential_check_ignores_comments_and_values(tmp_path):
                                 "registry=https://tokens.example.com:8443/npm/\nalways-auth=false\n"
                                 "git-tag-version = false\nscope-registry ssh://git@github.com/org/repo\n"
                                 'yarn-path "/opt/token-free/yarn.js"\n')
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
-    assert "toolchain-node/.npmrc" in plan.derived_dockerfile
+    plan = _plan(tmp_path, blocks=[{**NODE, "project": "app", "config_files": [".npmrc"]}])
+    assert "project/.npmrc" in plan.derived_dockerfile
 
 
 def test_content_hash_tracks_config_files_and_install_flags(tmp_path):
@@ -389,9 +386,7 @@ def test_content_hash_tracks_config_files_and_install_flags(tmp_path):
     (app / ".npmrc").write_text(NPMRC)
 
     def tag(**kw):
-        blocks = tcs.resolve([{**NODE, "project": "app", **kw}], tmp_path)
-        lines, staged = tcs.dockerfile_lines(blocks)
-        return content_hash("\n".join(lines), staged)
+        return _plan(tmp_path, blocks=[{**NODE, "project": "app", **kw}]).image
 
     base = tag()
     with_npmrc = tag(config_files=[".npmrc"])
@@ -406,20 +401,20 @@ def test_content_hash_tracks_config_files_and_install_flags(tmp_path):
 
 def test_unset_config_files_and_install_flags_render_identically(tmp_path):
     _node_project(tmp_path / "app")
-    plain = _plan(tmp_path, toolchains=[{**NODE, "project": "app"}])
-    empty = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "config_files": [], "install_flags": None}])
+    plain = _plan(tmp_path, blocks=[{**NODE, "project": "app"}])
+    empty = _plan(tmp_path, blocks=[{**NODE, "project": "app", "config_files": [], "install_flags": None}])
     assert plain.derived_dockerfile == empty.derived_dockerfile and plain.image == empty.image
 
 
 def test_non_strict_install_mode_needs_only_the_manifest(tmp_path):
     _node_project(tmp_path / "app", lock=None)
-    plan = _plan(tmp_path, toolchains=[{**NODE, "project": "app", "install": "install"}])
+    plan = _plan(tmp_path, blocks=[{**NODE, "project": "app", "install": "install"}])
     assert "npm install --no-audit" in plan.derived_dockerfile
 
 
 def test_explicit_env_wins(tmp_path):
     _py_project(tmp_path / "tool")
-    plan = _plan(tmp_path, toolchains=[{**PY, "project": "tool"}], env={"VIRTUAL_ENV": "/mine"})
+    plan = _plan(tmp_path, blocks=[{**PY, "project": "tool"}], env={"VIRTUAL_ENV": "/mine"})
     assert plan.environment["VIRTUAL_ENV"] == "/mine"
 
 
@@ -434,11 +429,16 @@ def _every_block(tmp_path) -> list[tcs.Toolchain]:
                         {**PY, "project": "tool", "packages": ["rich"]}], tmp_path)
 
 
+def _words(layers: list[dict]) -> list[str]:
+    return [w for layer in layers for v in (*layer.get("run", ()), *layer.get("env", {}).values(),
+                                            *(dst for _, dst in layer.get("copy_host", ())))
+            for w in v.replace('"', " ").replace(":", " ").split()]
+
+
 def test_every_install_prefix_is_outside_the_mounts(tmp_path):
     blocks = _every_block(tmp_path)
-    lines, _ = tcs.dockerfile_lines(blocks)
     paths = [*tcs.path_entries(blocks), *tcs.harness_env(blocks).values()]
-    paths += [p for line in lines for p in line.replace('"', " ").split() if p.startswith("/opt/")]
+    paths += [p for p in _words(tcs.image_layers(blocks)) if p.startswith("/opt/")]
     assert paths
     for p in paths:
         assert p.startswith(tcs.ROOT + "/"), p
@@ -449,10 +449,11 @@ def test_every_install_prefix_is_outside_the_mounts(tmp_path):
 
 def test_no_install_runs_at_run_time(tmp_path):
     blocks = _every_block(tmp_path)
-    lines, _ = tcs.dockerfile_lines(blocks)
-    # every install is a build step; the runtime side is env only
-    for line in lines:
-        assert line.startswith(("RUN ", "COPY ", "ENV PATH=", "# ")), line
+    layers = tcs.image_layers(blocks)
+    # every install is a build step, all after other extensions' layers; the runtime side is env only
+    assert all(layer["stage"] == "late" and set(layer) <= {"run", "copy_host", "env", "stage"} for layer in layers)
+    path = f"{':'.join(tcs.path_entries(blocks))}:$PATH"
+    assert [layer["env"] for layer in layers if "env" in layer] == [{"PATH": path}]
     runtime = json.dumps([tcs.harness_env(blocks), tcs.path_entries(blocks)])
     assert not any(w in runtime for w in ("install", "curl", "sync"))
 
@@ -461,9 +462,7 @@ def test_content_hash_tracks_version_and_manifests_only(tmp_path):
     app = _node_project(tmp_path / "app")
 
     def tag(version="22.11.0"):
-        blocks = tcs.resolve([{**NODE, "version": version, "project": "app"}], tmp_path)
-        lines, staged = tcs.dockerfile_lines(blocks)
-        return content_hash("\n".join(lines), staged)
+        return _plan(tmp_path, blocks=[{**NODE, "version": version, "project": "app"}]).image
 
     base = tag()
     assert tag("22.12.0") != base
@@ -495,16 +494,14 @@ def test_staging_skips_host_artifacts_and_keeps_symlinks_as_links(tmp_path):
 # --- what the agent is told ------------------------------------------------------------------------
 
 
-def _context(tmp_path, toolchains, enforcer="nono+srt", enforcer_options=None) -> str:
-    """The context file for a plan holding `toolchains` (parsed, not resolved)."""
-    plan = _plan(tmp_path, enforcer=enforcer)
-    options = _cfg(tmp_path, enforcer=enforcer, enforcer_options=enforcer_options or {}).enforcer_options
-    return build_environment_context(dataclasses.replace(plan, toolchains=tcs.parse(toolchains),
-                                                         enforcer_options=options))
+def _context(tmp_path, blocks, enforcer="nono+srt", enforcer_options=None) -> str:
+    return build_environment_context(_plan(tmp_path, blocks=blocks, enforcer=enforcer,
+                                           enforcer_options=enforcer_options or {}))
 
 
 def test_context_file_section_only_when_set(tmp_path):
     assert "Toolchains" not in _context(tmp_path, [])
+    _node_project(tmp_path / "app")
     text = _context(tmp_path, [{**NODE, "project": "app"}, PY])
     assert "## Toolchains" in text and "Node 22.11.0" in text and "Python 3.12" in text
     assert "ln -s /opt/glove/toolchains/node/project/node_modules node_modules" in text
@@ -521,12 +518,29 @@ def test_browsers_brief_is_honest_about_the_tool_sandbox(tmp_path, enforcer, opt
     assert ("cannot start inside a shell command" in text) is warned
 
 
-@pytest.mark.parametrize("toolchains", [[], [PY]])
-def test_vibe_hook_always_runs_on_the_image_python(tmp_path, toolchains):
-    plan = _plan(tmp_path, harness="vibe", toolchains=toolchains)
-    cfg = _cfg(tmp_path, harness="vibe", toolchains=toolchains)
+def test_the_browsers_grant_needs_a_browser(tmp_path):
+    grant = {"nono": {"browsers": True}}
+    # /proc for a Chromium no block bakes: a grant with nothing to use it
+    with pytest.raises(ConfigError, match="no block bakes `browsers:`"):
+        _plan(tmp_path, blocks=[NODE], enforcer_options=grant)
+    _plan(tmp_path, blocks=[CHROMIUM], enforcer_options=grant)
+    # without the extension the grant stands alone (`glove plan` shows it beside the enforcer)
+    _plan(tmp_path, enforcer_options=grant)
+
+
+@pytest.mark.parametrize("blocks", [[], [PY]])
+def test_vibe_hook_always_runs_on_the_image_python(tmp_path, blocks):
+    plan = _plan(tmp_path, harness="vibe", blocks=blocks)
+    cfg = _cfg(tmp_path, harness="vibe", blocks=blocks)
     render_home(cfg, plan, tmp_path / "home")
     hooks = (tmp_path / "home" / ".vibe" / "hooks.toml").read_text()
     assert 'command = "/usr/local/bin/python3 /opt/glove/vibe-hook"' in hooks
 
 
+def test_glove_check_composes_the_toolchains_with_the_sessions_enforcer(tmp_path):
+    from glove.doctor import extension_checks
+
+    # no session plan (it failed): `glove check` composes on its own
+    checks = extension_checks({"llm": STUB_LLM, "toolchains": {"blocks": [PY]}}, harness="pi", session_dir=tmp_path,
+                              enforcer="srt")
+    assert checks[0].status == "ok", checks[0].detail

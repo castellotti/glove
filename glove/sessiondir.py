@@ -11,7 +11,7 @@
       .glove/             0700; only home/ and enforcer/ are ever mounted
         id                stable session id: <dirname>-<6 hex>
         compose.yml  effective.yml  baseline.yml  template.yml
-        home/  enforcer/  ext/<name>/  placeholders/  host-logs/
+        home/  enforcer/  ext/<name>/  placeholders/
 
 Deleting the directory deletes the session; what outlives it is its registry
 row and what an extension explicitly exported (``~/.glove/observe/<id>/``),
@@ -51,13 +51,14 @@ PLACEHOLDER = "<set-me>"
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
-# for the v2 keys that v3 replaced.
+# for the keys glove replaced (v2's, and those moved into extensions).
 FILE_KEYS = frozenset({
     "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_config",
     "env", "git_config", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
-    "protect_ide_files", "allow_root", "allow_sensitive", "host_services", "toolchains",
+    "protect_ide_files", "allow_root", "allow_sensitive",
 })
-V2_KEYS = {
+_NO_HOST = "a session starts no host processes; `playwright: {mode: host}` runs the host's Chrome"
+MOVED_KEYS = {
     "name": "the session is the directory; its id is in .glove/id",
     "workdir": "/work is the session's work/ directory",
     "add_dirs": "use `mounts: [{path: ..., mode: ro|rw}]`",
@@ -65,9 +66,11 @@ V2_KEYS = {
     "services": "forwarders come only from extensions",
     "observe": "network observability is an extension: `extensions: {observe: {}}` (plus `filter: {}` for rules)",
     "config_home_source": "the harness home is .glove/home",
-    "host_setup": "use host_services",
+    "host_setup": _NO_HOST,
+    "host_services": _NO_HOST,
     "provider": "set `runtime`",
     "rebuild": "pass `glove up --rebuild`",
+    "toolchains": "an extension now: `extensions: {toolchains: {blocks: [...]}}`",
 }
 
 
@@ -183,10 +186,10 @@ def load_file(sd: SessionDir) -> dict[str, Any]:
         raise SessionError(f"{sd.file}: must be a mapping")
     if raw.get("glove") != SCHEMA_VERSION:
         raise SessionError(f"{sd.file}: needs `glove: {SCHEMA_VERSION}` (this is glove v3's session schema)")
-    old = sorted(set(raw) & set(V2_KEYS))
+    old = sorted(set(raw) & set(MOVED_KEYS))
     if old:
-        raise SessionError(f"{sd.file}: v2 key(s) {old} are not part of the v3 schema — "
-                           + "; ".join(f"{k}: {V2_KEYS[k]}" for k in old))
+        raise SessionError(f"{sd.file}: key(s) {old} are no longer session keys — "
+                           + "; ".join(f"{k}: {MOVED_KEYS[k]}" for k in old))
     unknown = sorted(set(raw) - FILE_KEYS)
     if unknown:
         raise SessionError(f"{sd.file}: unknown key(s) {unknown} (known: {sorted(FILE_KEYS)})")

@@ -181,8 +181,8 @@ def build_environment_context(plan: SessionPlan) -> str:
 
     Describes the mounts and their modes, that shell commands have no network,
     the RUN ON HOST relay rule, then each extension's brief in extension order —
-    rendered from the plan (the mounts the runtime binds, the resolved
-    toolchains), so what the agent is told matches reality.
+    rendered from the plan (the mounts the runtime binds), so what the agent
+    is told matches reality.
     """
     mount_plan = plan.mount_plan
     lines = ["# How your environment works", ""]
@@ -219,10 +219,6 @@ def build_environment_context(plan: SessionPlan) -> str:
     lines += ["", "## Privileged host commands", "", SUDO_RELAY_BODY]
     if plan.profile.brief:
         lines += ["", plan.profile.brief]
-    if plan.toolchains:
-        from .toolchains import brief
-
-        lines += ["", brief(plan.toolchains, plan.enforcer, plan.enforcer_options)]
     briefs = plan.composition.rendered_briefs()
     if briefs:
         lines += ["", "## Capabilities", ""]

@@ -35,14 +35,14 @@ endpoints:
     when: { harness: vibe }
     port: 8000
     target: { service: fetcher, network: fetchnet, port: 8000 }
-    observe: { tool: web_fetch }
+    observe: { tool: web_fetch, feeds: [webfetch-egress] }
   # Every harness's web_download: the same fetcher under its own name, so a
   # gate labels (and a filter rule can tell) downloads apart from fetches
   webdownload-mcp:
     when: { downloads: work }
     port: 8000
     target: { service: fetcher, network: fetchnet, port: 8000 }
-    observe: { tool: web_download }
+    observe: { tool: web_download, feeds: [webdownload-egress] }
   # The fetcher's hop to the egress proxy. Only rendered when a forwarder
   # provider (observe) interposes a gate: then the fetcher leaves the egress
   # network and reaches the proxy only through it. Otherwise it dials the proxy.

@@ -40,11 +40,10 @@ KEYS = {
     "vars": Key(None, "add"),  # the extension's own compose fragment ({{ vars.x }})
     "egress_hosts": Key(None, "cat"),  # names its sidecars reach (doctor: does the egress admit them?)
     "secret_refs": Key(None, "add"),  # label → secret ref, for the plan's list of secrets
-    "host_services": Key(None, "cat"),  # until R16.C moves them into playwright
 }
 # What a hook's `harness:` may hold: image layers (only these may `copy_host`),
-# env, skills (container paths) and mcp items.
-HARNESS_CONTRIB = {"image": list, "env": dict, "skills": list, "mcp": list}
+# env, skills (container paths), mcp items and a brief (its text, not a template).
+HARNESS_CONTRIB = {"image": list, "env": dict, "skills": list, "mcp": list, "brief": str}
 
 
 def _is(v: Any, types: type | tuple) -> bool:
@@ -84,7 +83,7 @@ def check_contribution(name: str, out: Any) -> dict[str, Any]:
             for hk, hv in v.items():
                 if hk not in HARNESS_CONTRIB or not isinstance(hv, HARNESS_CONTRIB[hk]):
                     raise ExtensionError(f"{where}: harness takes {sorted(HARNESS_CONTRIB)} "
-                                         "(image, skills, mcp: lists; env: a mapping)")
+                                         "(image, skills, mcp: lists; env: a mapping; brief: a string)")
     return out
 
 

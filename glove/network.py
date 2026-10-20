@@ -108,8 +108,9 @@ def endpoint_info(ep: Endpoint, session: str, networks: tuple[str, ...], target:
     this forwarder dials it (so checks it is private: not when a second hop does)."""
     return {
         "name": ep.name, "extension": ep.extension, "port": ep.port,
-        "target": target, "target_kind": ep.target.kind,
-        "harness": ep.harness, "host_gateway": ep.target.kind == "host", "networks": list(networks),
+        "target": target, "target_kind": ep.target.kind, "target_network": ep.target.network,
+        "listen_networks": list(ep.listen_networks), "harness": ep.harness,
+        "host_gateway": ep.target.kind == "host", "networks": list(networks),
         "aliases": list(ep.aliases), "observe": ep.observe, "interpose": ep.interpose,
         "container": ep.host(session),
         "lan": ep.target.network == "lan", "lan_only": lan_only,
@@ -123,6 +124,7 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
 
     internal_net = scoped(session, "net")
     sidecars: list[Sidecar] = []
+    infos: dict[str, dict[str, Any]] = {}  # endpoint → what its forwarder hook was told
     session_networks: dict[str, bool] = {}
     for ep in comp.endpoints if comp else []:
         if ep.interpose and not ep.interposed:
@@ -144,7 +146,7 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
                           networks=tuple(nets), lan=lan)
             target = f"{scoped(session, hop.role)}:{ep.target.port}"
         lan_only = lan and hop is None
-        info = endpoint_info(ep, session, tuple(nets), target, lan_only=lan_only)
+        info = infos[ep.name] = endpoint_info(ep, session, tuple(nets), target, lan_only=lan_only)
         impl = forwarder_service(comp, info)
         sidecars.append(Sidecar(
             role=ep.name, listen_port=ep.port, target=target,
@@ -170,27 +172,9 @@ def build_network_plan(cfg: Config, session: str, comp: Composition | None = Non
         session_networks=session_networks,
     )
     if comp is not None:
-        nxt = _next_gates(comp.endpoints)
         comp.forwarders = [
             {"service": s.role, "listen": f"{scoped(session, s.role)}:{s.listen_port}", "harness": s.harness,
-             "target": s.target, "observed": s.impl is not None, **s.facts, "next": nxt.get(s.role, [])}
-            for s in sidecars
+             "target": s.target, "observed": s.impl is not None, **s.facts, "endpoint": infos.get(s.role)}
+            for s in sidecars  # a second hop has no endpoint
         ]
     return plan
-
-
-def _next_gates(endpoints: list[Endpoint]) -> dict[str, list[str]]:
-    """Forwarder → the egress forwarders its target's sidecars dial out on (session.json `next`).
-
-    A forwarder whose target is a service on network N feeds the off-harness
-    forwarders listening on N (observed or not: a skipped gate still carries the
-    traffic); when both declare an `observe.tool`, only the same tool's (the
-    webfetch fetcher sends each tool through its own egress forwarder)."""
-    rendered = [ep for ep in endpoints if ep.interposed or not ep.interpose]
-    tools = {ep.name: (ep.observe or {}).get("tool") for ep in rendered}
-    egress = [ep for ep in rendered if not ep.harness]
-    return {
-        ep.name: [g.name for g in egress if g is not ep and ep.target.network in g.listen_networks
-                  and (tools[ep.name] is None or tools[g.name] is None or tools[g.name] == tools[ep.name])]
-        for ep in rendered if ep.target.kind == "service"
-    }

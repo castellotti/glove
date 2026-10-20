@@ -11,7 +11,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,20 +22,6 @@ if TYPE_CHECKING:
 
 # Docker Desktop's default File sharing list when no explicit key is set.
 _DEFAULT_FILE_SHARING = ["/Users", "/Volumes", "/private", "/tmp", "/var/folders"]
-
-
-def _host_tool_checks() -> list[Check]:
-    checks: list[Check] = []
-    for tool, why in (
-        ("ssh", "host_services: SSH model tunnel"),
-        ("node", "host_services: Playwright MCP/server"),
-        ("npx", "host_services: Playwright MCP/server"),
-    ):
-        path = shutil.which(tool)
-        checks.append(
-            Check(f"host tool: {tool}", "ok" if path else "warn", path or f"absent — needed for {why}")
-        )
-    return checks
 
 
 def _file_sharing_check() -> Check:
@@ -80,11 +65,11 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
 
-def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None,
-                     session_dir: Path | None = None, probe=None) -> list[Check]:
+def extension_checks(requested: dict, *, harness: str, comp: Composition | None = None, probe=None,
+                     **session) -> list[Check]:
     """Selection/settings validation plus each extension's own `doctor` hook.
-    ``comp``: the session plan's composition, when it already built one;
-    ``session_dir`` resolves relative path settings when it did not;
+    ``comp``: the session plan's composition, when it already built one; ``session``:
+    its `session_dir` (relative path settings), `enforcer` and `enforcer_options` when it did not;
     ``probe``: ``probe(url, method=, body=, headers=)`` → (status, text), a
     request to what the session reaches from a throwaway container, never the
     host; a `doctor(ctx, probe)` hook calls ``probe(url, method=, body=)``, as at
@@ -96,8 +81,7 @@ def extension_checks(requested: dict, *, harness: str, comp: Composition | None 
         try:
             # Stand-in paths: nothing is created; export roots only need to render
             # (observe/filter fragments bind them).
-            comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"),
-                           session_dir=session_dir,
+            comp = compose(requested, harness=harness, session="doctor", state_root=Path("/nonexistent"), **session,
                            export_dirs={r: Path("/nonexistent") / r for r in ("observe", "control")})
         except ValueError as e:
             return [Check("extensions", "fail", str(e))]
@@ -153,7 +137,6 @@ def run_doctor(
     # the whole home via the machine mount, so the hint is misleading there.
     if runtime == "docker":
         checks.append(_file_sharing_check())
-    checks.extend(_host_tool_checks())
     return checks
 
 

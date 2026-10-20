@@ -240,3 +240,18 @@ def test_tools_need_an_enforcer_that_runs_nono(tmp_path):
                    tools={"allow_commands": ["cp"]})
     with pytest.raises(ConfigError, match="would be ignored"):
         build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=501, gid=20)
+
+
+def test_host_services_are_no_longer_a_session_key(tmp_path):
+    from helpers import make_session
+
+    from glove import sessiondir as sdm
+
+    d = make_session(tmp_path / "a", "host_services:\n  - {name: t, command: sleep 1}\n")
+    with pytest.raises(sdm.SessionError, match=r"host_services: a session starts no host processes; `playwright: "):
+        sdm.load_file(sdm.SessionDir(d))
+    # an effective.yml written before they were removed still reads
+    eff = tmp_path / "effective.yml"
+    eff.write_text("config: {harness: pi, toolchains: [], host_services: [{name: t, command: sleep 1}]}\n"
+                   "resolved: {}\n")
+    assert sdm.read_effective(eff)[0].harness == "pi"

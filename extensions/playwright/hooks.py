@@ -3,9 +3,10 @@
 Sidecar modes (headless, novnc): `materialize` renders the MCP config the
 sidecar reads (read-only) and creates its output, profile and staging dirs. Host mode:
 headed Chrome + the pinned Playwright MCP run on the host in tmux
-(glove/hostsvc.py) on per-session loopback ports, and the `browser` endpoint
-forwards to that MCP. The Chrome profile and MCP output live in this
-session's extension state, never shared across sessions.
+(host/services.py: `launch_env` starts them, `teardown` stops them) on
+per-session loopback ports, and the `browser` endpoint forwards to that
+MCP. The Chrome profile and MCP output live in this session's extension
+state, never shared across sessions.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from glove.api import HookContext, hook, resolve_ca_file, scoped
 
 from .host import chrome
 from .host import login as lg
+from .host import services as hs
 
 HERE = Path(__file__).parent
 # The one Playwright pin: the sidecar image installs it from its lockfile and
@@ -148,31 +150,30 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
         start = urlsplit(login.start_url).hostname or ""
         return {"egress_hosts": sorted({start, *login.domains} - {""})}
     ports = host_ports(ctx)
-    state = ctx.state_dir
-    exe = chrome.chrome_executable() or chrome.DEFAULT_CHROME
-    host = scoped(ctx.session["id"], "browser")
+    # what `glove up` will run outside the sandbox: shown by `glove plan`/`policy`, kept in effective.yml
+    ran = {f"runs on the host ({svc.name})": svc.command for svc in host_services(ctx, ports)}
     return {
-        "exports": {"host_ports": ports},
+        "exports": {"host_ports": ports, "resolved": ran},
         "endpoints": {
             "browser": {"port": 8931, "target": {"host_port": ports["mcp"]}, "observe": {"tool": "browser"}},
         },
-        "host_services": [
-            {
-                "name": "chrome",
-                "command": (f'"{exe}" --remote-debugging-port={ports["cdp"]} '
-                            f"--user-data-dir={state / 'host-profile'} --no-first-run --no-default-browser-check"),
-                "ready_port": ports["cdp"],
-                "keep": s["keep_browser"],
-            },
-            {
-                "name": "mcp",
-                "command": (f"npx -y {PLAYWRIGHT_MCP} mcp --host 127.0.0.1 --port {ports['mcp']} "
-                            f"--allowed-hosts {host}:{ports['mcp']} --cdp-endpoint http://127.0.0.1:{ports['cdp']} "
-                            f"--shared-browser-context --output-dir {state / 'output'}"),
-                "ready_port": ports["mcp"],
-            },
-        ],
     }
+
+
+def host_services(ctx: HookContext, ports: dict[str, int]) -> list[hs.Service]:
+    """Host mode's Chrome and the pinned MCP attached to it, on this session's ports."""
+    state = ctx.state_dir
+    exe = chrome.chrome_executable() or chrome.DEFAULT_CHROME
+    host = scoped(ctx.session["id"], "browser")
+    return [
+        hs.Service("chrome", f'"{exe}" --remote-debugging-port={ports["cdp"]} --user-data-dir={state / "host-profile"} '
+                             "--no-first-run --no-default-browser-check",
+                   ports["cdp"], keep=ctx.settings["keep_browser"]),
+        hs.Service("mcp", f"npx -y {PLAYWRIGHT_MCP} mcp --host 127.0.0.1 --port {ports['mcp']} "
+                          f"--allowed-hosts {host}:{ports['mcp']} --cdp-endpoint http://127.0.0.1:{ports['cdp']} "
+                          f"--shared-browser-context --output-dir {state / 'output'}",
+                   ports["mcp"]),
+    ]
 
 
 def mcp_config(settings: dict[str, Any]) -> dict[str, Any]:
@@ -224,7 +225,19 @@ def materialize(ctx: HookContext) -> None:
 @hook
 def launch_env(ctx: HookContext, resolve_secret) -> dict[str, Any]:
     s = ctx.settings
-    return {"env": state_env(s["storage_state"], resolve_secret)} if s.get("storage_state") else {}
+    out = {"env": state_env(s["storage_state"], resolve_secret)} if s.get("storage_state") else {}
+    if s["mode"] == "host":  # after the secret: a bad reference starts nothing
+        hs.start(host_services(ctx, ctx.slot["browser"]["host_ports"]), ctx.session["id"], ctx.state_dir)
+    return out
+
+
+@hook
+def teardown(ctx: HookContext) -> None:
+    # whatever the mode now: a session switched away from host mode may still run them;
+    # none without the ports every host-mode launch records
+    if not (ctx.state_dir / PORTS_FILE).exists():
+        return
+    hs.stop(host_services(ctx, host_ports(ctx)), ctx.session["id"], ctx.state_dir)
 
 
 @hook
@@ -236,6 +249,8 @@ def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
                        path or "no Chrome/Chromium found for `glove playwright login`"))
     if ctx.settings["mode"] != "host":
         return checks
+    for svc in host_services(ctx, ctx.slot["browser"]["host_ports"]):  # what `glove up` runs outside the sandbox
+        checks.append((f"playwright host: {svc.name}", "info", svc.command))
     for tool in ("node", "npx"):
         p = shutil.which(tool)
         detail = p or f"absent — needed for {PLAYWRIGHT_MCP} mcp"

@@ -106,6 +106,18 @@ def test_git_config_env_vars_are_refused_with_a_pointer(tmp_path, var):
         build_session_plan(_cfg(tmp_path, env={var: "x"}), home_dir=str(tmp_path / "h"))
 
 
+def test_an_extensions_image_env_cannot_set_git_config_env_vars(tmp_path, monkeypatch):
+    real = plan_mod.compose
+
+    def compose(*a, **kw):
+        comp = real(*a, **kw)
+        comp.image_layers.append(("e", {"env": {"GIT_CONFIG_COUNT": "1"}}))
+        return comp
+    monkeypatch.setattr(plan_mod, "compose", compose)
+    with pytest.raises(ConfigError, match="an extension's env sets GIT_CONFIG_COUNT"):
+        build_session_plan(_cfg(tmp_path), home_dir=str(tmp_path / "h"))
+
+
 @pytest.mark.parametrize("raw", [["safe.directory"], {"nodot": "x"}, {"a.b": "x\ny"}, {"a.b": {"c": 1}}])
 def test_bad_git_config_is_refused(tmp_path, raw):
     with pytest.raises(ConfigError):

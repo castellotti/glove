@@ -64,6 +64,8 @@ class HookContext:
     export_dirs: Mapping[str, Path] = _EMPTY  # the in-tree owner of an export root
     forwarders: tuple[Mapping[str, Any], ...] = ()  # the forwarder slot's provider, once planned
     grants: Mapping[str, Any] = _EMPTY
+    enforcer: str = ""  # the session's, and its normalized `enforcer_options`
+    enforcer_options: Mapping[str, Any] = _EMPTY
 
     def __post_init__(self) -> None:
         for f in fields(self):
@@ -123,8 +125,8 @@ RESULTS: dict[str, Callable[[Any], str | None]] = {
     "resolve": _resolve,
     "diagnose": lambda out: None if out is None or isinstance(out, str) else "want a hint (a string) or None",
     "doctor": _doctor,
+    "teardown": lambda out: None if out is None else "want None",
 }
-# teardown (R16.C) joins with its first consumer
 HOOKS = frozenset(RESULTS)
 
 

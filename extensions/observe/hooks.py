@@ -112,6 +112,30 @@ def _rules(ctx: HookContext) -> bool:
     return "control" in ctx.export_dirs
 
 
+def next_gates(forwarders: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Forwarder → the egress forwarders its target's sidecars dial out on (session.json `next`).
+
+    An endpoint's `observe.feeds` names them; otherwise a forwarder whose
+    target is a service on network N feeds the off-harness forwarders listening
+    on N (observed or not: a skipped gate still carries the traffic). A second
+    hop (`<name>-out`) has no endpoint and feeds none; nor does any other."""
+    eps = {f["service"]: f["endpoint"] for f in forwarders if f["endpoint"]}
+    egress = [f["service"] for f in forwarders if f["endpoint"] and not f["harness"]]
+    out: dict[str, list[str]] = {f["service"]: [] for f in forwarders}
+    for name, ep in eps.items():
+        obs = ep["observe"] if isinstance(ep["observe"], dict) else {}
+        feeds = obs.get("feeds")
+        if feeds is None:
+            if ep["target_kind"] == "service":
+                out[name] = [g for g in egress if g != name and ep["target_network"] in eps[g]["listen_networks"]]
+            continue
+        if not isinstance(feeds, list) or any(f == name or f not in egress for f in feeds):
+            raise ValueError(f"endpoint {name!r}: observe.feeds must list this session's other off-harness "
+                             f"endpoints (rendered: {egress}), got {feeds!r}")
+        out[name] = [g for g in egress if g in feeds]
+    return out
+
+
 @hook
 def forwarder(ctx: HookContext, ep: dict[str, Any]) -> dict[str, Any] | None:
     s = ctx.settings
@@ -157,8 +181,9 @@ def session_facts(ctx: HookContext) -> dict[str, Any]:
     s = ctx.settings
     sid = ctx.session["id"]
     services = []
+    nxt = next_gates(ctx.forwarders)
     for f in ctx.forwarders:
-        entry = {k: f[k] for k in ("service", "listen", "observed", "harness", "next")}
+        entry = {k: f[k] for k in ("service", "listen", "observed", "harness")} | {"next": nxt[f["service"]]}
         if f["observed"]:
             entry.update({k: f[k] for k in ("mode", "tool", "scope", "upstream", "route", "client")})
         services.append(entry)

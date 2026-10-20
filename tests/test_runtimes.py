@@ -291,10 +291,8 @@ def test_doctor_surfaces_stub_runtime():
 def test_doctor_host_only_json_shape():
     checks = run_doctor(runtime="docker", enforcer="nono", include_container_probes=False)
     assert all({"name", "status", "detail"} <= set(c.to_dict()) for c in checks)
-    # enforcer + file-sharing + host tools all present without touching docker
-    names = {c.name for c in checks}
-    assert "enforcer: nono" in names
-    assert any(n.startswith("host tool") for n in names)
+    # the enforcer check without touching docker
+    assert "enforcer: nono" in {c.name for c in checks}
 
 
 def test_podman_keep_id_only_where_a_container_writes_a_host_bind(tmp_path):

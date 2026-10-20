@@ -6,6 +6,47 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Host services belong to `playwright` (breaking for session files).** The
+  session key `host_services:` is refused with a pointer: a session file can
+  no longer run host commands. `playwright`'s host mode starts its Chrome and
+  MCP itself (in its `launch_env` hook, after its `storage_state` secret
+  resolves, still in tmux, now logging under
+  `.glove/ext/playwright/host-logs/` without tmux) and stops them in the new
+  `teardown` hook, which `glove down` and `glove rm` run for each extension
+  the last launch enabled (a failure is a warning), and `glove up` when a
+  secret then fails to resolve. `glove plan` and `glove policy` show the host
+  commands (under `resolved (playwright)`, also kept in `effective.yml`), and
+  `glove check` lists them (as `info`). The `pi-remote-llm` example's SSH tunnel
+  is now opened by hand before `glove up`. **Before upgrading, `glove down`
+  any running session that uses `host_services:`**: the new glove no longer
+  knows to stop them (playwright host mode's, started by an older glove, it
+  still stops). `glove doctor` drops its ssh/node/npx checks (playwright's host
+  mode checks node and npx itself). For extension authors: `host_services`
+  is no longer a hook result.
+
+- **observe computes `session.json`'s `next` itself.** Core no longer reads an
+  endpoint's `observe` mapping: the forwarder provider's context gives each
+  forwarder its `endpoint` (what its `forwarder` hook was told, which now
+  includes `target_network` and `listen_networks`), and an endpoint may declare `observe: {feeds:
+  [<egress endpoint>, ...]}` instead of observe inferring it from shared
+  networks. webfetch declares it, replacing the rule that matched gates by
+  `observe.tool`. `next` is unchanged for every in-tree session.
+
+- **`toolchains` is an extension (breaking for session files).** The session
+  key `toolchains:` is refused with a pointer; the same list goes under
+  `extensions: {toolchains: {blocks: [...]}}` (the `claude-code` template is
+  updated). Its layers are `stage: late`, so the image keeps its layer order;
+  a project's manifest and lockfile are now baked like any extension's
+  `copy_host`, so a project under a read-write mount (`/work` included) is
+  refused. `enforcer_options.nono.browsers` without a block that bakes
+  `browsers:` is refused only when the extension is selected; `glove plan`
+  shows the enforcer options not at their defaults. For extension authors: an
+  image layer may set `env` (image `ENV`; git's config variables stay
+  glove's) and `stage: late`, a `contribute`
+  hook may return a `brief` (plain text), the hook context has `enforcer` and
+  `enforcer_options`, and `glove.api` adds `fetch_steps`, `exposes_private` and
+  `tools_run_browsers`.
+
 - **Extensions speak `api: 2` (breaking for out-of-tree extensions and
   adapters).** A manifest says `api: 2`; `api: 1` is refused with a pointer to
   the new author's guide, [docs/extensions.md](docs/extensions.md). Hooks are marked `@hook` from `glove.api` and get a read-only

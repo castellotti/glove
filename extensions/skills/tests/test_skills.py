@@ -130,7 +130,7 @@ def test_a_subset_of_skills_drops_the_rest_from_the_image(tmp_path, plugin):
 
 def test_editing_a_skill_is_a_new_image_whose_plugin_layer_comes_last(tmp_path, plugin):
     cfg = _cfg(tmp_path, "pi", {"demo": {"path": "skills/demo-repo/demo"}})
-    cfg.toolchains = [{"lang": "node", "version": "22.11.0"}]
+    cfg.extensions["toolchains"] = {"blocks": [{"lang": "node", "version": "22.11.0"}]}
     before = _plan_of(tmp_path, cfg)
     (plugin / "skills" / "greet" / "SKILL.md").write_text("---\nname: greet\n---\nchanged\n")
     after = _plan_of(tmp_path, cfg)

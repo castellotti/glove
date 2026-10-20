@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from glove import registry as reg
 from glove.cli import app
+from glove.config import ConfigError
 
 runner = CliRunner()
 
@@ -123,6 +124,18 @@ def test_plan_renders_under_dot_glove(home, tmp_path, monkeypatch):
     assert nets[f"glove-{sid}-hostgw"]["ipam"]["config"][0]["subnet"] == "172.31.0.32/27"
     base = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())["providers"]["glove"]["baseUrl"]
     assert base == f"http://glove-{sid}-llm:8080/v1"
+
+
+@pytest.mark.parametrize(("body", "shown"), [
+    ("", "enforcer: nono+srt  subnet"),
+    ("enforcer_options: {nono: {browsers: true}}\n", "enforcer: nono+srt (nono.browsers: true)  subnet"),
+    # a section the enforcer never applies is not in effect, so not shown
+    ("enforcer: srt\nenforcer_options: {nono: {browsers: true}}\n", "enforcer: srt  subnet"),
+])
+def test_plan_shows_the_enforcer_options_off_their_defaults(home, tmp_path, body, shown):
+    result = runner.invoke(app, ["plan", str(make_session(tmp_path / "s", body))], env={"COLUMNS": "300"})
+    assert result.exit_code == 0, result.output
+    assert shown in result.output
 
 
 def test_two_sessions_get_distinct_ids_projects_and_subnets(home, tmp_path):
@@ -616,7 +629,6 @@ def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypa
 
     monkeypatch.setattr("glove.session.launch", launch)
     monkeypatch.setattr("glove.cli._resolve_extensions", lambda *a, **k: None)
-    monkeypatch.setattr("glove.cli.start_host_services", lambda *a, **k: None)
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0
     resolved = yaml.safe_load(eff.read_text())["resolved"]
     assert resolved["extensions"] == {"corp": {"routes": ["10.0.0.0/8"]}} and resolved["model"]
@@ -645,13 +657,35 @@ def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypa
     d = make_session(tmp_path / "s")
     started, inspected = [], []
     monkeypatch.setattr("glove.session.launch", lambda *a, **k: started.append(1))
-    monkeypatch.setattr("glove.cli.start_host_services", lambda *a: started.append("host"))
     monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: inspected.append(a))
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("chrome", "fail", "absent")])
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 1 and "chrome: absent" in result.output and not started
     monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
+
+
+@pytest.mark.parametrize(("error", "said"), [
+    (lambda: ConfigError("keychain: no such item"), "no such item"),
+    (lambda: NotImplementedError("not on this host"), "not on this host"),
+    (lambda: subprocess.CalledProcessError(1, ["tmux", "new-session"]), "returned non-zero exit status 1"),
+])
+def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_path, monkeypatch, error, said):
+    d = make_session(tmp_path / "s")
+    events = []
+
+    def missing(plan):
+        raise error()
+
+    monkeypatch.setattr("glove.session.launch", lambda *a, **k: events.append("launched"))
+    monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: None)
+    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [])
+    monkeypatch.setattr("glove.plan.secret_env", missing)
+    monkeypatch.setattr("glove.extsession.run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 1 and said in result.output and "warn: w" in result.output
+    assert "Traceback" not in result.output
+    assert events == [{"llm"}]  # torn down, never launched
 
 
 def test_files_left_in_an_old_work_subdir_are_pointed_out(home, tmp_path):

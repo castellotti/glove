@@ -9,12 +9,13 @@ mounts: []                     # extra host dirs, e.g. [{path: ~/src/some-librar
 limits: { pids: 1024, memory: 8g, cpus: 4 }
 # Lets a shell command start the baked Chromium (Playwright against pages served
 # inside the sandbox): shell commands may read /proc, while other processes'
-# environment (the harness's token) stays hidden. README "Toolchains".
+# environment (the harness's token) stays hidden. extensions/toolchains/README.md.
 enforcer_options: { nono: { browsers: true } }
-toolchains:                    # baked into the image at build time; shell commands are offline
-  - { lang: python, version: "3.12", manager: uv }
-  - { lang: node, version: "24.21.0", manager: "pnpm@12.9.1", packages: ["playwright@1.63.0"], browsers: [chromium] }
 extensions:
+  toolchains:                  # baked into the image at build time; shell commands are offline
+    blocks:
+      - { lang: python, version: "3.12", manager: uv }
+      - { lang: node, version: "24.21.0", manager: "pnpm@12.9.1", packages: ["playwright@1.63.0"], browsers: [chromium] }
   llm:                         # the model (required): see extensions/llm/README.md
     provider: anthropic
     auth: oauth                # a Claude subscription token from `claude setup-token`; drop for an API key

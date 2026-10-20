@@ -107,7 +107,7 @@ def test_a_hooks_value_error_names_the_extension_and_hook_and_a_bug_says_where(t
     ("{'bogus': 1}", "'bogus' is not a key a hook may return"),
     ("{'verify': {}}", "'verify' must be a list"),
     ("{'exports': []}", "'exports' must be a dict"),
-    ("{'harness': {'brief': 'b.md'}}", "harness takes"),
+    ("{'harness': {'brief': ['b.md']}}", "harness takes"),
     ("[]", "must return a mapping"),
 ])
 def test_a_contribution_has_known_keys_of_their_types(tree, out, match):

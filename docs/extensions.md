@@ -67,7 +67,7 @@ Legend:
 | `host_files` | bool | | | yes | the hooks read files in the session directory that no other key declares (see [the context](#the-context)) |
 | `validate` | list of `{when, error}` or `{when, require, message}` | items | | | cross-setting rules, checked when the session is planned |
 | `exports` | map | | `add` | | values other extensions and templates read; a slot's are typed ([slot exports](#slot-exports)) |
-| `endpoints` | map name → `{port, target, harness, aliases, listen_networks, observe, interpose}` | entries | `add` | `host_port`, `address` | a forwarder. `target` is one of `service` (+ `network`), `slot`, `host_port`, `address` (+ `via: llm\|wan\|lan`) |
+| `endpoints` | map name → `{port, target, harness, aliases, listen_networks, observe, interpose}` | entries | `add` | `host_port`, `address` | a forwarder. `target` is one of `service` (+ `network`), `slot`, `host_port`, `address` (+ `via: llm\|wan\|lan`). `observe` is the forwarder provider's annotation (observe's gate: `mode`, `tool`, `client`, …; `feeds` names the egress endpoints its target dials out on, when its network has several) |
 | `networks` | map name → `{internal, when}` | entries | | | the extension's own networks; private ones are internal |
 | `services` | path to a compose fragment (Jinja) | in the template | | | its sidecars; core adds the hardening set and refuses security keys |
 | `images` | map name → `{build}` | | | | sidecar images, tagged by content |
@@ -86,8 +86,11 @@ Legend:
 
 ### `harness:`
 
-- `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`. Only a hook's
-  layers may `copy_host`.
+- `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`, `env` (image
+  `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`; never git's
+  `GIT_CONFIG_*`: use `git_config`). Only a hook's
+  layers may `copy_host`. Layers render in extension order, then those with
+  `stage: late` (e.g. the toolchains), then those that `copy_host`.
 - `env`: `{VAR: value}` or `{VAR: {value, when, shell: false}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
@@ -99,7 +102,7 @@ Legend:
   adapter reads. Core renders it, applying `when:`, before the adapter sees it.
 
 A `contribute` hook's `harness:` may hold `image`, `env`, `skills` (container
-paths) and `mcp`.
+paths), `mcp` and `brief` (its text, taken as is: not a template).
 
 ### Hook-only keys
 
@@ -111,7 +114,6 @@ time. A manifest may not set them.
 | `vars` | map | `add` | the extension's own fragment reads them as `{{ vars.x }}` |
 | `egress_hosts` | list of hosts (`*.x` for subdomains) | `cat` | the names its sidecars reach; `glove check` warns when a filtering egress doesn't admit one |
 | `secret_refs` | map label → secret reference | `add` | secrets nested deeper than a `secret` setting, which `glove check` verifies exist |
-| `host_services` | list | `cat` | host-side services (playwright's host mode); this key will move into that extension |
 
 ## Hooks
 
@@ -140,10 +142,17 @@ is optional.
 | `contribute` | `(ctx)` | planning (`check`, `plan`, `up`, `doctor`), in dependency order | read host files | manifest keys (`hook` column above) |
 | `materialize` | `(ctx)` | rendering (`plan`, `up`) | write under `ctx.state_dir` (and its export dirs) | `None` |
 | `forwarder` | `(ctx, endpoint)` | the network plan; the `forwarder` slot's provider only | nothing (pure) | `{service, facts, aliases}`, or `None` for core's own forwarder |
-| `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands; values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
+| `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands, start host processes (stopped by its `teardown`, also when `glove up` then fails before compose starts); values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
 | `resolve` | `(ctx, exports, probe)` | `up`, once the sidecars are healthy | only through `probe` | `(exports, notes)` |
 | `diagnose` | `(ctx, check, run)` | `up`, after one of its verify checks failed | `run(service, argv)` in its own sidecars | a hint, or `None` |
 | `doctor` | `(ctx, probe)` | `doctor`, `check` | `probe`, `None` offline | `[(name, status, detail)]`, status `ok`, `info`, `skip`, `warn` or `fail` |
+| `teardown` | `(ctx)` | `down`, `rm`, before the containers stop | stop what its `launch_env` started on the host | `None` |
+
+- `teardown` runs outside a launch: its context is a CLI's (the settings the
+  last `glove up` used, the session id, `state_dir` and the host paths its
+  manifest declares), with no plan behind it, and possibly when `launch_env`
+  never ran or only partly ran: stop only what is running. A failure is a
+  warning; the containers still stop.
 
 - A forwarder's `service` may set only `image`, `command`, `entrypoint`,
   `environment`, `volumes`, `tmpfs`, `depends_on`, `healthcheck`, `init`,
@@ -174,7 +183,8 @@ those of the fragment's template context.
 | `session_dir` | the session directory, **only if** the manifest declares a reason: a `path` setting, `mounts`, `outputs`/`inputs`, or `host_files: true` |
 | `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` (a `work` privilege its `contribute` hook returns counts for the hooks after it) |
 | `export_dirs` | the export roots it owns (in-tree only) |
-| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted) |
+| `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted); each forwarder's `endpoint` is what its `forwarder` hook was told (none for a second hop) |
+| `enforcer`, `enforcer_options` | the session's enforcer and its options (defaults applied), read-only |
 
 An untrusted out-of-tree extension never gets `session_dir`, `work_dir`,
 `export_dirs`, `forwarders` or `grants`. **This is hygiene, not a sandbox.** A
@@ -232,9 +242,10 @@ signatures, so a change is deliberate.
 | errors | `ConfigError`, `ExtensionError` (a `ConfigError`; both print as one line) |
 | the hook protocol | `HookContext`, `hook` |
 | secrets (values stay in memory) | `resolve_secret`, `is_secret_ref`, `keychain_service`, `keychain_set`, `is_secret_env_name` |
-| host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `resolve_ca_file` |
+| host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `exposes_private` (a path the harness must never see, e.g. `.glove/`), `resolve_ca_file` |
 | naming | `scoped(session_id, name)` (`glove-<id>-<name>`, a container, network or volume of the session), `HOST_GLOB` |
-| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `uv_steps` |
+| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_steps` |
+| the session's enforcer | `tools_run_browsers(enforcer, options)` (can Chromium start in a shell command?) |
 | rendering, with core's checks | `render_value`, `active_items`, `tool_names`, `mcp_server` |
 | an extension's CLI | `ext_session`, `ExtSession`, `reload_sidecar` |
 
@@ -289,8 +300,9 @@ def reload(directory: Path | None = DIR_OPT) -> None:
 ## Migrating from `api: 1`
 
 - `api: 2` in `extension.yml`.
-- `trust_corporate_ca:` → `trust:`. `conflicts:` and the manifest's
-  `host_services:` are gone.
+- `trust_corporate_ca:` → `trust:`. `conflicts:` and `host_services:` are
+  gone: an extension that runs something on the host starts it in
+  `launch_env` and stops it in `teardown`.
 - Mark each hook `@hook`. Read `ctx.settings`, not `ctx["settings"]`.
   `ctx["state"]` is `ctx.state_dir`.
 - `doctor(ctx)` → `doctor(ctx, probe)`.
