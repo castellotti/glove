@@ -173,13 +173,13 @@ def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
     return found
 
 
-def load_module(path: Path, name: str) -> ModuleType:
-    """Import an extension's `hooks.py`/`cli.py` by path, as a module of the
-    package `glove_ext.<name>` on its directory: it imports its own files
-    relatively (`from . import relay_policy`)."""
-    pkg = f"glove_ext.{name.replace('-', '_')}"
+def load_module(path: Path, name: str, ns: str = "glove_ext") -> ModuleType:
+    """Import an extension's `hooks.py`/`cli.py` (or, with `ns="glove_cmd"`, a
+    command's `cli.py`) by path, as a module of the package `<ns>.<name>` on its
+    directory: it imports its own files relatively (`from . import relay_policy`)."""
+    pkg = f"{ns}.{name.replace('-', '_')}"
     root = next((d for d in path.parents if (d / MANIFEST).is_file()), path.parent)
-    sys.modules.setdefault("glove_ext", ModuleType("glove_ext")).__path__ = []
+    sys.modules.setdefault(ns, ModuleType(ns)).__path__ = []
     if getattr(sys.modules.get(pkg), "__path__", None) != [str(root)]:
         # another directory of that name loaded first: `from . import x` must find this one's
         for k in [k for k in sys.modules if k == pkg or k.startswith(f"{pkg}.")]:

@@ -1,5 +1,5 @@
-"""The extension API's names and signatures (`glove.api`, `glove.api.harness`).
-A change to either fails here until this snapshot changes in the same commit:
+"""The extension API's names and signatures (`glove.api`, `glove.api.harness`,
+`glove.api.commands`). A change to any fails here until this snapshot changes in the same commit:
 an out-of-tree extension depends on them."""
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 
 import glove.api
+import glove.api.commands
 import glove.api.harness
 
 API = {
@@ -45,6 +46,86 @@ API = {
     "ext_session": "(name: 'str', directory: 'Path | None' = None, *, launched: 'bool' = True) -> 'ExtSession'",
     "reload_sidecar": "(s: 'ExtSession', service: 'str', env: 'Mapping[str, str]', *, wait: 'int' = 30) -> 'None'",
 }
+COMMANDS = {
+    "DIR_ARG": "ArgumentInfo",
+    "HardeningError": "class(ValueError)",
+    "ID_RE": "Pattern",
+    "Check": "dataclass(name, status, detail)",
+    "IKNOW": "OptionInfo",
+    "OPTION_SECTIONS": "dict",
+    "PLACEHOLDER": "str",
+    "RegistryError": "class(ValueError)",
+    "SCHEMA_VERSION": "int",
+    "SESSION_FILE": "str",
+    "SessionError": "class(ConfigError)",
+    "SubnetTaken": "class(Exception)",
+    "VERSION": "str",
+    "autodetect_provider": "() -> 'str'",
+    "build_session_plan": "(cfg: 'Config', *, home_dir: 'str', cwd: 'str | None' = None, uid: 'int | None' = None, "
+                          "gid: 'int | None' = None, resume: 'bool' = False, session_id: 'str | None' = None, "
+                          "state_dir: 'str | None' = None, session_dir: 'str | None' = None) -> 'SessionPlan'",
+    "build_forwarder": "(provider: 'str', *, force: 'bool' = False) -> 'None'",
+    "build_harness": "(provider: 'str', profile: 'HarnessProfile', *, apt_packages: 'list[str] | None' = None, "
+                     "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
+                     "plan: 'SessionPlan | None' = None, force: 'bool' = False) -> 'str'",
+    "call_hook": "(comp: 'Composition', a: 'Active', name: 'str', *args: 'Any') -> 'Any'",
+    "clear_stale_harness": "(provider: 'str', name: 'str') -> 'None'",
+    "console": "Console",
+    "conversations": "(profile, home_dir: 'Path', sid: 'str')",
+    "default_enforcer": "(runtime: 'str') -> 'str'",
+    "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
+    "ensure_home": "() -> 'None'",
+    "err": "Console",
+    "export_dirs": "(session_id: 'str') -> 'dict[str, Path]'",
+    "extension_checks": "(requested: 'dict', *, harness: 'str', comp: 'Composition | None' = None, probe=None, "
+                        "**session) -> 'list[Check]'",
+    "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
+    "find_session": "(path: 'str | Path | None' = None) -> 'SessionDir'",
+    "get_enforcer": "(name: 'str')",
+    "get_profile": "(name: 'str') -> 'HarnessProfile'",
+    "get_runtime": "(name: 'str')",
+    "glove_home": "() -> 'Path'",
+    "harness_model": "(profile: 'HarnessProfile', exports: 'dict[str, Any]') -> 'ModelDescriptor'",
+    "known_harnesses": "() -> 'list[str]'",
+    "known_runtimes": "() -> 'list[str]'",
+    "launch": "(cfg: 'Config', plan: 'SessionPlan', compose_file: 'Path', *, provider: 'str', rebuild: 'bool', "
+              "secrets: 'dict[str, str]', prepare: 'Callable[[], None] | None' = None) -> 'None'",
+    "load_registry": "() -> 'list[SessionEntry]'",
+    "load_session_file": "(sd: 'SessionDir') -> 'dict[str, Any]'",
+    "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
+    "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
+    "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
+                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+    "now": "() -> 'str'",
+    "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
+    "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
+    "placeholders_left": "(raw: 'Any', path: 'str' = '') -> 'list[str]'",
+    "print_checks": "(title: 'str', checks: 'list') -> 'None'",
+    "print_extensions": "(plan) -> 'None'",
+    "probe_direct": "(provider: 'str', url: 'str', *, method: 'str' = 'GET', body: 'dict | None' = None, "
+                    "headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
+    "probe_http": "(provider: 'str', plan: 'SessionPlan', url: 'str', *, method: 'str' = 'GET', "
+                  "body: 'dict | None' = None, headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
+    "project_name": "(session: 'str') -> 'str'",
+    "quarantine_supported": "() -> 'bool'",
+    "read_effective": "(path: 'Path') -> 'tuple[Config | None, dict[str, Any]]'",
+    "remove_rows": "(session_ids: 'set[str]') -> 'int'",
+    "remove_state": "(sd: 'SessionDir') -> 'None'",
+    "render_home": "(cfg: 'Config', plan: 'SessionPlan', home_dir: 'Path') -> 'list[Path]'",
+    "row_state": "(e: 'reg.SessionEntry') -> 'str'",
+    "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
+                  "-> 'list[Check]'",
+    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
+    "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
+    "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
+    "stop": "(sd: 'SessionDir', sid: 'str', provider: 'str | None', *, wipe: 'bool', mark: 'bool' = True) -> 'None'",
+    "sync_registry": "(sd: 'SessionDir', sid: 'str', raw: 'dict', *, check_runtime: 'bool' = False) "
+                     "-> 'reg.SessionEntry'",
+    "template_drift": "(sd: 'SessionDir') -> 'tuple[str, str] | None'",
+    "with_headers": "(probe, exports: 'dict') -> 'Callable[..., tuple[int, str]]'",
+    "write_effective": "(path: 'Path', cfg: 'Config', resolved: 'dict[str, Any] | None' = None) -> 'None'",
+    "worst_status": "(checks: 'list[Check]') -> 'str'",
+}
 HARNESS = {
     "CONTAINER_HOME": "str",
     "INJECTED_KEY": "str",
@@ -71,6 +152,6 @@ def _describe(obj) -> str:
 
 
 def test_the_api_is_what_the_snapshot_says():
-    for module, want in ((glove.api, API), (glove.api.harness, HARNESS)):
+    for module, want in ((glove.api, API), (glove.api.harness, HARNESS), (glove.api.commands, COMMANDS)):
         assert sorted(module.__all__) == sorted(want), module.__name__
         assert {n: _describe(getattr(module, n)) for n in module.__all__} == want, module.__name__

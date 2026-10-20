@@ -39,7 +39,7 @@ hosts, relayed to a sidecar that holds the key). See [Extensions](#extensions).
 
 ## Quick start
 
-glove runs from a checkout (the bundled `harnesses/`, `extensions/` and `templates/` live
+glove runs from a checkout (the bundled `harnesses/`, `extensions/`, `commands/` and `templates/` live
 next to the package), with [uv](https://docs.astral.sh/uv/), and Docker Desktop
 or Podman:
 
@@ -195,7 +195,8 @@ Mac runs the next time you use git. See "Planted host-trusted files" in
 ## CLI
 
 Session commands take an optional directory; without one they use the nearest
-`glove-session.yml` at or above the current directory.
+`glove-session.yml` at or above the current directory. Every command lives in
+`commands/<name>/` ([commands/README.md](commands/README.md)); core only mounts them.
 
 ```
 glove new <template|path|git-url> [DIR]      # materialize a session (DIR default: .)
@@ -205,10 +206,12 @@ glove check [DIR] [--no-container] [--offline]   # schema, placeholders, secrets
                                              # (--offline: contact nothing)
 glove plan  [DIR] [--compose] [--resume|--session ID]   # render .glove/, print the grants
 glove up    [DIR] [--resume|-r] [--session ID] [--rebuild]   # runs the extensions' checks first
-glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow record
+glove down  [DIR] [--wipe]                   # anonymous volumes go; --wipe: also named ones + the flow record
 glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
+glove clean [--dry-run] [--yes] [--volumes] [--runtime R]   # stopped stacks of gone sessions
+glove clean 7d [--build-cache]               # + idle sessions' containers/networks, glove images unused for 7d
 glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv; a long
                                              # one in parts, <service>.part<n>; ASCII only)
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)

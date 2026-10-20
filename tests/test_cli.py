@@ -1,304 +1,34 @@
-"""CLI-level tests for the session-directory workflow (v3 §4)."""
+"""glove's CLI (`glove/cli.py`: the commands and extension CLIs it mounts) and the launch and
+teardown machinery the commands drive. Each command's own tests are in `commands/<name>/tests/`."""
 
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import stat
 import subprocess
-from pathlib import Path
 
 import pytest
-import yaml
-from helpers import darwin, make_session, quarantine_attr
 from typer.testing import CliRunner
 
-from glove import registry as reg
 from glove.cli import app
 from glove.config import ConfigError
 
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def _wide_console(monkeypatch):
-    from glove import cli
+def test_help_lists_every_command():
+    from glove.cli import COMMANDS_DIR
 
-    for c in (cli.console, cli.err):
-        monkeypatch.setattr(c, "width", 400)  # no wrapping of long paths in assertions
-
-
-@pytest.fixture(autouse=True)
-def _no_preflight(request, monkeypatch):
-    # `up`'s doctor probes the real runtime; test_up_refuses_a_failing_check covers it
-    if "preflight" not in request.node.name:
-        monkeypatch.setattr("glove.cli.preflight", lambda *a: None)
-
-
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    ghome = tmp_path / "ghome"
-    monkeypatch.setenv("GLOVE_HOME", str(ghome))
-    return ghome
-
-
-def _sid(d: Path) -> str:
-    return (d / ".glove" / "id").read_text().strip()
-
-
-def _lan(extra: str = "") -> str:
-    return "{provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m" + extra + "}"
-
-
-# --- glove new ------------------------------------------------------------------------
-
-
-def test_new_minimal_materializes_the_layout(home, tmp_path):
-    d = tmp_path / "My Research.1"
-    result = runner.invoke(app, ["new", "minimal", str(d)])
-    assert result.exit_code == 0, result.output
-    assert (d / "glove-session.yml").is_file() and (d / "work").is_dir()
-    assert stat.S_IMODE((d / ".glove").stat().st_mode) == 0o700
-    sid = _sid(d)
-    assert sid.startswith("my-research-1-") and len(sid.rsplit("-", 1)[1]) == 6
-    assert "extensions.llm.provider" in result.output  # the <set-me>s to fill in
-    doc = json.loads((home / "registry.json").read_text())
-    assert doc["v"] == 2
-    row = doc["sessions"][0]
-    assert row["id"] == sid and row["dir"] == str(d.resolve()) and row["template"] == "minimal"
-    assert row["harness"] == "pi" and row["grants"] == {"observe": None, "filter": None}
-    assert row["subnet"] == "172.31.0.0/24"
-    assert (home / "control").is_dir()  # Layman's overlay condition (handoff §2)
-
-
-def test_new_refuses_an_existing_session_and_unknown_templates(home, tmp_path):
-    d = tmp_path / "s"
-    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
-    again = runner.invoke(app, ["new", "minimal", str(d)])
-    assert again.exit_code == 1 and "already" in again.output
-    bad = runner.invoke(app, ["new", "no-such-template", str(tmp_path / "t")])
-    assert bad.exit_code == 1 and "minimal" in bad.output  # lists the bundled ones
-
-
-def test_new_from_a_path_and_diff(home, tmp_path):
-    tpl = make_session(tmp_path / "tpl")
-    d = tmp_path / "s"
-    assert runner.invoke(app, ["new", str(tpl), str(d)]).exit_code == 0
-    assert "unchanged" in runner.invoke(app, ["new", "--diff", "x", str(d)]).output
-    (tpl / "glove-session.yml").write_text((tpl / "glove-session.yml").read_text() + "brief: new\n")
-    assert "+brief: new" in runner.invoke(app, ["new", "--diff", "x", str(d)]).output
-
-
-def test_new_refuses_to_overwrite_a_v2_registry(home, tmp_path):
-    home.mkdir()
-    (home / "registry.json").write_text('[{"dir": "/x", "harness": "pi", "env_id": "x"}]')
-    result = runner.invoke(app, ["new", "minimal", str(tmp_path / "s")])
-    assert result.exit_code == 1 and "glove v2 registry" in result.output
-    assert not (tmp_path / "s").exists()
-    assert json.loads((home / "registry.json").read_text())[0]["env_id"] == "x"  # untouched
-
-
-# --- plan / up ----------------------------------------------------------------------
-
-
-def test_plan_renders_under_dot_glove(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s")
-    monkeypatch.chdir(d / "work")  # found from a subdirectory
-    result = runner.invoke(app, ["plan", "--compose"])
-    assert result.exit_code == 0, result.output
-    sid = _sid(d)
-    compose = yaml.safe_load((d / ".glove" / "compose.yml").read_text())
-    harness = compose["services"][f"glove-{sid}-harness"]
-    sources = set()
-    for v in harness["volumes"]:
-        sources.add(v.split(":")[0] if isinstance(v, str) else v.get("source"))
-    assert str((d / "work").resolve()) in sources and str((d / ".glove" / "home").resolve()) in sources
-    # nothing else of the session dir is mounted: not the dir, not .glove/ itself
-    assert not sources & {str(d.resolve()), str((d / ".glove").resolve())}
-    # the default enforcer on docker: srt around the harness, nono per command
-    assert {p.name for p in (d / ".glove" / "enforcer").iterdir()} >= {"srt-harness.json", "tool.json"}
-    assert (d / ".glove" / "effective.yml").is_file() and (d / ".glove" / "baseline.yml").is_file()
-    nets = compose["networks"]
-    assert nets[f"glove-{sid}-net"]["ipam"]["config"][0]["subnet"] == "172.31.0.0/27"
-    assert nets[f"glove-{sid}-hostgw"]["ipam"]["config"][0]["subnet"] == "172.31.0.32/27"
-    base = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())["providers"]["glove"]["baseUrl"]
-    assert base == f"http://glove-{sid}-llm:8080/v1"
-
-
-@pytest.mark.parametrize(("body", "shown"), [
-    ("", "enforcer: nono+srt  subnet"),
-    ("enforcer_options: {nono: {browsers: true}}\n", "enforcer: nono+srt (nono.browsers: true)  subnet"),
-    # a section the enforcer never applies is not in effect, so not shown
-    ("enforcer: srt\nenforcer_options: {nono: {browsers: true}}\n", "enforcer: srt  subnet"),
-])
-def test_plan_shows_the_enforcer_options_off_their_defaults(home, tmp_path, body, shown):
-    result = runner.invoke(app, ["plan", str(make_session(tmp_path / "s", body))], env={"COLUMNS": "300"})
-    assert result.exit_code == 0, result.output
-    assert shown in result.output
-
-
-def test_two_sessions_get_distinct_ids_projects_and_subnets(home, tmp_path):
-    a, b = make_session(tmp_path / "a" / "proj"), make_session(tmp_path / "b" / "proj")
-    for d in (a, b):
-        assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    assert _sid(a) != _sid(b) and _sid(a).startswith("proj-") and _sid(b).startswith("proj-")
-    assert {e.subnet for e in reg.load_registry()} == {"172.31.0.0/24", "172.31.1.0/24"}
-
-
-def test_up_refuses_placeholders(home, tmp_path):
-    d = tmp_path / "s"
-    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
-    result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 1 and "<set-me>" in result.output
-
-
-def test_not_a_session_errors_with_a_hint(home, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["up"])
-    assert result.exit_code == 1 and "glove new" in result.output
-
-
-@pytest.mark.parametrize(("extra", "msg"), [("workdir: .\n", "work/ directory"),
-                                            ("net: [service]\n", "only from extensions"),
-                                            ("add_dirs: [/x]\n", "mounts"), ("frobnicate: 1\n", "unknown key")])
-def test_v2_keys_and_unknown_keys_are_refused(home, tmp_path, extra, msg):
-    d = make_session(tmp_path / "s", extra)
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 1 and msg in result.output
-
-
-@pytest.mark.parametrize("mount", [".", ".glove", ".glove/home", "local", "glove-session.yml", ".."])
-def test_mounts_never_expose_the_session_state(home, tmp_path, mount):
-    d = make_session(tmp_path / "p" / "s", f"mounts: [{{path: \"{mount}\", mode: ro}}]\n")
-    (d / "local").mkdir()
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 1 and "would expose" in result.output
-
-
-def test_a_relative_mount_resolves_against_the_session_dir(home, tmp_path):
-    d = make_session(tmp_path / "s", "mounts: [{path: data, mode: ro}]\n")
-    (d / "data").mkdir()
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 0, result.output
-    assert str((d / "data").resolve()) in result.output
-
-
-def test_a_moved_session_keeps_its_id_and_updates_the_registry(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    sid = _sid(d)
-    moved = tmp_path / "elsewhere"
-    d.rename(moved)
-    result = runner.invoke(app, ["plan", str(moved)])
-    assert result.exit_code == 0 and "moved" in result.output
-    assert _sid(moved) == sid and reg.find(sid).dir == str(moved.resolve())
-
-
-def test_a_copied_session_is_refused_until_it_gets_its_own_id(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    copy = tmp_path / "copy"
-    shutil.copytree(d, copy)
-    result = runner.invoke(app, ["plan", str(copy)])
-    assert result.exit_code == 1 and "same session id" in result.output
-    (copy / ".glove" / "id").unlink()
-    assert runner.invoke(app, ["plan", str(copy)]).exit_code == 0
-    assert _sid(copy) != _sid(d)
-
-
-# --- resume ---------------------------------------------------------------------------
-
-
-def _seed_transcript(d: Path, uuid="01a09d62"):
-    tdir = d / ".glove" / "home" / ".pi" / "agent" / "sessions" / "--work--"
-    tdir.mkdir(parents=True, exist_ok=True)
-    (tdir / f"20240101_{uuid}.jsonl").write_text("{}\n")
-    return uuid
-
-
-def test_resume_and_session_mutually_exclusive(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    for cmd in ("up", "plan"):
-        result = runner.invoke(app, [cmd, str(d), "--resume", "--session", "x"])
-        assert result.exit_code == 1 and "not both" in result.output
-
-
-def test_resume_no_prior_conversation_errors(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    result = runner.invoke(app, ["plan", str(d), "--resume"])
-    assert result.exit_code == 1 and "no previous conversation" in result.output
-
-
-def test_resume_renders_continue_inside_the_wrapper(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    _seed_transcript(d)
-    assert runner.invoke(app, ["plan", str(d), "--resume"]).exit_code == 0
-    compose = (d / ".glove" / "compose.yml").read_text()
-    assert "--continue" in compose and compose.index("--continue") > compose.index("--")
-
-
-def test_session_renders_id_and_lists_available_when_missing(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    uuid = _seed_transcript(d)
-    assert runner.invoke(app, ["plan", str(d), "--session", uuid]).exit_code == 0
-    compose = (d / ".glove" / "compose.yml").read_text()
-    assert "--session" in compose and uuid in compose
-    missing = runner.invoke(app, ["plan", str(d), "--session", "nope"])
-    assert missing.exit_code == 1 and "no conversation matching" in missing.output and uuid in missing.output
-
-
-def test_resume_grant_widening_warns_against_the_baseline(home, tmp_path):
-    d = make_session(tmp_path / "s")
-    uuid = _seed_transcript(d)
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0  # baseline: llm only
-    f = d / "glove-session.yml"
-    f.write_text(f.read_text() + "allow_sensitive: true\n")
-    result = runner.invoke(app, ["plan", str(d), "--session", uuid])
-    assert result.exit_code == 0, result.output
-    assert "broader access" in result.output and "allow_sensitive" in result.output
-    # the baseline is the original, not the last run: a second widened run warns again
-    assert "broader access" in runner.invoke(app, ["plan", str(d), "--session", uuid]).output
+    out = runner.invoke(app, ["--help"], env={"COLUMNS": "200"}).output
+    names = sorted(p.name for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file())
+    assert len(names) == 17
+    for name in names:
+        assert f" {name} " in out, name
+    # workflow order (each command's RANK); Typer lists the groups after the commands
+    shown = [line.split()[1] for line in out.splitlines() if line.startswith("│ ") and line[2:3].isalpha()]
+    assert shown[:17] == ["new", "plan", "up", "check", "down", "rm", "ls", "ps", "gc", "clean", "build", "doctor",
+                          "policy", "ext", "version", "downloads", "keychain"]
 
 
 # --- secrets ------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("harness", ["pi", "vibe"])
-def test_the_llm_key_is_written_nowhere(home, tmp_path, monkeypatch, harness):
-    secret = "sk-test-0123456789abcdef"
-    monkeypatch.setenv("MY_LLM_KEY", secret)
-    d = make_session(tmp_path / "s", harness=harness, llm=_lan(", api_key: env:MY_LLM_KEY"))
-    result = runner.invoke(app, ["plan", str(d), "--compose"])
-    assert result.exit_code == 0, result.output
-    assert secret not in result.output
-    for root in (home, d):
-        assert [p for p in root.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()] == []
-    compose = (d / ".glove" / "compose.yml").read_text()
-    # the harness holds a placeholder; the key reaches only llm-auth, at `compose up`
-    assert 'GLOVE_LLM_API_KEY: "glove-injected"' in compose and "LLM_AUTH_KEY: null" in compose
-    assert "api_key: env:MY_LLM_KEY" in (d / ".glove" / "effective.yml").read_text()
-    if harness == "pi":
-        models = json.loads((d / ".glove/home/.pi/agent/models.json").read_text())
-        assert models["providers"]["glove"]["apiKey"] == "$GLOVE_LLM_API_KEY"
-
-
-def test_a_literal_key_is_refused(home, tmp_path):
-    d = make_session(tmp_path / "s", llm=_lan(", api_key: sk-literal-key"))
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 1 and "llm.api_key is a secret: use a reference" in result.output
-    assert "sk-literal-key" not in result.output
-
-
-def test_plan_never_resolves_a_keychain_reference(home, tmp_path, monkeypatch):
-    from glove import config as config_mod
-
-    def boom(*a, **k):
-        raise AssertionError("planning must not resolve the key")
-
-    monkeypatch.setattr(config_mod, "resolve_secret", boom)
-    d = make_session(tmp_path / "s", llm=_lan(", api_key: keychain:my-llm"))
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
 
 
 def _launch_plan(tmp_path, api_key):
@@ -338,7 +68,6 @@ def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, 
 @pytest.mark.parametrize(("inspect", "removed"), [((1, ""), False), ((0, "false\n"), True), ((0, "true\n"), None)])
 def test_a_stale_harness_is_removed_and_a_running_one_refused(monkeypatch, inspect, removed):
     from glove import session as session_mod
-    from glove.config import ConfigError
 
     calls = []
 
@@ -353,7 +82,7 @@ def test_a_stale_harness_is_removed_and_a_running_one_refused(monkeypatch, inspe
     else:
         session_mod.clear_stale_harness("docker", "glove-s-harness")
     assert calls[0] == ["docker", "container", "inspect", "-f", "{{.State.Running}}", "glove-s-harness"]
-    assert calls[1:] == ([["docker", "rm", "-f", "glove-s-harness"]] if removed else [])
+    assert calls[1:] == ([["docker", "rm", "-fv", "glove-s-harness"]] if removed else [])
 
 
 def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
@@ -364,60 +93,7 @@ def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
     assert secret_env(plan) == {"LLM_AUTH_KEY": "sk-env"}
 
 
-def test_check_reports_secrets_without_reading_them(home, tmp_path, monkeypatch):
-    from glove import config as config_mod
-
-    def boom(*a, **k):
-        raise AssertionError("check must not resolve the key")
-
-    monkeypatch.setattr(config_mod, "resolve_secret", boom)
-    monkeypatch.delenv("NOT_SET_KEY", raising=False)
-    d = make_session(tmp_path / "s", llm=_lan(", api_key: env:NOT_SET_KEY"))
-    result = runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
-    assert result.exit_code == 1 and "NOT_SET_KEY is not set" in result.output
-    assert not (d / ".glove").exists() and not (home / "registry.json").exists()  # check writes nothing
-    monkeypatch.setenv("NOT_SET_KEY", "x")
-    result = runner.invoke(app, ["check", str(d), "--no-container", "--offline"])
-    assert "secret llm.api_key" in result.output and "is not set" not in result.output
-
-
-def test_check_asks_the_llm_server_only_from_a_container(home, tmp_path, monkeypatch):
-    from glove import session
-
-    asked = []
-    monkeypatch.setattr(session, "probe_direct", lambda provider, url, **kw:
-                        asked.append((provider, url, kw)) or (200, '{"data": [{"id": "m"}]}'))
-    monkeypatch.setattr("glove.doctor.run_doctor", lambda **k: [])  # no runtime probes here
-    d = make_session(tmp_path / "s", llm=_lan())
-    result = runner.invoke(app, ["check", str(d)])
-    assert result.exit_code == 0, result.output
-    assert "llm server" in result.output and "serves m" in result.output
-    assert asked == [("docker", "http://example.test:8080/v1/models", {"method": "GET", "body": None, "headers": {}})]
-    for flag in ("--offline", "--no-container"):  # neither runs a container: nothing is asked
-        result = runner.invoke(app, ["check", str(d), flag])
-        assert result.exit_code == 0 and "llm server" not in result.output, result.output
-    assert len(asked) == 1
-
-
-# --- ls / down / rm / gc ----------------------------------------------------------------------
-
-
-def test_ls_shows_rows_and_their_state(home, tmp_path):
-    a, b = make_session(tmp_path / "a"), make_session(tmp_path / "b")
-    for d in (a, b):
-        assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    shutil.rmtree(b)
-    out = runner.invoke(app, ["ls"]).output
-    assert _sid(a) in out and "ok" in out and "missing" in out and "glove gc" in out
-
-
-def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    calls = []
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append((sid, k)))
-    assert runner.invoke(app, ["down", str(d), "--provider", "docker"]).exit_code == 0
-    assert calls == [(_sid(d), {"provider": "docker", "wipe": False})]
+# --- teardown ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("wipe", "tail"), [(False, []), (True, ["--volumes"])])
@@ -437,7 +113,8 @@ def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail, runs):
     project = session.project_name("s-0a0b0c")
     assert calls[0] == ["podman", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}",
                         "--filter", "label=com.docker.compose.oneoff=True"]
-    assert calls[1:] == ([["podman", "rm", "-f", "abc123", "def456"]] if runs else []) + [
+    assert calls[1:] == ([["podman", "rm", "-fv", "abc123", "def456"]] if runs else []) + [
+        ["podman", "compose", "-p", project, "rm", "-fsv"],  # anonymous volumes go, named ones stay
         ["podman", "compose", "-p", project, "down", "--remove-orphans", *tail]]
 
 
@@ -452,186 +129,9 @@ def test_compose_runs_without_podmans_banner(monkeypatch, provider, banner_off):
     assert ("PODMAN_COMPOSE_WARNING_LOGS" in envs[-1]) is banner_off
 
 
-def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
-    monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
-    d = make_session(tmp_path / "s", "  observe: {}\n  filter: {}\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    sid = _sid(d)
-    assert (home / "observe" / sid / "net" / "session.json").is_file() and (home / "control" / sid).is_dir()
-    (d / "work" / "keep.txt").write_text("x")
-    assert runner.invoke(app, ["rm", str(d), "--yes", "--provider", "docker"]).exit_code == 0
-    assert not (d / ".glove").exists() and (d / "work" / "keep.txt").is_file()
-    assert (d / "glove-session.yml").exists()
-    assert not (home / "observe" / sid).exists() and not (home / "control" / sid).exists()
-    assert reg.find(sid) is None
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0  # a fresh identity
-    assert runner.invoke(app, ["rm", str(d), "--yes", "--all", "--provider", "docker"]).exit_code == 0
-    assert not d.exists()
-
-
-def test_deleting_the_dir_leaves_only_the_row_and_exports_which_gc_removes(home, tmp_path):
-    d = make_session(tmp_path / "s", "  observe: {transcripts: false}\n")
-    keep = make_session(tmp_path / "keep", "  observe: {transcripts: false}\n")
-    for x in (d, keep):
-        assert runner.invoke(app, ["plan", str(x)]).exit_code == 0
-    sid, kept = _sid(d), _sid(keep)
-    assert reg.find(sid).grants["observe"] == {"net": True, "transcripts": False}
-    shutil.rmtree(d)
-    foreign = home / "observe" / "pi-search"  # not a v3 id: never glove v3's to remove
-    foreign.mkdir(parents=True)
-    result = runner.invoke(app, ["gc", "--yes"])
-    assert result.exit_code == 0, result.output
-    assert reg.find(sid) is None and reg.find(kept) is not None
-    assert not (home / "observe" / sid).exists() and not (home / "control" / sid).exists()
-    assert (home / "observe" / kept).is_dir() and foreign.is_dir()
-    assert "nothing to collect" in runner.invoke(app, ["gc", "--yes"]).output
-
-
-def test_gc_refuses_a_v2_registry(home):
-    home.mkdir()
-    (home / "registry.json").write_text("[]")
-    result = runner.invoke(app, ["gc", "--yes"])
-    assert result.exit_code == 1 and "v2 registry" in result.output
-
-
-def test_keychain_set_runs_security_interactively(monkeypatch):
-    calls = []
-    monkeypatch.setattr("glove.config.keychain_set", lambda svc, secret=None: calls.append((svc, secret)) or 0)
-    result = runner.invoke(app, ["keychain", "set", "my-llm"])
-    assert result.exit_code == 0 and calls == [("my-llm", None)] and "keychain:my-llm" in result.output
-
-
-def test_keychain_set_stdin_takes_one_piped_line(monkeypatch):
-    calls = []
-    monkeypatch.setattr("glove.config.keychain_set", lambda svc, secret=None: calls.append((svc, secret)) or 0)
-    result = runner.invoke(app, ["keychain", "set", "--stdin", "corp-pat"], input="s3cret\n")
-    assert result.exit_code == 0 and calls == [("corp-pat", "s3cret")]
-    assert "s3cret" not in result.output
-
-
 def test_the_v2_commands_are_gone():
     for cmd in (["init", "pi"], ["run", "pi"], ["config"], ["pi"]):
         assert runner.invoke(app, cmd).exit_code != 0, cmd
-
-
-def test_effective_records_launch_time_resolution(home, tmp_path):
-    from glove import sessiondir
-
-    d = make_session(tmp_path / "s")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    sd = sessiondir.SessionDir(d.resolve())
-    cfg, _ = sessiondir.read_effective(sd.effective)
-    sessiondir.write_effective(sd.effective, cfg, {"at": "2026-09-28T00:00:00Z",
-                                                  "model": {"model": "qwen", "vision": True, "context_window": 131072}})
-    out = runner.invoke(app, ["plan", str(d)]).output
-    assert "resolved at last launch" in out and "qwen" in out and "131072" in out
-    assert sessiondir.read_effective(sd.effective)[1]["model"]["model"] == "qwen"  # a re-plan keeps it
-    assert os.stat(sd.state).st_mode & 0o777 == 0o700
-
-
-def test_mounts_never_expose_the_glove_home_or_another_session(home, tmp_path):
-    other = make_session(tmp_path / "other")
-    assert runner.invoke(app, ["plan", str(other)]).exit_code == 0
-    for mount in (str(home / "control"), str(home), str(other), str(other / ".glove" / "home")):
-        d = make_session(tmp_path / "s", f"mounts: [{{path: \"{mount}\", mode: rw}}]\n")
-        result = runner.invoke(app, ["plan", str(d)])
-        assert result.exit_code == 1 and "would expose" in result.output, mount
-
-
-def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_path, monkeypatch):
-    from glove.runtimes.docker import DockerRuntime
-
-    taken = {"other_default": ["172.31.0.0/24"]}
-    monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: taken)
-    d = tmp_path / "s"
-    assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
-    sid = _sid(d)
-    assert reg.find(sid).subnet == "172.31.1.0/24"  # allocation skipped the runtime's network
-    taken[f"glove-{sid}-net"] = ["172.31.1.0/27"]  # its own networks are not a conflict
-    make_session(d)  # fill in the model so `up` gets as far as planning
-    monkeypatch.setattr("glove.session.launch", lambda *a, **k: None)
-    assert runner.invoke(app, ["up", str(d)]).exit_code == 0
-    assert reg.find(sid).subnet == "172.31.1.0/24"
-    taken["later_default"] = ["172.31.1.128/25"]  # a foreign network took part of it since
-    result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 0 and "re-allocating" in result.output
-    assert reg.find(sid).subnet == "172.31.2.0/24"
-    assert "172.31.2.0/27" in (d / ".glove" / "compose.yml").read_text()
-
-
-def test_up_retries_on_a_subnet_another_session_took_meanwhile(home, tmp_path, monkeypatch):
-    from glove.runtimes.docker import DockerRuntime
-    from glove.session import SubnetTaken
-
-    taken: dict[str, list[str]] = {}
-    monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: taken)
-    d = make_session(tmp_path / "s")
-    subnets = []
-
-    def launch(cfg, plan, *a, **k):  # the other session's networks appear during compose up
-        subnets.append(cfg.subnet)
-        if len(subnets) == 1:
-            taken["glove-other-net"] = [cfg.subnet]
-            raise SubnetTaken(f"another network took this session's subnet meanwhile: {cfg.subnet}")
-
-    monkeypatch.setattr("glove.session.launch", launch)
-    result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 0 and "re-allocating and retrying" in result.output
-    assert subnets[0] != subnets[1] == reg.find(_sid(d)).subnet
-
-
-def test_up_gives_up_after_three_taken_subnets(home, tmp_path, monkeypatch):
-    from glove.session import SubnetTaken
-
-    d = make_session(tmp_path / "s")
-    rebuilds = []
-
-    def always(cfg, plan, *a, rebuild, **k):
-        rebuilds.append(rebuild)
-        raise SubnetTaken("taken")
-
-    monkeypatch.setattr("glove.session.launch", always)
-    result = runner.invoke(app, ["up", str(d), "--rebuild"])
-    assert result.exit_code == 1 and "gave up after 3 attempts" in result.output
-    assert rebuilds == [True, False, False]  # the images are built once
-
-
-def test_an_unsupported_runtime_enforcer_pair_is_a_clean_error(home, tmp_path):
-    d = make_session(tmp_path / "s", "runtime: podman\nenforcer: srt\n")
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 1 and "not supported on the podman runtime" in result.output
-    assert "Traceback" not in result.output
-
-
-def test_down_and_rm_use_the_sessions_runtime_not_path(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s", "runtime: podman\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    monkeypatch.setattr("glove.cli.shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
-    calls = []
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append(k["provider"]))
-    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
-    (d / ".glove" / "effective.yml").unlink()  # never planned since: the session file says
-    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
-    assert runner.invoke(app, ["rm", str(d), "-y"]).exit_code == 0
-    assert calls == ["podman", "podman", "podman"]
-
-
-def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypatch):
-    from glove import sessiondir as sdm
-
-    d = make_session(tmp_path / "s")
-    eff = d / ".glove" / "effective.yml"
-
-    def launch(cfg, plan, *a, prepare, **k):
-        _, resolved = sdm.read_effective(eff)  # as a `resolved` export would have recorded it
-        sdm.write_effective(eff, cfg, {**resolved, "extensions": {"corp": {"routes": ["10.0.0.0/8"]}}})
-        prepare()
-
-    monkeypatch.setattr("glove.session.launch", launch)
-    monkeypatch.setattr("glove.cli._resolve_extensions", lambda *a, **k: None)
-    assert runner.invoke(app, ["up", str(d)]).exit_code == 0
-    resolved = yaml.safe_load(eff.read_text())["resolved"]
-    assert resolved["extensions"] == {"corp": {"routes": ["10.0.0.0/8"]}} and resolved["model"]
 
 
 def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, monkeypatch):
@@ -651,67 +151,25 @@ def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, m
     assert "bad" not in {g.name for g in app.registered_groups}
 
 
-def test_up_preflight_refuses_a_failing_extension_check(home, tmp_path, monkeypatch):
-    from glove.runtimes.base import Check
-
-    d = make_session(tmp_path / "s")
-    started, inspected = [], []
-    monkeypatch.setattr("glove.session.launch", lambda *a, **k: started.append(1))
-    monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: inspected.append(a))
-    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("chrome", "fail", "absent")])
-    result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 1 and "chrome: absent" in result.output and not started
-    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [Check("x", "warn", "meh")])
-    assert runner.invoke(app, ["up", str(d)]).exit_code == 0 and started and inspected
 
 
-@pytest.mark.parametrize(("error", "said"), [
-    (lambda: ConfigError("keychain: no such item"), "no such item"),
-    (lambda: NotImplementedError("not on this host"), "not on this host"),
-    (lambda: subprocess.CalledProcessError(1, ["tmux", "new-session"]), "returned non-zero exit status 1"),
-])
-def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_path, monkeypatch, error, said):
-    d = make_session(tmp_path / "s")
-    events = []
+def test_a_broken_or_missing_command_does_not_break_glove(tmp_path, monkeypatch, capsys):
+    import typer
 
-    def missing(plan):
-        raise error()
+    from glove import cli
 
-    monkeypatch.setattr("glove.session.launch", lambda *a, **k: events.append("launched"))
-    monkeypatch.setattr("glove.session.clear_stale_harness", lambda *a: None)
-    monkeypatch.setattr("glove.doctor.extension_checks", lambda *a, **k: [])
-    monkeypatch.setattr("glove.plan.secret_env", missing)
-    monkeypatch.setattr("glove.extsession.run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
-    result = runner.invoke(app, ["up", str(d)])
-    assert result.exit_code == 1 and said in result.output and "warn: w" in result.output
-    assert "Traceback" not in result.output
-    assert events == [{"llm"}]  # torn down, never launched
-
-
-def test_files_left_in_an_old_work_subdir_are_pointed_out(home, tmp_path):
-    # downloads: work used to land in work/browser-output/; the output beside
-    # work/ is now mounted over that path, hiding what is left there
-    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work}\n")
-    (d / "work" / "browser-output").mkdir()
-    (d / "work" / "browser-output" / "old.zip").write_text("x")
-    result = runner.invoke(app, ["plan", str(d)])
-    assert result.exit_code == 0, result.output
-    assert "work/browser-output/ has files" in result.output and "move them there" in result.output
-    (d / "work" / "browser-output" / "old.zip").unlink()
-    assert "has files" not in runner.invoke(app, ["plan", str(d)]).output
-
-
-@darwin
-def test_down_and_downloads_mark_quarantine_the_outputs_not_the_inputs(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work, uploads: work}\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: None)
-    monkeypatch.setattr("glove.cli.build_session_plan", None)  # down never re-plans: plan time recorded them
-    (d / "browser-output" / "x.dmg").write_bytes(b"x")
-    (d / "browser-uploads" / "mine.pdf").write_bytes(b"y")
-
-    result = runner.invoke(app, ["down", str(d)])
-    assert result.exit_code == 0 and "quarantined 1 downloaded file" in result.output, result.output
-    assert quarantine_attr(d / "browser-output" / "x.dmg") and not quarantine_attr(d / "browser-uploads" / "mine.pdf")
-    result = runner.invoke(app, ["downloads", "mark", str(d)])
-    assert result.exit_code == 0 and "nothing new to quarantine (1 already marked)" in result.output
+    for name, text in {"good": "def command():\n    print('ran')\n", "broken": "raise RuntimeError('boom')\n",
+                       "neither": "x = 1\n"}.items():
+        (tmp_path / "commands" / name).mkdir(parents=True)
+        (tmp_path / "commands" / name / "cli.py").write_text(text)
+    fresh = typer.Typer()
+    fresh.command("noop")(lambda: None)  # a group needs two commands to keep their names
+    monkeypatch.setattr(cli, "app", fresh)
+    monkeypatch.setattr(cli, "COMMANDS_DIR", tmp_path / "commands")
+    cli._mount_commands()
+    out = capsys.readouterr().err
+    assert "command 'broken' failed to load: boom" in out and "'neither'" in out
+    assert "neither `command` nor `app`" in out
+    assert runner.invoke(fresh, ["good"]).output == "ran\n"
+    monkeypatch.setattr(cli, "COMMANDS_DIR", tmp_path / "absent")  # e.g. a wheel install without commands/
+    cli._mount_commands()

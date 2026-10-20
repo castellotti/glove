@@ -13,6 +13,7 @@ printed); a failed start ends the driver with its summary. Teardown is
 from __future__ import annotations
 
 import fnmatch
+import importlib
 import json
 import os
 import re
@@ -28,13 +29,19 @@ from pathlib import Path
 import yaml
 from ptyio import Tui
 
+import glove.cli  # noqa: F401  (mounts the commands)
 from extensions.observe.netview import read_records
 from glove import registry
-from glove.cli import _materialize_plan, _open, preflight, prepare_harness
 from glove.enforcers.base import SECRET_DENY_VARS
+from glove.extensions import load_module
 from glove.plan import SessionPlan, secret_env
 from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
+from glove.sessionops import materialize_plan, open_session
+
+# `glove up`'s own steps: the commands/up/cli.py glove.cli mounted (load_module would make a second copy)
+_up = importlib.import_module("glove_cmd.up.cli")
+preflight, prepare_harness = _up.preflight, _up.prepare_harness
 
 RESULTS: list[bool] = []
 # A secret-shaped env name glove never set (as an image layer's or the
@@ -338,8 +345,8 @@ def kept() -> bool:
 
 
 def _materialize(directory: Path) -> tuple:
-    sd, _, sid, cfg = _open(directory)
-    plan, _, _ = _materialize_plan(sd, sid, cfg)
+    sd, _, sid, cfg = open_session(directory)
+    plan, _, _ = materialize_plan(sd, sid, cfg)
     return sd, sid, cfg, plan, secret_env(plan)
 
 

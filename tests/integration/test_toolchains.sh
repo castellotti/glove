@@ -37,10 +37,10 @@ build() {  # build the session's images exactly as `glove up` does; prints the h
   uv run --quiet --project "$ROOT" python - "$1" <<'EOF'
 import sys
 from pathlib import Path
-from glove.cli import _materialize_plan, _open
+from glove.sessionops import materialize_plan, open_session
 from glove.session import ensure_images
-sd, _, sid, cfg = _open(Path(sys.argv[1]))
-plan, _, _ = _materialize_plan(sd, sid, cfg)
+sd, _, sid, cfg = open_session(Path(sys.argv[1]))
+plan, _, _ = materialize_plan(sd, sid, cfg)
 ensure_images(cfg, plan, cfg.provider)
 print(plan.image)
 EOF

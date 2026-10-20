@@ -61,6 +61,11 @@ def session_file(extra: str = "", *, harness: str = "pi", llm: str | None = None
     return f"glove: 3\ntemplate: test\nharness: {harness}\nextensions:\n  llm: {llm}\n{extra}"
 
 
+def lan_llm(extra: str = "") -> str:
+    """A LAN llama.cpp provider as a flow mapping (`session_file`'s `llm`), plus `extra` keys."""
+    return "{provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m" + extra + "}"
+
+
 def make_session(root, extra: str = "", **kw):
     """Write a session directory (file + work/) without `glove new`; returns its Path."""
     from pathlib import Path
@@ -69,6 +74,23 @@ def make_session(root, extra: str = "", **kw):
     (root / "work").mkdir(parents=True, exist_ok=True)
     (root / "glove-session.yml").write_text(session_file(extra, **kw))
     return root
+
+
+def session_id(d) -> str:
+    """The id `glove new`/`plan` gave the session directory `d`."""
+    from pathlib import Path
+
+    return (Path(d) / ".glove" / "id").read_text().strip()
+
+
+def command_module(name: str):
+    """The `commands/<name>/cli.py` module `glove.cli` mounted: patch this one
+    when invoking `glove.cli.app` (another `load_module` makes a second copy)."""
+    import importlib
+
+    import glove.cli  # noqa: F401  (mounts the commands)
+
+    return importlib.import_module(f"glove_cmd.{name}.cli")
 
 
 def path_rule_cases(tmp) -> tuple[str, list[tuple[str, str | None]]]:

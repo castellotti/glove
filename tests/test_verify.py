@@ -258,7 +258,7 @@ def test_secret_sidecars_are_recreated_and_verify_failure_stops_everything(tmp_p
     assert ups[0][-2:] == ["--force-recreate", "glove-s-gluetun"]
     assert "glove-s-gluetun" in ups[1] and "--force-recreate" not in ups[1]
     assert ["docker", "logs", "--tail", "25", "glove-s-gluetun"] in calls
-    assert calls[-1][-1] == "down"  # fail closed
+    assert [c[-2:] for c in calls[-2:]] == [["rm", "-fsv"], ["down", "--remove-orphans"]]  # fail closed
 
 
 def test_a_failed_up_on_a_subnet_a_foreign_network_took_is_subnet_taken(tmp_path, monkeypatch):
@@ -284,7 +284,7 @@ def test_a_failed_up_on_a_subnet_a_foreign_network_took_is_subnet_taken(tmp_path
     nets["glove-other-net"] = [mine]
     with pytest.raises(session.SubnetTaken, match="glove-other-net"):
         session.start_sidecars(plan, f, provider="docker", env={})
-    assert calls[-1][-1] == "down"  # stopped first, as any failed start
+    assert calls[-1][-2:] == ["down", "--remove-orphans"]  # stopped first, as any failed start
 
 
 def test_redact_log_drops_credential_lines():
@@ -358,6 +358,6 @@ def test_a_failed_compose_up_stops_everything(tmp_path, monkeypatch):
     monkeypatch.setattr(session.subprocess, "run", run)
     with pytest.raises(subprocess.CalledProcessError):
         session.start_sidecars(plan, f, provider="podman", env={})
-    assert calls[-1][0][-1] == "down"  # never a half-started egress stack
+    assert [c[0][-2:] for c in calls[-2:]] == [["rm", "-fsv"], ["down", "--remove-orphans"]]  # never half-started
     ups = [c for c, _ in calls if "up" in c]
     assert len(ups[0]) == len(["podman", "compose", "-p", "x", "-f", "f", "up", "-d"]) + 1  # podman: one at a time

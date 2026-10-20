@@ -4,8 +4,69 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`glove clean`.** Removes the stopped stacks (found by compose's project
+  label `glove-<id>`) of sessions that no longer exist here, on Docker and
+  Podman: their containers and networks, and their volumes only when the
+  session is provably gone (its directory now holds another session id). A
+  missing directory (maybe moved) or a `glove-<v3 id>` project with no row
+  (maybe another `GLOVE_HOME`) keeps its volumes unless `--volumes`. A live
+  session's stack and one with any container not `exited`/`dead` are left
+  alone. `--dry-run` lists, `--yes` skips the question, `--runtime` picks one.
+  `glove gc` still removes the rows and exports.
+- **`glove clean <age>`** (`12h`, `3d`, `2w`) also reclaims what has not been
+  used for that long: an idle session's stopped containers and networks (its
+  volumes stay, so `glove up` restarts it) and the `glove/*` images
+  (Podman's `localhost/glove/*`) that no remaining container uses. A session's
+  last use is the newest of its `.glove/compose.yml`'s mtime (else its row's
+  `created`) and its containers' last start or stop; its images are that
+  file's `image:`s. An image's last use is the newest of the sessions naming
+  it and the containers that ran it, else its creation time. An image a kept
+  one was built from (its layers begin the kept one's: the srt and apt/pip
+  bases) stays. `<age>` is at least `1h`, so a `0d` typo is refused. Containers
+  are removed without `-f`, so one started since the listing is refused, not
+  killed. `--build-cache` (Docker; machine-wide, so opt-in) prunes the build
+  cache older than `<age>`, and warns when Docker was not looked at. The
+  summary counts what was actually removed and the disk reclaimed (`system df`
+  before and after, on the runtimes it removed from).
+- **Commands live in `commands/<name>/`** (`commands/README.md`), apart from
+  extensions: core mounts each `cli.py`'s `command` or `app` and never imports
+  them. A command imports only `glove.api` and the new `glove.api.commands`
+  (pinned in `tests/test_api_surface.py`). `glove clean` is the first; every
+  other command moved there too (`version`, `ext`, `ls`, `ps`, `gc`,
+  `keychain`, `downloads`, `build`, `doctor`, `policy`, `check`, `new`, `plan`,
+  `rm`, `down`, `up`), each with its own tests, and each command's CLI is
+  unchanged (`glove --help` lists them in workflow order, by each one's
+  `RANK`). `glove/cli.py` keeps only the app and the mounting. What two or
+  more commands share moved to
+  `glove/sessionops.py` (the consoles, `fail`, `DIR_ARG`, `IKNOW`,
+  `open_session`, `sync_registry`, `materialize_plan`, `stop`, …).
+  `glove.api.commands` exports: `DIR_ARG`, `IKNOW`, `VERSION`, `console`,
+  `err`, `fail`, `ensure_home`, `now`, `open_session`, `sync_registry`,
+  `materialize_plan`, `one_resume`, `conversations`, `print_checks`,
+  `print_extensions`, `row_state`, `mark_downloads`, `stop` (shared); and the
+  core names a command uses: `Check`, `HardeningError`, `OPTION_SECTIONS`,
+  `PLACEHOLDER`, `SCHEMA_VERSION`, `SESSION_FILE`, `SessionError`,
+  `SubnetTaken`, `autodetect_provider`, `build_forwarder`, `build_harness`,
+  `build_session_plan`, `call_hook`, `clear_stale_harness`,
+  `default_enforcer`, `discover`, `export_dirs`, `extension_checks`, `find_session`,
+  `get_enforcer`, `get_profile`, `get_runtime`, `glove_home`, `harness_model`,
+  `known_harnesses`, `known_runtimes`, `launch`, `load_session_file`,
+  `materialize_session`, `placeholders_left`, `probe_direct`,
+  `probe_http`, `quarantine_supported`, `read_effective`, `remove_rows`,
+  `remove_state`, `render_home`, `run_doctor`, `run_teardown`, `secret_env`,
+  `secret_refs`, `template_drift`, `with_headers`,
+  `worst_status`, `write_effective`. `commands/build/` is no longer skipped by
+  git and pytest as a build directory.
+
 ### Changed
 
+- **`glove down` removes the containers' anonymous volumes**, which `compose
+  down` kept, so every `up`/`down` cycle left one more (`compose rm -fsv`
+  first, which stops the services as `down` would); named volumes stay unless
+  `--wipe`. A killed harness run's container and the containers `glove clean`
+  removes take their anonymous volumes with them too (`rm -v`).
 - **`glove skills refresh` asks only what it must.** It lists the relay's
   Keychain secrets first (stored or missing, without reading them; how each
   is refreshed; the env var or file that uses it). Name the ones to refresh

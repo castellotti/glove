@@ -3,8 +3,8 @@
     uv run python tests/integration/llm_live.py <session-dir> [prompt] [--isolation]
 
 With GLOVE_HOME set, it:
-  1. renders the session exactly as `glove up` does (`cli._open` +
-     `cli._materialize_plan`: .glove/ layout, registry row, subnet);
+  1. renders the session exactly as `glove up` does (`sessionops.open_session` +
+     `sessionops.materialize_plan`: .glove/ layout, registry row, subnet);
   2. does what `glove up` does next (`live_common.live_session`) — its
      preflight, builds images, `compose up -d` every sidecar, runs the
      extensions' verify checks, runs the launch-time resolution (`model: auto`,
