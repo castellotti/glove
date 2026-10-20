@@ -21,7 +21,7 @@
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
     "NODE_EXTRA_CA_CERTS": "/run/glove/llm-ca/ca.pem"
   },
-  "image": "glove/claude-code:0.2.0-91e42d0a0c-srt-46f57ff955",
+  "image": "glove/claude-code:0.2.0-bc85a2338a-srt-46f57ff955",
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.claude/projects"

@@ -319,9 +319,12 @@ goes in the session file).
 
 An adapter may also render read-only **system config** (`system_files`): files
 in a directory of its own under `/etc`, written to `.glove/harness/` and bound
-read-only like the ring-1 policies. Every enforcer with a tool wrapper also
-renders it one argument per line (`tool-wrapper.argv`) beside
-`tool-wrapper.json`, for glue that has no JSON parser. Both directories are
+read-only like the ring-1 policies. Every enforcer with a tool wrapper renders
+it one argument per line (`tool-wrapper.argv`); `/opt/glove/bin/glove-tool -c
+<cmd>`, baked into every harness image, runs a shell command under it. Pi's
+enforcer extension, Vibe's hook and Claude Code's shell prefix all hand the
+command to `glove-tool` as one argument, so the wrapper is never quoted into a
+shell string. Both directories are
 updated in place on a re-plan (a changed file replaced atomically, stale ones
 removed), since a running session binds them.
 
@@ -469,7 +472,7 @@ extensions:
 ```
 
 - **Image** `glove/claude-code:0.2.0`: the native Claude Code binary (pinned,
-  auto-update off), nono, glove-pty and `glove-cc-prefix`; no Node.
+  auto-update off), nono, glove-pty, `glove-tool` and `glove-cc-prefix`; no Node.
 - **Guard rails live outside the agent's reach**, in
   `/etc/claude-code/managed-settings.json` (read-only bind; managed settings win
   over every other scope, and an unparseable file stops Claude Code):
@@ -990,7 +993,7 @@ agent can write (`/work`, a read-write mount, another session's `work/`: it
 could edit what the next session bakes) or in glove's state, a symlink leaving the plugin, a file that looks like a credential
 (`.env`, `.netrc`, `.npmrc`, `.pypirc`, `*.p12`, SSH keys, a PEM private key),
 and a secret-shaped name or a `keychain:`/`env:` reference in `env`. A plugin's
-stdio MCP server runs under the tool wrapper (`glove-confine`: the per-command
+stdio MCP server runs under the tool wrapper (`glove-tool --`: the per-command
 sandbox, no network), never with the harness's own network, which reaches the
 session's forwarders. Plugin hooks, commands and agents are not loaded.
 
@@ -1172,7 +1175,7 @@ enforcer: nono+srt    # what a session gets on Docker when it names no enforcer;
 
 ```
 glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- pi …
-  every shell command: glove-pty notty -u '*KEY*' … -- nono wrap --profile tool.json -- bash -c <cmd>
+  every shell command: glove-tool -c <cmd> → glove-pty notty -u '*KEY*' … -- nono wrap --profile tool.json -- bash -c <cmd>
 ```
 
 srt (bubblewrap) wraps the harness process, nono (Landlock) wraps every shell

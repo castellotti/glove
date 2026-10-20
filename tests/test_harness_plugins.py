@@ -66,13 +66,14 @@ def test_vibe_transcripts_and_resume_share_its_log_dir():
     assert vibe.sessions_subdir == vibe.transcript_subdir == "logs/session"
 
 
-def test_every_harness_image_bakes_the_shared_entrypoint():
+def test_every_harness_image_bakes_the_shared_entrypoint_and_glove_tool():
     for name in known_harnesses():
         image = HARNESSES_DIR / name / "image"
         assert not (image / "entrypoint.sh").exists()
         df = (image / "Dockerfile").read_text()
         if re.search(r"^ENTRYPOINT", df, re.M):
             assert "COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
+            assert "COPY --chmod=0755 --from=gloveentry glove-tool /opt/glove/bin/glove-tool" in df
 
 
 def _manifest(tmp_path: Path, name: str, body: str) -> Path:

@@ -93,7 +93,7 @@ All notable changes to glove are documented here.
   [mcp, skills]`): each server `hidden` but for its allowed tools, named
   `mcp__<server>__<tool>` in Pi and in the tool inventory. Pi's MCP stays off
   in a session without a server. A stdio server runs as its extension wrote
-  it (the `skills` plugins' under `glove-confine`). Refused for Pi: a server
+  it (the `skills` plugins' under the tool wrapper). Refused for Pi: a server
   without a `tools` allowlist, names that collide once Pi replaces their `-`,
   and an `env` value Pi would expand (`$`) or run (`!…`). Pi sessions with `search`,
   `playwright` or `webfetch` `downloads: work` now start those MCP sidecars.
@@ -115,6 +115,16 @@ All notable changes to glove are documented here.
   limiter off) and tells the agent not to retry immediately, instead of a bare
   "No results". `fetch_url` no longer reads a `Retry-After` of 0 (or a past
   date) as "wait 0 s": it says not to retry immediately.
+- **One launcher runs every harness's shell commands:** `/opt/glove/bin/glove-tool
+  -c <cmd>`, baked into every harness image, runs the command under the session's
+  tool wrapper (`tool-wrapper.argv`), drops `NONO_*`/`SRT_*`, and fails closed
+  (126) without a wrapper. Pi's enforcer extension, Vibe's `pre_tool` hook and
+  Claude Code's shell prefix all hand it the command as one argument, so the
+  hooks no longer quote the wrapper's arguments into a shell string; the
+  `skills` extension's stdio MCP servers run as `glove-tool -- <command> …`
+  (`glove-confine` is gone, and they now get the same env scrub). The
+  enforcers no longer render `tool-wrapper.json`, and the entrypoint refuses to
+  start a wrapped session without `glove-tool`. Images rebuild.
 - **observe polls the exit from one gate in every session:** the harness's
   own hop to the egress proxy when it has one (Claude Code's `proxy`), else
   the first egress consumer's (`searxng-egress`, `webfetch-egress`, …), so Vibe

@@ -91,7 +91,7 @@ def test_srt_does_not_wrap_harness(tmp_path):
     assert plan.image.endswith(srt_suffix())  # distinct image variant
     # srt unsets only exact names: the scrub before it unsets every secret
     # glob, any case, and gives up the terminal, as under nono.
-    wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
+    wrapper = plan.policies["tool-wrapper.argv"].splitlines()
     n = len(scrub_argv())
     assert wrapper[:n] == scrub_argv() and wrapper[n:] == [SRT, "-s", f"{ENFORCER_DIR}/srt-settings.json", "--"]
 

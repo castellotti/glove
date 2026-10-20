@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/vibe:0.5.0-fbc2201932-b78644781d-srt-46f57ff955
+    image: glove/vibe:0.5.0-65852e547f-a630bff7e2-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "vibe", "--trust", "--yolo", "--workdir", "/work"]
     stdin_open: true

@@ -98,7 +98,7 @@ def write_roots(plan: SessionPlan) -> list[str]:
 
 def argv_lines(argv: list[str]) -> str:
     """An argv one argument per line (`*.argv`), for glue with no JSON parser
-    (Claude Code's shell prefix is a bash script)."""
+    (glove-tool, a bash script)."""
     return "".join(f"{a}\n" for a in argv)
 
 
@@ -143,7 +143,7 @@ class Enforcer(Protocol):
         ...
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        """Prefix the harness hooks prepend to every shell command."""
+        """The prefix glove-tool runs every shell command under."""
         ...
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:

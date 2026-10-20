@@ -47,23 +47,15 @@ EOF
 }
 
 # compose run of the rendered harness service: same image, env, hardening,
-# mounts and internal-only network; `tool` adds the rendered tool wrapper
-# (what the harness prepends to every shell command).
+# mounts and internal-only network; `tool` runs a command through glove-tool
+# (what every harness does with a shell command: the rendered tool wrapper).
 crun() {  # [compose-run flags… --] command…; compose's own progress lines (Container/Network …) dropped
   local flags=()
   if [ "${1#-}" != "$1" ]; then while [ $# -gt 0 ] && [ "$1" != -- ]; do flags+=("$1"); shift; done; shift; fi
   "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T ${flags[@]+"${flags[@]}"} \
     "glove-$S_ID-harness" "$@" 2>&1 | grep -v -E '^ (Container|Network|Volume) '
 }
-tool_wrapper() {  # shell-quoted: the scrub's globs must not expand (bash 3.2 on macOS has no mapfile)
-  uv run --quiet --project "$ROOT" python -c \
-    'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json"
-}
-tool() {
-  local w
-  w="$(tool_wrapper)"
-  eval "crun $w bash -c $(printf %q "$1")"
-}
+tool() { crun /opt/glove/bin/glove-tool -c "$1"; }
 cleanup() { "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" down -v >/dev/null 2>&1; }
 
 echo "== session 1: pi (default enforcer) + node $NODE_V (npm ci, chromium) + python $PY_V (uv sync) =="
@@ -197,12 +189,11 @@ import sys, yaml
 svc = next(v for k, v in yaml.safe_load(open(sys.argv[1]))["services"].items() if k.endswith("-harness"))
 cmd = svc["command"]
 print(" ".join(cmd[:cmd.index("ctty") - 1] if "ctty" in cmd else cmd[:cmd.index("--") + 1]))' "$S_COMPOSE")"
-w="$(tool_wrapper)"
 cp "$ROOT/tests/integration/fixtures/environ-probe.sh" "$S3B/work/"
 probe="bash /work/environ-probe.sh ^GLOVE_LLM_API_KEY=glove-test-key"
 # shellcheck disable=SC2086
 out="$(crun -e GLOVE_LLM_API_KEY=glove-test-key -- $wrap bash -c \
-  "sleep 30 & s=\$!; $probe; echo TOOL; $w $probe; kill \$s")"
+  "sleep 30 & s=\$!; $probe; echo TOOL; /opt/glove/bin/glove-tool -c '$probe'; kill \$s")"
 harness_side="$(echo "$out" | sed -n '/^TOOL$/q;p')"
 tool_side="$(echo "$out" | sed -n '/^TOOL$/,$p')"
 echo "$harness_side" | grep -q 'environ-seen=[1-9]' && ok "control: the harness side reads its own processes' environ" \

@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, a read-only harness home (only its config home writable), internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 via one launcher, `glove-tool -c <cmd>` (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -448,7 +448,7 @@ does not vet it.
   noexec: dependencies are installed into read-only per-dependency-set
   environments instead of a writable cache.
 - **MCP servers run under the tool wrapper.** A plugin's stdio server is
-  started through `glove-confine`, which execs the enforcer's tool wrapper
+  started through `glove-tool --`, which execs the enforcer's tool wrapper
   (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
   not even the forwarders the harness process reaches (glove's own stdio MCP
   servers on Claude Code run under the harness sandbox instead). With no
@@ -624,7 +624,8 @@ Claude Code from starting (fail closed).
 - **`CLAUDE_CODE_SHELL_PREFIX`** = `/opt/glove/bin/glove-cc-prefix` (baked,
   read-only rootfs). Claude Code runs `<prefix> "<shell string>"` for the Bash
   tool (main agent and subagents), operator `!` commands, hooks and MCP stdio
-  servers. The prefix reads the tool wrapper from
+  servers. The prefix hands the string to `/opt/glove/bin/glove-tool -c`, as
+  Pi's and Vibe's hooks do: it reads the tool wrapper from
   `/etc/glove/enforcer/tool-wrapper.argv` (read-only), drops `NONO_*`/`SRT_*`
   from its environment, and execs `<wrapper> bash --norc -c "<string>"`. A
   missing or empty wrapper, or anything but one argument, exits 126 without
@@ -861,7 +862,7 @@ wrapper and the planted hook ran in the harness.
   those tools, named `mcp__<server>__<tool>`, are the only MCP tools in the
   inventory the enforcer extension passes (codemode's nested calls are
   classified one by one). A stdio server runs as its extension wrote it: the
-  `skills` extension's run under `glove-confine` (the tool wrapper: no network,
+  `skills` extension's run under `glove-tool --` (the tool wrapper: no network,
   no home). Pi expands `${VAR}` and runs a `!command` in `env` (and `headers`)
   values, so glove refuses an `env` value that looks like either; it renders no
   `headers`.
@@ -904,7 +905,7 @@ keeps the process group, so an aborted command is still killed with its group.
 As a session leader it runs the command in a new session instead, tied to the
 parent (`PR_SET_PDEATHSIG`). `glove-pty` is a static helper baked into every
 harness image (`glove/enforcers/pty/glove-pty.c`); the entrypoint refuses to
-start if the wrapper names it and it is missing. Under srt it adds to bwrap's
+start a session with a tool wrapper if it, or `glove-tool`, is missing. Under srt it adds to bwrap's
 `--new-session`. The same step unsets the
 secret-shaped env names (`-u <glob>`, any case; see "Any other secret in the
 harness env" above).

@@ -45,7 +45,7 @@ def test_harness_runs_under_srt_on_a_relayed_terminal(tmp_path):
 
 def test_tool_commands_drop_the_terminal_then_run_under_nono(tmp_path):
     plan = _plan(tmp_path)
-    argv = json.loads(plan.policies["tool-wrapper.json"])["argv"]
+    argv = plan.policies["tool-wrapper.argv"].splitlines()
     n = len(scrub_argv())
     assert argv[:n] == scrub_argv()
     assert argv[n:n + 2] == [NONO, "wrap"] and f"{ENFORCER_DIR}/tool.json" in argv

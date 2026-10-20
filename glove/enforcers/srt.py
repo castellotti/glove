@@ -107,26 +107,19 @@ def denied_env(plan: SessionPlan) -> list[str]:
     return sorted({LLM_API_KEY_ENV, *(k for k in plan.environment if is_secret_env_name(k))})
 
 
-def tool_wrapper_argv(plan: SessionPlan) -> list[str]:
-    return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
-
-
 class SrtEnforcer:
     name = "srt"
     tool_sandbox = "srt"
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
-        return {
-            SETTINGS_FILE: json.dumps(render_settings(plan), indent=2) + "\n",
-            "tool-wrapper.json": json.dumps({"argv": tool_wrapper_argv(plan)}, indent=2) + "\n",
-        }
+        return {SETTINGS_FILE: json.dumps(render_settings(plan), indent=2) + "\n"}
 
     def wrap_harness(self, plan: SessionPlan, entry: list[str]) -> list[str]:
         # srt does not wrap the TUI; the harness process is ring-0 only.
         return list(entry)
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        return tool_wrapper_argv(plan)
+        return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         return {}

@@ -7,7 +7,7 @@ only when there is one. A server's `tools` allowlist becomes `"exposure":
 them from the model, and its scripts could reach the rest). Pi names them
 `mcp__<server>__<tool>`; those names join the session's tool inventory, which
 the enforcer extension refuses every other tool by. A stdio server runs as its
-contributor wrote it (the `skills` extension's go through `glove-confine`, the
+contributor wrote it (the `skills` extension's go through `glove-tool --`, the
 tool wrapper). Pi expands `${VAR}` and runs a `!command` in `env` values, so
 glove's literal values may hold no `$` and start with no `!`.
 

@@ -49,7 +49,7 @@ hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:
 # host_src binds with no mount-watch: each dir is written before a container first sees it
 # (README: Docker Desktop shared folders), so no host-side change can go stale
 MNT=(-v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro")
-TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c)
+TOOL=(/opt/glove/bin/glove-tool -c)  # what Pi's enforcer runs: the rendered tool wrapper
 HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -c)
 
 run_tool()    { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" "${TOOL[@]}" "$1" 2>&1; }
@@ -93,17 +93,16 @@ BADDIR="$TMPROOT/bad"; mkdir "$BADDIR"; printf '{ this is not valid json ' > "$B
   && bad "entrypoint ran with an invalid policy" || ok "entrypoint fails closed on invalid policy"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
-# a harness-like process on a real tty runs the rendered wrapper; the command
+# a harness-like process on a real tty runs glove-tool (the rendered wrapper); the command
 # tries to open /dev/tty. Baseline: the same command unwrapped opens it.
 TTYCMD='perl -e '"'"'open(T, "+<", "/dev/tty") or die "TTY-REFUSED: $!\n"; print "TTY-OPENED\n"'"'"
-WRAP="$(uv run --quiet --no-project python -c 'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$POLDIR/tool-wrapper.json")"
 tty_run() { uv run --quiet --no-project python "$ROOT/tests/integration/in_pty.py" "$RT" run -it "${hardened[@]}" "${MNT[@]}" \
   --entrypoint bash "$IMAGE" -c "$1" 2>&1; }
 tty_run "$TTYCMD" | grep -q 'TTY-OPENED' && ok "baseline: an unwrapped command opens /dev/tty" \
   || bad "baseline could not open /dev/tty (the check cannot detect the gap)"
 # as a child of the harness (what Pi and Vibe do), and as the session leader
 for how in "a child of the harness" "the session leader"; do
-  shape="$WRAP bash -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
+  shape="/opt/glove/bin/glove-tool -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
   out="$(tty_run "$shape")"
   echo "$out" | grep -q 'TTY-REFUSED: No such device' && ! echo "$out" | grep -q 'TTY-OPENED' \
     && ok "wrapped command cannot open /dev/tty (wrapper as $how)" \

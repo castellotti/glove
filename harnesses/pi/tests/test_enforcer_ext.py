@@ -4,6 +4,7 @@ the host's node (type stripping): its file-tool write rule. Skipped without node
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -79,7 +80,7 @@ def test_tools_are_classified_by_the_inventory(tmp_path):
     inv = tmp_path / "tools.json"
     inv.write_text(json.dumps({c: list(get_profile("pi").tools.get(c, ())) for c in ("shell", "file_write", "allow")}))
     got = _node(tmp_path, f"""
-const h = ext.toolCallHandler(["nono", "wrap", "--"], [{json.dumps(str(work))}], ext.loadTools({json.dumps(str(inv))}));
+const h = ext.toolCallHandler([{json.dumps(str(work))}], ext.loadTools({json.dumps(str(inv))}));
 const call = (toolName, input) => {{ const r = h({{ toolName, input }}, {{ cwd: {json.dumps(str(work))} }});
   return {{ r: r ?? null, input }}; }};
 console.log(JSON.stringify({{
@@ -90,12 +91,18 @@ console.log(JSON.stringify({{
   unknown: call("mcp", {{ server: "x" }}),
   renamed: call("bash2", {{ command: "ls" }}),
 }}));""")
-    assert got["bash"]["r"] is None and got["bash"]["input"]["command"] == "'nono' 'wrap' '--' bash -c 'ls'"
+    assert got["bash"]["r"] is None and got["bash"]["input"]["command"] == "/opt/glove/bin/glove-tool -c 'ls'"
     assert got["write"]["r"] is None and got["write"]["input"]["path"] == f"{work}/a.py"
     assert got["write_out"]["r"]["block"] and got["read"]["r"] is None
     for k in ("unknown", "renamed"):  # a tool glove hasn't classed: blocked, its input untouched
         assert got[k]["r"]["block"] and "not in this session's tool inventory" in got[k]["r"]["reason"]
     assert got["renamed"]["input"]["command"] == "ls"
+
+
+def test_a_command_reaches_glove_tool_as_one_argument(tmp_path):
+    cmd = """echo 'it'"'"'s' "$HOME" *KEY* $(id); x"""
+    got = _node(tmp_path, f"console.log(JSON.stringify(ext.wrapCommand({json.dumps(cmd)})));")
+    assert shlex.split(got) == ["/opt/glove/bin/glove-tool", "-c", cmd]
 
 
 def test_a_checked_input_is_frozen(tmp_path):
@@ -104,7 +111,7 @@ def test_a_checked_input_is_frozen(tmp_path):
     inv = tmp_path / "tools.json"
     inv.write_text(json.dumps({"shell": ["bash"], "file_write": ["edit"], "allow": ["read"]}))
     got = _node(tmp_path, f"""
-const h = ext.toolCallHandler(["nono", "wrap", "--"], [{json.dumps(str(work))}], ext.loadTools({json.dumps(str(inv))}));
+const h = ext.toolCallHandler([{json.dumps(str(work))}], ext.loadTools({json.dumps(str(inv))}));
 const later = (input, change) => {{ try {{ change(input); return "changed"; }} catch (e) {{ return "refused"; }} }};
 const bash = {{ command: "ls" }}, edit = {{ path: "a.py", edits: [{{ oldText: "a", newText: "b" }}] }};
 const read = {{ path: "/etc/hostname" }}, out = {{ path: "/etc/x", content: "x" }};
@@ -121,7 +128,7 @@ console.log(JSON.stringify({{
   command: bash.command,
 }}));""")  # an ES module: strict, so a frozen write throws
     assert got["bash"] == got["edit"] == got["nested"] == "refused"
-    assert got["command"].endswith("bash -c 'ls'")  # the wrapped command stays
+    assert got["command"] == "/opt/glove/bin/glove-tool -c 'ls'"  # the wrapped command stays
     # nothing checked to keep: a pass-through, a refusal
     assert got["read"] == "changed" and got["blocked"] == "changed"
 

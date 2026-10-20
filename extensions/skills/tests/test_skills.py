@@ -169,20 +169,20 @@ def test_mcp_is_opt_in_and_needs_its_tools_listed(tmp_path, plugin):
     assert ext == "skills"
     # under the tool wrapper (no network); `uv run --script <its script>` on
     # that script's baked interpreter
-    assert item == {"name": "demo", "transport": "stdio", "command": "/opt/glove/bin/glove-confine",
-                    "args": ["/opt/glove/plugins/.uv/python3", "/opt/glove/plugins/demo/mcp/server.py"],
+    assert item == {"name": "demo", "transport": "stdio", "command": "/opt/glove/bin/glove-tool",
+                    "args": ["--", "/opt/glove/plugins/.uv/python3", "/opt/glove/plugins/demo/mcp/server.py"],
                     "env": {"DEMO_VAULT": "/work/.glove-plugin-data/demo/vault",
                             "CLAUDE_PLUGIN_ROOT": "/opt/glove/plugins/demo",
                             "CLAUDE_PLUGIN_DATA": "/work/.glove-plugin-data/demo"},
                     "tools": ["search", "fetch"]}
-    assert "COPY skills/glove-confine /opt/glove/bin/glove-confine" in plan.derived_dockerfile
+    assert "glove-confine" not in plan.derived_dockerfile  # glove-tool is in every harness image
 
 
 def test_mcp_per_harness(tmp_path, plugin):
     tools = {"demo": ["search"]}
     for harness in ("pi", "vibe"):
         [(_, item)] = _plan(tmp_path, harness=harness, mcp=True, tools=tools).composition.mcp
-        assert item["command"] == "/opt/glove/bin/glove-confine"
+        assert item["command"] == "/opt/glove/bin/glove-tool" and item["args"][0] == "--"
     with pytest.raises(ExtensionError, match=r"tools maps a server of \['demo'\]"):
         _plan(tmp_path, harness="claude-code", mcp=True, tools={"other": ["x"]})
 
@@ -286,21 +286,6 @@ def test_the_sessions_skills_dir_is_never_mounted(tmp_path, plugin):
     from glove.sessiondir import exposes_private
 
     assert exposes_private(tmp_path, tmp_path / "skills" / "demo-repo")[1] == "skills/"
-
-
-def test_glove_confine_runs_the_server_after_the_tool_wrapper_or_not_at_all(tmp_path):
-    import subprocess
-    from pathlib import Path
-
-    src = (Path(__file__).parents[1] / "bin" / "glove-confine").read_text()
-    wrapper = tmp_path / "tool-wrapper.argv"
-    script = tmp_path / "confine"
-    script.write_text(src.replace("/etc/glove/enforcer/tool-wrapper.argv", str(wrapper)))
-    run = lambda *a: subprocess.run(["sh", str(script), *a], capture_output=True, text=True)  # noqa: E731
-    r = run("printf", "%s|")
-    assert r.returncode == 126 and "no tool wrapper" in r.stderr  # fail closed
-    wrapper.write_text("printf\n%s|\nw 1\n")  # the wrapper's argv, then the server's
-    assert run("srv", 'a "b', "").stdout == 'w 1|srv|a "b||'
 
 
 def test_three_skills_of_one_name_all_get_a_link(tmp_path):

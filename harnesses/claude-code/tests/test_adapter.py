@@ -78,8 +78,7 @@ def test_the_shell_prefix_is_managed_and_reads_the_rendered_argv(tmp_path, enfor
     _, plan = _plan(tmp_path, enforcer=enforcer)
     m = _managed(plan)
     assert m["env"]["CLAUDE_CODE_SHELL_PREFIX"] == "/opt/glove/bin/glove-cc-prefix"
-    argv = json.loads(plan.policies["tool-wrapper.json"])["argv"]
-    assert plan.policies["tool-wrapper.argv"] == "".join(f"{a}\n" for a in argv)
+    assert plan.policies["tool-wrapper.argv"].startswith("/opt/glove/bin/glove-pty\n")  # what glove-tool runs under
     assert "CLAUDE_CODE_SHELL_PREFIX" not in plan.environment  # never the process env (the agent's settings win)
 
 
@@ -306,3 +305,24 @@ def test_system_files_are_rewritten_in_place(tmp_path):
     assert json.loads((d / "managed-settings.json").read_text())["allowManagedHooksOnly"] is True
     assert sorted(p.name for p in root.iterdir()) == ["claude-code"]
     assert sorted(p.name for p in d.iterdir()) == ["managed-settings.json"]
+
+
+def test_the_shell_prefix_hands_the_string_to_glove_tool_or_runs_a_rendered_mcp_server(tmp_path):
+    import subprocess
+
+    src = (Path(__file__).parents[1] / "image" / "glove-cc-prefix").read_text()
+    tool = tmp_path / "glove-tool"  # stands in for /opt/glove/bin/glove-tool: prints its argv
+    tool.write_text("#!/bin/sh\nprintf '%s|' TOOL \"$@\"\n")
+    tool.chmod(0o755)
+    (tmp_path / "mcp-probe.argv").write_text("printf\n%s|\nsrv a")  # no trailing newline: still read
+    script = tmp_path / "prefix"
+    script.write_text(src.replace("exec /opt/glove/bin/glove-tool", f"exec {tool}")
+                      .replace("/etc/claude-code/", f"{tmp_path}/"))
+    run = lambda *a: subprocess.run(["bash", str(script), *a], capture_output=True, text=True)  # noqa: E731
+    assert run("echo 'a b'; x").stdout == "TOOL|-c|echo 'a b'; x|"
+    assert run("/opt/glove/bin/glove-cc-prefix --mcp probe").stdout == "srv a|"
+    for args in (("a", "b"), (), ("/opt/glove/bin/glove-cc-prefix --mcp nope",)):
+        r = run(*args)
+        assert r.returncode == 126 and "fail closed" in r.stderr and "TOOL" not in r.stdout
+    # anything else, even naming --mcp, is a shell string for glove-tool
+    assert run("/opt/glove/bin/glove-cc-prefix --mcp probe; id").stdout.startswith("TOOL|-c|")

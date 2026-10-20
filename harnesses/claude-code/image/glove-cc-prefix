@@ -1,47 +1,32 @@
 #!/bin/bash --norc
 # glove-cc-prefix: Claude Code's CLAUDE_CODE_SHELL_PREFIX. Claude Code runs
 # `<prefix> "<one shell string>"` for the Bash tool, `!` commands, hooks and MCP
-# stdio servers; this runs that string under the session's ring-1 tool wrapper
-# (/etc/glove/enforcer/tool-wrapper.argv, one argument per line, read-only).
-# Anything unexpected fails closed with 126: no wrapper, no shell.
+# stdio servers; this hands that string to glove-tool, which runs it under the
+# session's ring-1 tool wrapper, as for every harness. Anything unexpected fails
+# closed with 126: no wrapper, no shell.
 #
 # The one exception is a glove-rendered stdio MCP server, whose string is
 # exactly `<this prefix> --mcp <name>`: it runs /etc/claude-code/mcp-<name>.argv
-# (read-only) under the harness's own sandbox, as Pi and Vibe run theirs, since
-# the tool profile has no network to reach a sidecar. The agent cannot produce
-# that string: every Bash/`!` string starts with Claude Code's snapshot
-# `source`, and hooks are managed-only.
+# (read-only, one argument per line) under the harness's own sandbox, as Pi and
+# Vibe run theirs, since the tool profile has no network to reach a sidecar. The
+# agent cannot produce that string: every Bash/`!` string starts with Claude
+# Code's snapshot `source`, and hooks are managed-only.
 set -uo pipefail
-WRAPPER=/etc/glove/enforcer/tool-wrapper.argv
 
-# load_argv <array> <file> <refusal>: the file's lines (one argument each) into
-# <array>; a missing or unreadable file, or an empty first line, exits 126.
-load_argv() {
-  local -n into=$1
-  into=()
-  if [ -r "$2" ]; then
-    mapfile -t into < "$2"
-  fi
-  if [ "${#into[@]}" -eq 0 ] || [ -z "${into[0]}" ]; then
-    echo "glove: $3 (fail closed)" >&2
-    exit 126
-  fi
-}
 if [ "$#" -ne 1 ]; then
   echo "glove: shell prefix expects one argument, got $# — shell blocked (fail closed)" >&2
   exit 126
 fi
-# Claude Code's settings `env` reaches this process; project settings are
-# read-only (ring 0, harness.yml protect), so it is the operator's.
-# Drop anything aimed at the enforcers themselves.
-for name in $(compgen -e); do
-  case "$name" in NONO_*|SRT_*) unset "$name" ;; esac
-done
 if [[ "$1" =~ ^/opt/glove/bin/glove-cc-prefix\ --mcp\ ([A-Za-z0-9_-]+)$ ]]; then
-  load_argv server "/etc/claude-code/mcp-${BASH_REMATCH[1]}.argv" "no MCP server ${BASH_REMATCH[1]} — blocked"
+  f="/etc/claude-code/mcp-${BASH_REMATCH[1]}.argv"
+  server=()  # read, not mapfile: the unit tests run this under macOS's bash 3.2
+  if [ -r "$f" ]; then
+    while IFS= read -r a || [ -n "$a" ]; do server+=("$a"); done < "$f"
+  fi
+  if [ "${#server[@]}" -eq 0 ] || [ -z "${server[0]}" ]; then
+    echo "glove: no MCP server ${BASH_REMATCH[1]} — blocked (fail closed)" >&2
+    exit 126
+  fi
   exec "${server[@]}"
 fi
-load_argv argv "$WRAPPER" "tool wrapper missing — shell blocked"
-# --norc: bash's rshd heuristic would otherwise source /etc/bash.bashrc, which
-# the tool policy denies, and print an error on every command.
-exec "${argv[@]}" /bin/bash --norc -c "$1"
+exec /opt/glove/bin/glove-tool -c "$1"

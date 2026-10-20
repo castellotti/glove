@@ -36,8 +36,7 @@ hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:
 # host_src binds with no mount-watch: each dir is written before a container first sees it
 # (README: Docker Desktop shared folders), so no host-side change can go stale
 MNT=(-v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro")
-run_tool() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \
-  nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "$1" 2>&1; }
+run_tool() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/bin/glove-tool -c "$1" 2>&1; }
 
 echo "== ring-1 tool policy enforces in the vibe image =="
 run_tool 'echo hi > /work/f && cat /work/f' | grep -q '^hi$' && ok "write /work" || bad "write /work"
@@ -46,17 +45,18 @@ run_tool 'mkdir -p /home/agent/.vibe; ls /home/agent/.vibe' | grep -qi 'permissi
 run_tool 'curl -sS -m 4 http://1.1.1.1 >/dev/null 2>&1; echo rc=$?' | grep -q 'rc=[^0]' \
   && ok "network blocked" || bad "network not blocked"
 # nono's own deny_vars (the scrub in front of it: test_tool_confine, test_config_protect)
-run_tool 'env | grep -i -e key -e secret || echo NONE' | grep -q 'NONE' \
+"$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json \
+  -- bash -c 'env | grep -i -e key -e secret || echo NONE' 2>&1 | grep -q 'NONE' \
   && ok "secrets stripped" || bad "secret leaked"
 
 echo "== baked vibe-hook rewrites a bash tool call =="
 HOOKIN='{"hook_event_name":"pre_tool","tool_name":"bash","tool_input":{"command":"ls /work"}}'
 out="$(echo "$HOOKIN" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/vibe-hook 2>/dev/null)"
-# the command, split as bash would, is exactly the rendered wrapper + bash -c <cmd>
+# the command, split as bash would, is exactly glove-tool -c <cmd>
 echo "$out" | uv run --quiet --no-project python -c 'import json,shlex,sys
 cmd = json.load(sys.stdin)["hook_specific_output"]["tool_input"]["command"]
-sys.exit(shlex.split(cmd) != json.load(open(sys.argv[1]))["argv"] + ["bash", "-c", "ls /work"])' "$POLDIR/tool-wrapper.json" \
-  && ok "hook rewrites bash command to the rendered wrapper" || bad "hook did not rewrite: $out"
+sys.exit(shlex.split(cmd) != ["/opt/glove/bin/glove-tool", "-c", "ls /work"])' \
+  && ok "hook rewrites bash command to glove-tool" || bad "hook did not rewrite: $out"
 
 echo "== baked vibe-hook refuses a tool not in the inventory (web_fetch) =="
 WEBIN='{"hook_event_name":"pre_tool","tool_name":"web_fetch","tool_input":{"url":"http://x"}}'
@@ -72,17 +72,16 @@ echo "== entrypoint validates policies =="
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="
-# a harness-like process on a real tty runs the rendered wrapper; the command
+# a harness-like process on a real tty runs glove-tool (the rendered wrapper); the command
 # tries to open /dev/tty. Baseline: the same command unwrapped opens it.
 TTYCMD='perl -e '"'"'open(T, "+<", "/dev/tty") or die "TTY-REFUSED: $!\n"; print "TTY-OPENED\n"'"'"
-WRAP="$(uv run --quiet --no-project python -c 'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$POLDIR/tool-wrapper.json")"
 tty_run() { uv run --quiet --no-project python "$ROOT/tests/integration/in_pty.py" "$RT" run -it "${hardened[@]}" "${MNT[@]}" \
   --entrypoint bash "$IMAGE" -c "$1" 2>&1; }
 tty_run "$TTYCMD" | grep -q 'TTY-OPENED' && ok "baseline: an unwrapped command opens /dev/tty" \
   || bad "baseline could not open /dev/tty (the check cannot detect the gap)"
 # as a child of the harness (what Pi and Vibe do), and as the session leader
 for how in "a child of the harness" "the session leader"; do
-  shape="$WRAP bash -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
+  shape="/opt/glove/bin/glove-tool -c $(printf %q "$TTYCMD")"; [ "$how" = "a child of the harness" ] && shape="$shape; true"
   out="$(tty_run "$shape")"
   echo "$out" | grep -q 'TTY-REFUSED: No such device' && ! echo "$out" | grep -q 'TTY-OPENED' \
     && ok "wrapped command cannot open /dev/tty (wrapper as $how)" \

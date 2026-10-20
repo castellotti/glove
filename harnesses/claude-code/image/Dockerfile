@@ -56,6 +56,7 @@ RUN if [ -n "$GLOVE_PIP" ]; then \
 COPY --chmod=0755 glove-cc-prefix /opt/glove/bin/glove-cc-prefix
 COPY --from=glove-pty /src/glove-pty /opt/glove/bin/glove-pty
 COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh
+COPY --chmod=0755 --from=gloveentry glove-tool /opt/glove/bin/glove-tool
 
 RUN mkdir -p /home/agent && chmod 0777 /home/agent
 ENV HOME=/home/agent
