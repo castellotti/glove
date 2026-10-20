@@ -88,6 +88,20 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove up` explains what happened after the harness exits.**
+  - The resume hint is best effort: an error becomes one dim line
+    ("`glove up --resume` still works"), never a traceback that hides the
+    harness's own exit. This happened once when an editable install was
+    updated mid-session and the old `cli.py` imported new modules.
+  - If glove's source changed while the session ran, `up` says to run
+    `glove down` with the new version before the next `up`.
+  - The container runtime restarted if, of the two or more sidecars running
+    as the harness started, none still has the start time it had then. The
+    `--rm` harness went with it and the sidecars came back alone, so `up`
+    says so and points to `glove up --resume` or `glove down`. Start times
+    are compared as the runtime reports them, so the VM's clock never meets
+    the host's, and one recreated sidecar doesn't count. The runtime calls
+    time out after 5 s, and nothing after the harness exits can raise.
 - **playwright README: what `viewport` means in `novnc`.** It is the VNC
   display and Chromium's window (at `0,0`), and the page gets ~88 px less
   (1280x712 for the default). Each new MCP client's page opens in a new

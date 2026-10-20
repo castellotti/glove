@@ -85,9 +85,11 @@ def png(width: int, height: int, bgrx: bytes) -> bytes:
 
 
 def running() -> tuple[str, int] | None:
+    """The running capture, if `.current` names a live recorder (not a reused pid)."""
     try:
         cid, pid = CURRENT.read_text().split()
-        os.kill(int(pid), 0)
+        if b"glove-pw-capture" not in Path(f"/proc/{int(pid)}/cmdline").read_bytes():
+            return None
         return cid, int(pid)
     except (OSError, ValueError):
         return None

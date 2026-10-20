@@ -22,6 +22,17 @@ const CAPTURING = "/tmp/capture/.current";
 const WRAPPED = Symbol("glove.front");
 let warned = false;
 
+// `.current` is "<id> <pid>" while a recorder runs; a recorder killed outright leaves it
+// behind, and its pid may be reused: it counts only while that pid is still the recorder
+function capturing() {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(CAPTURING, "utf8").split(/\s+/)[1], 10);
+    return fs.readFileSync(`/proc/${pid}/cmdline`, "latin1").includes("glove-pw-capture");
+  } catch {
+    return false;
+  }
+}
+
 exports.default = async ({ page }) => {
   const sym = Object.getOwnPropertySymbols(page).find((s) => s.description === "tabSymbol");
   const context = sym && page[sym] && page[sym].context;
@@ -35,7 +46,7 @@ exports.default = async ({ page }) => {
   const ensureTab = context.ensureTab.bind(context);
   context.ensureTab = async (...args) => {
     const tab = await ensureTab(...args);
-    if (!fs.existsSync(CAPTURING)) await tab.page.bringToFront().catch(() => {});
+    if (!capturing()) await tab.page.bringToFront().catch(() => {});
     return tab;
   };
 };

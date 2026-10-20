@@ -9,6 +9,7 @@ from functools import partial
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
 from glove.api import ConfigError
 from glove.api.commands import (
@@ -59,6 +60,7 @@ def command(
     """Build, start the sidecars, resolve launch-time settings, attach the harness."""
     one_resume(resume, session)
     secrets: dict[str, str] | None = None
+    source = _source_stamp()
     for attempt in range(1, SUBNET_ATTEMPTS + 1):
         # (again after SubnetTaken: sync_registry re-allocates a subnet a foreign network took)
         sd, sid, cfg, plan = _plan_up(directory, resume, session, iknow)
@@ -78,9 +80,10 @@ def command(
                 raise fail(str(e)) from e
         # Only transcripts written at/after launch belong to this run (see the hint).
         launched_at = time.time()
+        sidecars: dict[str, str] = {}  # id → StartedAt as the harness starts (after the sidecars and prepare)
         try:
             launch(cfg, plan, sd.compose, provider=cfg.provider, rebuild=rebuild and attempt == 1, secrets=secrets,
-                   prepare=partial(prepare_harness, sd, cfg, plan))
+                   prepare=partial(_prepare_then_snapshot, sd, cfg, plan, sidecars))
         except SubnetTaken as e:
             if attempt == SUBNET_ATTEMPTS:
                 raise fail(f"{e} — gave up after {attempt} attempts") from e
@@ -92,6 +95,7 @@ def command(
             raise fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
                        "`glove down` removes what did start.") from e
         _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
+        _after_harness(cfg.provider, plan.project, sidecars, source)
         return
 
 
@@ -137,6 +141,11 @@ def prepare_harness(sd, cfg, plan) -> None:
     render_home(cfg, plan, sd.home)
 
 
+def _prepare_then_snapshot(sd, cfg, plan, sidecars: dict[str, str]) -> None:
+    prepare_harness(sd, cfg, plan)
+    sidecars.update(_started(cfg.provider, plan.project) or {})
+
+
 def _resolve_extensions(plan, provider: str) -> None:
     """Run each active extension's `resolve` hook (after sidecars are up) and
     refresh the model descriptor from the inference slot's resolved exports."""
@@ -156,10 +165,70 @@ def _resolve_extensions(plan, provider: str) -> None:
 def _print_resume_hint(profile, home_dir: Path, sid: str, *, since: float) -> None:
     """After the TUI exits, show how to reopen the conversation THIS run wrote
     (identified by mtime; a fresh one quit before any message leaves none)."""
-    refs = [r for r in conversations(profile, home_dir, sid) if r.mtime >= since]
+    try:
+        refs = [r for r in conversations(profile, home_dir, sid) if r.mtime >= since]
+    except Exception as e:  # never a traceback over the harness's own exit
+        console.print(f"[dim]couldn't list the saved conversation ({escape(str(e))}); "
+                      "`glove up --resume` still works[/dim]")
+        return
     if not refs:
         return
     newest = refs[0]
     console.print(f"\n[bold]conversation saved:[/bold] {newest.id}")
     console.print("  resume last:     [cyan]glove up --resume[/cyan]")
     console.print(f"  resume this one: [cyan]glove up --session {newest.id}[/cyan]")
+
+
+def _after_harness(provider: str, project: str, sidecars: dict[str, str], source: float | None) -> None:
+    """What `up` adds once the harness has exited; never a traceback over its exit."""
+    try:
+        if _runtime_restarted(sidecars, _started(provider, project)):
+            err.print("[yellow]⚠[/yellow] the container runtime restarted during the session: the sidecars are "
+                      "back, the harness isn't — `glove up --resume`, or `glove down`")
+        if source is not None and _source_stamp() != source:
+            err.print("[yellow]⚠[/yellow] glove was updated while this session ran; run `glove down` with the new "
+                      "version before the next `glove up`")
+    except Exception as e:  # best effort
+        err.print(f"[dim]after the harness: {escape(str(e))}[/dim]")
+
+
+def _source_stamp() -> float | None:
+    """The newest source file of a glove checkout (an editable install), None otherwise. One
+    updated while `up` runs leaves this process's old modules lazily importing new ones."""
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "pyproject.toml").is_file():
+        return None
+    newest = 0.0
+    for d in ("glove", "commands", "extensions", "harnesses"):
+        for f in (root / d).rglob("*.py"):
+            try:
+                newest = max(newest, f.stat().st_mtime)
+            except OSError:  # removed meanwhile (a pull, a branch switch)
+                continue
+    return newest
+
+
+def _started(provider: str, project: str) -> dict[str, str] | None:
+    """Each running container of the project → its StartedAt, as the runtime says it;
+    None when the runtime doesn't answer."""
+    try:
+        ids = subprocess.run([provider, "ps", "-q", "--filter", f"label=com.docker.compose.project={project}"],
+                             capture_output=True, text=True, check=True, timeout=5).stdout.split()
+        if not ids:
+            return {}
+        r = subprocess.run([provider, "inspect", "-f", "{{.Id}} {{.State.StartedAt}}", *ids], capture_output=True,
+                           text=True, check=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return dict(line.split(" ", 1) for line in r.stdout.splitlines() if " " in line)
+
+
+def _runtime_restarted(before: dict[str, str], after: dict[str, str] | None) -> bool:
+    """The runtime restarted (taking the `--rm` harness with it) when, of two or more
+    sidecars running as the harness started, none still has the start it had then and
+    some are running again: they came back alone on their restart policy. Compared in
+    the runtime's own words, so the VM's clock never meets the host's; one sidecar
+    recreated (e.g. `glove playwright reload`) leaves the others as they were."""
+    if len(before) < 2 or not after:
+        return False
+    return not any(after.get(cid) == started for cid, started in before.items())
