@@ -15,4 +15,4 @@ Removes what glove left on Docker and Podman.
   question, `--runtime docker|podman` looks at one runtime (default: each on
   `PATH`; one that does not answer is reported and skipped).
 
-`glove gc` (core) removes the registry rows and exports of the same sessions.
+`glove gc` removes the registry rows and exports of the same sessions.

@@ -16,7 +16,31 @@ All notable changes to glove are documented here.
 - **Commands live in `commands/<name>/`** (`commands/README.md`), apart from
   extensions: core mounts each `cli.py`'s `command` or `app` and never imports
   them. A command imports only `glove.api` and the new `glove.api.commands`
-  (pinned in `tests/test_api_surface.py`). `glove clean` is the first.
+  (pinned in `tests/test_api_surface.py`). `glove clean` is the first; every
+  other command moved there too (`version`, `ext`, `ls`, `ps`, `gc`,
+  `keychain`, `downloads`, `build`, `doctor`, `policy`, `check`, `new`, `plan`,
+  `rm`, `down`, `up`), each with its own tests, and each command's CLI is
+  unchanged (`glove --help` now lists them alphabetically). `glove/cli.py` keeps
+  only the app and the mounting. What two or more commands share moved to
+  `glove/sessionops.py` (the consoles, `fail`, `DIR_ARG`, `IKNOW`,
+  `open_session`, `sync_registry`, `materialize_plan`, `stop`, …).
+  `glove.api.commands` exports: `DIR_ARG`, `IKNOW`, `VERSION`, `console`,
+  `err`, `fail`, `ensure_home`, `now`, `open_session`, `sync_registry`,
+  `materialize_plan`, `one_resume`, `conversations`, `print_checks`,
+  `print_extensions`, `row_state`, `mark_downloads`, `stop` (shared); and the
+  core names a command uses: `Check`, `HardeningError`, `OPTION_SECTIONS`,
+  `PLACEHOLDER`, `SCHEMA_VERSION`, `SESSION_FILE`, `SessionError`,
+  `SubnetTaken`, `autodetect_provider`, `build_forwarder`, `build_harness`,
+  `build_session_plan`, `call_hook`, `clear_stale_harness`, `control_dir`,
+  `default_enforcer`, `discover`, `extension_checks`, `find_session`,
+  `get_enforcer`, `get_profile`, `get_runtime`, `glove_home`, `harness_model`,
+  `known_harnesses`, `known_runtimes`, `launch`, `load_session_file`,
+  `materialize_session`, `observe_dir`, `placeholders_left`, `probe_direct`,
+  `probe_http`, `quarantine_supported`, `read_effective`, `remove_rows`,
+  `remove_state`, `render_home`, `run_doctor`, `run_teardown`, `secret_env`,
+  `secret_exists`, `secret_refs`, `template_drift`, `with_headers`,
+  `worst_status`, `write_effective`. `commands/build/` is no longer skipped by
+  git and pytest as a build directory.
 
 ### Changed
 

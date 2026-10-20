@@ -195,8 +195,8 @@ Mac runs the next time you use git. See "Planted host-trusted files" in
 ## CLI
 
 Session commands take an optional directory; without one they use the nearest
-`glove-session.yml` at or above the current directory. Commands being moved out
-of core live in `commands/<name>/` ([commands/README.md](commands/README.md)).
+`glove-session.yml` at or above the current directory. Every command lives in
+`commands/<name>/` ([commands/README.md](commands/README.md)); core only mounts them.
 
 ```
 glove new <template|path|git-url> [DIR]      # materialize a session (DIR default: .)
