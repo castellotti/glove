@@ -50,6 +50,7 @@ COMMANDS = {
     "ID_RE": "Pattern",
     "RegistryError": "class(ValueError)",
     "SessionDir": "dataclass(root)",
+    "VERSION": "str",
     "load_registry": "() -> 'list[SessionEntry]'",
     "project_name": "(session: 'str') -> 'str'",
 }

@@ -22,7 +22,7 @@ import typer
 from rich.console import Console
 from rich.syntax import Syntax
 
-from . import __version__, quarantine
+from . import quarantine
 from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
@@ -1018,12 +1018,6 @@ def ext_cmd() -> None:
                 *([f"provides {','.join(m.provides)}"] if m.provides else []),
                 *([f"cli: glove {name} …"] if m.cli else [])]
         console.print(f"[cyan]{name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {m.summary}")
-
-
-@app.command()
-def version() -> None:
-    """Print the glove version."""
-    console.print(__version__)
 
 
 _mount_commands()
