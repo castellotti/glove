@@ -44,12 +44,7 @@ crun() {  # compose run of the rendered harness service; compose's progress line
   "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" run --rm --no-deps -T "glove-$S_ID-harness" "$@" 2>&1 \
     | grep -v -E '^ (Container|Network|Volume) '
 }
-tool() {  # a shell command as the harness runs one: inside the session's tool wrapper
-  local w
-  w="$(uv run --quiet --project "$ROOT" python -c \
-    'import json,shlex,sys; print(shlex.join(json.load(open(sys.argv[1]))["argv"]))' "$S_POLICIES/tool-wrapper.json")"
-  eval "crun $w bash -c $(printf %q "$1")"
-}
+tool() { crun /opt/glove/bin/glove-tool -c "$1"; }  # a shell command as the harness runs one
 cleanup() { [ -n "${S_COMPOSE:-}" ] && "$RT" compose -p "glove-$S_ID" -f "$S_COMPOSE" down -v >/dev/null 2>&1; }
 ON_EXIT=cleanup
 # MOUNTS=native|virtiofs: `docker_desktop_mounts:` (MOUNTS=native on Docker Desktop 4.96 is the control: /work fails)

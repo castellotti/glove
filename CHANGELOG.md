@@ -110,8 +110,7 @@ All notable changes to glove are documented here.
   not through the `proxy` endpoint, which is now Claude Code's alone, and
   search's Pi-only `search` endpoint is gone. The fetch guard and body rules
   exist once, in the fetcher. Verified live with Pi on Podman (nono) and on
-  Docker (nono+srt; Docker Desktop 4.96 with the pending bind-layer fix for its
-  Landlock bug): search and fetch through `direct` and `tor`, `web_download`,
+  Docker (nono+srt; Docker Desktop 4.96 with the virtiofs bind layer): search and fetch through `direct` and `tor`, `web_download`,
   the headless browser, `corporate`, observe's flows and filter, and a stdio
   server planted in `/work/.mcp.json` or `/work/.pi/mcp.json` never starts.
 - **`web_search` names the engines SearXNG found unresponsive** (e.g.
