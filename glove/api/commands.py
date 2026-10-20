@@ -4,11 +4,14 @@ besides `glove.api`: the session machinery and the core names commands use."""
 from .. import __version__ as VERSION
 from ..extensions import discover
 from ..naming import project_name
+from ..quarantine import supported as quarantine_supported
 from ..registry import RegistryError, glove_home, load_registry
 from ..registry import remove as remove_rows
 from ..runtimes import get_runtime
-from ..sessiondir import ID_RE, SessionDir, autodetect_provider
-from ..sessionops import console, err, fail, row_state
+from ..sessiondir import ID_RE, SessionDir, SessionError, autodetect_provider
+from ..sessiondir import find as find_session
+from ..sessionops import DIR_ARG, console, err, fail, mark_downloads, row_state
 
-__all__ = ["ID_RE", "VERSION", "RegistryError", "SessionDir", "autodetect_provider", "console", "discover", "err",
-           "fail", "get_runtime", "glove_home", "load_registry", "project_name", "remove_rows", "row_state"]
+__all__ = ["DIR_ARG", "ID_RE", "VERSION", "RegistryError", "SessionDir", "SessionError", "autodetect_provider",
+           "console", "discover", "err", "fail", "find_session", "get_runtime", "glove_home", "load_registry",
+           "mark_downloads", "project_name", "quarantine_supported", "remove_rows", "row_state"]

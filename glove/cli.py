@@ -21,7 +21,6 @@ from pathlib import Path
 import typer
 from rich.syntax import Syntax
 
-from . import quarantine
 from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
@@ -32,7 +31,7 @@ from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
-from .sessionops import console, err, fail
+from .sessionops import DIR_ARG, console, err, fail, mark_downloads
 
 app = typer.Typer(
     add_completion=False,
@@ -47,9 +46,6 @@ app = typer.Typer(
         "[cyan]glove down[/cyan]  stop it",
     ]),
 )
-
-_DIR_ARG = typer.Argument(None, help="session directory (default: the nearest one at or above the cwd)")
-
 
 def _ensure_home() -> None:
     """``registry.ensure_home``, printing its warnings (see there)."""
@@ -289,7 +285,7 @@ _IKNOW = typer.Option([], "--i-know-what-i-am-doing", help="waive a hardening ro
 
 @app.command("plan")
 def plan_cmd(
-    directory: Path | None = _DIR_ARG,
+    directory: Path | None = DIR_ARG,
     compose: bool = typer.Option(False, "--compose", help="also print the rendered compose project"),
     resume: bool = typer.Option(False, "--resume", "-r", help="render as `glove up --resume` would"),
     session: str | None = typer.Option(None, "--session", help="render as `glove up --session <id>` would"),
@@ -330,7 +326,7 @@ def plan_cmd(
 
 @app.command()
 def up(
-    directory: Path | None = _DIR_ARG,
+    directory: Path | None = DIR_ARG,
     rebuild: bool = typer.Option(False, "--rebuild", help="rebuild the images"),
     resume: bool = typer.Option(False, "--resume", "-r", help="reopen the most recent conversation"),
     session: str | None = typer.Option(None, "--session",
@@ -580,7 +576,7 @@ def _print_extensions(plan) -> None:
 
 @app.command()
 def check(
-    directory: Path | None = _DIR_ARG,
+    directory: Path | None = DIR_ARG,
     no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
     offline: bool = typer.Option(False, "--offline", help="contact nothing the session reaches (e.g. the LLM server)"),
 ) -> None:
@@ -650,7 +646,7 @@ def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: b
         err.print(f"[yellow]warn:[/yellow] {w}")
     teardown(sid, provider=provider, wipe=wipe)
     if mark:
-        _mark_downloads(sd)
+        mark_downloads(sd)
     if wipe:
         # the flow/exit record and status; session.json and transcripts stay
         net = reg.observe_dir(sid) / "net"
@@ -661,25 +657,9 @@ def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: b
             console.print(f"[dim]removed {len(gone)} network-observability file(s) from {net}[/dim]")
 
 
-def _mark_downloads(sd: SessionDir) -> quarantine.Marked | None:
-    """Stamp the macOS quarantine attribute on what the session's sidecars
-    saved: its `outputs:` dirs (e.g. <session>/downloads/), as recorded at
-    plan time; see glove/quarantine.py. None off macOS."""
-    if not quarantine.supported():
-        return None
-    _, resolved = sdm.read_effective(sd.effective)
-    names = [n for n in resolved.get("outputs") or [] if isinstance(n, str) and Path(n).name == n]
-    r = quarantine.mark(sd.root / n for n in names)
-    if r.stamped:
-        console.print(f"[dim]quarantined {r.stamped} downloaded file(s)[/dim]")
-    for path, why in r.failed:
-        err.print(f"[yellow]warn:[/yellow] not quarantined: {path}: {why}")
-    return r
-
-
 @app.command()
 def down(
-    directory: Path | None = _DIR_ARG,
+    directory: Path | None = DIR_ARG,
     provider: str | None = typer.Option(None),
     wipe: bool = typer.Option(False, "--wipe", help="also remove volumes and the network-observability record"),
 ) -> None:
@@ -705,7 +685,7 @@ def _remove_exports(sid: str) -> list[Path]:
 
 @app.command()
 def rm(
-    directory: Path | None = _DIR_ARG,
+    directory: Path | None = DIR_ARG,
     all_: bool = typer.Option(False, "--all", help="also delete the directory itself (work/ included)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
     provider: str | None = typer.Option(None),
@@ -733,30 +713,6 @@ def rm(
     elif sd.state.exists():
         sdm.remove_state(sd)
     console.print(f"[green]✓[/green] removed {what}")
-
-
-downloads_app = typer.Typer(add_completion=False, help="Files the session's sidecars saved (web_download, …).")
-app.add_typer(downloads_app, name="downloads")
-
-
-@downloads_app.command("mark")
-def downloads_mark_cmd(directory: Path | None = _DIR_ARG) -> None:
-    """Stamp the macOS quarantine attribute on new files in the session's
-    download dirs, as `glove down` does (Gatekeeper then vets one opened from Finder)."""
-    if not quarantine.supported():
-        console.print("[dim]nothing to do: the quarantine attribute is macOS-only[/dim]")
-        return
-    try:
-        sd = sdm.find(directory)
-    except SessionError as e:
-        raise fail(str(e)) from e
-    if not sd.effective.is_file():
-        raise fail(f"{sd.root} has never been planned (no {sd.effective.name})")
-    r = _mark_downloads(sd)
-    if r is None or r.failed:
-        raise typer.Exit(1)
-    if not r.stamped:
-        console.print(f"[dim]nothing new to quarantine ({r.already} already marked)[/dim]")
 
 
 # --- build / doctor / policy ---------------------------------------------------
@@ -809,7 +765,7 @@ def doctor(
 
 
 @app.command()
-def policy(directory: Path | None = _DIR_ARG) -> None:
+def policy(directory: Path | None = DIR_ARG) -> None:
     """Print the rendered ring-1 policies and the ring-0 hardening for review."""
     try:
         sd, _, sid, cfg = _open(directory, register=False)
