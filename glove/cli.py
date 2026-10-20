@@ -19,7 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.syntax import Syntax
 
 from . import quarantine
@@ -33,6 +32,7 @@ from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
+from .sessionops import console, err, fail
 
 app = typer.Typer(
     add_completion=False,
@@ -47,15 +47,8 @@ app = typer.Typer(
         "[cyan]glove down[/cyan]  stop it",
     ]),
 )
-console = Console()
-err = Console(stderr=True)
 
 _DIR_ARG = typer.Argument(None, help="session directory (default: the nearest one at or above the cwd)")
-
-
-def _fail(msg: str, code: int = 1) -> typer.Exit:
-    err.print(f"[red]error:[/red] {msg}")
-    return typer.Exit(code)
 
 
 def _ensure_home() -> None:
@@ -169,7 +162,7 @@ def new(
         try:
             sd = sdm.find(directory)
         except SessionError as e:
-            raise _fail(str(e)) from e
+            raise fail(str(e)) from e
         drift = sdm.template_drift(sd)
         if drift is None:
             console.print("[green]✓[/green] the template is unchanged since `glove new`")
@@ -183,7 +176,7 @@ def new(
         sd, sid = sdm.materialize(template, directory)
         _sync_registry(sd, sid, sdm.load_file(sd))
     except (SessionError, reg.RegistryError) as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     console.print(f"[green]✓[/green] session [bold]{sid}[/bold] from template [cyan]{template}[/cyan] at {sd.root}")
     todo = sdm.placeholders_left(sdm.load_file(sd))
     if todo:
@@ -288,7 +281,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
 
 def _one_resume(resume: bool, session: str | None) -> None:
     if resume and session is not None:
-        raise _fail("pass either --resume (last) or --session <id> (specific), not both.")
+        raise fail("pass either --resume (last) or --session <id> (specific), not both.")
 
 
 _IKNOW = typer.Option([], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)")
@@ -309,7 +302,7 @@ def plan_cmd(
         plan, compose_yaml, home_files = _materialize_plan(sd, sid, cfg, resume=resume, session=session,
                                                            overrides=frozenset(iknow))
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     import json
 
     from .enforcers import OPTION_SECTIONS
@@ -370,7 +363,7 @@ def up(
                     raise
             except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError,
                     subprocess.SubprocessError) as e:
-                raise _fail(str(e)) from e
+                raise fail(str(e)) from e
         # Only transcripts written at/after launch belong to this run (see the hint).
         launched_at = time.time()
         try:
@@ -378,13 +371,13 @@ def up(
                    prepare=partial(prepare_harness, sd, cfg, plan))
         except SubnetTaken as e:
             if attempt == SUBNET_ATTEMPTS:
-                raise _fail(f"{e} — gave up after {attempt} attempts") from e
+                raise fail(f"{e} — gave up after {attempt} attempts") from e
             err.print(f"[yellow]⚠[/yellow] {e}; re-allocating and retrying")
             continue
         except ConfigError as e:
-            raise _fail(str(e)) from e
+            raise fail(str(e)) from e
         except subprocess.CalledProcessError as e:
-            raise _fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
+            raise fail(f"`{' '.join(e.cmd[:2])} …` failed (exit {e.returncode}); see its output above. "
                         "`glove down` removes what did start.") from e
         _print_resume_hint(plan.profile, sd.home, sid, since=launched_at)
         return
@@ -403,7 +396,7 @@ def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
         plan, _, _ = _materialize_plan(sd, sid, cfg, resume=resume, session=session, home=False,
                                        overrides=frozenset(iknow))
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     return sd, sid, cfg, plan
 
 
@@ -607,7 +600,7 @@ def check(
     try:
         sd, raw, sid, cfg = _open(directory, register=False)
     except (ConfigError, ValueError) as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     checks: list[Check] = [Check("session file", "ok", f"{sd.file} (schema v{sdm.SCHEMA_VERSION})")]
     plan = None
     todo = sdm.placeholders_left(raw)
@@ -694,10 +687,10 @@ def down(
     try:
         sd = sdm.find(directory)
     except SessionError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     sid = sd.read_id()
     if sid is None:
-        raise _fail(f"{sd.root} has never been launched (no .glove/id)")
+        raise fail(f"{sd.root} has never been launched (no .glove/id)")
     _stop(sd, sid, provider, wipe=wipe)
 
 
@@ -722,7 +715,7 @@ def rm(
     try:
         sd = sdm.find(directory)
     except SessionError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     sid = sd.read_id()
     what = f"the whole directory {sd.root}" if all_ else f"{sd.state} (work/ and {sdm.SESSION_FILE} stay)"
     if not yes and not typer.confirm(f"Remove session {sid or '(never launched)'}: {what}?", default=False):
@@ -755,7 +748,7 @@ def list_cmd() -> None:
     try:
         entries = reg.load_registry()
     except reg.RegistryError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     if not entries:
         console.print("[dim]no sessions — create one with `glove new <template> <dir>`[/dim]")
         return
@@ -793,7 +786,7 @@ def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> Non
     try:
         entries = reg.load_registry()
     except reg.RegistryError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     dead = {e.id for e in entries if _row_state(e) != "ok"}
     live = {e.id for e in entries} - dead
     orphans: list[Path] = []
@@ -831,9 +824,9 @@ def downloads_mark_cmd(directory: Path | None = _DIR_ARG) -> None:
     try:
         sd = sdm.find(directory)
     except SessionError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     if not sd.effective.is_file():
-        raise _fail(f"{sd.root} has never been planned (no {sd.effective.name})")
+        raise fail(f"{sd.root} has never been planned (no {sd.effective.name})")
     r = _mark_downloads(sd)
     if r is None or r.failed:
         raise typer.Exit(1)
@@ -861,12 +854,12 @@ def keychain_set_cmd(
     secret = None
     if stdin:
         if sys.stdin.isatty():
-            raise _fail("--stdin reads a piped secret; without it, glove prompts (and hides what you type)")
+            raise fail("--stdin reads a piped secret; without it, glove prompts (and hides what you type)")
         secret = sys.stdin.read().removesuffix("\n").removesuffix("\r")
     try:
         rc = keychain_set(service, secret)
     except ConfigError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     if rc != 0:
         raise typer.Exit(rc)
     console.print(f"[green]✓[/green] stored; reference it as [cyan]keychain:{service}[/cyan]")
@@ -911,7 +904,7 @@ def doctor(
     try:
         checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
     except ValueError as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
     if json_out:
         console.print_json(_json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]}))
     else:
@@ -927,7 +920,7 @@ def policy(directory: Path | None = _DIR_ARG) -> None:
         plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                                   session_dir=str(sd.root))
     except (ConfigError, ValueError) as e:
-        raise _fail(str(e)) from e
+        raise fail(str(e)) from e
 
     h = plan.hardening
     console.print(f"[bold]{sid}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
@@ -1002,22 +995,6 @@ def _mount_commands() -> None:
             app.command(d.name)(m.command)
         else:
             app.add_typer(m.app, name=d.name)
-
-
-@app.command("ext")
-def ext_cmd() -> None:
-    """Every extension glove can load, with its origin and CLI."""
-    from .extensions import ExtensionError, discover
-
-    try:
-        manifests = discover()
-    except ExtensionError as e:
-        raise _fail(str(e)) from e
-    for name, m in sorted(manifests.items()):
-        tags = [m.taint, *(["library"] if not m.selectable else []),
-                *([f"provides {','.join(m.provides)}"] if m.provides else []),
-                *([f"cli: glove {name} …"] if m.cli else [])]
-        console.print(f"[cyan]{name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {m.summary}")
 
 
 _mount_commands()

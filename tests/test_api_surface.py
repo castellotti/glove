@@ -51,6 +51,10 @@ COMMANDS = {
     "RegistryError": "class(ValueError)",
     "SessionDir": "dataclass(root)",
     "VERSION": "str",
+    "console": "Console",
+    "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
+    "err": "Console",
+    "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "project_name": "(session: 'str') -> 'str'",
 }
