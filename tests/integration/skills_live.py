@@ -3,7 +3,7 @@
     STUB_LOG=<stub log> uv run python tests/integration/skills_live.py <session-dir>
 
 The session has `skills: {plugins: {demo: …}}` (the fixture plugin in its
-skills/, `skills: [greet]`; on Claude Code also `mcp: true`) and its llm on the
+skills/, `skills: [greet]`, `mcp: true`) and its llm on the
 tool-driving stub. Every command is the agent's own tool call, under the
 session's enforcer. It checks:
   1. the plugin's scripts run by the paths the skill names: a stdlib script,
@@ -14,7 +14,7 @@ session's enforcer. It checks:
      is not in the image; the plugin is read-only; the data dir is writable;
   3. the harness loads the skill (Pi: in its system prompt; Vibe: its `skill`
      tool; Claude Code: the skill link it loads with --add-dir);
-  4. Claude Code and Vibe: the plugin's stdio MCP server answers, with its env
+  4. the plugin's stdio MCP server answers, with its env
      resolved, under the tool wrapper (it can't reach the llm forwarder);
   5. the shell still has no network (uv cannot reach an index).
 Prints PASS/FAIL per check; exits non-zero on any failure.
@@ -77,15 +77,14 @@ def main(directory: str) -> int:
             out = s.call("Skill", {"skill": "greet"})
             print(f"      skill: {tool_result(out, 300)}")
             check("its Skill tool loads it", "Launching skill: greet" in tool_result(out), tool_result(out, 200))
-        if harness != "pi":
-            print("== the plugin's stdio MCP server (under the tool wrapper)")
-            llm = next(e for e in s.plan.composition.endpoints if e.name == "llm")
-            target = f"{llm.host(s.sid)}:{llm.port}"
-            echo = "mcp__demo__echo" if harness == "claude-code" else "mcp_demo.echo"
-            out = tool_result(s.call(echo, {"message": target}))
-            check("it answers, its env resolved",
-                  f"ECHO {target} root={ROOT} data=/work/.glove-plugin-data/demo" in out, out[-200:])
-            check("it has no network (not even the harness's llm forwarder)", "net=closed" in out, out[-60:])
+        print("== the plugin's stdio MCP server (under the tool wrapper)")
+        llm = next(e for e in s.plan.composition.endpoints if e.name == "llm")
+        target = f"{llm.host(s.sid)}:{llm.port}"
+        echo = "mcp_demo.echo" if harness == "vibe" else "mcp__demo__echo"
+        out = tool_result(s.call(echo, {"message": target}))
+        check("it answers, its env resolved",
+              f"ECHO {target} root={ROOT} data=/work/.glove-plugin-data/demo" in out, out[-200:])
+        check("it has no network (not even the harness's llm forwarder)", "net=closed" in out, out[-60:])
 
         print("== still offline")
         out = sh("cd /tmp && uv run --no-project --with requests -- python -c 'print(\"NET\" + \"-OK\")' 2>&1 | tail -2")

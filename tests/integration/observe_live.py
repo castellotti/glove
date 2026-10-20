@@ -8,7 +8,7 @@ It checks, against real containers:
   1. every endpoint's forwarder is a netgate (none is socat); the collector has
      no network; with filter, every gate and the collector mount control/ read-only;
   2. SearXNG is off the egress network and reaches it only through its gate;
-  3. Pi's web search / fetch_url (stub-driven MCP tool calls) are recorded as flows
+  3. the harness's (Pi's or Vibe's) web search / fetch_url (stub-driven MCP tool calls) are recorded as flows
      with the right service, tool, client and route, and each model call as two
      flows (`llm` client harness, `llm-upstream` client llm); transcripts are exported;
      the harness sees no export but its transcripts; `exit_identity: auto` follows
@@ -78,11 +78,12 @@ def main(directory: str) -> int:
         mounts = [os.path.realpath(host_under_virtiofs(v["source"]) or v["source"])
                   for v in hv if v.get("type") == "bind"]
 
-        print("== Pi tool calls → flows")
+        h = live.cfg.harness
+        print(f"== {h} tool calls → flows")
         ans = live.call(live.tools["search"], {"query": "wikipedia"})
-        check("Pi web search through its gates", "TOOL RESULT" in ans, ans[-120:])
+        check(f"{h} web search through its gates", "TOOL RESULT" in ans, ans[-120:])
         ans = live.call(live.tools["fetch"], {"url": "https://example.com"})
-        check("Pi fetch_url through its gates", "documentation examples" in ans, ans[-120:])
+        check(f"{h} fetch_url through its gates", "documentation examples" in ans, ans[-120:])
         recs = wait_for(lambda: [r for r in flows() if r.get("service") == "webfetch-egress"
                                  and (r.get("dest") or {}).get("host") == "example.com"], 20)
         f = recs[-1] if recs else {}
@@ -143,7 +144,7 @@ def main(directory: str) -> int:
                         == digest, 15)
         check("the gates confirm the file (status.json rules.sha256)", bool(seen))
         ans = live.call(live.tools["fetch"], {"url": "https://example.com"})
-        check("Pi fetch_url example.com is now refused", "TOOL RESULT" in ans and "network policy" in ans, ans[-140:])
+        check(f"{h} fetch_url example.com is now refused", "TOOL RESULT" in ans and "network policy" in ans, ans[-140:])
         blocked = wait_for(lambda: [r for r in flows() if r.get("verdict") == "block"
                                     and (r.get("dest") or {}).get("host") == "example.com"], 15)
         rid = json.loads((ctl / "rules.json").read_text())["rules"][0]["id"]

@@ -173,15 +173,14 @@ def main(directory: str) -> int:
             out = tool_result(live.call(fetch, {"url": CDX}, timeout=240), 600)
             check(f"{fetch} reads a plain http:// page (Wayback CDX)", "theoldrobots.com" in out, out[-200:])
             if comp.by_name("observe"):
-                svc = "webfetch-egress" if live.cfg.harness == "vibe" else "proxy"
-                protos = [r.get("proto") for r in live.flows() if r.get("service") == svc
+                protos = [r.get("proto") for r in live.flows() if r.get("service") == "webfetch-egress"
                           and (r.get("dest") or {}).get("host") == "web.archive.org"
                           and r["dest"].get("port") == 80]
                 check("flow: → http://web.archive.org/ unwrapped (proto http)",
                       bool(protos) and set(protos) == {"http"}, f"protos {protos}")
-                if live.cfg.harness == "vibe":  # the MCP hops and the egress flows they cause
-                    check_next(live.net, live.flows(), {"webfetch-mcp": ["webfetch-egress"],
-                                                        "webdownload-mcp": ["webdownload-egress"]})
+                # the MCP hops and the egress flows they cause (Pi and Vibe: the fetcher's own gate)
+                check_next(live.net, live.flows(), {"webfetch-mcp": ["webfetch-egress"],
+                                                    "webdownload-mcp": ["webdownload-egress"]})
 
         if comp.by_name("filter"):
             print("== filter")

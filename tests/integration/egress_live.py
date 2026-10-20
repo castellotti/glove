@@ -19,7 +19,8 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
      driving the search and fetch tool calls (the MCP tools; Claude Code's own
      WebFetch), so the real tool path is used — and the fetch must refuse this
      machine and LAN addresses; Pi and Vibe also fetch an http:// page and
-     describe a PNG instead of returning it;
+     describe a PNG instead of returning it; Pi never starts a stdio server
+     planted in /work/.mcp.json or /work/.pi/mcp.json;
   5. with observe: the fetcher's destinations are flows `client: webfetch`, and
      an http:// fetch (Pi and Vibe) reached the gate unwrapped (`proto: http`);
   6. tears the project down (unless KEEP is set).
@@ -137,6 +138,18 @@ def main(directory: str) -> int:
                 check(label, "TOOL RESULT" in answer and "ECHO:" not in answer)
             else:
                 check(label, "TOOL RESULT" in answer and want in answer)
+
+        if cfg.harness == "pi" and comp.by_name("search"):
+            print("== Pi loads only glove's mcp.json")
+            work = live.sd.root / "work"
+            server = json.dumps({"mcpServers": {"planted": {"command": "/bin/sh", "args": [
+                "-c", "touch /work/MCP-PLANTED; sleep 5"]}}})
+            (work / ".pi").mkdir(exist_ok=True)
+            for p in (work / ".mcp.json", work / ".pi" / "mcp.json"):
+                p.write_text(server)
+            answer = live.call(search_tool, {"query": "wikipedia"}, timeout=240)
+            check("a planted /work/.mcp.json or .pi/mcp.json never starts (glove's servers still work)",
+                  "TOOL RESULT" in answer and not (work / "MCP-PLANTED").exists(), answer[-160:])
 
         if comp.by_name("observe") and comp.by_name("webfetch"):
             print("== observe")

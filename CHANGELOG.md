@@ -109,7 +109,11 @@ All notable changes to glove are documented here.
   harness → `webfetch-mcp` → `webfetch-egress` (observe: `client: webfetch`),
   not through the `proxy` endpoint, which is now Claude Code's alone, and
   search's Pi-only `search` endpoint is gone. The fetch guard and body rules
-  exist once, in the fetcher.
+  exist once, in the fetcher. Verified live with Pi on Podman (nono) and on
+  Docker (nono+srt; Docker Desktop 4.96 with the pending bind-layer fix for its
+  Landlock bug): search and fetch through `direct` and `tor`, `web_download`,
+  the headless browser, `corporate`, observe's flows and filter, and a stdio
+  server planted in `/work/.mcp.json` or `/work/.pi/mcp.json` never starts.
 - **`web_search` names the engines SearXNG found unresponsive** (e.g.
   `google: too many requests`, how a throttled exit shows with SearXNG's
   limiter off) and tells the agent not to retry immediately, instead of a bare
@@ -124,11 +128,17 @@ All notable changes to glove are documented here.
   `skills` extension's stdio MCP servers run as `glove-tool -- <command> …`
   (`glove-confine` is gone, and they now get the same env scrub). The
   enforcers no longer render `tool-wrapper.json`, and the entrypoint refuses to
-  start a wrapped session without `glove-tool`. Images rebuild.
+  start a wrapped session without `glove-tool`. Images rebuild. Verified live:
+  Pi's, Vibe's and Claude Code's shell commands and `!` under nono, srt and
+  nono+srt, a plugin's stdio MCP server under `glove-tool --` with every
+  harness (now Pi's too, `test_skills.sh`), and the entrypoint's refusal in an
+  image without `glove-tool`.
 - **observe polls the exit from one gate in every session:** the harness's
   own hop to the egress proxy when it has one (Claude Code's `proxy`), else
   the first egress consumer's (`searxng-egress`, `webfetch-egress`, …), so Vibe
-  sessions (and Pi's, now without a `proxy` hop) get `exit.ndjson` too. vpn's
+  sessions (and Pi's, now without a `proxy` hop) get `exit.ndjson` too (verified
+  live through `tor` with Pi and Vibe on Podman: `HARNESS=vibe
+  test_observe.sh tor`). vpn's
   `exit` volume is mounted read-only into that gate. Hook contexts' `endpoint`
   entries gain `harness` and `target_kind`.
 - **playwright `mode: host` never allows `browser_run_code_unsafe`**, for any
