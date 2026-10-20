@@ -11,7 +11,8 @@
 #     `stat /etc/glove`, a find for .glove / glove-session.yml / effective.yml …)
 #  3. `glove plan` shows the resolution recorded in .glove/effective.yml
 #  4. `glove down`; delete the directory → only the registry row remains under
-#     GLOVE_HOME (besides glove's own control/ and lock file); `glove ls` marks it
+#     GLOVE_HOME (besides glove's own control/, lock file and the engine-wide
+#     runtime-cache.json); `glove ls` marks it
 #     missing and `glove gc` removes it.
 # Uses a throwaway GLOVE_HOME: never touches ~/.glove. Requires docker + `glove build pi`.
 set -u
@@ -50,8 +51,8 @@ echo "== glove down; rm -rf $G1"
 ( cd "$G1" && glove down ) >/dev/null 2>&1
 rm -rf "$G1"
 echo "   GLOVE_HOME now holds:"; (cd "$GLOVE_HOME" && find . | sort | sed 's/^/     /')
-ok "only the registry row (+ control/, lock) remains" \
-  "[ \"\$(cd '$GLOVE_HOME' && find . -mindepth 1 | sort | tr '\n' ' ')\" = './control ./registry.json ./registry.json.lock ' ]"
+ok "only the registry row (+ control/, lock, runtime cache) remains" \
+  "[ \"\$(cd '$GLOVE_HOME' && find . -mindepth 1 ! -name runtime-cache.json | sort | tr '\n' ' ')\" = './control ./registry.json ./registry.json.lock ' ]"
 ok "the row names $SID" "grep -q '\"$SID\"' '$GLOVE_HOME/registry.json'"
 echo "== glove ls; glove gc"
 glove ls

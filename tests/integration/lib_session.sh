@@ -77,6 +77,7 @@ new_session() {
   S_ID="$(cat "$dir/.glove/id")"
   S_POLICIES="$dir/.glove/enforcer"
   S_COMPOSE="$dir/.glove/compose.yml"
+  S_LAYER="$(sed -n 's/^ *bind_layer: //p' "$dir/.glove/effective.yml")"
 }
 
 #   stub_llm <harness> <port>
@@ -155,4 +156,17 @@ rt = get_runtime(sys.argv[1])
 for k, v in rt.compose_cli_env.items():
     print(f"export {k}={shlex.quote(v)}")
 print("SRT_REFUSED=" + shlex.quote(rt.unsupported_enforcer_reason("srt") or ""))' "${RT:-docker}")"
+}
+
+#   host_src <path>
+#     the source a hand-built `-v <src>:…` under nono needs, as glove renders the
+#     harness's binds for the last new_session ($S_LAYER, its effective.yml's
+#     bind_layer): the path, or in virtiofs mode its path on Docker Desktop's
+#     virtiofs layer (README: Docker Desktop shared folders)
+host_src() {
+  if [ "${S_LAYER:-}" = virtiofs ]; then
+    echo "/run/host_virtiofs$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1")"
+  else
+    echo "$1"
+  fi
 }

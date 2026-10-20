@@ -221,9 +221,9 @@ def main(directory: str) -> int:
         check("no tools.json: every tool refused (the shell too)", "SHELL-RAN" not in r and "inventory" in r, r)
         if h == "pi":
             s.reconfigure("harness_config: {tools: {allow: [glove_probe]}}")
+            r = tool_result(s.call("glove_probe", {}), 300)
             check("… listed in harness_config.tools.allow, it runs",
-                  "glove_probe" in json.loads(inventory.read_text())["allow"]
-                  and "PROBE-RAN" in tool_result(s.call("glove_probe", {}), 300))
+                  "glove_probe" in json.loads(inventory.read_text())["allow"] and "PROBE-RAN" in r, r)
     return summary()
 
 

@@ -189,6 +189,37 @@ services:
       - "{{ host_gateway_name }}:host-gateway"
 {% endif %}
 {% endfor %}
+{% set watched = watch_paths() %}
+{% if watched %}
+
+  # --- mount-watch: Docker Desktop's virtiofs layer (the harness's binds) shows
+  # host-side changes only under a dir a running container binds on the normal
+  # path; this one binds the harness's own binds so, read-only, and `glove up`
+  # walks them here first (what changed while nothing watched). Runs nothing
+  # but sleep; no network.
+  glove-{{ session }}-mount-watch:
+    container_name: glove-{{ session }}-mount-watch
+    image: {{ harness_image }}
+    entrypoint: ["sleep", "infinity"]
+    stop_signal: SIGKILL
+    restart: unless-stopped
+    user: "{{ uid }}:{{ gid }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    pids_limit: 64
+    mem_limit: 256m
+    network_mode: none
+    volumes:
+{% for d in watched %}
+      - type: bind
+        source: {{ d | tojson }}
+        target: /watch/{{ loop.index }}
+        read_only: true
+{% endfor %}
+{% endif %}
 {% if extension_services %}
 
   # --- extension sidecars (validated + hardened by glove/compose.py) ---------

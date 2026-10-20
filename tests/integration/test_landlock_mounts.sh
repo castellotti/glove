@@ -9,11 +9,12 @@
 #   MOUNTS=native …   the control on Docker Desktop 4.96: the normal path, where /work fails under nono
 #
 # A throwaway session (Pi with python3, as the MX-5 research instance; webfetch
-# {downloads: work} for a read-only /work/downloads) is rendered by glove, its images built as `glove up` builds
-# them, then the rendered harness service runs with `compose run` (same image,
+# {downloads: work} for a read-only /work/downloads) is rendered by glove, its images built and its sidecars
+# started as `glove up` does (mount-watch too: Docker Desktop's virtiofs layer sees host-side changes only
+# through it), then the rendered harness service runs with `compose run` (same image,
 # env, hardening, binds, internal network only) and every check goes through the
 # session's own tool wrapper: what the harness prepends to each shell command.
-# No LLM, no sidecar started. Uses a throwaway GLOVE_HOME; tears everything down.
+# No LLM. Uses a throwaway GLOVE_HOME; tears everything down.
 set -u
 RT="${RT:-docker}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -26,15 +27,17 @@ PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-build() {  # the session's images, built as `glove up` builds them
+build() {  # the session's images and sidecars, as `glove up` builds and starts them
   uv run --quiet --project "$ROOT" python - "$1" <<'EOF'
 import sys
 from pathlib import Path
+from glove.plan import secret_env
 from glove.sessionops import materialize_plan, open_session
-from glove.session import ensure_images
+from glove.session import compose_process_env, ensure_images, start_sidecars
 sd, _, sid, cfg = open_session(Path(sys.argv[1]))
 plan, _, _ = materialize_plan(sd, sid, cfg)
 ensure_images(cfg, plan, cfg.provider)
+start_sidecars(plan, sd.compose, provider=cfg.provider, env=compose_process_env(cfg.provider, secret_env(plan)))
 EOF
 }
 crun() {  # compose run of the rendered harness service; compose's progress lines dropped
@@ -63,8 +66,8 @@ for enf in "${ENFORCERS[@]}"; do
   echo "== runtime $RT, enforcer $enf"
   new_session "$S" pi "  webfetch: {downloads: work}\n  direct: {}\nenforcer: $enf\napt_packages: [python3]\n" \
     || { bad "$enf: glove plan failed"; continue; }
-  build "$S" >/dev/null || { bad "$enf: image build failed"; continue; }
-  layer="$(grep -o 'bind_layer: [a-z]*' "$S/.glove/effective.yml" || echo 'bind_layer: native')"
+  build "$S" >/dev/null || { bad "$enf: image build or sidecar start failed"; continue; }
+  layer="bind_layer: ${S_LAYER:-native}"
   if grep -q '/run/host_virtiofs' "$S_COMPOSE"; then src=virtiofs; else src=native; fi
   [ "$layer" = "bind_layer: $src" ] && ok "$enf: $layer (compose sources agree)" || bad "$enf: $layer vs compose $src"
   if [ "$src" = virtiofs ]; then
@@ -84,6 +87,14 @@ for enf in "${ENFORCERS[@]}"; do
   [ "$out" = OK ] && ok "$enf: python unittest in /work" || bad "$enf: unittest: $out"
   out="$(tool 'python3 -c "import sqlite3,fcntl,mmap; c=sqlite3.connect(\"/work/db.sqlite\"); c.execute(\"create table t(x)\"); c.execute(\"insert into t values (7)\"); c.commit(); f=open(\"/work/b\",\"r+b\"); fcntl.flock(f,fcntl.LOCK_EX); print(c.execute(\"select x from t\").fetchone()[0], mmap.mmap(f.fileno(),0)[:2].decode())"')"
   [ "$out" = "7 hi" ] && ok "$enf: sqlite, flock, mmap" || bad "$enf: sqlite/flock/mmap: $out"
+  # the host replaces (as glove re-renders a policy) and deletes files the harness has already read
+  echo v1 > "$S/work/h.txt"; tool 'cat /work/h.txt /work/b' >/dev/null
+  python3 -c 'import os, sys, tempfile; fd, t = tempfile.mkstemp(dir=sys.argv[1]); os.write(fd, b"v2\n"); os.close(fd)
+os.replace(t, os.path.join(sys.argv[1], "work", "h.txt")); os.unlink(os.path.join(sys.argv[1], "work", "b"))' "$S"
+  out="$(tool 'cat /work/h.txt; test -e /work/b && echo b-still-there; true')"
+  # podman's virtiofs: a replaced file reads as missing for under 2 s, then right (never stale)
+  [ "$out" != v2 ] && [ "$RT" = podman ] && sleep 2 && out="$(tool 'cat /work/h.txt; test -e /work/b && echo b-still-there; true')"
+  [ "$out" = v2 ] && ok "$enf: the harness sees the host replace and delete files" || bad "$enf: host changes: $out"
   # a nested repo, checked after a pause: on the raw virtiofs layer a new dir's owner can turn 0:0
   out="$(tool 'cd /work && mkdir -p repo && cd repo && git init -q && echo a > a && git add a && git -c user.name=t -c user.email=t@example.invalid commit -qm one && sleep 2 && git status --short && git log --oneline | wc -l')"
   [ "$(echo "$out" | tr -d ' ')" = 1 ] && ok "$enf: git init/commit/status in /work/repo" || bad "$enf: git: $out"

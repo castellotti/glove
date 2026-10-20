@@ -37,6 +37,7 @@ import yaml
 from live_common import check, check_next, glove, inspect, live_session, summary, wait_for
 
 from glove import registry
+from glove.runtimes.landlock_mounts import host_under_virtiofs
 
 
 def main(directory: str) -> int:
@@ -73,7 +74,9 @@ def main(directory: str) -> int:
               (r.stderr.strip().splitlines() or ["?"])[-1][-80:])
         # the harness runs per call (`compose run --rm`): read its binds from the project
         hv = yaml.safe_load(sd.compose.read_text())["services"][plan.harness_service]["volumes"]
-        mounts = [os.path.realpath(v["source"]) for v in hv if v.get("type") == "bind"]
+        # each bind's host path (on Docker Desktop's virtiofs mode the source is /run/host_virtiofs/<it>)
+        mounts = [os.path.realpath(host_under_virtiofs(v["source"]) or v["source"])
+                  for v in hv if v.get("type") == "bind"]
 
         print("== Pi tool calls → flows")
         ans = live.call("web_search", {"query": "wikipedia"})

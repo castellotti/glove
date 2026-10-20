@@ -375,7 +375,8 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     extension fragments plus the `forwarder` provider's per-endpoint services."""
     services: dict[str, Any] = {}
     volumes: dict[str, Any] = {}
-    reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service}
+    reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service,
+                                                                         scoped(comp.session, "mount-watch")}
     declared_by: dict[str, set[str]] = {}
     _channel_volumes(comp, extra, volumes)
     for a, doc in comp.fragments:
@@ -467,6 +468,12 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
                     and not (name == plan.harness_service and plan.bind_layer == "virtiofs")):
                 raise ExtensionError(f"service {name!r}: only a Landlock harness binds from Docker Desktop's "
                                      f"virtiofs layer ({src})")
+        if name == scoped(session, "mount-watch"):  # never wider than the harness: its own binds, read-only
+            harness = {host_under_virtiofs(str(v.get("source"))) for v in services[plan.harness_service]["volumes"]
+                       if isinstance(v, dict)}
+            if any(not (isinstance(v, dict) and v.get("read_only") and v.get("source") in harness)
+                   for v in svc.get("volumes") or []):
+                raise ExtensionError("mount-watch binds only the harness's own binds, read-only")
         if name == plan.harness_service:
             nets = svc.get("networks") or []
             nets = list(nets) if isinstance(nets, list) else list(nets.keys())

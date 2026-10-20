@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -280,6 +281,70 @@ def test_virtiofs_translates_every_harness_bind_and_widens_safe_directory(tmp_pa
             assert not any("host_virtiofs" in str(v) for v in svc.get("volumes") or [])
     assert "'safe.directory'='*'" in plan_v.environment["GIT_CONFIG_PARAMETERS"]
     assert "'*'" not in plan.environment["GIT_CONFIG_PARAMETERS"]
+
+
+def test_watch_paths_are_the_harness_binds_once(tmp_path):
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "c").mkdir()
+    (tmp_path / "c" / "f").write_text("x")
+    (tmp_path / "g").write_text("x")
+    (tmp_path / "ab").mkdir()
+    real = os.path.realpath(tmp_path)
+    got = lm.watch_paths([str(tmp_path / "a" / "b"), str(tmp_path / "g"), str(tmp_path / "c" / "f"),
+                          str(tmp_path / "a"), str(tmp_path / "ab"), str(tmp_path / "a"), str(tmp_path / "c")])
+    # a file as itself (never its whole dir); a/b and c/f under a listed dir; ab is not under a
+    assert got == [f"{real}/g", f"{real}/a", f"{real}/ab", f"{real}/c"]
+
+
+def test_virtiofs_runs_a_mount_watch_on_the_normal_path(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    _, native = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path)
+    assert "mount-watch" not in native
+    plan_v, text = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path, bind_layer="virtiofs")
+    doc = yaml.safe_load(text)
+    watch = doc["services"][f"glove-{plan_v.session}-mount-watch"]
+    hosts = [lm.host_under_virtiofs(s) for s in _harness_sources(doc, plan_v)]
+    assert [v["source"] for v in watch["volumes"]] == lm.watch_paths(hosts)
+    assert all(any((s + "/").startswith(h + "/") for h in hosts) for s in lm.watch_paths(hosts))  # never wider
+    assert all(v["type"] == "bind" and v["read_only"] for v in watch["volumes"])
+    assert any((os.path.realpath(work) + "/").startswith(v["source"] + "/") for v in watch["volumes"])
+    assert (watch["image"], watch["entrypoint"], watch["network_mode"]) == (plan_v.image, ["sleep", "infinity"], "none")
+    assert (watch["cap_drop"], watch["read_only"], watch["user"]) == (["ALL"], True, "501:20")
+    assert watch["security_opt"] == ["no-new-privileges:true"]
+    for widen in ({"source": os.path.dirname(os.path.realpath(work))}, {"read_only": False}):
+        bad = yaml.safe_load(text)  # validate_project: only the harness's own binds, read-only
+        bad["services"][f"glove-{plan_v.session}-mount-watch"]["volumes"][0].update(widen)
+        with pytest.raises(ExtensionError, match="mount-watch binds only"):
+            validate_project(bad, plan_v, plan_v.composition)
+
+
+def test_start_sidecars_walks_the_watched_dirs_in_virtiofs_mode(tmp_path, monkeypatch):
+    from glove import session
+
+    work = tmp_path / "work"
+    work.mkdir()
+    for layer in ("virtiofs", "native"):
+        plan, text = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path, bind_layer=layer)
+        f = tmp_path / f"{layer}.yml"
+        f.write_text(text)
+        calls: list[list[str]] = []
+        ok = SimpleNamespace(returncode=0, stdout=b"")
+        monkeypatch.setattr(session.subprocess, "run", lambda cmd, calls=calls, ok=ok, **kw: calls.append(cmd) or ok)
+        session.start_sidecars(plan, f, provider="docker", env={})
+        walks = [c for c in calls if "exec" in c]
+        if layer == "virtiofs":  # after the sidecars are up
+            assert calls[-1] == walks[0] and walks[0][:3] == ["docker", "exec", f"glove-{plan.session}-mount-watch"]
+            assert "find /watch" in walks[0][-1]
+        else:
+            assert not walks
+    monkeypatch.setattr(session.subprocess, "run",
+                        lambda cmd, **kw: SimpleNamespace(returncode=int("exec" in cmd), stdout=b""))
+    monkeypatch.setattr(session, "teardown", lambda *a, **k: None)
+    monkeypatch.setattr(session, "_subnet_taken", lambda *a: None)
+    plan, text = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path, bind_layer="virtiofs")
+    with pytest.raises(subprocess.CalledProcessError):  # a failed walk stops the session (fail closed)
+        session.start_sidecars(plan, tmp_path / "virtiofs.yml", provider="docker", env={})
 
 
 def test_validate_project_keeps_the_virtiofs_layer_to_a_landlock_harness(tmp_path):

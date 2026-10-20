@@ -129,9 +129,15 @@ def virtiofs_source(host: str) -> str:
     return f"{VIRTIOFS_ROOT}{os.path.realpath(host)}"
 
 
+def watch_paths(hosts: list[str]) -> list[str]:
+    """The harness's host binds (`hosts`) that a normal-path bind must cover so host-side changes reach
+    the virtiofs layer: each once, in order, none under a listed dir (never wider than the harness's)."""
+    paths = list(dict.fromkeys(map(os.path.realpath, hosts)))
+    return [p for p in paths if not any(os.path.isdir(o) and p.startswith(o.rstrip("/") + "/") for o in paths)]
+
+
 def host_under_virtiofs(src: str) -> str | None:
-    """The host path a source on the virtiofs layer names ("/" for the layer's
-    root), or None for any other source. A leading `//` is the same path."""
+    """The host path a source on the virtiofs layer names ("/": its root; `//` = `/`), else None."""
     n = "/" + os.path.normpath(src).lstrip("/")
     if n == VIRTIOFS_ROOT or n.startswith(VIRTIOFS_ROOT + "/"):
         return n.removeprefix(VIRTIOFS_ROOT) or "/"
@@ -139,10 +145,8 @@ def host_under_virtiofs(src: str) -> str | None:
 
 
 def bind_layer(rt: DockerRuntime, cfg: Config, setting: str = "auto") -> tuple[str, str | None]:
-    """Where the harness's binds come from, ``virtiofs`` (Docker Desktop's
-    virtiofs layer) or ``native``, and a warning. Only a Landlock enforcer
-    needs the choice; ``setting`` is the user's ``docker_desktop_mounts``
-    (Docker only: Podman has no such layer). Refuses a session whose commands
+    """Where a Landlock harness's binds come from (``virtiofs``: Docker Desktop's virtiofs layer, or ``native``)
+    and a warning; ``setting``: ``docker_desktop_mounts`` (Docker only). Refuses a session whose commands
     could not read /work."""
     if not landlock_enforced(cfg.enforcer):
         return "native", None
@@ -160,8 +164,7 @@ def bind_layer(rt: DockerRuntime, cfg: Config, setting: str = "auto") -> tuple[s
         # the raw layer shows the host user's files as theirs: uid 0 without capabilities can't write them
         raise ConfigError("`allow_root` runs the harness as root, which can't write /work through Docker "
                           "Desktop's virtiofs layer (README: Docker Desktop shared folders)")
-    warn = None
     if layer == "native" and mm.mode == "virtiofs":
-        warn = (f"docker_desktop_mounts: native (~/.glove/config.yml), but Landlock can't open files on {rt.name}'s "
-                f"normal bind path ({mm.detail}): no command will read /work")
-    return layer, warn
+        return layer, (f"docker_desktop_mounts: native (~/.glove/config.yml), but Landlock can't open files on "
+                       f"{rt.name}'s normal bind path ({mm.detail}): no command will read /work")
+    return layer, None

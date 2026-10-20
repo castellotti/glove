@@ -22,7 +22,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from ..exports import validate_export_isolation
 from ..hardening import HardeningError, validate_hardening
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
-from .landlock_mounts import MIN_LANDLOCK_ABI, MountMode, mount_mode, virtiofs_source
+from .landlock_mounts import MIN_LANDLOCK_ABI, MountMode, mount_mode, virtiofs_source, watch_paths
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -269,10 +269,12 @@ class DockerRuntime:
             **extra,
             **_extension_blocks(plan, extra),
         }
-        env = self._jinja()
+        env, hosts = self._jinja(), []
         # the harness's bind sources (never a sidecar's): from Docker Desktop's
-        # virtiofs layer when its fakeowner layer breaks Landlock
-        env.filters["src"] = virtiofs_source if plan.bind_layer == "virtiofs" else str
+        # virtiofs layer when its fakeowner layer breaks Landlock; mount-watch
+        # (rendered after them) binds the same on the normal path
+        env.filters["src"] = (lambda p: hosts.append(p) or virtiofs_source(p)) if plan.bind_layer == "virtiofs" else str
+        env.globals["watch_paths"] = lambda: watch_paths(hosts)
         compose_yaml = env.get_template("compose.yml.j2").render(**ctx)
         # Not waivable: re-check §3.4 on the merged project (extension sidecars
         # included), so a merge bug cannot ship a weaker project.

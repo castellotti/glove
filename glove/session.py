@@ -217,7 +217,7 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
     notice a changed secret value (a rotated Keychain entry, a freshly
     registered VPN key). A failed check stops the project (fail closed) after
     showing the failing sidecar's last log lines."""
-    from .verify import VerifyError, run_verify
+    from .verify import VerifyError, run_verify, sidecar_exec
 
     base = _compose_base(provider, plan.project, compose_file)
     doc = yaml.safe_load(compose_file.read_text()) or {}
@@ -233,7 +233,11 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
         if with_secrets:
             subprocess.run([*base, "up", "-d", "--force-recreate", *with_secrets], check=True, env=env)
         for batch in batches:
-            subprocess.run([*base, "up", "-d", *batch], check=True, env=env)
+            subprocess.run([*base, "up", "-d", "--remove-orphans", *batch], check=True, env=env)
+        if scoped(plan.session, "mount-watch") in services:  # what changed while nothing watched (compose.yml.j2)
+            walk = ["sh", "-c", "find /watch >/dev/null 2>&1 || true"]  # an unreadable entry: as unreadable there
+            if sidecar_exec(provider, plan.session, "mount-watch", walk, 300)[0]:
+                raise subprocess.CalledProcessError(1, walk, "mount-watch: walking the harness's binds failed")
     except subprocess.CalledProcessError:
         # never leave a half-started egress stack behind (fail closed)
         console.print("[bold red]starting the sidecars failed — stopping the session's sidecars.[/bold red]")

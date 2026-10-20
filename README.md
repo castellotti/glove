@@ -1262,6 +1262,17 @@ Two consequences:
   so that guard has nothing to protect there.
 - **`allow_root` is refused**: root without capabilities can't write the host
   user's files on the raw layer.
+- **A `mount-watch` sidecar.** The raw layer shows host-side changes (an edit
+  in your editor, a re-rendered policy, a deleted file) only under a directory
+  that some running container binds from the normal path; elsewhere a container
+  keeps seeing the old file, or none, even a new container (measured on
+  4.96.0). So the session runs `glove-<id>-mount-watch`: the harness image
+  running only `sleep`, as your uid, no network, no capabilities, read-only
+  rootfs, binding the harness's own binds (never more) read-only from the
+  normal path. `glove up` first walks them there (`find`), which brings in what
+  changed while nothing watched; a `/work` of a few hundred thousand files
+  (`node_modules`, a large `.git`) adds seconds to each start, and a walk that
+  fails or takes over 5 minutes stops the session.
 
 `docker_desktop_mounts:` in `~/.glove/config.yml` overrides the choice on the
 `docker` runtime (Podman ignores it: it has no such layer): `auto` (the
@@ -1274,8 +1285,8 @@ layer work. `glove check` and `glove policy` plan with the same choice.
 
 | Component | Option | Status |
 |---|---|---|
-| Runtime | docker | hardened + doctor probes |
-| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`; srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
+| Runtime | docker | hardened + doctor probes. Docker Desktop 4.96.0 (engine 29.9.1, kernel 7.0.14-linuxkit, Landlock ABI 8): the `nono`/`nono+srt` enforcers run through its virtiofs layer with `mount-watch` ("Docker Desktop shared folders"), verified live 2026-10-20: `test_landlock_mounts` (incl. host-side replace/delete seen by a running harness; `MOUNTS=native` control fails), `test_pi_nono`, `test_vibe_nono`, `test_pi_srt`, `test_ring0_protect`, `test_tool_confine` (Pi nono, Vibe nono+srt), `test_config_protect` (Pi, Vibe, Claude Code), `test_teardown`, `test_session_dir`, `test_nono_srt` (Pi, Vibe), `test_cc_nono`, `test_skills`, `test_vibe_skills`, `test_llm_inject`, `test_llm_host_stub`, `test_subnet_race`, `test_toolchains`, `test_downloads direct`, `test_egress direct`, `test_observe direct`, `test_playwright headless`, `test_github`, `test_corporate`, `test_github_ghes` |
+| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`, and again with podman 6.1.2 on 2026-10-20 (Landlock on its bind mounts: `native`; `test_landlock_mounts`, `test_skills`, `test_llm_inject`, `test_subnet_race`, `test_egress`, `test_observe`, `test_corporate`, `test_github_ghes`); srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi and Vibe verified (`test_pi_nono`, `test_vibe_nono`, `test_config_protect`, `test_tool_confine`, `test_vibe_skills`) |
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi, Vibe and Claude Code (`test_nono_srt.sh`, `test_config_protect.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |

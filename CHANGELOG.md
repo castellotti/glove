@@ -180,7 +180,14 @@ All notable changes to glove are documented here.
   read as `0:0`. `glove plan` shows it, `effective.yml` records `bind_layer`,
   `validate_project` allows the layer only there (never a share's root), and
   `allow_root` is refused. `docker_desktop_mounts: auto|native|virtiofs` in
-  `~/.glove/config.yml` overrides the choice.
+  `~/.glove/config.yml` overrides the choice. That layer shows host-side
+  changes only under a dir some running container binds from the normal path
+  (else a replaced, re-created or deleted file stays as it was, a re-rendered
+  policy too), so in this mode the session also runs a `mount-watch` sidecar
+  (the harness image running `sleep`: no network, no capabilities, read-only)
+  binding the harness's own binds read-only from the normal path, and `glove
+  up` walks them there first. The hand-built nono runs (`test_pi_nono.sh`,
+  `test_vibe_nono.sh`) bind as glove does (`host_src`).
 
 ### Added
 
