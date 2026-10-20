@@ -196,8 +196,8 @@ def last_uses(entries) -> tuple[dict[str, datetime], dict[str, datetime]]:
                 sessions[e.id] = created
             continue
         sessions[e.id] = used
-        services = (compose or {}).get("services") if isinstance(compose, dict) else None
-        for svc in (services or {}).values() if isinstance(services, dict) else ():
+        services = compose.get("services") if isinstance(compose, dict) else None
+        for svc in services.values() if isinstance(services, dict) else ():
             if isinstance(svc, dict) and str(tag := svc.get("image", "")).startswith("glove/"):
                 images[tag] = max(images.get(tag, used), used)
     return images, sessions
@@ -236,10 +236,9 @@ def unused_images(cli: str, cutoff: datetime, used: dict[str, datetime], leaving
     for iid, created, tags, layers in (r.split("|") for r in images if r.count("|") == 3):
         layers = tuple(layers.split())
         for ref in tags.split():
-            img = Image(cli, ref, _newest(used.get(ref.removeprefix("localhost/")), ran.get(iid))
-                        or _when(created) or datetime.now(UTC), layers)
-            if not img.tag.startswith("glove/"):
+            if not (tag := ref.removeprefix("localhost/")).startswith("glove/"):
                 continue
+            img = Image(cli, ref, _newest(used.get(tag), ran.get(iid)) or _when(created) or datetime.now(UTC), layers)
             if iid in in_use or img.last >= cutoff:
                 kept.update(layers[:n] for n in range(1, len(layers) + 1))
             else:

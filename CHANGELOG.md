@@ -37,8 +37,9 @@ All notable changes to glove are documented here.
   other command moved there too (`version`, `ext`, `ls`, `ps`, `gc`,
   `keychain`, `downloads`, `build`, `doctor`, `policy`, `check`, `new`, `plan`,
   `rm`, `down`, `up`), each with its own tests, and each command's CLI is
-  unchanged (`glove --help` lists them in workflow order, by each one's `RANK`). `glove/cli.py` keeps
-  only the app and the mounting. What two or more commands share moved to
+  unchanged (`glove --help` lists them in workflow order, by each one's
+  `RANK`). `glove/cli.py` keeps only the app and the mounting. What two or
+  more commands share moved to
   `glove/sessionops.py` (the consoles, `fail`, `DIR_ARG`, `IKNOW`,
   `open_session`, `sync_registry`, `materialize_plan`, `stop`, …).
   `glove.api.commands` exports: `DIR_ARG`, `IKNOW`, `VERSION`, `console`,
