@@ -36,7 +36,8 @@ case "$CASE" in
   headless) EXTRA=$'  observe: {}\n  filter: {}\n' ;;
   novnc)    PW="{mode: novnc}" ;;
   control)  PW="{mode: novnc, allow_control: true}" ;;
-  capture)  PW="{mode: novnc, allow_control: true, downloads: work, challenge_capture: {to: work}}" ;;
+  capture)  PW="{mode: novnc, allow_control: true, downloads: work, challenge_capture: {to: work}}"
+            TOP=$'apt_packages: [p7zip-full]\n' ;;  # downloads: work runs the 7z check too
   vibe)     HARNESS=vibe ;;
   claude-code) HARNESS=claude-code; EXTRA=$'  observe: {}\n' ;;
   downloads) HARNESS="$CASE_HARNESS"
