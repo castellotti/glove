@@ -106,7 +106,7 @@ def test_wrap_and_wrapper_argv(tmp_path):
     assert wrapped[-3:] == ["pi", "-e", "x"]
     assert f"{ENFORCER_DIR}/harness.json" in wrapped
 
-    wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
+    wrapper = plan.policies["tool-wrapper.argv"].splitlines()
     # the scrub first (secret env by glob, no TIOCSTI into the harness), then nono
     n = len(scrub_argv())
     assert wrapper[:n] == scrub_argv()

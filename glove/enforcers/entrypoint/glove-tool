@@ -1,0 +1,36 @@
+#!/bin/bash --norc
+# glove-tool -c <cmd> | glove-tool -- <command> [<arg>...]: run one shell
+# command, or one argv, under the session's ring-1 tool wrapper
+# (/etc/glove/enforcer/tool-wrapper.argv, one argument per line, read-only).
+# Every confined process starts here: Pi's enforcer extension, Vibe's pre_tool
+# hook and Claude Code's shell prefix pass the agent's command as the one string
+# after -c, so the wrapper's own arguments are never quoted into a shell string;
+# the skills extension passes a plugin's stdio MCP server after --. Anything
+# unexpected fails closed with 126: no wrapper (or enforcer none), nothing runs.
+set -uo pipefail
+WRAPPER=/etc/glove/enforcer/tool-wrapper.argv
+
+refuse() {
+  echo "glove: $1 (fail closed)" >&2
+  exit 126
+}
+if [ "$#" -eq 2 ] && [ "$1" = -c ]; then
+  set -- /bin/bash --norc -c "$2"
+elif [ "$#" -ge 2 ] && [ "$1" = -- ]; then
+  shift
+else
+  refuse "glove-tool expects -c <command> or -- <command> [<arg>...] — not run"
+fi
+# The harness's env reaches this process (Claude Code's settings `env`, a
+# harness tool's or MCP server's own env): drop anything aimed at the enforcers.
+for name in $(compgen -e); do
+  case "$name" in NONO_*|SRT_*) unset "$name" ;; esac
+done
+argv=()  # read, not mapfile: the unit tests run this under macOS's bash 3.2
+if [ -r "$WRAPPER" ]; then
+  while IFS= read -r a || [ -n "$a" ]; do argv+=("$a"); done < "$WRAPPER"
+fi
+[ "${#argv[@]}" -gt 0 ] && [ -n "${argv[0]}" ] || refuse "tool wrapper missing — not run"
+# --norc (-c): bash's rshd heuristic would otherwise source /etc/bash.bashrc,
+# which the tool policy denies, and print an error on every command.
+exec "${argv[@]}" "$@"

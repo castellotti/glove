@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "webfetch": {
+      "url": "http://glove-s-webfetch-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "fetch_url": "direct"
+      }
+    },
+    "webdownload": {
+      "url": "http://glove-s-webdownload-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "web_download": "direct",
+        "web_download_status": "direct"
+      }
+    }
+  }
+}

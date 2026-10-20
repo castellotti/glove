@@ -20,7 +20,8 @@ works for pure-Python dependencies: the env points uv at the baked wheelhouse.
 
 `mcp: true` turns the plugin's `.mcp.json` into neutral `mcp` items (their
 `tools` listed in the session file); a stdio server runs under the tool wrapper
-(bin/glove-confine), never with the harness's own network.
+(`glove-tool -- <command>…`, in every harness image), never with the harness's
+own network.
 
 `relay:` runs some of a plugin's scripts in a sidecar of their own
 (`skill-<name>`, relay's relayd under relay_policy.py), which holds their
@@ -67,7 +68,7 @@ UV = f"{ROOT}/.uv"  # uv, its Python and the wheelhouse (a plugin name never sta
 PYTHON = f"{UV}/python3"
 WHEELS = f"{UV}/wheels"
 ENVS = f"{UV}/envs"  # one per set of dependencies
-CONFINE = "/opt/glove/bin/glove-confine"  # bin/glove-confine
+GLOVE_TOOL = "/opt/glove/bin/glove-tool"  # glove/enforcers/entrypoint/glove-tool
 PLUGIN_KEYS = frozenset({"path", "skills", "env", "mcp", "tools", "relay"})
 RELAY_KEYS = frozenset({"commands", "check", "timeout"})
 COMMAND_KEYS = frozenset({"hosts", "allow", "out_flags", "in_flags", "env", "files"})
@@ -172,8 +173,6 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
                 raise SkillsError(f"skills.plugins: env {k!r} is set by two plugins (or by glove)")
             h["env"][k] = v
         h["mcp"] += p["mcp"]
-    if any(m["transport"] == "stdio" for m in h["mcp"]):
-        h["image"].append({"copy": [["bin/glove-confine", CONFINE]], "run": [f"chmod 0755 {CONFINE}"]})
     if plugins:  # one layer for every plugin: core renders it last
         h["image"].append({"copy_host": [c for p in plugins for c in p["copy"]],
                              "run": [_bake(plugins)]})
@@ -610,7 +609,7 @@ def _mcp(ctx: HookContext, where: str, name: str, root: Path, raw: dict,
                 command, args = pythons[args[2]], args[2:]
             # under the tool wrapper: never the harness's own sandbox, whose
             # network reaches the session's forwarders
-            item = {"transport": "stdio", "command": CONFINE, "args": [command, *args],
+            item = {"transport": "stdio", "command": GLOVE_TOOL, "args": ["--", command, *args],
                     "env": {**(spec.get("env") or {}), **values}}
         else:
             raise SkillsError(f"{w}: type {kind or spec.get('type')!r}: only stdio and http servers")

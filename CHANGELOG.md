@@ -88,6 +88,60 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
+  built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
+  [mcp, skills]`): each server `hidden` but for its allowed tools, named
+  `mcp__<server>__<tool>` in Pi and in the tool inventory. Pi's MCP stays off
+  in a session without a server. A stdio server runs as its extension wrote
+  it (the `skills` plugins' under the tool wrapper). Refused for Pi: a server
+  without a `tools` allowlist, names that collide once Pi replaces their `-`,
+  and an `env` value Pi would expand (`$`) or run (`!…`). Pi sessions with `search`,
+  `playwright` or `webfetch` `downloads: work` now start those MCP sidecars.
+- **Pi gets search, fetch and the browser over MCP only (breaking for Pi tool
+  names).** The `search`, `webfetch` and `playwright` extensions no longer
+  bake their own Pi code (`pi-extension/`, about 630 lines of TypeScript, and
+  the `SEARXNG_URL`, `GLOVE_FETCH_*`, `GLOVE_DOWNLOAD_MCP_URL` and `BROWSER_*`
+  harness variables). Pi's `web_search`, `web_fetch`, `web_download(_status)`
+  and `browser_*` are now `mcp__searxng__web_search`,
+  `mcp__webfetch__fetch_url`, `mcp__webdownload__web_download(_status)` and
+  `mcp__playwright__browser_*` (`browser_status` is gone). A Pi `webfetch`
+  session starts the `fetcher` sidecar, as Vibe's does: its fetches go
+  harness → `webfetch-mcp` → `webfetch-egress` (observe: `client: webfetch`),
+  not through the `proxy` endpoint, which is now Claude Code's alone, and
+  search's Pi-only `search` endpoint is gone. The fetch guard and body rules
+  exist once, in the fetcher. Verified live with Pi on Podman (nono) and on
+  Docker (nono+srt; Docker Desktop 4.96 with the virtiofs bind layer): search and fetch through `direct` and `tor`, `web_download`,
+  the headless browser, `corporate`, observe's flows and filter, and a stdio
+  server planted in `/work/.mcp.json` or `/work/.pi/mcp.json` never starts.
+- **`web_search` names the engines SearXNG found unresponsive** (e.g.
+  `google: too many requests`, how a throttled exit shows with SearXNG's
+  limiter off) and tells the agent not to retry immediately, instead of a bare
+  "No results". `fetch_url` no longer reads a `Retry-After` of 0 (or a past
+  date) as "wait 0 s": it says not to retry immediately.
+- **One launcher runs every harness's shell commands:** `/opt/glove/bin/glove-tool
+  -c <cmd>`, baked into every harness image, runs the command under the session's
+  tool wrapper (`tool-wrapper.argv`), drops `NONO_*`/`SRT_*`, and fails closed
+  (126) without a wrapper. Pi's enforcer extension, Vibe's `pre_tool` hook and
+  Claude Code's shell prefix all hand it the command as one argument, so the
+  hooks no longer quote the wrapper's arguments into a shell string; the
+  `skills` extension's stdio MCP servers run as `glove-tool -- <command> …`
+  (`glove-confine` is gone, and they now get the same env scrub). The
+  enforcers no longer render `tool-wrapper.json`, and the entrypoint refuses to
+  start a wrapped session without `glove-tool`. Images rebuild. Verified live:
+  Pi's, Vibe's and Claude Code's shell commands and `!` under nono, srt and
+  nono+srt, a plugin's stdio MCP server under `glove-tool --` with every
+  harness (now Pi's too, `test_skills.sh`), and the entrypoint's refusal in an
+  image without `glove-tool`.
+- **observe polls the exit from one gate in every session:** the harness's
+  own hop to the egress proxy when it has one (Claude Code's `proxy`), else
+  the first egress consumer's (`searxng-egress`, `webfetch-egress`, …), so Vibe
+  sessions (and Pi's, now without a `proxy` hop) get `exit.ndjson` too (verified
+  live through `tor` with Pi and Vibe on Podman: `HARNESS=vibe
+  test_observe.sh tor`). vpn's
+  `exit` volume is mounted read-only into that gate. Hook contexts' `endpoint`
+  entries gain `harness` and `target_kind`.
+- **playwright `mode: host` never allows `browser_run_code_unsafe`**, for any
+  harness, even if `tools` lists it.
 - **`glove up` explains what happened after the harness exits.**
   - The resume hint is best effort: an error becomes one dim line
     ("`glove up --resume` still works"), never a traceback that hides the
@@ -420,13 +474,6 @@ All notable changes to glove are documented here.
   Podman). Fragments see `output.<name>.path`/`input.<name>.path`.
 - **`when: {any: [...]}`** in manifests: any-of across keys (e.g. `harness:
   vibe` or `downloads: work`).
-- **`env: {…, shell: false}`** for an extension's harness env var the harness
-  process reads and shell commands never need: the tool wrapper unsets it.
-  webfetch's `GLOVE_FETCH_PROXY`, `GLOVE_DOWNLOAD_MCP_URL` and
-  `GLOVE_FETCH_ALLOW`, search's `SEARXNG_URL` and playwright's
-  `BROWSER_MCP_URL`, `BROWSER_MCP_TOOLS` and `BROWSER_MODE` use it (a proxy
-  or service URL in the shell only invited a `curl` that fails). Playwright's
-  are now set for Pi only: Vibe and Claude Code use its MCP server.
 - `web_fetch`/`fetch_url` **describe a binary body** instead of returning it: a
   response whose content type isn't text, or an unlabelled one with a NUL in
   its first 4 KB, becomes `[binary: <type>, <size>] <url>` and the rest is

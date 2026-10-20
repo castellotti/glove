@@ -7,9 +7,9 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/pi:0.5.0-5782abbef9-e30a40f46c-srt-46f57ff955
+    image: glove/pi:0.5.0-7603cc3191-srt-46f57ff955
     working_dir: /work
-    command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer", "-e", "/opt/glove/ext/webfetch/pi-extension"]
+    command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/node", "/usr/local/bin/pi", "-e", "/opt/glove/pi-extensions/enforcer"]
     stdin_open: true
     tty: true
     # --- hardening set (PLAN §3.2); `allow_root` only drops the non-root user --
@@ -29,8 +29,6 @@ services:
       PI_CODING_AGENT_DIR: "/home/agent/.pi/agent"
       PI_CODING_AGENT_SESSION_DIR: "/home/agent/.pi/agent/sessions/--work--"
       PI_OFFLINE: "1"
-      GLOVE_FETCH_PROXY: "http://glove-s-proxy:8888"
-      GLOVE_DOWNLOAD_MCP_URL: "http://glove-s-webdownload-mcp:8000/mcp"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
     volumes:
       # the harness home, read-only: its config home is re-bound read-write below
@@ -254,10 +252,11 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:e2f07d880e
+    image: glove/ext-webfetch-mcp:e26a01b977
     environment:
+      GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
       GLOVE_FETCH_ALLOW: ''
-      MCP_ALLOWED_HOST: glove-s-webdownload-mcp:8000
+      MCP_ALLOWED_HOST: glove-s-webfetch-mcp:8000,glove-s-webdownload-mcp:8000
       GLOVE_DOWNLOAD_PROXY: http://glove-s-webdownload-egress:8888
       GLOVE_DOWNLOADS: /run/glove-output/downloads
       GLOVE_DOWNLOADS_SHOWN_AS: /work/downloads
@@ -349,21 +348,21 @@ services:
     mem_limit: 512m
     extra_hosts:
     - host.docker.internal:host-gateway
-  glove-s-proxy:
-    container_name: glove-s-proxy
+  glove-s-webfetch-mcp:
+    container_name: glove-s-webfetch-mcp
     image: glove/ext-gate-netgate:be365e45ce
     command:
     - forward
     - --service
-    - proxy
+    - webfetch-mcp
     - --mode
-    - http-proxy
+    - tcp
     - --listen
-    - '8888'
+    - '8000'
     - --upstream
-    - chain:http://glove-s-direct-proxy:8888
+    - tcp:glove-s-fetcher:8000
     - --route
-    - direct
+    - tcp
     - --env
     - s
     - --session
@@ -377,14 +376,16 @@ services:
     - --record
     - metadata
     - --ingress-alias
-    - glove-s-proxy-ingress
+    - glove-s-webfetch-mcp-ingress
+    - --scope
+    - local
     - --tool
     - web_fetch
     networks:
       glove-s-net:
         aliases:
-        - glove-s-proxy-ingress
-      glove-s-egress: {}
+        - glove-s-webfetch-mcp-ingress
+      glove-s-fetchnet: {}
     volumes:
     - type: volume
       source: glove-s-observe-events
@@ -440,6 +441,56 @@ services:
       glove-s-net:
         aliases:
         - glove-s-webdownload-mcp-ingress
+      glove-s-fetchnet: {}
+    volumes:
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    depends_on:
+      glove-s-netgate:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-webfetch-egress:
+    container_name: glove-s-webfetch-egress
+    image: glove/ext-gate-netgate:be365e45ce
+    command:
+    - forward
+    - --service
+    - webfetch-egress
+    - --mode
+    - http-proxy
+    - --listen
+    - '8888'
+    - --upstream
+    - chain:http://glove-s-direct-proxy:8888
+    - --route
+    - direct
+    - --env
+    - s
+    - --session
+    - s
+    - --resolve
+    - in-tunnel
+    - --events
+    - /run/glove-netgate/events.sock
+    - --client
+    - webfetch
+    - --record
+    - metadata
+    - --tool
+    - web_fetch
+    networks:
+      glove-s-egress: {}
       glove-s-fetchnet: {}
     volumes:
     - type: volume

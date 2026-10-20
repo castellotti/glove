@@ -8,7 +8,7 @@ example.com not; `allow_cidrs` covers the runtime's host-gateway range, which
 must stay refused anyway. With observe on and the llm at the tool-driving stub:
   1. verify passes: the gate is up, https://example.com is refused through it
      (the negative check), and `probe_url` answers;
-  2. Pi's web_fetch reaches the allowed host and is refused everything else,
+  2. Pi's fetch_url reaches the allowed host and is refused everything else,
      with the gate's reason; flows carry `route: corporate`;
   3. the host gateway, cloud metadata and the session's own network are
      refused by the gate even though an allowed CIDR covers the gateway;
@@ -35,10 +35,10 @@ def main(directory: str) -> int:
         check("sidecars up + verify passed (incl. example.com refused, probe_url answers)",
               {"proxy-up", "internet-refused", "probe"} <= set(names), ", ".join(names))
 
-        print("== Pi web_fetch through the corporate gate")
+        print("== Pi fetch_url through the corporate gate")
 
         def fetch(url: str) -> str:
-            out = live.call("web_fetch", {"url": url}, timeout=240)
+            out = live.call(live.tools["fetch"], {"url": url}, timeout=240)
             print(f"    {url}: {out.strip()[-300:]}")
             return out
 
@@ -68,7 +68,7 @@ def main(directory: str) -> int:
         check("tcp endpoint glove-<id>-web80:80 reaches example.org:80", code.strip() == "200", f"HTTP {code}")
 
         print("== flows")
-        closes = [r for r in live.flows() if r.get("phase") == "close" and r.get("service") == "proxy"]
+        closes = [r for r in live.flows() if r.get("phase") == "close" and r.get("service") == "webfetch-egress"]
         by_host = {(r.get("dest") or {}).get("host"): r for r in closes}
         org = by_host.get("example.org") or {}
         check("flow to the allowed host: route corporate, allow",

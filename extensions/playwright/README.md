@@ -1,8 +1,9 @@
 # playwright — a real Chromium for the agent
 
 Provides the `browser` slot: Playwright's MCP server (`playwright-core mcp`,
-pinned in `image/package.json` + its lockfile), exposed to Pi as native
-`browser_*` tools and to Vibe and Claude Code as the `playwright` MCP server.
+pinned in `image/package.json` + its lockfile), exposed to every harness as
+the `playwright` MCP server (Pi and Claude Code name its tools
+`mcp__playwright__browser_*`, Vibe `mcp_playwright.browser_*`).
 Three modes:
 
 | | `headless` (default) | `novnc` | `host` |
@@ -126,8 +127,8 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   `corporate_ca` (which covers the harness), so set both. Host mode ignores it,
   because your Chrome already uses your Mac's trust store.
 - The MCP always offers `browser_run_code_unsafe` (arbitrary code in the MCP
-  process). glove never passes it on: Pi's extension registers only `tools`,
-  Vibe gets a `disabled_tools` rule that hides every other `playwright_*`
+  process). glove never passes it on: Pi offers only `tools` (each server is
+  `hidden` but for them) and its enforcer extension refuses any other, Vibe gets a `disabled_tools` rule that hides every other `playwright_*`
   tool, and Claude Code gets allow rules for `tools` and a managed deny rule
   for every other tool the pinned MCP defines (`all_tools` in
   `extension.yml`), so it never offers them and no prompt can approve one. In
@@ -329,7 +330,9 @@ and `glove policy` show both commands before you launch.
 **Exposure.** This is the highest-exposure mode: the browser runs as you, on
 your desktop, with your network, and any local process can drive its CDP port
 while it runs. It is refused when the session's egress is anonymising (vpn,
-tor). `browser_run_code_unsafe` runs code on your Mac: Pi never registers it
-in host mode, and Vibe hides it (Claude Code denies it), but a client-side
+tor). `browser_run_code_unsafe` runs code on your Mac: in host mode glove
+leaves it out of the allowlist even if `tools` lists it. Pi's enforcer
+extension, the code that wraps its every shell command, refuses a tool its
+inventory lacks; Vibe hides it (Claude Code denies it), but that client-side
 filter is not a boundary, so `vibe` or `claude-code` + host mode is refused
 unless you set `i_accept_host_rce: true`.

@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ..base import ENFORCER_DIR, NONO, scrub_argv, shell_denied_env, write_roots
+from ..base import ENFORCER_DIR, NONO, SECRET_DENY_VARS, scrub_argv, write_roots
 
 if TYPE_CHECKING:
     from ...plan import SessionPlan
@@ -124,7 +124,7 @@ def render_tool_profile(plan: SessionPlan) -> dict:
             "read": read,
         },
         "network": {"block": True},
-        "environment": {"deny_vars": list(shell_denied_env(plan))},
+        "environment": {"deny_vars": list(SECRET_DENY_VARS)},
         "security": {"signal_mode": "allow_same_sandbox"},
     }
     if allow_commands:
@@ -135,10 +135,10 @@ def render_tool_profile(plan: SessionPlan) -> dict:
 
 
 def tool_wrapper_argv(plan: SessionPlan) -> list[str]:
-    """The prefix the harness hooks prepend to every shell command: the
+    """The prefix glove-tool runs every shell command under: the
     scrub (nono's base policy grants /dev/tty), then nono."""
     return [
-        *scrub_argv(plan),
+        *scrub_argv(),
         NONO, "wrap", "-s", "--allow-cwd",
         "--profile", f"{ENFORCER_DIR}/tool.json", "--",
     ]
@@ -158,5 +158,4 @@ def render_all(plan: SessionPlan) -> dict[str, str]:
     return {
         "harness.json": json.dumps(render_harness_profile(plan), indent=2) + "\n",
         "tool.json": json.dumps(render_tool_profile(plan), indent=2) + "\n",
-        "tool-wrapper.json": json.dumps({"argv": tool_wrapper_argv(plan)}, indent=2) + "\n",
     }

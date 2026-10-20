@@ -128,7 +128,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     provider: <set-me>      # a gluetun provider name, or custom
     wireguard_key: keychain:my-vpn-wg
   search: {}                # per-session SearXNG behind the egress
-  webfetch: {}              # read a page through the egress (Pi web_fetch, Claude Code WebFetch, Vibe fetch_url); {downloads: work} adds web_download
+  webfetch: {}              # read a page through the egress (fetch_url over MCP; Claude Code: its own WebFetch); {downloads: work} adds web_download
   media: {}
   # playwright: {}           # a real Chromium in a sidecar, via the egress (mode: headless | novnc | host)
   # github: { token: keychain:my-github }   # gh / git push from shell commands; the token stays in a sidecar
@@ -162,8 +162,8 @@ sets `NODE_EXTRA_CA_CERTS` to that path (an explicit `env:` entry wins). Node ad
 these certificates to its built-in roots, so the public roots stay trusted and
 **TLS verification is never turned off**. The PEM is a public certificate, not a
 secret, so it never goes through the Keychain. Every enforcer can already read
-`/etc/glove`, so no policy changes. That covers Node (Pi, Claude Code,
-`web_fetch`). For everything else (curl, git, gh, Python `requests`/`urllib`,
+`/etc/glove`, so no policy changes. That covers Node (Pi, Claude Code).
+For everything else (curl, git, gh, Python `requests`/`urllib`,
 Vibe's client), glove bakes `/etc/glove/ca-bundle.pem` into the session's derived
 image: the image's own roots, then the CA. It sets `SSL_CERT_FILE`,
 `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` to that path, each only
@@ -319,9 +319,12 @@ goes in the session file).
 
 An adapter may also render read-only **system config** (`system_files`): files
 in a directory of its own under `/etc`, written to `.glove/harness/` and bound
-read-only like the ring-1 policies. Every enforcer with a tool wrapper also
-renders it one argument per line (`tool-wrapper.argv`) beside
-`tool-wrapper.json`, for glue that has no JSON parser. Both directories are
+read-only like the ring-1 policies. Every enforcer with a tool wrapper renders
+it one argument per line (`tool-wrapper.argv`); `/opt/glove/bin/glove-tool -c
+<cmd>`, baked into every harness image, runs a shell command under it. Pi's
+enforcer extension, Vibe's hook and Claude Code's shell prefix all hand the
+command to `glove-tool` as one argument, so the wrapper is never quoted into a
+shell string. Both directories are
 updated in place on a re-plan (a changed file replaced atomically, stale ones
 removed), since a running session binds them.
 
@@ -406,9 +409,10 @@ tools (`tools:`) by what glove does with a call: `shell` runs under the tool
 wrapper, `file_write` is held to the write roots, `allow` passes through, `ask`
 is left to the harness's own prompt (Claude Code) and `deny` is refused. glove
 renders the session's list as `/etc/glove/enforcer/tools.json` (read-only):
-the harness's classes, the tools its extensions add (a Pi extension's
-`pi: {tools: …}`; for Vibe, `mcp_<server>.<tool>` for each tool a glove MCP
-server's allowlist names) and the session's own additions. Pi's enforcer
+the harness's classes, the tools its extensions add (each tool a glove MCP
+server's allowlist names, as the harness names it: Pi `mcp__<server>__<tool>`,
+Vibe `mcp_<server>.<tool>`; an extension's own Pi code's `pi: {tools: …}`) and
+the session's own additions. Pi's enforcer
 extension and Vibe's hook refuse any other tool, and every tool when the file
 is missing, so a tool a new release adds or renames stays refused until glove
 classifies it. **If you add your own Pi extension or a Vibe
@@ -430,11 +434,13 @@ session can use glove's bridge (`transport: stdio`, `command:
 
 Pi 1.x features, as glove renders them:
 
-- **Built-in MCP: off** (`extensions: ["-builtin:mcp"]`). Pi starts stdio MCP
-  servers from the harness process, outside ring 1. A session's own
-  `harness_config.settings.extensions` are added after that entry, and any
-  naming `builtin:mcp` is dropped: there is no opt-in until glove extensions
-  contribute Pi MCP servers.
+- **Built-in MCP: glove's servers only.** glove renders the extensions' MCP
+  servers into the read-only `~/.pi/agent/mcp.json`, each `"exposure":
+  "hidden"` but for its allowed tools (`direct`), which Pi names
+  `mcp__<server>__<tool>` and the enforcer extension passes; without a server
+  it is off (`extensions: ["-builtin:mcp"]`). A session's own
+  `harness_config.settings.extensions` are added after glove's, and any naming
+  `builtin:mcp` is dropped.
 - **Codemode: off**, as Pi ships it. `harness_config: {settings: {defaultTools:
   ["+codemode"]}}` turns it on; its nested `tools.bash` and `tools.write` go
   through the enforcer like direct calls.
@@ -466,7 +472,7 @@ extensions:
 ```
 
 - **Image** `glove/claude-code:0.2.0`: the native Claude Code binary (pinned,
-  auto-update off), nono, glove-pty and `glove-cc-prefix`; no Node.
+  auto-update off), nono, glove-pty, `glove-tool` and `glove-cc-prefix`; no Node.
 - **Guard rails live outside the agent's reach**, in
   `/etc/claude-code/managed-settings.json` (read-only bind; managed settings win
   over every other scope, and an unparseable file stops Claude Code):
@@ -596,11 +602,9 @@ and an extension's CLI).
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
-  - `env: {K: value}` or `{K: {value: …, when: …, shell: false}}`: a value is set
-    as rendered, even when empty; `when:` leaves the variable unset unless it
-    matches; `shell: false` keeps it from shell commands (the tool wrapper
-    unsets it; any enforcer but `none`), for a variable only the harness
-    process uses. A
+  - `env: {K: value}` or `{K: {value: …, when: …}}`: a value is set as
+    rendered, even when empty; `when:` leaves the variable unset unless it
+    matches. A
     `when:` (here, on endpoints, services, verify checks and list items) matches
     setting names, `harness`, `renders` (the contributions the harness renders,
     e.g. `renders: mcp` rather than a list of harnesses), dotted
@@ -627,8 +631,8 @@ and an extension's CLI).
     `/opt/glove/cc/.claude/skills`, `--add-dir`; Vibe: links under
     `/opt/glove/vibe/skills`, its `skill_paths`);
   - `<harness>: {...}`: a section only that harness's adapter reads, e.g.
-    `pi: {extensions: [pi-extension], tools: [web_search]}` (glove renders no
-    MCP for Pi: its built-in MCP is off, so it loads its own code with `pi -e`).
+    `pi: {extensions: [my-pi-code], tools: [my_tool]}` (Pi code loaded
+    with `pi -e`; an MCP server is the one path for a tool every harness gets).
     `tools` (a list or comma-separated) names the tools that code registers;
     they join the tool inventory, and Pi refuses any it doesn't name.
 
@@ -727,7 +731,7 @@ session's exit is comes from the egress's own software.
   With no `host_check_url`, verify does not compare the exit with the host's IP. Its `publicip_api` setting (no default) turns gluetun's own lookup on, through the
   tunnel, with a service the operator names (gluetun's `PUBLICIP_API`).
 - `tor` uses the Tor Project's check (`check.torproject.org`), through Tor: at verify, and with
-  observe (its `exit_identity: auto` default) every 5 minutes from the proxy gate. Tor isolates circuits
+  observe (its `exit_identity: auto` default) every 5 minutes from one gate. Tor isolates circuits
   per client, so the exit observe records for tor is its gate's own, not necessarily the agent's.
 - `direct` checks the proxy with an `http-ok` to `https://on.quad9.net` (`check_url`).
 - The host's own IP is never looked up unless the operator sets `host_check_url`.
@@ -737,16 +741,15 @@ session's exit is comes from the egress's own software.
 `search` runs SearXNG and valkey in the session, with every engine request
 going through the egress proxy. `webfetch` reads one page as text through the
 egress, refusing this machine, the LAN and metadata addresses (also on every
-redirect). Pi gets its own `web_search`/`web_fetch` extensions (`webfetch`
-through a `proxy` forwarder). Claude Code keeps its own `WebFetch`, pointed at
-the same `proxy` forwarder; there the egress layer (the proxy's filter, the
-tunnel's policy, or with `observe` the gate's SSRF guard) refuses this machine
-and the LAN. Harnesses that speak MCP get `web_search` from a small hardened
-sidecar served over HTTP (`search-mcp`), so the harness never reaches SearXNG
-itself. Vibe gets `fetch_url` from a second one (`webfetch-mcp`), which
-reaches the proxy only through its own hop (`webfetch-egress`; with `observe`,
-a gate labelling its flows `client: webfetch`). Both need an egress provider.
-`web_fetch`/`fetch_url` return text only: a PDF, an archive or an image is
+redirect). Every harness gets `web_search` from a small hardened sidecar served
+over MCP (`search-mcp`), so the harness never reaches SearXNG itself. Pi and
+Vibe get `fetch_url` from a second one (`webfetch-mcp`), which reaches the
+proxy only through its own hop (`webfetch-egress`; with `observe`, a gate
+labelling its flows `client: webfetch`). Claude Code keeps its own `WebFetch`,
+pointed at a `proxy` forwarder; there the egress layer (the proxy's filter,
+the tunnel's policy, or with `observe` the gate's SSRF guard) refuses this
+machine and the LAN. Both need an egress provider. `fetch_url` returns text
+only: a PDF, an archive or an image is
 described (`[binary: application/pdf, 812345 bytes] <url>`), never returned. An
 `http://` URL goes to the proxy as a plain request, as a browser sends it
 (only `https://` is tunnelled). With `webfetch: {downloads: work}` every
@@ -854,7 +857,7 @@ the egress proxy. One `web_search` shows every engine SearXNG contacted.
 and passes `--rules`. `glove filter block '*.doubleclick.net'` writes a rule to
 `rules.json`, the same file Layman writes. The gates reload it within about a
 second, refuse new matching connections with a recorded `verdict: block` (and
-`web_fetch` tells the agent it was refused by policy, with the reason), and with
+`fetch_url` tells the agent it was refused by policy, with the reason), and with
 `--terminate` also cut established ones. A malformed or unreadable file is
 rejected as a whole: the gates keep the previous rules and report the error in
 `glove filter rules` and `status.json`. `glove filter validate FILE` runs the
@@ -965,7 +968,7 @@ extensions:
         env: { WIKI_SPACE: team }                   # plain values only: a secret is refused
       notes:
         path: skills/notes-repo/notes
-        mcp: true                                   # its .mcp.json servers (Claude Code, Vibe; Pi has no MCP)
+        mcp: true                                   # its .mcp.json servers (every harness)
         tools: { notes: [search, fetch] }           # each server's allowed tools (required)
 ```
 
@@ -990,7 +993,7 @@ agent can write (`/work`, a read-write mount, another session's `work/`: it
 could edit what the next session bakes) or in glove's state, a symlink leaving the plugin, a file that looks like a credential
 (`.env`, `.netrc`, `.npmrc`, `.pypirc`, `*.p12`, SSH keys, a PEM private key),
 and a secret-shaped name or a `keychain:`/`env:` reference in `env`. A plugin's
-stdio MCP server runs under the tool wrapper (`glove-confine`: the per-command
+stdio MCP server runs under the tool wrapper (`glove-tool --`: the per-command
 sandbox, no network), never with the harness's own network, which reaches the
 session's forwarders. Plugin hooks, commands and agents are not loaded.
 
@@ -1172,7 +1175,7 @@ enforcer: nono+srt    # what a session gets on Docker when it names no enforcer;
 
 ```
 glove-pty relay -- glove-srt srt-harness.json -- glove-pty ctty -- pi …
-  every shell command: glove-pty notty -u '*KEY*' … -- nono wrap --profile tool.json -- bash -c <cmd>
+  every shell command: glove-tool -c <cmd> → glove-pty notty -u '*KEY*' … -- nono wrap --profile tool.json -- bash -c <cmd>
 ```
 
 srt (bubblewrap) wraps the harness process, nono (Landlock) wraps every shell
@@ -1196,7 +1199,7 @@ command inside it. What that adds over `nono`:
 
 The harness keeps the container network, which ring 0 already limits to the
 session's forwarders; srt's own network confinement would only repeat that and
-breaks clients with their own proxy (web_fetch). srt's CLI always confines the
+breaks clients with their own proxy (Claude Code's WebFetch). srt's CLI always confines the
 network, so glove runs srt's library through a small launcher (`glove-srt`).
 The TUI runs on a pty glove relays (srt starts it without a controlling
 terminal), so resize and Ctrl-C work.
@@ -1294,13 +1297,13 @@ layer work. `glove check` and `glove policy` plan with the same choice.
 | Enforcer | none (ring 0 only) | debug |
 | Inference | `llm` extension: openai-compatible (default; vLLM, NInfer, …), anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter | `host` verified live (stub llama-server, stub Anthropic server); `lan` verified live (`openai-compatible` → NInfer over the user's VPN, `model: auto`, key by Keychain reference, Pi answered); `anthropic` verified live with Claude Code and a subscription token (`auth: oauth`, paginated model list, with and without `observe`); other cloud providers **untested**. Key injection (`llm-auth`) verified live against the stubs: Pi, Vibe and Claude Code on Docker, Pi on Podman (`test_llm_inject.sh`); a subscription token in `llm-auth` (TLS as `api.anthropic.com`, the session CA) against a stand-in for the provider on Docker and Podman (`test_llm_inject.sh claude-code-oauth`); through a real LAN server, a cloud provider with an API key, or a real subscription (`test_cc_account.sh`): **untested** |
 | Harness | `claude-code` | verified live on Docker under nono and nono+srt against a stub (`test_cc_nono.sh`: prefix fail-closed, managed settings read-only, prefix survives the agent's settings, config home denied to Read/Write, project hooks and `.mcp.json` inert, a glove stdio MCP server under the harness sandbox with network, project settings unplantable by the Write tool or a command, every tool it offers in its inventory, a `cd` not carried into the next Bash call, Write denied in the home and `/dev/shm`, transcripts; `test_nono_srt.sh claude-code`; `test_config_protect.sh claude-code`: the protected home read-only, the home outside `.claude/` read-only, `.claude.json` and sessions still written, `--continue` resumes) and against a real account (`test_cc_account.sh`, opt-in). With extensions (against the stub): `search` over its MCP sidecar and its own `WebFetch` through the egress proxy, private destinations refused there (`HARNESS=claude-code test_egress.sh direct`), `playwright` headless with observe (`test_playwright.sh claude-code`: allowlisted tools only, a denied tool never offered, the SSRF guard at the gate); `rag`/`ocr` skills with Claude Code: **untested**; Podman: **untested** |
-| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, `egress-up` (Quad9 through the tunnel), `exit-confirmed` (the endpoint from gluetun's kill switch; a gluetun restart removes and rewrites it), search and web_fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS, `exit_identity: auto` an `exit` record (`vpn-endpoint`) from the `exit` volume, read-only in the proxy gate; also under `nono+srt` on Docker); the opt-in `publicip_api` and `host_check_url`, OpenVPN and built-in gluetun providers **untested** |
-| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: only the provider on `wan`, SearXNG and the harness network have no direct internet, Pi `web_search`/`web_fetch` through the egress; two sessions concurrently. `exit-confirmed` (tor: the Tor Project's `IsTor`), direct's `egress-up` (Quad9) and, with observe, tor's `exit` record (`exit_identity: auto`): verified live on Docker, on Podman **untested**. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); behind tor/vpn and on Podman **untested** |
+| Egress | `vpn` (gluetun, WireGuard/OpenVPN, optional register hook) | verified live on Docker and Podman (WireGuard through a register hook, keys from the Keychain: tunnel healthy, `egress-up` (Quad9 through the tunnel), `exit-confirmed` (the endpoint from gluetun's kill switch; a gluetun restart removes and rewrites it), search and fetch through the tunnel; with `observe`: flows `route: vpn`, destinations resolved in-tunnel by gluetun's DNS, `exit_identity: auto` an `exit` record (`vpn-endpoint`) from the `exit` volume, read-only in the one gate that polls the exit; also under `nono+srt` on Docker); the opt-in `publicip_api` and `host_check_url`, OpenVPN and built-in gluetun providers **untested** |
+| Egress | `tor` (tor + privoxy), `direct` (tinyproxy) | verified live on Docker and Podman: only the provider on `wan`, SearXNG and the harness network have no direct internet, search and fetch through the egress; two sessions concurrently. `exit-confirmed` (tor: the Tor Project's `IsTor`), direct's `egress-up` (Quad9) and, with observe, tor's `exit` record (`exit_identity: auto`): verified live on Docker and Podman. The `search-mcp`/`webfetch-mcp` sidecars (Vibe, Claude Code): verified live on Docker with `direct` (MCP only under the forwarder's Host, sidecars unreachable from the harness network, the fetcher without direct internet, the fetch guard incl. a redirect into loopback); Pi through them (in place of its own extensions): verified live on Docker and Podman with `direct` and `tor`, and through `tor` the `exit` record with Pi and Vibe on Podman; behind vpn **untested** |
 | Egress | `corporate` (a default-block netgate proxy + allowlist) | verified live on Docker and Podman with a public host standing in for a corporate one (allowed host reached, everything else refused with the gate's reason, host gateway/metadata/own network refused even inside an allowed CIDR, raw TCP endpoint); **through a real corporate VPN: untested** (the operator runs it) |
-| Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the harness-only vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
+| Downloads | `webfetch` `downloads: work` (`web_download`) | verified live on Docker with Pi, Vibe and Claude Code over vpn (WireGuard through a register hook) and direct, with observe + filter, and Pi on Podman (`test_downloads.sh`): files only in `<session>/downloads/` (the fetcher's bind, also after a restart), read-only at `/work/downloads/` (no write, no planted link), the fetcher's vars absent from a tool command; a PDF's sha256 equal in the tool, the host and the shell, `glove-ocr` on it; a 3.8 GB Debian DVD as a job (`.part` visible, the harness answering meanwhile, the fetcher at ~55 MiB, sha256 = SHA256SUMS); a `glove filter` block and the `min_free` reserve refusing; `glove downloads mark` and `glove down` stamping the quarantine attribute and keeping an existing one. Gatekeeper's prompt for a stamped file: **untested** |
 | Observability | `observe` (read) + `filter` (write) | verified live on Docker and Podman (direct and tor): every forwarder a netgate, flows for the harness's tools and SearXNG's engines, in-tunnel resolution over Tor, transcripts exported, `glove filter block` enforced and confirmed by SHA-256, revocation; `netgate_control_perms.sh` and `test_netgate_shutdown.sh` on both |
 | Documents | `ocr` (tesseract/ocrmypdf/poppler + `glove-ocr`), `rag` (kstore: Obsidian vault + FAISS, fastembed in-process) | verified live with Pi on Docker and Podman: `glove-ocr` on a PNG, a scanned PDF page and a text-layer PDF; `kstore sync` (scan and image OCR'd, index built from the read-only model mount, offline) and `kstore ask` citing the original scanned page, all as Pi `bash` tool calls in the nono tool sandbox; rag and claude-obsidian skills in Pi's prompt. **Vibe: untested** (kstore via uv; skills through `skill_paths`, as `skills`) |
-| Plugins | `skills` (Claude Code plugins and skill dirs, baked) | verified live on Docker (nono+srt) and Podman (nono) with Pi, Claude Code and Vibe, against the stub with the fixture plugin (`test_skills.sh`): scripts by the paths the skill names (stdlib, a dependency, a compiled dependency, an explicit `uv run --script`), `bin/` on PATH, paths resolved in the baked skill, the unselected skill absent, the plugin read-only and its data dir writable, the skill loaded (Pi's prompt, Claude Code's Skill tool, Vibe's `skill` tool), the plugin's stdio MCP server under the tool wrapper (Claude Code, Vibe: it answers and can't reach the llm forwarder), no network. Real-world plugins (an MCP server with compiled dependencies): built and their commands run by hand in the image; in a session **untested**. Relays (`test_skills_relay.sh`, a public bearer echo behind `direct`): Pi, Claude Code and Vibe on Docker (nono+srt) and Podman (nono) — the token in no session file and never in the harness, an unlisted subcommand, a path outside `/work` and a host the relay doesn't name refused, an expired token seen by `glove skills status` and a `glove up` warning, `refresh` through a hook, then `reload` with the harness left running. Behind `corporate` (`CORPORATE=1`: a stand-in API over TLS from a throwaway `corporate_ca`): Pi, Claude Code and Vibe on Docker, Pi on Podman — the relay's sidecar trusts the CA, the stand-in sees only the right token, and `glove check` warns when the allowlist doesn't admit the relay's host. The real connector scripts: **untested** |
+| Plugins | `skills` (Claude Code plugins and skill dirs, baked) | verified live on Docker (nono+srt) and Podman (nono) with Pi, Claude Code and Vibe, against the stub with the fixture plugin (`test_skills.sh`): scripts by the paths the skill names (stdlib, a dependency, a compiled dependency, an explicit `uv run --script`), `bin/` on PATH, paths resolved in the baked skill, the unselected skill absent, the plugin read-only and its data dir writable, the skill loaded (Pi's prompt, Claude Code's Skill tool, Vibe's `skill` tool), the plugin's stdio MCP server under the tool wrapper (`glove-tool --`; Pi, Claude Code, Vibe: it answers and can't reach the llm forwarder), no network. Real-world plugins (an MCP server with compiled dependencies): built and their commands run by hand in the image; in a session **untested**. Relays (`test_skills_relay.sh`, a public bearer echo behind `direct`): Pi, Claude Code and Vibe on Docker (nono+srt) and Podman (nono) — the token in no session file and never in the harness, an unlisted subcommand, a path outside `/work` and a host the relay doesn't name refused, an expired token seen by `glove skills status` and a `glove up` warning, `refresh` through a hook, then `reload` with the harness left running. Behind `corporate` (`CORPORATE=1`: a stand-in API over TLS from a throwaway `corporate_ca`): Pi, Claude Code and Vibe on Docker, Pi on Podman — the relay's sidecar trusts the CA, the stand-in sees only the right token, and `glove check` warns when the allowlist doesn't admit the relay's host. The real connector scripts: **untested** |
 | Browser | `playwright` `headless` / `novnc` sidecars | verified live with Pi, Vibe and Claude Code (headless) on Docker (sandbox on) and Podman (`chromium_sandbox: "off"`: podman compose cannot apply the `chromium-userns` seccomp profile, and glove refuses rather than dropping it): no ports, no capabilities, only on an internal network with no DNS or route; browsing through the egress; flows `client: playwright`, `glove filter` and the SSRF guard enforced at the gate; the agent offered only the allowlisted tools; `glove playwright view` loopback-only with Host/Origin checks; view-only and clipboard-off enforced by the VNC server (an RFB click lands only with `allow_control` and the full password). Behind vpn/tor/corporate: **untested** (direct egress only). `downloads: work`/`uploads: work` verified live on Docker (`test_playwright.sh downloads`): with Pi, Vibe and Claude Code a `.7z` and a 2 GB ISO (above the 768 MB `/tmp`, staged on disk) land in `<session>/browser-output/`, read-only to the shell; with Pi and Claude Code `browser_file_upload` sends files from `/work/browser-uploads/` only (a link there still names a sidecar file: SECURITY.md). With Vibe, glove's stdio bridge keeps one MCP session per server, so a click after a navigate (and so an upload) works: verified live on Docker (`test_playwright.sh vibe` and `downloads`, also across two `run_typescript` calls); the bridge itself on Docker and Podman (`test_mcp_bridge.sh`); the Vibe browser case on Podman: **untested** |
 | Relay | `github` (`relay` library: channel + relayd + fence) | verified live on Docker against the stub (`test_github.sh`): Claude Code under nono and nono+srt, Pi under nono+srt — channel present, token absent from the harness, every policy refusal, `gh`/`git ls-remote`/`clone`/`pull` through the sidecar against public GitHub, shell still offline; `OBSERVE=1` flows `client: github`. With a real token (Keychain): `gh api user`, `gh pr list`, `gh api` GET (with `OBSERVE=1`), and against a scratch repository a push of a throwaway branch, seen on GitHub and deleted again (nono+srt); local git on fresh checkouts. GitHub Enterprise hosts (`test_github_ghes.sh`): two stand-in hosts with a token each, behind `corporate`, over a private CA (`corporate_ca`), `git: [fetch, clone, ls-remote]` — Pi on Docker (nono+srt) and Podman (nono), Claude Code and Vibe on Docker; a real GHES: **untested**; Vibe, `srt`, behind tor/vpn: **untested** |
 | Relay | `ssh` (`via: lan` forwarders) | verified live on Docker with Claude Code under nono and nono+srt and Pi under nono+srt against a real LAN host and a Keychain-held key (`test_ssh.sh`: key absent from the harness, `ssh <host> <command>` as the configured user with the exit code back, every refusal, no route from a shell, the sidecar only through its forwarder; `OBSERVE=1` flows `client: ssh`, `scope: lan`; `SSH_LAN_ONLY=1` a host whose `.lan` name resolves public, refused by its gate as `builtin:lan-only` with zero bytes, verified with Pi under nono); Vibe, `srt`, Podman, a key with a passphrase: **untested** |
@@ -1400,7 +1403,8 @@ bash tests/integration/test_github_ghes.sh    # GitHub Enterprise hosts vs a sta
 SSH_TEST_HOST=… SSH_TEST_USER=… SSH_KEYCHAIN=… bash tests/integration/test_ssh.sh  # the ssh relay vs a LAN
                                               # host you name, nono + nono+srt (22 checks each; OBSERVE=1: 24;
                                               # SSH_LAN_ONLY=1 also a `builtin:lan-only` refusal: 25)
-bash tests/integration/test_observe.sh direct # observe + filter end to end (also: tor) (29 checks with direct)
+bash tests/integration/test_observe.sh direct # observe + filter end to end (31 checks; tor: 33 with the exit
+                                              # record; HARNESS=vibe)
 bash tests/integration/test_llm_inject.sh pi  # the LLM key only in llm-auth (also: vibe, claude-code) (15 checks;
                                               # claude-code-oauth: a subscription token, 28)
 bash tests/integration/test_subnet_race.sh    # another network takes the subnet at compose up (7 checks)
@@ -1409,8 +1413,8 @@ bash tests/integration/test_netgate_shutdown.sh   # clean down / killed forwarde
 bash tests/integration/netgate_control_perms.sh   # who can read/write net/ and rules.json (6 checks)
 bash tests/integration/test_toolchains.sh     # pinned node/python + deps + Chromium, offline (42 checks;
                                               # 40 with RT=podman: no srt session)
-bash tests/integration/test_skills.sh pi      # a Claude Code plugin baked and used (11 checks; also:
-                                              # claude-code 14, vibe 13: its stdio MCP server)
+bash tests/integration/test_skills.sh pi      # a Claude Code plugin baked and used, its stdio MCP
+                                              # server too (13 checks; also: claude-code 14, vibe 13)
 bash tests/integration/test_skills_relay.sh pi  # a plugin relay: token expiry, refresh, reload (14 checks;
                                               # a throwaway Keychain item, deleted; a public echo host;
                                               # CORPORATE=1: a stand-in behind corporate with a CA, 18)

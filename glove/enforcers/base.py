@@ -74,21 +74,13 @@ def is_secret_env_name(name: str) -> bool:
     return any(fnmatchcase(name.upper(), g.upper()) for g in SECRET_DENY_VARS)
 
 
-def shell_denied_env(plan: SessionPlan | None = None) -> tuple[str, ...]:
-    """What no shell command may see: SECRET_DENY_VARS, then the plan's
-    harness-process-only vars (an extension's `env: {shell: false}`, e.g. a
-    proxy URL a shell command can't use anyway). Every layer reads this one
-    list: the scrub, nono's deny_vars, srt's envVars."""
-    return (*SECRET_DENY_VARS, *(sorted(plan.composition.shell_hidden_env) if plan else ()))
-
-
-def scrub_argv(plan: SessionPlan | None = None) -> list[str]:
+def scrub_argv() -> list[str]:
     """The start of every enforcer's tool wrapper: `glove-pty notty` unsets
-    each shell_denied_env name or glob (any case, whoever set the var) and gives up
+    each SECRET_DENY_VARS name or glob (any case, whoever set the var) and gives up
     the controlling terminal (keeping the process group, so an abort still
     kills the command): with /dev/tty a command could TIOCSTI keystrokes into
     the harness TUI."""
-    return [GLOVE_PTY, "notty", *(a for g in shell_denied_env(plan) for a in ("-u", g)), "--"]
+    return [GLOVE_PTY, "notty", *(a for g in SECRET_DENY_VARS for a in ("-u", g)), "--"]
 
 
 def workdir(plan: SessionPlan) -> str:
@@ -106,7 +98,7 @@ def write_roots(plan: SessionPlan) -> list[str]:
 
 def argv_lines(argv: list[str]) -> str:
     """An argv one argument per line (`*.argv`), for glue with no JSON parser
-    (Claude Code's shell prefix is a bash script)."""
+    (glove-tool, a bash script)."""
     return "".join(f"{a}\n" for a in argv)
 
 
@@ -151,7 +143,7 @@ class Enforcer(Protocol):
         ...
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        """Prefix the harness hooks prepend to every shell command."""
+        """The prefix glove-tool runs every shell command under."""
         ...
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:

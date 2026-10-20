@@ -3,6 +3,7 @@
 #
 #   bash tests/integration/test_observe.sh [direct|tor]          # Docker
 #   RT=podman bash tests/integration/test_observe.sh direct      # Podman
+#   HARNESS=vibe bash tests/integration/test_observe.sh tor      # Vibe (default: pi)
 #   VPN_SETTINGS='{…}' [VPN_LOCAL=<dir>] bash … vpn             # as test_egress.sh vpn
 #
 # A throwaway session dir (llm → the tool-driving stub on the host, its key in
@@ -18,9 +19,10 @@ EG="$ROUTE: {}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RT="${RT:-docker}"
 PORT="${STUB_PORT:-18083}"
+HARNESS="${HARNESS:-pi}"
 . "$ROOT/tests/integration/lib_session.sh"
 driver_init "observe-$ROUTE"
-stub_llm pi "$PORT"
+stub_llm "$HARNESS" "$PORT"
 start_stub "$PORT" "$TMPROOT/stub.log" || exit 1
 case "$ROUTE" in
   direct|tor) ;;
@@ -29,9 +31,9 @@ case "$ROUTE" in
 esac
 mkdir -p "$S/work"
 if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
-printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: pi\nextensions:\n  llm: %s\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
-  "$RT" "$LLM" "$EG" > "$S/glove-session.yml"
-echo "== runtime $RT, route $ROUTE"
+printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\nextensions:\n  llm: %s\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
+  "$RT" "$HARNESS" "$LLM" "$EG" > "$S/glove-session.yml"
+echo "== runtime $RT, route $ROUTE, harness $HARNESS"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )
 RC=$?
 SID="$(cat "$S/.glove/id" 2>/dev/null)"

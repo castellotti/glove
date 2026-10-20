@@ -66,13 +66,14 @@ def test_vibe_transcripts_and_resume_share_its_log_dir():
     assert vibe.sessions_subdir == vibe.transcript_subdir == "logs/session"
 
 
-def test_every_harness_image_bakes_the_shared_entrypoint():
+def test_every_harness_image_bakes_the_shared_entrypoint_and_glove_tool():
     for name in known_harnesses():
         image = HARNESSES_DIR / name / "image"
         assert not (image / "entrypoint.sh").exists()
         df = (image / "Dockerfile").read_text()
         if re.search(r"^ENTRYPOINT", df, re.M):
             assert "COPY --chmod=0755 --from=gloveentry entrypoint.sh /opt/glove/entrypoint.sh" in df
+            assert "COPY --chmod=0755 --from=gloveentry glove-tool /opt/glove/bin/glove-tool" in df
 
 
 def _manifest(tmp_path: Path, name: str, body: str) -> Path:
@@ -210,9 +211,9 @@ def test_unknown_harness_keys_are_refused(tmp_path, monkeypatch, section):
 
 
 def test_a_harness_section_reaches_only_its_adapter(tmp_path, monkeypatch):
-    section = "  pi: { extensions: [code] }\n  mcp: [{name: m, transport: http, url: 'http://m:1/mcp'}]\n"
+    section = "  pi: { extensions: [code] }\n  mcp: [{name: m, transport: http, url: 'http://m:1/mcp', tools: t}]\n"
     pi = _plan_with(tmp_path, monkeypatch, section)
-    assert pi.command[-2:] == ["-e", "/opt/glove/ext/x/code"] and pi.composition.mcp == []
+    assert pi.command[-2:] == ["-e", "/opt/glove/ext/x/code"] and [s["name"] for _, s in pi.composition.mcp] == ["m"]
     (tmp_path / "v").mkdir()
     vibe = _plan_with(tmp_path / "v", monkeypatch, section, harness="vibe")
     assert vibe.composition.harness_items == [] and [s["name"] for _, s in vibe.composition.mcp] == ["m"]

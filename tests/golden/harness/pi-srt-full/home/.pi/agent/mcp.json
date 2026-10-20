@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "url": "http://glove-s-browser:8931/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "browser_navigate": "direct",
+        "browser_navigate_back": "direct",
+        "browser_snapshot": "direct",
+        "browser_take_screenshot": "direct",
+        "browser_click": "direct",
+        "browser_type": "direct",
+        "browser_hover": "direct",
+        "browser_select_option": "direct",
+        "browser_press_key": "direct",
+        "browser_wait_for": "direct",
+        "browser_tabs": "direct",
+        "browser_handle_dialog": "direct"
+      }
+    },
+    "searxng": {
+      "url": "http://glove-s-search-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "web_search": "direct"
+      }
+    },
+    "webfetch": {
+      "url": "http://glove-s-webfetch-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "fetch_url": "direct"
+      }
+    }
+  }
+}

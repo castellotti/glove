@@ -31,7 +31,7 @@ and runs) or glove's state.
 | `path` | a Claude Code plugin (`.claude-plugin/plugin.json`, skills under `skills/<name>/SKILL.md`), or a directory of `<name>/SKILL.md` dirs |
 | `skills` | the skills to load; the rest are never staged, so never in the image |
 | `env` | names → plain values, set in the harness (shell commands see them). A secret-shaped name (`*TOKEN*`, `*_PAT`, `*KEY*`, …) or a `keychain:`/`env:` reference is refused: secrets never enter the harness |
-| `mcp` | `true`: each `.mcp.json` server becomes an MCP server for Claude Code and Vibe (Pi has no MCP; its skills still work through the shell) |
+| `mcp` | `true`: each `.mcp.json` server becomes an MCP server for every harness (a stdio one under `glove-tool --`, the tool wrapper) |
 | `tools` | `{<server>: [tool, …]}`, required for every server when `mcp` is on: the tool inventory fails closed |
 | `relay` | scripts that run in the plugin's relay sidecar, with their secrets and network (below) |
 
@@ -75,7 +75,7 @@ Python: the harness env points uv at the wheelhouse (`UV_OFFLINE`,
 
 ## MCP servers
 
-A stdio server runs as `glove-confine <command> …`: under the session's tool
+A stdio server runs as `glove-tool -- <command> …`: under the session's tool
 wrapper, the same per-command sandbox a shell command gets (`/work`, `/tmp`, no
 network). It never gets the harness's own sandbox, whose network reaches the
 session's forwarders (the LLM, and the egress proxy when `webfetch` is on).

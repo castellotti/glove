@@ -10,16 +10,17 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
   2. checks the topology: only the egress provider's containers are on the
      session's wan network; SearXNG (egress consumer) has no direct internet;
      a container on the harness network has no internet at all;
-  3. uses the harness endpoints from the harness network: Pi's `search` returns
-     SearXNG results and `proxy` reaches the internet (verify confirmed the
-     exit; no IP lookup here); for Vibe and Claude Code the `search-mcp` and
-     `webfetch-mcp` sidecars answer over MCP (only under their forwarder's
-     name) and the fetcher has no direct internet;
+  3. uses the harness endpoints from the harness network: the `search-mcp`
+     sidecar (and for Pi and Vibe `webfetch-mcp`) answers over MCP (only under
+     its forwarder's name) and the fetcher has no direct internet; Claude
+     Code's `proxy` reaches the internet (verify confirmed the exit; no IP
+     lookup here);
   4. runs the harness non-interactively (wrapped, hardened) with the stub
-     driving the search and fetch tool calls (Pi web_search/web_fetch, the MCP
-     tools for Vibe and Claude Code), so the real tool path is used — and the
-     fetch must refuse this machine and LAN addresses; Pi and Vibe also fetch an
-     http:// page and describe a PNG instead of returning it;
+     driving the search and fetch tool calls (the MCP tools; Claude Code's own
+     WebFetch), so the real tool path is used — and the fetch must refuse this
+     machine and LAN addresses; Pi and Vibe also fetch an http:// page and
+     describe a PNG instead of returning it; Pi never starts a stdio server
+     planted in /work/.mcp.json or /work/.pi/mcp.json;
   5. with observe: the fetcher's destinations are flows `client: webfetch`, and
      an http:// fetch (Pi and Vibe) reached the gate unwrapped (`proto: http`);
   6. tears the project down (unless KEEP is set).
@@ -48,7 +49,6 @@ def main(directory: str) -> int:
         print(f"== egress {egress.name} (route {route}); subnet {cfg.subnet}")
         s = live.prefix
         check("sidecars up + verify passed", True)
-        mcp_harness = cfg.harness != "pi"
 
         print("== topology")
         doc = json.loads(subprocess.run([rt, "network", "inspect", f"{s}-wan"], capture_output=True,
@@ -73,12 +73,7 @@ def main(directory: str) -> int:
         check("harness network has no internet", rc != 0, out.splitlines()[-1] if out else "")
 
         print("== harness endpoints (from the harness network)")
-        if comp.by_name("search") and not mcp_harness:
-            rc, out = probe(rt, plan, "net", 'curl -sS -m 60 "$U" | grep -o \'"url": *"http\' | wc -l',
-                            {"U": f"http://{s}-search:8080/search?q=wikipedia&format=json"}, timeout=90)
-            hits = int(out) if rc == 0 and out.strip().isdigit() else -1
-            check("search endpoint returns SearXNG results", hits > 0, f"{hits} results")
-        if comp.by_name("webfetch") and cfg.harness in ("pi", "claude-code"):
+        if comp.by_name("webfetch") and cfg.harness == "claude-code":
             # verify confirmed the exit; this checks the endpoint's path (no IP lookup)
             try:
                 out = run_check(rt, plan, "webfetch", {"kind": "http-ok", "url": "https://on.quad9.net",
@@ -94,31 +89,30 @@ def main(directory: str) -> int:
                                capture_output=True, text=True, timeout=180)
             return (r.stdout + r.stderr).strip()
 
-        if mcp_harness:
-            for ext, host, tool, sidecar in (("search", f"{s}-search-mcp", "web_search", "searxng-mcp"),
-                                             ("webfetch", f"{s}-webfetch-mcp", "fetch_url", "fetcher")):
-                if not comp.by_name(ext) or (ext == "webfetch" and cfg.harness != "vibe"):
-                    continue
-                out = mcp(ext, host, [["tools/list", {}]])
-                check(f"{ext}: the forwarder serves the MCP ({tool})", f"tools: {tool}" in out, out[-160:])
-                out = mcp(ext, host, [["tools/list", {}]], header="evil.example:8000")
-                check(f"{ext}: a foreign Host header is refused", "tools:" not in out, out[-120:])
-                out = mcp(ext, f"{s}-{sidecar}", [["tools/list", {}]])
-                check(f"{ext}: the sidecar itself is unreachable from the harness network",
-                      "tools:" not in out, out[-100:])
-            if comp.by_name("webfetch") and cfg.harness == "vibe":
-                r = subprocess.run([rt, "exec", f"{s}-fetcher", "python3", "-c",
-                                    "import urllib.request as u; u.urlopen('https://example.com', timeout=8)"],
-                                   capture_output=True, text=True)
-                check("the fetcher has no direct internet", r.returncode != 0,
-                      (r.stderr.strip().splitlines() or ["?"])[-1])
+        cc = cfg.harness == "claude-code"
+        for ext, host, tool, sidecar in (("search", f"{s}-search-mcp", "web_search", "searxng-mcp"),
+                                         ("webfetch", f"{s}-webfetch-mcp", "fetch_url", "fetcher")):
+            if not comp.by_name(ext) or (ext == "webfetch" and cc):
+                continue
+            out = mcp(ext, host, [["tools/list", {}]])
+            check(f"{ext}: the forwarder serves the MCP ({tool})", f"tools: {tool}" in out, out[-160:])
+            out = mcp(ext, host, [["tools/list", {}]], header="evil.example:8000")
+            check(f"{ext}: a foreign Host header is refused", "tools:" not in out, out[-120:])
+            out = mcp(ext, f"{s}-{sidecar}", [["tools/list", {}]])
+            check(f"{ext}: the sidecar itself is unreachable from the harness network",
+                  "tools:" not in out, out[-100:])
+        if comp.by_name("webfetch") and not cc:
+            r = subprocess.run([rt, "exec", f"{s}-fetcher", "python3", "-c",
+                                "import urllib.request as u; u.urlopen('https://example.com', timeout=8)"],
+                               capture_output=True, text=True)
+            check("the fetcher has no direct internet", r.returncode != 0,
+                  (r.stderr.strip().splitlines() or ["?"])[-1])
 
         search_tool, fetch_tool = live.tools["search"], live.tools["fetch"]
         print(f"== {cfg.harness} tool calls (stub-driven, wrapped harness)")
         calls = []
         if comp.by_name("search"):
             calls.append((search_tool, {"query": "wikipedia"}, "TOOL RESULT"))
-        cc = cfg.harness == "claude-code"
         if comp.by_name("webfetch"):
             # Claude Code's own WebFetch takes a prompt and summarises with the model (the stub echoes)
             extra = {"prompt": "quote the page"} if cc else {}
@@ -145,28 +139,39 @@ def main(directory: str) -> int:
             else:
                 check(label, "TOOL RESULT" in answer and want in answer)
 
+        if cfg.harness == "pi" and comp.by_name("search"):
+            print("== Pi loads only glove's mcp.json")
+            work = live.sd.root / "work"
+            server = json.dumps({"mcpServers": {"planted": {"command": "/bin/sh", "args": [
+                "-c", "touch /work/MCP-PLANTED; sleep 5"]}}})
+            (work / ".pi").mkdir(exist_ok=True)
+            for p in (work / ".mcp.json", work / ".pi" / "mcp.json"):
+                p.write_text(server)
+            answer = live.call(search_tool, {"query": "wikipedia"}, timeout=240)
+            check("a planted /work/.mcp.json or .pi/mcp.json never starts (glove's servers still work)",
+                  "TOOL RESULT" in answer and not (work / "MCP-PLANTED").exists(), answer[-160:])
+
         if comp.by_name("observe") and comp.by_name("webfetch"):
             print("== observe")
             recs = live.flows()
-            # Pi's web_fetch and Claude Code's WebFetch go through the proxy; Vibe's fetcher its own gate
-            svc = "webfetch-egress" if cfg.harness == "vibe" else "proxy"
+            # Claude Code's WebFetch goes through the proxy; Pi's and Vibe's fetcher its own gate
+            svc = "proxy" if cc else "webfetch-egress"
             fetched = [r for r in recs if r.get("service") == svc
                        and (r.get("dest") or {}).get("host") == "example.com"]
             if not cc:  # the http:// fetch reached the gate unwrapped, not as a CONNECT tunnel to :80
                 protos = [r.get("proto") for r in fetched if r["dest"].get("port") == 80]
                 check(f"flow: {svc} → http://example.com/ unwrapped (proto http)",
                       bool(protos) and set(protos) == {"http"}, f"protos {protos}")
-            if cfg.harness != "pi":
-                client = "harness" if cc else "webfetch"
-                f = fetched[-1] if fetched else {}
-                check(f"flow: {svc} → example.com, client {client}, tool web_fetch",
-                      (f.get("client"), f.get("tool")) == (client, "web_fetch"),
-                      json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
+            client = "harness" if cc else "webfetch"
+            f = fetched[-1] if fetched else {}
+            check(f"flow: {svc} → example.com, client {client}, tool web_fetch",
+                  (f.get("client"), f.get("tool")) == (client, "web_fetch"),
+                  json.dumps({k: f.get(k) for k in ("client", "tool", "route", "verdict")}))
             if cc:
                 dests = sorted({(r.get("dest") or {}).get("host") for r in recs if r.get("service") == "proxy"}
                                - {None})
                 print(f"    (WebFetch destinations through the proxy: {', '.join(dests)})")
-            elif cfg.harness == "vibe":
+            else:
                 hop = [r for r in recs if r.get("service") == "webfetch-mcp"]
                 check("flow: the harness → fetcher hop, client harness",
                       bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")

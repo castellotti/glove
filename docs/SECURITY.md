@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, a read-only harness home (only its config home writable), internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 via one launcher, `glove-tool -c <cmd>` (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -146,12 +146,6 @@ Every capability (the model, search, the browser, …) is an extension in
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
   it. It exists for `github` (below). `/work` itself is the session's `work/`,
   which the agent cannot replace.
-- **Harness-process-only variables.** An extension's harness env entry with
-  `shell: false` (what Pi's webfetch, search and playwright extensions read:
-  their service URLs and settings) is unset by the tool wrapper before every
-  shell command, like the secret-shaped names (every enforcer but `none`,
-  which wraps nothing). Not a secret: shell commands have no network to use it
-  on, and seeing it only invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions or host ports unless trusted. A session file can't run
   host commands (`host_services:` is gone); an extension's hooks are host
@@ -264,7 +258,7 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
 - **vpn's `exit` volume.** gluetun's start script is wrapped to publish the exit
   IP in a plain volume (`/run/glove-exit/ip`). vpn lists it in its `shares`
   export; core lets a forwarder mount such a volume **read-only** only, and
-  observe mounts it into the harness's proxy gate alone. The harness mounts no
+  observe mounts it only into the one gate that polls the exit. The harness mounts no
   volume but its channels, so it never sees the file.
 - **Privileges.** Only gluetun takes exceptions (root, `NET_ADMIN`,
   `/dev/net/tun`, writable rootfs; no sysctls). It is never on a network with
@@ -278,14 +272,14 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   `local/`, which is never mounted, so a symlink into `work/` is refused) gets
   the account credentials on stdin. Its key goes to gluetun the same way; nothing
   is written to disk.
-- **No way in through the proxy.** `web_fetch` refuses non-public destinations
+- **No way in through the proxy.** `fetch_url` refuses non-public destinations
   before the request is sent: non-global IP literals, single-label and local
   names, credentials in the URL. It follows redirects itself so every hop is
   checked. `direct`'s tinyproxy refuses the same shapes (CONNECT included) and
   allows CONNECT only to 443/80. Tor exits and gluetun's kill switch already
   refuse private destinations. **Known gap:** names are judged by shape and never
   resolved, so a public name that resolves privately passes both checks under
-  `direct`. With observe on, the proxy gate's in-tunnel resolver closes this for
+  `direct`. With observe on, the proxy gates' in-tunnel resolver closes this for
   vpn and tor (a name resolving to a private address is refused); `direct` has
   no in-tunnel resolver, so the gap stays there.
 - **`direct` is not anonymous.** Its flows are labelled `route: direct`. Its
@@ -306,7 +300,7 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   loopback, link-local/metadata (`169.254.0.0/16`, `100.100.100.200`),
   multicast, the runtime's host gateway (resolved from its fixed names at
   start), the session's own /24, and names like `host.docker.internal`.
-  `web_fetch` gets the same allowlist for its own pre-check. Measured live (a
+  `fetch_url` gets the same allowlist for its own pre-check. Measured live (a
   public host standing in for a corporate one): the allowed host is reached,
   everything else is refused with the gate's reason, and the host gateway,
   metadata and the session's network are refused even inside an allowed CIDR.
@@ -348,8 +342,10 @@ has no server-side switch for it). The controls:
   CDP port or `--allow-unrestricted-file-access`. Chromium's own sandbox is
   on (`chromium-userns`, above); on podman it must be `off`, and then the
   container is the only boundary.
-- **The tool allowlist.** Pi registers only the `tools` setting (never
-  `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
+- **The tool allowlist.** The MCP server's allowlist is the `tools` setting
+  (never `browser_run_code_unsafe` in host mode, even if listed). Pi shows the
+  model only those tools, and its enforcer extension refuses any other (glove's
+  own code, as the `mcp__playwright__…` names are not in its inventory). Vibe gets a
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
   tool, it is not a boundary around the MCP. A `javascript:` URL passed to
@@ -452,7 +448,7 @@ does not vet it.
   noexec: dependencies are installed into read-only per-dependency-set
   environments instead of a writable cache.
 - **MCP servers run under the tool wrapper.** A plugin's stdio server is
-  started through `glove-confine`, which execs the enforcer's tool wrapper
+  started through `glove-tool --`, which execs the enforcer's tool wrapper
   (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
   not even the forwarders the harness process reaches (glove's own stdio MCP
   servers on Claude Code run under the harness sandbox instead). With no
@@ -628,7 +624,8 @@ Claude Code from starting (fail closed).
 - **`CLAUDE_CODE_SHELL_PREFIX`** = `/opt/glove/bin/glove-cc-prefix` (baked,
   read-only rootfs). Claude Code runs `<prefix> "<shell string>"` for the Bash
   tool (main agent and subagents), operator `!` commands, hooks and MCP stdio
-  servers. The prefix reads the tool wrapper from
+  servers. The prefix hands the string to `/opt/glove/bin/glove-tool -c`, as
+  Pi's and Vibe's hooks do: it reads the tool wrapper from
   `/etc/glove/enforcer/tool-wrapper.argv` (read-only), drops `NONO_*`/`SRT_*`
   from its environment, and execs `<wrapper> bash --norc -c "<string>"`. A
   missing or empty wrapper, or anything but one argument, exits 126 without
@@ -706,7 +703,7 @@ Claude Code from starting (fail closed).
   Code expects rather than substituting one, and points it at the egress:
   managed `HTTPS_PROXY`/`HTTP_PROXY` = the `proxy` endpoint, `NO_PROXY` = every
   session forwarder name and alias plus loopback (managed, so the agent cannot
-  change either). Compared with Pi's `web_fetch` and Vibe's `fetch_url`, this
+  change either). Compared with Pi's and Vibe's `fetch_url`, this
   is broader in these ways:
   - **no client-side destination guard.** Private, loopback and metadata
     destinations are refused only at the egress: tinyproxy's filter under
@@ -851,14 +848,24 @@ wrapper and the planted hook ran in the harness.
   well-meant extension that rewrites commands from silently unwrapping them,
   not a hostile one: an extension is code in the harness process and could
   start a process itself. **Load only extensions you trust.**
-- **Pi's built-in MCP is off** (`extensions: ["-builtin:mcp"]` in the rendered,
-  read-only settings): Pi 1.x starts stdio MCP servers from the harness
-  process, outside ring 1, with the harness's rights (its home, the session's
-  forwarders). Measured on by default: a server in `mcp.json` ran on a plain
-  turn. The project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`
-  even with MCP on. A session's own `harness_config.settings.extensions` are
-  added after glove's entry, and any naming `builtin:mcp` is dropped: there is
-  no opt-in until glove extensions contribute Pi MCP servers.
+- **Pi's built-in MCP loads only glove's servers.** Pi 1.x starts stdio MCP
+  servers from the harness process, with the harness's rights (its home, the
+  session's forwarders); measured: a server in `mcp.json` ran on a plain turn.
+  So glove renders `~/.pi/agent/mcp.json` itself from the extensions' neutral
+  `mcp` items and binds it read-only (`/mcp` exposure changes fail to save),
+  and the project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`.
+  Without a server the file is empty and MCP is off (`extensions:
+  ["-builtin:mcp"]`). A session's own `harness_config.settings.extensions` are
+  added after glove's entry, and any naming `builtin:mcp` is dropped.
+  Each server is `"exposure": "hidden"` with only its allowlisted tools
+  `direct` (Pi's default, `codemode`, would let a script reach every tool), and
+  those tools, named `mcp__<server>__<tool>`, are the only MCP tools in the
+  inventory the enforcer extension passes (codemode's nested calls are
+  classified one by one). A stdio server runs as its extension wrote it: the
+  `skills` extension's run under `glove-tool --` (the tool wrapper: no network,
+  no home). Pi expands `${VAR}` and runs a `!command` in `env` (and `headers`)
+  values, so glove refuses an `env` value that looks like either; it renders no
+  `headers`.
 - **Pi's codemode** (model-written JavaScript in QuickJS calling Pi's tools)
   is off as Pi ships it; `harness_config.settings.defaultTools: ["+codemode"]`
   turns it on. Its nested calls are wrapped and held like direct ones
@@ -898,7 +905,7 @@ keeps the process group, so an aborted command is still killed with its group.
 As a session leader it runs the command in a new session instead, tied to the
 parent (`PR_SET_PDEATHSIG`). `glove-pty` is a static helper baked into every
 harness image (`glove/enforcers/pty/glove-pty.c`); the entrypoint refuses to
-start if the wrapper names it and it is missing. Under srt it adds to bwrap's
+start a session with a tool wrapper if it, or `glove-tool`, is missing. Under srt it adds to bwrap's
 `--new-session`. The same step unsets the
 secret-shaped env names (`-u <glob>`, any case; see "Any other secret in the
 harness env" above).
@@ -941,7 +948,7 @@ Landlock cannot grant).
   an internal network whose only hosts are the session's forwarders, with no
   external DNS; srt's allowlist would name the same forwarders, and confining
   the harness in srt's netns broke every client that speaks its own proxy
-  protocol (web_fetch) and raw-TCP endpoints. srt's CLI always confines the
+  protocol (Claude Code's WebFetch) and raw-TCP endpoints. srt's CLI always confines the
   network, so `glove-srt` (a small launcher on srt's library, validating the
   settings with srt's own schema) runs srt without it.
 - **Only paths present at launch.** For a missing path bwrap creates an empty

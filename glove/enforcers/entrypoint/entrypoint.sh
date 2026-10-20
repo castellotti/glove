@@ -26,11 +26,12 @@ if [ -d "$ENF_DIR" ] && command -v nono >/dev/null 2>&1; then
   nono setup --check-only >/dev/null 2>&1 || true
 fi
 
-# The tool wrapper starts with glove-pty: without it every command would fail,
-# so say why up front.
-if [ -f "$ENF_DIR/tool-wrapper.json" ] && grep -q '/opt/glove/bin/glove-pty' "$ENF_DIR/tool-wrapper.json" \
-    && [ ! -x /opt/glove/bin/glove-pty ]; then
-  refuse "/opt/glove/bin/glove-pty is missing from this image (rebuild it: glove build <harness> --rebuild)"
+# Every shell command goes through glove-tool, and the tool wrapper starts with
+# glove-pty: without either every command would fail, so say why up front.
+if [ -f "$ENF_DIR/tool-wrapper.argv" ]; then
+  for b in /opt/glove/bin/glove-tool /opt/glove/bin/glove-pty; do
+    [ -x "$b" ] || refuse "$b is missing from this image (rebuild it: glove build <harness> --rebuild)"
+  done
 fi
 
 # srt / nono+srt: srt falls back to its stock apply-seccomp (or none) when the

@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/vibe:0.5.0-fbc2201932-b78644781d-srt-46f57ff955
+    image: glove/vibe:0.5.0-65852e547f-a630bff7e2-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "vibe", "--trust", "--yolo", "--workdir", "/work"]
     stdin_open: true
@@ -320,7 +320,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-mcp:
     container_name: glove-s-searxng-mcp
-    image: glove/ext-search-mcp:1e59a8fb36
+    image: glove/ext-search-mcp:8c576760bb
     environment:
       SEARXNG_URL: http://glove-s-searxng:8080
       MCP_ALLOWED_HOST: glove-s-search-mcp:8000
@@ -354,7 +354,7 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:e2f07d880e
+    image: glove/ext-webfetch-mcp:e26a01b977
     environment:
       GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
       GLOVE_FETCH_ALLOW: ''

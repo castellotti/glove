@@ -1,8 +1,8 @@
 ## Network: corporate resources only
 
 This session reaches **only** the corporate resources its operator allowed, over
-the host's corporate VPN; the general internet is refused (`web_fetch` gets a
-403 from the proxy). Allowed: {% for h in slot.egress.guard_hosts %}`{{ h }}`{% if not loop.last %}, {% endif %}{% endfor %}{% if slot.egress.guard_hosts and slot.egress.guard_cidrs %}, {% endif %}{% for c in slot.egress.guard_cidrs %}`{{ c }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+the host's corporate VPN; the general internet is refused (a fetch is refused
+by the session's network policy). Allowed: {% for h in slot.egress.guard_hosts %}`{{ h }}`{% if not loop.last %}, {% endif %}{% endfor %}{% if slot.egress.guard_hosts and slot.egress.guard_cidrs %}, {% endif %}{% for c in slot.egress.guard_cidrs %}`{{ c }}`{% if not loop.last %}, {% endif %}{% endfor %}.
 {% if slot.egress.tcp %}
 Raw TCP endpoints (connect to the forwarder, which dials the corporate host):
 {% for t in slot.egress.tcp %}

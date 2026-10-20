@@ -34,9 +34,7 @@
       "*COOKIE*",
       "*_PAT",
       "PAT_*",
-      "*_PAT_*",
-      "GLOVE_DOWNLOAD_MCP_URL",
-      "GLOVE_FETCH_PROXY"
+      "*_PAT_*"
     ]
   },
   "security": {

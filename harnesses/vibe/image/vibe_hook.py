@@ -7,9 +7,10 @@ hook with `strict = true`. Vibe passes each tool call as JSON on stdin
 the session's inventory (/etc/glove/enforcer/tools.json, rendered by glove from
 harness.yml, the session's MCP allowlists and its `harness_config.tools.allow`):
 
-  - a `shell` tool's `command` is rewritten to run under the enforcer's
-    per-command wrapper (read from /etc/glove/enforcer/tool-wrapper.json),
-    returning a full `hook_specific_output.tool_input` replacement — so a
+  - a `shell` tool's `command` is rewritten to `/opt/glove/bin/glove-tool -c
+    <command>`, which runs it under the enforcer's per-command wrapper
+    (/etc/glove/enforcer/tool-wrapper.argv), returning a full
+    `hook_specific_output.tool_input` replacement — so a
     prompt-injected command can only touch /work + rw mounts + /tmp, has no
     network, and cannot read the harness home or the LLM key;
   - a `file_write` tool's write (also called from `run_typescript`) is held to
@@ -22,9 +23,9 @@ harness.yml, the session's MCP allowlists and its `harness_config.tools.allow`):
   - any other tool is refused, so a tool a new Vibe release adds or renames
     fails closed instead of running unchecked.
 
-`strict = true` means any failure (bad stdin, missing wrapper, non-zero exit)
-becomes a denial — fail closed, never run a command unsandboxed. Without a
-readable inventory every tool is refused.
+`strict = true` means any failure (bad stdin, non-zero exit) becomes a denial —
+fail closed, never run a command unsandboxed; without a wrapper glove-tool
+refuses the command (126). Without a readable inventory every tool is refused.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ import os
 import re
 import sys
 
-WRAPPER_FILE = "/etc/glove/enforcer/tool-wrapper.json"
+GLOVE_TOOL = "/opt/glove/bin/glove-tool"
 WRITE_ROOTS_FILE = "/etc/glove/enforcer/write-roots.json"
 TOOLS_FILE = "/etc/glove/enforcer/tools.json"
 TOOL_CLASSES = ("shell", "file_write", "allow")
@@ -53,24 +54,10 @@ def _shq(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def wrap_command(wrapper_argv: list[str], command: str) -> str:
-    # NON-login shell, same as Pi's enforcer extension: a login shell sources
+def wrap_command(command: str) -> str:
+    # glove-tool runs a NON-login shell (`bash --norc -c`): a login shell sources
     # /etc/profile, which nono's default profile denies (deny_shell_configs).
-    # each argv element quoted: the scrub's globs (`-u '*KEY*'`) must not expand
-    return f"{' '.join(map(_shq, wrapper_argv))} bash -c {_shq(command)}"
-
-
-def load_wrapper_argv(path: str | None = None) -> list[str] | None:
-    path = path or WRAPPER_FILE  # resolved at call time so it stays patchable
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        argv = data.get("argv")
-        if isinstance(argv, list) and argv and all(isinstance(a, str) for a in argv):
-            return argv
-    except (OSError, ValueError):
-        pass
-    return None
+    return f"{GLOVE_TOOL} -c {_shq(command)}"
 
 
 def load_write_roots(path: str | None = None) -> list[str] | None:
@@ -111,7 +98,7 @@ def checked_path(path: str, roots: list[str], cwd: str) -> str | None:
     return real if any(os.path.commonpath([real, r]) == r for r in roots) else None
 
 
-def process(payload: dict, wrapper_argv: list[str] | None, tools: dict[str, frozenset[str]] | None,
+def process(payload: dict, tools: dict[str, frozenset[str]] | None,
             write_roots: list[str] | None = None) -> dict | None:
     """Return the hook response dict, or None for passthrough.
 
@@ -135,8 +122,6 @@ def process(payload: dict, wrapper_argv: list[str] | None, tools: dict[str, froz
         return {"hook_specific_output": {"tool_input": {**tool_input, **checked}}}
 
     if tool_name in tools["shell"]:
-        if not wrapper_argv:
-            return _deny("tool wrapper missing — shell blocked (fail closed)")
         tool_input = dict(payload.get("tool_input") or {})
         command = tool_input.get("command")
         if not isinstance(command, str):
@@ -154,7 +139,7 @@ def process(payload: dict, wrapper_argv: list[str] | None, tools: dict[str, froz
             if checked is None:
                 return _deny(f"{tool_name} may run only under {', '.join(write_roots)}")
             tool_input[k] = checked
-        tool_input["command"] = wrap_command(wrapper_argv, command)
+        tool_input["command"] = wrap_command(command)
         return {"hook_specific_output": {"tool_input": tool_input}}
 
     if tool_name in tools["allow"]:
@@ -174,7 +159,7 @@ def main() -> int:
         return 1
 
     try:
-        result = process(payload, load_wrapper_argv(), load_tools(), write_roots=load_write_roots())
+        result = process(payload, load_tools(), write_roots=load_write_roots())
     except Exception as e:  # noqa: BLE001 - any failure must fail closed
         print(f"glove enforcer: hook error: {e}", file=sys.stderr)
         return 1

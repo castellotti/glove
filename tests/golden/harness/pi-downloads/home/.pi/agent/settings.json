@@ -4,7 +4,5 @@
   "defaultThinkingLevel": "low",
   "theme": "dark",
   "defaultProjectTrust": "never",
-  "extensions": [
-    "-builtin:mcp"
-  ]
+  "extensions": []
 }

@@ -48,7 +48,7 @@ def test_nono_wraps_harness_command(tmp_path):
     plan = build_session_plan(_cfg(tmp_path, enforcer="nono"), home_dir=str(tmp_path / "h"))
     assert plan.harness_command[:4] == ["nono", "run", "-s", "--allow-cwd"]
     assert plan.harness_command[-1] == "/opt/glove/pi-extensions/enforcer"  # original entry preserved
-    assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.json", "tool-wrapper.argv",
+    assert set(plan.policies) == {"harness.json", "tool.json", "tool-wrapper.argv",
                                   "write-roots.json", "tools.json"}
 
 
@@ -67,10 +67,10 @@ def test_limits_flow_through(tmp_path):
     assert plan.hardening.limits.memory == "2g"
 
 
-def test_browser_endpoint_reaches_environment(tmp_path):
+def test_browser_endpoint_reaches_the_mcp_item(tmp_path):
     cfg = _cfg(tmp_path, extensions={"playwright": {"mode": "host", "port": 8931}})
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"))
-    assert plan.environment["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
+    assert [s["url"] for _, s in plan.composition.mcp] == ["http://glove-s-browser:8931/mcp"]
 
 
 def test_add_dir_modes(tmp_path):

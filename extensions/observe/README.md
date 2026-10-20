@@ -32,8 +32,13 @@ follows the egress provider's `exit_identity` export:
 | `tor` | `via-proxy:check.torproject.org` | the Tor Project's check, every 5 minutes; `IsTor` must be true. Tor builds this gate its own circuit, so its exit need not be the agent's |
 | `direct`, `corporate` | none | the exit is the host's (or the corporate proxy's) address |
 
+One gate polls the exit, so no two write its records: the harness's own hop to
+the egress proxy if it has one (Claude Code's `proxy`), otherwise the first
+egress consumer's (`searxng-egress`, `webfetch-egress`, …); with none (or
+that one in `skip`), there is no record and session.json says `none`.
+
 vpn's address arrives in a file in gluetun's `exit` volume, which vpn `shares`
-read-only with the harness's proxy gate (never with the harness); it has no
+read-only with that polling gate (never with the harness); it has no
 country or city. An absent file is "not known yet": no record until it appears.
 An `https://` URL makes the gate poll that service through the egress instead
 (geo if it answers ipinfo/echoip-style JSON); `none` records nothing.

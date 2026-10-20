@@ -12,9 +12,9 @@
 # A throwaway session dir (llm → the tool-driving stub on the host) runs
 # tests/integration/egress_live.py: sidecars up + verify (exit-confirmed for
 # vpn/tor), wan holds only the egress provider, SearXNG and the harness network
-# have no direct internet, the search/proxy endpoints work from the harness
+# have no direct internet, the search-mcp/webfetch-mcp/proxy endpoints work from the harness
 # network, and the harness's search / fetch tools work through the egress
-# (Pi's own extensions; the search-mcp and fetcher sidecars for Vibe and Claude Code).
+# (the search-mcp and fetcher sidecars; Claude Code's own WebFetch through the proxy).
 # Secrets stay in the Keychain: glove resolves the refs in memory. Uses a
 # throwaway GLOVE_HOME; tears everything down.
 set -u

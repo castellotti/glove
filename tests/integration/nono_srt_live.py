@@ -127,7 +127,7 @@ def main(directory: str) -> int:
                      "LLM_MATCH": LLM_MATCH.get(cfg.harness, "stub-qwen")}
         env_args = tuple(a for k, v in probe_env.items() for a in ("-e", f"{k}={v}"))
         prefix = plan.harness_command[:plan.harness_command.index("ctty") + 2]  # relay … ctty --
-        wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
+        wrapper = plan.policies["tool-wrapper.argv"].splitlines()
 
         def in_harness(script: str) -> str:
             r = s.run(*prefix, "bash", "-c", script, extra=env_args)
@@ -150,7 +150,7 @@ def main(directory: str) -> int:
               h.get("DOTENV") == "0" and h.get("CLEAN_ENV") == "0", f"{h.get('DOTENV')} {h.get('CLEAN_ENV')}")
 
         print("== the tool position (the rendered tool wrapper, inside the harness position)")
-        t_ = lines(in_harness(shlex.join([*wrapper, "bash", "-c", TOOL_PROBE])))
+        t_ = lines(in_harness(shlex.join(["/opt/glove/bin/glove-tool", "-c", TOOL_PROBE])))
         check("wrapper: glove-pty notty (the scrub) → nono wrap",
               wrapper[1] == "notty" and wrapper[wrapper.index("--") + 1:][:2] == [NONO, "wrap"])
         check("no user namespace", t_.get("T_UNSHARE_USER") not in (None, "0"), str(t_))

@@ -24,7 +24,7 @@ def _control_mounts(svc: dict) -> list[dict]:
 def test_observe_only_gates_never_see_rules(tmp_path):
     _, doc, text = render(tmp_path)
     g = gates(doc)
-    assert len(g) == 5  # llm, search, proxy, searxng-egress + the collector
+    assert len(g) == 6  # llm, search, search-mcp, proxy, searxng-egress + the collector
     for name, svc in g.items():
         assert "--rules" not in svc["command"], name
         assert not _control_mounts(svc), name

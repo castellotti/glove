@@ -98,5 +98,5 @@ IP in `/run/glove-exit/ip`, in vpn's `exit` volume.
   tunnel (`PUBLICIP_FILE`), with the service you name. glove picks none.
 
 verify's `exit-confirmed` reads that file. observe's `exit_identity: auto`
-mounts the volume **read-only** into the harness's proxy gate only (vpn's
+mounts the volume **read-only** into the one gate that polls the exit only (vpn's
 `shares: [exit]` export); the harness never sees it.

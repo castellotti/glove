@@ -103,14 +103,8 @@ def render_settings(plan: SessionPlan) -> dict:
 def denied_env(plan: SessionPlan) -> list[str]:
     """The names srt unsets for tool commands: the LLM key's (a guard: the
     harness holds a placeholder) and each harness env name nono's secret globs
-    match in any case (over-denying is the safe side), by exact name, and the
-    harness-process-only ones."""
-    secret = (k for k in plan.environment if is_secret_env_name(k))
-    return sorted({LLM_API_KEY_ENV, *secret, *plan.composition.shell_hidden_env})
-
-
-def tool_wrapper_argv(plan: SessionPlan) -> list[str]:
-    return [*scrub_argv(plan), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+    match in any case (over-denying is the safe side), by exact name."""
+    return sorted({LLM_API_KEY_ENV, *(k for k in plan.environment if is_secret_env_name(k))})
 
 
 class SrtEnforcer:
@@ -118,17 +112,14 @@ class SrtEnforcer:
     tool_sandbox = "srt"
 
     def render_policies(self, plan: SessionPlan) -> dict[str, str]:
-        return {
-            SETTINGS_FILE: json.dumps(render_settings(plan), indent=2) + "\n",
-            "tool-wrapper.json": json.dumps({"argv": tool_wrapper_argv(plan)}, indent=2) + "\n",
-        }
+        return {SETTINGS_FILE: json.dumps(render_settings(plan), indent=2) + "\n"}
 
     def wrap_harness(self, plan: SessionPlan, entry: list[str]) -> list[str]:
         # srt does not wrap the TUI; the harness process is ring-0 only.
         return list(entry)
 
     def tool_wrapper_argv(self, plan: SessionPlan) -> list[str]:
-        return tool_wrapper_argv(plan)
+        return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
     def compose_env(self, plan: SessionPlan) -> dict[str, str]:
         return {}

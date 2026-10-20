@@ -38,7 +38,7 @@ denied() { echo "$1" | grep -q 'rc=[^0]' && echo "$1" | grep -Eq 'Read-only file
 run() {  # run $1 inside the rendered harness service, bypassing the TUI
   "$RT" compose -f "$COMPOSE" run --rm --no-deps -T --entrypoint bash "glove-$ENVID-harness" -c "$1" 2>&1
 }
-TOOL='nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c'
+TOOL='/opt/glove/bin/glove-tool -c'  # what every harness runs a shell command with
 
 echo "== the agent cannot plant or edit host-trusted files =="
 for who in harness tool; do

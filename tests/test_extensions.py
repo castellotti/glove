@@ -174,12 +174,12 @@ def test_when_a_star_matches_any_key_and_gives_what_it_found():
     assert not when_matches({"settings.plugins.*.relay": {"set": True}}, {"settings": {}})
 
 
-@pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])
-def test_when_renders_follows_the_harness_contributions(harness, mcp):
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
+def test_when_renders_follows_the_harness_contributions(harness):
     from glove.extensions import when_context
 
     ctx = when_context({"dir": "", "n": 0}, harness)
-    assert when_matches({"renders": "mcp"}, ctx) is mcp
+    assert when_matches({"renders": "mcp"}, ctx)  # every in-tree harness renders MCP
     assert when_matches({"renders": ["mcp", "skills"]}, ctx)  # every harness renders skills
     assert when_matches({"dir": {"set": False}, "n": {"set": True}}, ctx)  # 0 is a value; "" is not
 
@@ -503,7 +503,7 @@ def test_unselected_extension_contributes_nothing(tmp_path):
     assert [a.name for a in plan.composition.active] == ["llm"]
 
 
-def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path):
+def test_image_layers_yield_a_content_addressed_image(tmp_path):
     exts = {"media": {}, "direct": {}, "search": {}}
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan, _ = render(cfg, tmp_path)
@@ -512,9 +512,8 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     df = plan.derived_dockerfile
     assert f"FROM {base}\n" in df
     assert "ffmpeg" in df and "python3-pil" in df
-    assert "COPY search/pi-extension /opt/glove/ext/search/pi-extension" in df
-    assert "-e" in plan.command and "/opt/glove/ext/search/pi-extension" in plan.command
-    # vibe gets search over MCP from a sidecar: no Pi extension, nothing baked for it
+    # search is an MCP sidecar: nothing baked into the image for it, nothing loaded with `-e`
+    assert "search" not in df and "/opt/glove/ext/" not in " ".join(plan.command)
     cfg = make_cfg(harness="vibe", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan2, _ = render(cfg, tmp_path / "v")
     assert "searxng" not in plan2.derived_dockerfile and "pi-extension" not in plan2.derived_dockerfile
@@ -633,28 +632,8 @@ def test_harness_env_when_sets_a_value_only_where_it_matches(tree):
     assert "PI_ONLY" not in got and got["DIR_SET"] == "/d/x" and "DIR_UNSET" not in got
 
 
-def test_a_shell_false_env_var_is_unset_before_every_shell_command(tmp_path, tree):
-    _ext(tree, "e", """\
-        api: 2
-        name: e
-        summary: x
-        harness:
-          env:
-            HIDDEN: { value: x, shell: false }
-            SKIPPED: { value: y, when: { harness: vibe }, shell: false }
-            SHOWN: { value: z, shell: true }
-        """)
-    plan, _ = _render(tmp_path, tree, {"llm": STUB_LLM, "e": {}}, enforcer="nono")
-    assert plan.environment["HIDDEN"] == "x"  # the harness process still has it
-    assert plan.composition.shell_hidden_env == {"HIDDEN"}
-    wrapper = json.loads(plan.policies["tool-wrapper.json"])["argv"]
-    assert wrapper[wrapper.index("--") - 2:wrapper.index("--")] == ["-u", "HIDDEN"]
-    assert "SHOWN" not in wrapper and "SKIPPED" not in wrapper
-    assert "HIDDEN" in json.loads(plan.policies["tool.json"])["environment"]["deny_vars"]  # nono too
-
-
 @pytest.mark.parametrize("value", ["{ value: x, when: {}, extra: 1 }", "{ when: { harness: pi } }", "null",
-                                   "{ value: x, shell: no-thanks }"])
+                                   "{ value: x, shell: false }"])  # `shell:` is gone
 def test_a_harness_env_entry_is_a_value_or_value_and_when(tree, value):
     _ext(tree, "e", f"api: 2\nname: e\nsummary: x\nharness:\n  env: {{ K: {value} }}\n")
     with pytest.raises(ExtensionError, match="env 'K'"):
@@ -671,13 +650,20 @@ def _mcp(tree, *items: str, harness="vibe", ext="e"):
                    manifests=discover(tree)).mcp
 
 
-def test_an_mcp_item_is_normalized(tree):
+def test_an_mcp_item_is_normalized(tree, monkeypatch):
+    import dataclasses
+
+    import glove.extensions as ext_mod
+
     got = _mcp(tree, "{ name: h, transport: streamable-http, url: 'http://h/mcp', tools: 'a, b', all_tools: [a, c] }",
                "{ name: s, command: srv, args: [-p, 1], env: { PORT: 1 } }")
     assert got == [
         ("e", {"name": "h", "transport": "http", "url": "http://h/mcp", "tools": ["a", "b"], "all_tools": ["a", "c"]}),
         ("e", {"name": "s", "transport": "stdio", "command": "srv", "args": ["-p", "1"], "env": {"PORT": "1"}})]
-    assert _mcp(tree, "{ name: s, command: srv }", harness="pi", ext="p") == []  # Pi renders no MCP
+    # a harness that doesn't render MCP gets none
+    real = ext_mod.get_profile
+    monkeypatch.setattr(ext_mod, "get_profile", lambda h: dataclasses.replace(real(h), contributions=frozenset()))
+    assert _mcp(tree, "{ name: s, command: srv }", ext="p") == []
 
 
 @pytest.mark.parametrize("item,why", [

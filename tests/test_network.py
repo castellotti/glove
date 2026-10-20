@@ -20,7 +20,7 @@ def test_the_inference_endpoint_is_the_only_forwarder_by_default(tmp_path):
 
 def test_endpoints_join_their_target_networks_and_sessions_get_slices(tmp_path):
     net = _plan(tmp_path, {"direct": {}, "search": {}}).network
-    search = next(s for s in net.sidecars if s.role == "search")
+    search = next(s for s in net.sidecars if s.role == "search-mcp")
     assert search.networks == ("glove-s-searchnet",) and search.impl is None
     assert list(net.subnets) == ["glove-s-net", "glove-s-hostgw", "glove-s-egress", "glove-s-searchnet",
                                  "glove-s-wan"]

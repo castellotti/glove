@@ -8,7 +8,7 @@ It checks, against real containers:
   1. every endpoint's forwarder is a netgate (none is socat); the collector has
      no network; with filter, every gate and the collector mount control/ read-only;
   2. SearXNG is off the egress network and reaches it only through its gate;
-  3. Pi's web_search / web_fetch (stub-driven tool calls) are recorded as flows
+  3. the harness's (Pi's or Vibe's) web search / fetch_url (stub-driven MCP tool calls) are recorded as flows
      with the right service, tool, client and route, and each model call as two
      flows (`llm` client harness, `llm-upstream` client llm); transcripts are exported;
      the harness sees no export but its transcripts; `exit_identity: auto` follows
@@ -78,17 +78,21 @@ def main(directory: str) -> int:
         mounts = [os.path.realpath(host_under_virtiofs(v["source"]) or v["source"])
                   for v in hv if v.get("type") == "bind"]
 
-        print("== Pi tool calls → flows")
-        ans = live.call("web_search", {"query": "wikipedia"})
-        check("Pi web_search through its gates", "TOOL RESULT" in ans, ans[-120:])
-        ans = live.call("web_fetch", {"url": "https://example.com"})
-        check("Pi web_fetch through its gate", "documentation examples" in ans, ans[-120:])
-        recs = wait_for(lambda: [r for r in flows() if r.get("service") == "proxy"
+        h = live.cfg.harness
+        print(f"== {h} tool calls → flows")
+        ans = live.call(live.tools["search"], {"query": "wikipedia"})
+        check(f"{h} web search through its gates", "TOOL RESULT" in ans, ans[-120:])
+        ans = live.call(live.tools["fetch"], {"url": "https://example.com"})
+        check(f"{h} fetch_url through its gates", "documentation examples" in ans, ans[-120:])
+        recs = wait_for(lambda: [r for r in flows() if r.get("service") == "webfetch-egress"
                                  and (r.get("dest") or {}).get("host") == "example.com"], 20)
         f = recs[-1] if recs else {}
-        check("flow: proxy → example.com:443, web_fetch, client harness, allow",
+        check("flow: webfetch-egress → example.com:443, web_fetch, client webfetch, allow",
               (f.get("tool"), f.get("client"), (f.get("dest") or {}).get("port"), f.get("verdict")) ==
-              ("web_fetch", "harness", 443, "allow"), json.dumps({k: f.get(k) for k in ("tool", "client", "route")}))
+              ("web_fetch", "webfetch", 443, "allow"), json.dumps({k: f.get(k) for k in ("tool", "client", "route")}))
+        hop = [r for r in flows() if r.get("service") == "webfetch-mcp"]
+        check("flow: the harness → fetcher hop, client harness",
+              bool(hop) and hop[-1].get("client") == "harness", f"{len(hop)} flows")
         # SearXNG pools its connections: they may still be open (no close yet)
         if comp.slot_exports("egress").get("resolver") not in (None, "none"):
             res = (f.get("dest") or {})
@@ -139,8 +143,8 @@ def main(directory: str) -> int:
         seen = wait_for(lambda: (json.loads((net / "status.json").read_text()).get("rules") or {}).get("sha256")
                         == digest, 15)
         check("the gates confirm the file (status.json rules.sha256)", bool(seen))
-        ans = live.call("web_fetch", {"url": "https://example.com"})
-        check("Pi web_fetch example.com is now refused", "TOOL RESULT" in ans and "network policy" in ans, ans[-140:])
+        ans = live.call(live.tools["fetch"], {"url": "https://example.com"})
+        check(f"{h} fetch_url example.com is now refused", "TOOL RESULT" in ans and "network policy" in ans, ans[-140:])
         blocked = wait_for(lambda: [r for r in flows() if r.get("verdict") == "block"
                                     and (r.get("dest") or {}).get("host") == "example.com"], 15)
         rid = json.loads((ctl / "rules.json").read_text())["rules"][0]["id"]
@@ -161,8 +165,8 @@ def main(directory: str) -> int:
               all("--rules" not in c for c in cmds) and not any(ctl_mounts(g) for g in gates))
         gone = wait_for(lambda: "rules" not in json.loads((net / "status.json").read_text()), 20)
         check("status.json carries no `rules` (no gate reads a rules file)", bool(gone))
-        ans = live.call("web_fetch", {"url": "https://example.com"})
-        check("web_fetch example.com works again (no rules read)", "documentation examples" in ans, ans[-120:])
+        ans = live.call(live.tools["fetch"], {"url": "https://example.com"})
+        check("fetch_url example.com works again (no rules read)", "documentation examples" in ans, ans[-120:])
     return summary()
 
 

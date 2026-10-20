@@ -2,7 +2,8 @@
  * glove-pi-enforcer — routes every shell command through the ring-1 enforcer.
  *
  * The model's `bash` tool and the operator's `!`/`!!` commands are both rewritten
- * to run under the enforcer's per-command wrapper (e.g.
+ * to `/opt/glove/bin/glove-tool -c <cmd>`, which runs the command under the
+ * enforcer's per-command wrapper (/etc/glove/enforcer/tool-wrapper.argv, e.g.
  *   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c <cmd>
  * ), so a prompt-injected command can only touch /work + rw mounts + /tmp, has no
  * network, and cannot read the harness home (extensions, skills, session
@@ -23,10 +24,9 @@
  * other tool blocked, so a tool a new Pi release or an operator extension adds
  * fails closed. Without a readable inventory every tool is blocked.
  *
- * The wrapper argv is read from /etc/glove/enforcer/tool-wrapper.json, rendered by
- * glove's enforcer — so this extension is enforcer-agnostic (nono today, srt
- * later). If the wrapper file is missing or unreadable, the extension FAILS CLOSED
- * and blocks all shell execution rather than running commands unsandboxed.
+ * glove-tool is shared by every harness, so this extension is enforcer-agnostic. If
+ * the wrapper file is missing or unreadable, glove-tool FAILS CLOSED (exit 126)
+ * rather than running the command unsandboxed.
  *
  * This is a pure-JS extension (node builtins only) so it needs no npm install and
  * does not depend on pi internals at runtime.
@@ -38,7 +38,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const WRAPPER_FILE = "/etc/glove/enforcer/tool-wrapper.json";
+const GLOVE_TOOL = "/opt/glove/bin/glove-tool";
 const ROOTS_FILE = "/etc/glove/enforcer/write-roots.json";
 const TOOLS_FILE = "/etc/glove/enforcer/tools.json";
 const TOOL_CLASSES = ["shell", "file_write", "allow"] as const;
@@ -46,18 +46,6 @@ type Tools = Record<(typeof TOOL_CLASSES)[number], Set<string>>;
 // What Pi's path normalization turns into a plain space: refused, so the path
 // checked is the path written.
 const ODD_SPACE = /[\u00A0\u2000-\u200B\u202F\u205F\u3000\uFEFF]/;
-
-function loadWrapper(): string[] | null {
-  try {
-    const data = JSON.parse(fs.readFileSync(WRAPPER_FILE, "utf-8"));
-    if (Array.isArray(data.argv) && data.argv.length > 0 && data.argv.every((a: unknown) => typeof a === "string")) {
-      return data.argv as string[];
-    }
-  } catch {
-    // fall through — treated as "no wrapper", fail closed below
-  }
-  return null;
-}
 
 function loadRoots(): string[] | null {
   try {
@@ -135,14 +123,10 @@ function shq(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-function wrapCommand(argv: string[], command: string): string {
-  // argv already ends with "--"; append the shell that runs the agent's command.
-  // Use a NON-login shell (`-c`, not `-lc`): a login shell sources /etc/profile,
-  // which nono's default profile denies (deny_shell_configs), printing a harmless
-  // but noisy "bash: /etc/profile: Permission denied" on every command. PATH is
-  // already set by the image env, so login-shell setup is unnecessary here.
-  // Each argv element quoted: the scrub's globs (`-u '*KEY*'`) must not expand.
-  return `${argv.map(shq).join(" ")} bash -c ${shq(command)}`;
+export function wrapCommand(command: string): string {
+  // glove-tool runs a NON-login shell (`bash --norc -c`): a login shell sources
+  // /etc/profile, which nono's default profile denies (deny_shell_configs).
+  return `${GLOVE_TOOL} -c ${shq(command)}`;
 }
 
 // Reject attempts to neuter the enforcer by overriding its env in the command.
@@ -168,7 +152,7 @@ function deepFreeze(o: unknown, seen = new WeakSet<object>()): void {
 }
 
 /** The `tool_call` handler: each call classified by the inventory (`tools`). */
-export function toolCallHandler(argv: string[] | null, roots: string[] | null, tools: Tools | null) {
+export function toolCallHandler(roots: string[] | null, tools: Tools | null) {
   // Pi's own file tools: only under the write roots, at the path checked.
   const holdWrite = (event: ToolEvent, cwd: string): Verdict => {
     const input = event.input as { path?: unknown };
@@ -190,13 +174,10 @@ export function toolCallHandler(argv: string[] | null, roots: string[] | null, t
     if (typeof input.command !== "string") {
       return { block: true, reason: `glove enforcer: ${event.toolName} without a command string (fail closed)` };
     }
-    if (!argv) {
-      return { block: true, reason: "glove enforcer: tool wrapper missing — shell blocked (fail closed)" };
-    }
     if (NONO_OVERRIDE.test(input.command)) {
       return { block: true, reason: "glove enforcer: NONO_* env overrides are not allowed" };
     }
-    input.command = wrapCommand(argv, input.command);
+    input.command = wrapCommand(input.command);
     deepFreeze(input);
     return;
   };
@@ -214,25 +195,15 @@ export function toolCallHandler(argv: string[] | null, roots: string[] | null, t
 }
 
 export default async function (pi: ExtensionAPI) {
-  const argv = loadWrapper();
-  pi.on("tool_call", toolCallHandler(argv, loadRoots(), loadTools()));
+  pi.on("tool_call", toolCallHandler(loadRoots(), loadTools()));
 
   // Operator `!`/`!!` commands: run through the same wrapper via custom operations.
   pi.on("user_bash", (event) => {
-    if (!argv) {
-      return {
-        result: {
-          content: [{ type: "text", text: "glove enforcer: tool wrapper missing — shell blocked (fail closed)" }],
-          isError: true,
-        },
-      };
-    }
-    const wrapped = wrapCommand(argv, event.command);
     return {
       operations: {
         exec: (_command: string, cwd: string, opts: { onData: (d: Buffer) => void; signal?: AbortSignal; env?: NodeJS.ProcessEnv }) =>
           new Promise<{ exitCode: number | null }>((resolve, reject) => {
-            const child = spawn("bash", ["-c", wrapped], { cwd, env: opts.env ?? process.env });
+            const child = spawn(GLOVE_TOOL, ["-c", event.command], { cwd, env: opts.env ?? process.env });
             child.stdout.on("data", (d: Buffer) => opts.onData(d));
             child.stderr.on("data", (d: Buffer) => opts.onData(d));
             child.on("error", reject);

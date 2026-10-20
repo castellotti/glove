@@ -23,7 +23,7 @@ extensions:
   (`dns`), the **resolved address** is checked, and that address is dialled.
 - **Guard exceptions.** Corporate hosts are private, which the SSRF guard would
   refuse, so the allowlist is also the guard's exception list: for this gate,
-  for observe's gate in front of it, and for `web_fetch`'s own pre-check. It
+  for observe's gate in front of it, and for `fetch_url`'s own pre-check. It
   comes only from `glove-session.yml` — never from `rules.json`, which has no
   key for it and which this gate does not read.
 - **Always refused**, whatever the allowlist: loopback, link-local and cloud
@@ -51,5 +51,5 @@ $EDITOR glove-session.yml   # llm, and corporate: allow_domains/probe_url for on
 glove check && glove up     # verify: example.com refused, probe_url answers
 ```
 
-Then in Pi: `web_fetch` the internal URL (works) and `https://example.com`
+Then in Pi: `fetch_url` the internal URL (works) and `https://example.com`
 (refused by policy).

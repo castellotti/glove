@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""MCP server exposing `fetch_url` (one web page as readable text; Vibe's, the
-twin of Pi's web_fetch extension in pi-extension/) and, with webfetch
-downloads on, `web_download`/`web_download_status` (files saved to /work, for
-every harness), all through the session's egress proxy.
+"""MCP server exposing `fetch_url` (one web page as readable text, for Pi and
+Vibe) and, with webfetch downloads on, `web_download`/`web_download_status`
+(files saved to /work, for every harness), all through the session's egress
+proxy.
 
 Runs in the `fetcher` sidecar and serves streamable HTTP on :8000 (stateless,
 plain JSON responses), which the harness reaches through the `webfetch-mcp`
@@ -12,9 +12,9 @@ GLOVE_DOWNLOAD_PROXY (the egress provider's proxy, or with observe a gate in
 front of it, one per tool): the sidecar has no other route. Each tool is served
 only when its variable is set.
 
-The destination guard is pi-extension/guard.ts, ported: refuse anything that is
-not plainly a public internet host, judged by shape only and never resolved,
-before the request is sent and again on every redirect hop. Under the
+The destination guard refuses anything that is not plainly a public internet
+host, judged by shape only and never resolved, before the request is sent and
+again on every redirect hop. Under the
 `corporate` egress the operator's allowlist (GLOVE_FETCH_ALLOW) is let through
 even when private; this machine, link-local/metadata and multicast stay refused.
 When the egress gate refuses a request (a filter rule, the corporate allowlist,
@@ -237,7 +237,7 @@ def _policy(url: str, why: str) -> str:
             "route; tell the user if you need this source.")
 
 
-# --- what a fetch makes of a response it won't read as text (pi-extension/body.ts) --
+# --- what a fetch makes of a response it won't read as text ---------------------
 
 TEXT = re.compile(r"(text/.+|[^/]+/([^/]+\+)?(json|xml|yaml)|"
                   r"application/(x-)?(javascript|ecmascript|yaml|toml|ndjson|sql|graphql|sh|shellscript))")
@@ -279,7 +279,7 @@ def rate_limited(retry_after: str | None, now: float | None = None) -> str:
             if email.utils.format_datetime(date, usegmt=True) == v:
                 s = round(date.timestamp() - (time.time() if now is None else now))
     return "Rate-limited (HTTP 429). Back off; " + (
-        f"the server asks to wait {max(0, s)} s before retrying." if s is not None else "do not retry immediately.")
+        f"the server asks to wait {s} s before retrying." if s and s > 0 else "do not retry immediately.")
 
 
 class Refusal(Exception):
@@ -706,7 +706,7 @@ def main() -> None:
             allowed_origins=[]),
     )
 
-    if PROXY:  # Vibe
+    if PROXY:  # fetch_url: Pi, Vibe
         @mcp.tool()
         async def fetch_url(url: str, max_chars: int = 20000, raw: bool = False) -> str:
             """Fetch a URL and return its main text content (HTML converted to readable

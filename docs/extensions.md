@@ -91,7 +91,7 @@ Legend:
   `GIT_CONFIG_*`: use `git_config`). Only a hook's
   layers may `copy_host`. Layers render in extension order, then those with
   `stage: late` (e.g. the toolchains), then those that `copy_host`.
-- `env`: `{VAR: value}` or `{VAR: {value, when, shell: false}}`. A variable is
+- `env`: `{VAR: value}` or `{VAR: {value, when}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
 - `brief`: a file (or `{file, when}`) the agent reads at start.
@@ -175,7 +175,7 @@ those of the fragment's template context.
 | `session` | `{id, subnet, secrets_dir}` |
 | `names` | `{project, harness_network, prefix}` |
 | `slot` | `{slot: {provider, **exports}}`, for the slots filled so far |
-| `endpoint`, `own_endpoints` | every endpoint declared so far; its own |
+| `endpoint`, `own_endpoints` | every endpoint declared so far (`{host, port, url, harness, aliases, interposed, target_kind}`); its own (`{host, port}`) |
 | `state_dir` | its own state directory (`.glove/ext/<name>/`) |
 | `assets` | its own directory |
 | `images`, `libs` | image tags: its own, and its libraries' |

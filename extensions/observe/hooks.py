@@ -89,14 +89,22 @@ def _url_ok(url: Any) -> bool:
     return True
 
 
-def _polls_exit(harness: bool, mode: str | None, upstream: str | None) -> bool:
-    """The gate that polls the exit: the harness's own proxy gate, chained to the
-    egress (one, so the egress consumers' gates do not duplicate its records)."""
-    return harness and mode == "http-proxy" and upstream != "direct"
+def _poller(ctx: HookContext) -> str | None:
+    """The one gate that polls the exit, so no two write its records (nor do
+    Tor's per-gate circuits alternate in them): the harness's own hop to the
+    egress proxy if it has one (Claude Code's `proxy`), else the first egress
+    consumer's (`webfetch-egress`, `searxng-egress`, …). A skipped gate polls nothing."""
+    skip = ctx.settings.get("skip") or []
+    hops = [n for n, e in ctx.endpoint.items() if e["target_kind"] == "slot" and n not in skip]
+    return min(hops, key=lambda n: not ctx.endpoint[n]["harness"], default=None)
+
+
+def _polls_exit(ctx: HookContext, name: str, mode: str | None, upstream: str | None) -> bool:
+    return name == _poller(ctx) and mode == "http-proxy" and upstream != "direct"
 
 
 def _polled(ctx: HookContext) -> bool:
-    return any(f["observed"] and _polls_exit(f["harness"], f.get("mode"), f["route"].get("upstream"))
+    return any(f["observed"] and _polls_exit(ctx, f["service"], f.get("mode"), f["route"].get("upstream"))
                for f in ctx.forwarders)
 
 
@@ -148,7 +156,7 @@ def forwarder(ctx: HookContext, ep: dict[str, Any]) -> dict[str, Any] | None:
     rules = _rules(ctx)
     volumes = [{"type": "volume", "source": EVENTS_VOLUME, "target": gatelib.EVENTS_DIR}]
     exit_url = exit_file = None
-    exit_id = exit_identity(ctx) if _polls_exit(ep["harness"], gate.mode, gate.route_upstream) else None
+    exit_id = exit_identity(ctx) if _polls_exit(ctx, ep["name"], gate.mode, gate.route_upstream) else None
     if exit_id and "url" in exit_id:
         exit_url = exit_id["url"]
     elif exit_id:
