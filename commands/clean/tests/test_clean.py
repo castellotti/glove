@@ -17,18 +17,11 @@ runner = CliRunner()
 LABEL = cli.PROJECT_LABEL
 
 
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "ghome"))
-    for c in (cli.console, cli.err):
-        monkeypatch.setattr(c, "width", 400)
-
-
 def _fake_runtime(monkeypatch, listing: dict[str, list[str]], *, fail: str = ""):
     """`_out` answering `<kind> inspect` from `listing` (kind → inspect lines)."""
     calls = []
 
-    def out(rt, *args):
+    def out(rt, *args, partial=False):
         calls.append(args)
         if fail and fail in args:
             return None
@@ -43,14 +36,14 @@ def _fake_runtime(monkeypatch, listing: dict[str, list[str]], *, fail: str = "")
 
 def test_stacks_groups_glove_v3_projects_and_skips_the_rest(monkeypatch):
     calls = _fake_runtime(monkeypatch, {
-        "container": ["glove-a-0a0b0c c1 running", "glove-a-0a0b0c c2 exited", "open-webui c3 running",
+        "container": ["glove-a-0a0b0c c1 created", "glove-a-0a0b0c c2 exited", "open-webui c3 running",
                       "glove-pi-search x running"],  # not a v3 id: never glove v3's
         "network": ["glove-a-0a0b0c glove-a-0a0b0c-net"],
         "volume": ["glove-b-0d0e0f glove-b-0d0e0f-data", "open-webui_data x"]})
     a, b = cli.stacks("podman")
-    assert (a.sid, a.containers, a.networks, a.running) == ("a-0a0b0c", {"c1": "running", "c2": "exited"},
+    assert (a.sid, a.containers, a.networks, a.active) == ("a-0a0b0c", {"c1": "created", "c2": "exited"},
                                                            ["glove-a-0a0b0c-net"], True)
-    assert (b.sid, b.volumes, b.running, b.describe()) == ("b-0d0e0f", ["glove-b-0d0e0f-data"], False, "1 volume(s)")
+    assert (b.sid, b.volumes, b.active, b.describe()) == ("b-0d0e0f", ["glove-b-0d0e0f-data"], False, "1 volume(s)")
     assert ("ps", "-aq", "--filter", f"label={LABEL}") in calls
     assert ("container", "inspect", "-f", f'{{{{index .Config.Labels "{LABEL}"}}}} {{{{.Id}}}} {{{{.State.Status}}}}',
             "container-id") in calls
@@ -59,6 +52,14 @@ def test_stacks_groups_glove_v3_projects_and_skips_the_rest(monkeypatch):
 def test_stacks_is_none_when_the_runtime_does_not_answer(monkeypatch):
     _fake_runtime(monkeypatch, {"container": [], "network": [], "volume": []}, fail="volume")
     assert cli.stacks("docker") is None
+
+
+def test_stacks_keeps_what_an_inspect_printed_when_one_id_went_meanwhile(monkeypatch):
+    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(
+        cmd, 1, stdout="glove-a-0a0b0c n1\n", stderr="No such network: n-gone") if "inspect" in cmd
+        else subprocess.CompletedProcess(cmd, 0 if "ls" in cmd else 1, stdout="n1\nn-gone\n"))
+    assert cli._labelled("docker", "network", ".Labels", ".Name") == [["glove-a-0a0b0c", "n1"]]
+    assert cli._out("docker", "network", "rm", "n1") is None  # a plain failure is still one
 
 
 def test_stacks_with_nothing_labelled_inspects_nothing(monkeypatch):
@@ -70,10 +71,16 @@ def test_stacks_with_nothing_labelled_inspects_nothing(monkeypatch):
 @pytest.mark.parametrize("volumes", [True, False])
 def test_remove_takes_containers_then_networks_and_volumes_only_when_asked(monkeypatch, volumes):
     cmds = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or subprocess.CompletedProcess(
-        cmd, 1 if cmd[-1] == "n2" else 0))
+    def run(cmd, **k):
+        cmds.append(cmd)
+        assert k["timeout"] == cli.TIMEOUT
+        if cmd[-1] == "v1":
+            raise subprocess.TimeoutExpired(cmd, k["timeout"])
+        return subprocess.CompletedProcess(cmd, 1 if cmd[-1] == "n2" else 0)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
     s = cli.Stack("docker", "a-0a0b0c", {"c1": "exited"}, ["n1", "n2"], ["v1"])
-    assert cli.remove(s, volumes=volumes) == ["docker network n2"]
+    assert cli.remove(s, volumes=volumes) == ["docker network n2", *(["docker volume v1"] if volumes else [])]
     assert cmds == [["docker", "rm", "-f", "c1"], ["docker", "network", "rm", "n1"], ["docker", "network", "rm", "n2"],
                     *([["docker", "volume", "rm", "v1"]] if volumes else [])]
 
@@ -93,33 +100,41 @@ def _session(tmp_path, name: str, sid: str, *, holds: str | None = None) -> None
     reg.upsert(reg.SessionEntry(id=sid, dir=str(d), harness="pi"))
 
 
-def test_clean_removes_dead_and_unregistered_stacks_only(home, tmp_path, monkeypatch):
+@pytest.mark.parametrize("flag", [False, True])
+def test_clean_removes_volumes_only_of_provably_gone_sessions(home, tmp_path, monkeypatch, flag):
     _session(tmp_path, "live", "live-0a0a0a", holds="live-0a0a0a")
-    _session(tmp_path, "gone", "gone-0b0b0b")
+    _session(tmp_path, "moved", "moved-0b0b0b")  # its directory is missing: maybe moved
     _session(tmp_path, "reused", "reused-0c0c0c", holds="reused-0d0d0d")  # re-launched under a new id
     found = [cli.Stack("docker", "live-0a0a0a", {"c1": "exited"}, ["n1"], ["v1"]),
-             cli.Stack("docker", "gone-0b0b0b", {"c2": "exited"}, ["n2"], ["v2"]),
+             cli.Stack("docker", "moved-0b0b0b", {"c2": "exited"}, ["n2"], ["v2"]),
              cli.Stack("docker", "reused-0c0c0c", volumes=["v3"]),
              cli.Stack("docker", "other-home-0e0e0e", volumes=["v4"]),
-             cli.Stack("docker", "still-up-0f0f0f", {"c5": "running"})]
+             cli.Stack("docker", "starting-0f0f0f", {"c5": "created"}, volumes=["v5"])]
     removed = []
     monkeypatch.setattr(cli, "runtimes", lambda only=None: ["docker"])
     monkeypatch.setattr(cli, "stacks", lambda rt: found)
     monkeypatch.setattr(cli, "remove", lambda s, volumes: removed.append((s.sid, volumes)) or [])
-    result = runner.invoke(app, ["--dry-run"])
+    args = ["--volumes"] if flag else []
+    result = runner.invoke(app, ["--dry-run", *args])
     assert result.exit_code == 0 and not removed
-    assert "docker stack glove-gone-0b0b0b: 1 container(s), 1 network(s), 1 volume(s)" in result.output
-    assert "glove-live-0a0a0a" not in result.output.replace("left alone", "")
-    assert "glove-still-up-0f0f0f is running: left alone" in result.output
-    result = runner.invoke(app, ["-y"])
+    out = result.output
+    assert "glove-starting-0f0f0f is active: left alone" in out and "glove-live-0a0a0a" not in out
+    if flag:
+        assert "docker stack glove-moved-0b0b0b: 1 container(s), 1 network(s), 1 volume(s)" in out
+        assert "keeping" not in out
+    else:
+        assert "docker stack glove-moved-0b0b0b: 1 container(s), 1 network(s)\n" in out
+        assert "keeping docker glove-moved-0b0b0b's 1 volume(s): its directory is missing (moved?)" in out
+        assert "keeping docker glove-other-home-0e0e0e's 1 volume(s): not in this registry" in out
+    result = runner.invoke(app, ["-y", *args])
     assert result.exit_code == 0, result.output
-    assert removed == [("gone-0b0b0b", True), ("reused-0c0c0c", True), ("other-home-0e0e0e", True)]
-    assert "removed 3 stack(s)" in result.output
+    assert removed == [("moved-0b0b0b", flag), ("reused-0c0c0c", True),
+                       *([("other-home-0e0e0e", True)] if flag else [])]
 
 
 def test_clean_asks_first(home, monkeypatch):
     monkeypatch.setattr(cli, "runtimes", lambda only=None: ["docker"])
-    monkeypatch.setattr(cli, "stacks", lambda rt: [cli.Stack("docker", "gone-0b0b0b", volumes=["v"])])
+    monkeypatch.setattr(cli, "stacks", lambda rt: [cli.Stack("docker", "gone-0b0b0b", {"c": "exited"})])
     monkeypatch.setattr(cli, "remove", lambda s, volumes: pytest.fail("removed without asking"))
     assert runner.invoke(app, [], input="n\n").exit_code == 1
 

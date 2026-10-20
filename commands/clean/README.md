@@ -2,15 +2,17 @@
 
 Removes what glove left on Docker and Podman.
 
-- **Dead sessions' stacks.** A session's stack is its compose project
-  `glove-<id>`: the containers, networks and volumes compose labelled with it.
-  The stack is dead when its session no longer exists: the registry row's
-  directory is gone or holds another session now (re-launched under a new
-  id), or there is no row (a `glove-<v3 id>` project of another `GLOVE_HOME`,
-  such as an integration test's). Nothing of it can be restarted, so all of
-  it goes, volumes included.
-- A running stack, a live session's stack, and anything that is not a
-  `glove-<v3 id>` project are never touched.
+- **Stacks of sessions that no longer exist here.** A session's stack is its
+  compose project `glove-<id>`: the containers, networks and volumes compose
+  labelled with it. Their stopped containers and networks go.
+- **Volumes only when the session is provably gone:** its registry row's
+  directory now holds another session (re-launched under a new id). A missing
+  directory may have moved, and a `glove-<v3 id>` project with no row may be
+  another `GLOVE_HOME`'s (an integration test's): their volumes stay, with a
+  line saying why, unless `--volumes`.
+- A live session's stack, a stack with any container not `exited`/`dead`
+  (running, starting, paused, …), and anything that is not a `glove-<v3 id>`
+  project are never touched.
 - It lists first, then asks. `--dry-run` only lists, `--yes` skips the
   question, `--runtime docker|podman` looks at one runtime (default: each on
   `PATH`; one that does not answer is reported and skipped).

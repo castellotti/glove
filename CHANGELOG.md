@@ -6,13 +6,15 @@ All notable changes to glove are documented here.
 
 ### Added
 
-- **`glove clean`.** Removes the stacks (containers, networks and volumes,
-  found by compose's project label `glove-<id>`) of sessions that no longer
-  exist, on Docker and Podman: a registry row whose directory is gone or was
-  re-launched under a new id, or a `glove-<v3 id>` project with no row (e.g. an
-  integration test's `GLOVE_HOME`). A running stack and a live session's are
-  left alone. `--dry-run` lists, `--yes` skips the question, `--runtime` picks
-  one. `glove gc` still removes the rows and exports.
+- **`glove clean`.** Removes the stopped stacks (found by compose's project
+  label `glove-<id>`) of sessions that no longer exist here, on Docker and
+  Podman: their containers and networks, and their volumes only when the
+  session is provably gone (its directory now holds another session id). A
+  missing directory (maybe moved) or a `glove-<v3 id>` project with no row
+  (maybe another `GLOVE_HOME`) keeps its volumes unless `--volumes`. A live
+  session's stack and one with any container not `exited`/`dead` are left
+  alone. `--dry-run` lists, `--yes` skips the question, `--runtime` picks one.
+  `glove gc` still removes the rows and exports.
 - **Commands live in `commands/<name>/`** (`commands/README.md`), apart from
   extensions: core mounts each `cli.py`'s `command` or `app` and never imports
   them. A command imports only `glove.api` and the new `glove.api.commands`

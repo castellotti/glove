@@ -210,7 +210,7 @@ glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow r
 glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
-glove clean [--dry-run] [--yes] [--runtime R]   # remove dead sessions' stacks on Docker/Podman
+glove clean [--dry-run] [--yes] [--volumes] [--runtime R]   # stopped stacks of gone sessions
 glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv; a long
                                              # one in parts, <service>.part<n>; ASCII only)
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)

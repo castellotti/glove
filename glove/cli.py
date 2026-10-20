@@ -1,16 +1,5 @@
 """glove command-line interface: the app, which mounts each command
-(`commands/<name>/cli.py`) and each extension's CLI.
-
-A session is a directory holding ``glove-session.yml`` (see
-``glove/sessiondir.py``). Every session command takes an optional directory
-and otherwise uses the nearest session at or above the cwd:
-
-    glove new <template|path|git-url> [dir]    materialize a session
-    glove check | plan | up | down | rm         work with one session
-    glove ls | ps | gc                          all sessions (~/.glove/registry.json)
-    glove keychain set <service> [--stdin]      store a secret, prompting for it (or piped)
-    glove downloads mark [dir]                  quarantine what the sidecars saved (macOS)
-"""
+(`commands/<name>/cli.py`; see commands/README.md) and each extension's CLI."""
 
 from __future__ import annotations
 
@@ -71,15 +60,25 @@ COMMANDS_DIR = Path(__file__).resolve().parent.parent / "commands"
 def _mount_commands() -> None:
     """Mount each in-tree command: its `cli.py`'s `command` (a function) as
     `glove <name>`, or its `app` (a Typer) as the group `glove <name> …`.
-    Commands import only glove.api(.commands); core loads them by path."""
+    Commands import only glove.api(.commands); core loads them by path. One that
+    fails to load is reported, and the others still work."""
+    from rich.markup import escape
+
     from .extensions import load_module
 
-    for d in sorted(p for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file()):
-        m = load_module(d / "cli.py", d.name, ns="glove_cmd")
-        if hasattr(m, "command"):
+    found = sorted(p for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file()) if COMMANDS_DIR.is_dir() else []
+    for d in found:
+        try:
+            m = load_module(d / "cli.py", d.name, ns="glove_cmd")
+        except Exception as e:
+            err.print(f"[yellow]warn:[/yellow] command {d.name!r} failed to load: {escape(str(e))}")
+            continue
+        if callable(getattr(m, "command", None)):
             app.command(d.name)(m.command)
-        else:
+        elif isinstance(getattr(m, "app", None), typer.Typer):
             app.add_typer(m.app, name=d.name)
+        else:
+            err.print(f"[yellow]warn:[/yellow] command {d.name!r}: {d / 'cli.py'} has neither `command` nor `app`")
 
 
 _mount_commands()

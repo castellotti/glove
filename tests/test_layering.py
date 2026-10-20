@@ -54,13 +54,17 @@ def test_contract_catches_a_core_to_extension_import(tmp_path):
 
 
 # --- Extension contracts. An AST scan of every non-test module under extensions/, harnesses/ and
-# commands/: from core they import only `glove.api` (and its submodules); an extension imports another
-# only if it requires it (any form, `when:` ignored); a harness adapter or a command imports no
-# extension, and a command no other command.
+# commands/: from core they import only `glove.api` (and its submodules; `glove.api.commands` only a
+# command); an extension imports another only if it requires it (any form, `when:` ignored); a harness
+# adapter or a command imports no extension, and a command no other command.
+
+
+COMMANDS_API = "glove.api.commands"
 
 
 def _imports(path: Path, root: Path) -> list[str]:
-    """`top.second` of every module `path` imports (e.g. `glove.config`), relative imports resolved."""
+    """`top.second` of every module `path` imports (e.g. `glove.config`; `glove.api.commands` whole),
+    relative imports resolved."""
     base = list(path.relative_to(root).parent.parts)
     out = []
     for node in ast.walk(ast.parse(path.read_text(), str(path))):
@@ -72,7 +76,7 @@ def _imports(path: Path, root: Path) -> list[str]:
             if node.level:
                 mod = ".".join(base[: len(base) - node.level + 1] + ([mod] if mod else []))
             out += [f"{mod}.{a.name}" for a in node.names]
-    return list(dict.fromkeys(".".join(m.split(".")[:2]) for m in out))
+    return list(dict.fromkeys(".".join(m.split(".")[:3 if m.startswith(COMMANDS_API) else 2]) for m in out))
 
 
 def _requires(root: Path) -> dict[str, set[str]]:
@@ -104,13 +108,14 @@ def contract_violations(root: Path = REPO) -> set[str]:
             if "tests" in where.parts:
                 continue
             for mod in _imports(path, root):
-                first, _, second = mod.partition(".")
+                first, second = [*mod.split("."), ""][:2]
                 own = where.parts[1] if len(where.parts) > 2 else ""  # extensions/<own>/...
                 if (
                     (first == "glove" and second != "api")
                     or (first == "extensions" and top != "extensions")
                     or (first == "extensions" and own and second not in {own, *reqs.get(own, ())})
                     or (first == "commands" and (top != "commands" or second != own))
+                    or (mod == COMMANDS_API and top != "commands")
                 ):
                     out.add(f"{where} -> {mod}")
     return out
@@ -138,7 +143,8 @@ def test_contract_catches_private_core_and_adapter_imports(tmp_path):
         "extensions/a/tests/test_a.py": "from glove.session import x\n",
         "extensions/__init__.py": "from extensions.a import hooks\n",
         "extensions/b/extension.yml": "# nothing yet\n",
-        "harnesses/h/adapter.py": "from glove import naming\nfrom extensions.a import hooks\n",
+        "harnesses/h/adapter.py": "from glove import naming\nfrom extensions.a import hooks\n"
+                                  "from glove.api.commands import stop\n",
         "commands/c/cli.py": "from glove.api.commands import x\nfrom glove import cli\nfrom extensions.a import h\n"
                              "from commands.d import y\nfrom . import helpers\n",
         "commands/d/cli.py": "from glove.api import ConfigError\n",
@@ -147,6 +153,7 @@ def test_contract_catches_private_core_and_adapter_imports(tmp_path):
         "extensions/a/hooks.py -> glove.session",
         "harnesses/h/adapter.py -> glove.naming",
         "harnesses/h/adapter.py -> extensions.a",
+        "harnesses/h/adapter.py -> glove.api.commands",
         "commands/c/cli.py -> glove.cli",
         "commands/c/cli.py -> extensions.a",
         "commands/c/cli.py -> commands.d",

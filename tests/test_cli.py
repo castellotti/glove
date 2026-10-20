@@ -161,3 +161,25 @@ def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, m
     assert "bad" not in {g.name for g in app.registered_groups}
 
 
+
+
+def test_a_broken_or_missing_command_does_not_break_glove(tmp_path, monkeypatch, capsys):
+    import typer
+
+    from glove import cli
+
+    for name, text in {"good": "def command():\n    print('ran')\n", "broken": "raise RuntimeError('boom')\n",
+                       "neither": "x = 1\n"}.items():
+        (tmp_path / "commands" / name).mkdir(parents=True)
+        (tmp_path / "commands" / name / "cli.py").write_text(text)
+    fresh = typer.Typer()
+    fresh.command("noop")(lambda: None)  # a group needs two commands to keep their names
+    monkeypatch.setattr(cli, "app", fresh)
+    monkeypatch.setattr(cli, "COMMANDS_DIR", tmp_path / "commands")
+    cli._mount_commands()
+    out = capsys.readouterr().err
+    assert "command 'broken' failed to load: boom" in out and "'neither'" in out
+    assert "neither `command` nor `app`" in out
+    assert runner.invoke(fresh, ["good"]).output == "ran\n"
+    monkeypatch.setattr(cli, "COMMANDS_DIR", tmp_path / "absent")  # e.g. a wheel install without commands/
+    cli._mount_commands()
