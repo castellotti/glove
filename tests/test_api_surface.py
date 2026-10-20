@@ -57,8 +57,10 @@ COMMANDS = {
     "err": "Console",
     "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
     "get_runtime": "(name: 'str')",
+    "glove_home": "() -> 'Path'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "project_name": "(session: 'str') -> 'str'",
+    "remove_rows": "(session_ids: 'set[str]') -> 'int'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
 }
 HARNESS = {

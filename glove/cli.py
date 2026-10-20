@@ -32,7 +32,7 @@ from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
-from .sessionops import console, err, fail, row_state
+from .sessionops import console, err, fail
 
 app = typer.Typer(
     add_completion=False,
@@ -733,37 +733,6 @@ def rm(
     elif sd.state.exists():
         sdm.remove_state(sd)
     console.print(f"[green]✓[/green] removed {what}")
-
-
-@app.command()
-def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> None:
-    """Remove registry rows whose directory is gone (or no longer that session),
-    with their exports under ~/.glove/observe and ~/.glove/control."""
-    try:
-        entries = reg.load_registry()
-    except reg.RegistryError as e:
-        raise fail(str(e)) from e
-    dead = {e.id for e in entries if row_state(e) != "ok"}
-    live = {e.id for e in entries} - dead
-    orphans: list[Path] = []
-    for root in (reg.glove_home() / "observe", reg.glove_home() / "control"):
-        if root.is_dir():
-            # only v3 session ids: anything else there is not glove v3's to remove
-            orphans += [p for p in sorted(root.iterdir())
-                        if p.is_dir() and sdm.ID_RE.match(p.name) and p.name not in live]
-    if not dead and not orphans:
-        console.print("[green]✓[/green] nothing to collect")
-        return
-    for sid in sorted(dead):
-        console.print(f"  registry row {sid}")
-    for p in orphans:
-        console.print(f"  {p}")
-    if not yes and not typer.confirm("Remove these?", default=False):
-        raise typer.Exit(1)
-    for p in orphans:
-        shutil.rmtree(p)
-    reg.remove(dead)
-    console.print(f"[green]✓[/green] removed {len(dead)} row(s), {len(orphans)} export dir(s)")
 
 
 downloads_app = typer.Typer(add_completion=False, help="Files the session's sidecars saved (web_download, …).")
