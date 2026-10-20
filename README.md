@@ -1205,6 +1205,38 @@ profile (like `srt`); the harness starts ~0.1 s slower; the image is
 `<harness image>-srt-<hash>` (srt, bubblewrap and its own Node layered on).
 Refused on podman: its compose provider can't apply the profile.
 
+## Docker Desktop shared folders
+
+Docker Desktop 4.96 serves its shared folders (`/Users`, `/Volumes`, `/private`,
+`/tmp`, `/var/folders`) through `fakeowner`, a layer that reports every file as
+owned by whoever asks, stacked on virtiofs. Landlock never matches a rule for a
+`fakeowner` file, so under the `nono` and `nono+srt` enforcers no command can
+read a bind-mounted `/work` (`Permission denied`; a create leaves a 0-byte file).
+The same folder bound from the virtiofs layer (`/run/host_virtiofs/<path>` in
+Docker Desktop's VM) works.
+
+glove probes this rather than assuming it. A hardened throwaway container
+(`glove/runtimes/landlock_probe.py`, as your uid, no network) restricts itself
+with Landlock on a temp dir under `~/.glove`, bound from its normal path and from
+the virtiofs layer. It then creates, writes, reads, lists, mmaps, locks,
+renames, links and unlinks a file there. It runs the same steps without Landlock
+first, so a plain permission problem is not blamed on Landlock. The result is a
+mode:
+
+| mode | meaning | what glove does |
+|---|---|---|
+| `native` | Landlock works on the normal path (Linux Docker, Podman, a fixed Docker Desktop) | nothing |
+| `virtiofs` | only the virtiofs layer works (Docker Desktop 4.96) | the harness's binds need that layer |
+| `broken` | neither works | `glove up`/`plan` refuse a session whose enforcer runs nono |
+| `unknown` | the engine couldn't be probed, or the control run failed too | nothing refused; `glove check` warns |
+
+The mode is cached in `~/.glove/runtime-cache.json`, keyed by the engine's
+version and kernel (and Docker Desktop's settings file), so an update or a
+settings change probes again; a failure is never cached. `glove check` and
+`glove doctor` probe afresh and report it as `landlock on a bind mount`. If the
+mode is `broken`, `runtime: podman` works: its applehv machine mounts plain
+virtiofs, verified with Landlock ABI 9. No setting lets Landlock skip `/work`.
+
 ## Support matrix
 
 | Component | Option | Status |

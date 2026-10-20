@@ -158,6 +158,23 @@ All notable changes to glove are documented here.
   teardown does); a driver's own `ON_EXIT` (e.g. its Keychain cleanup) still
   runs. `test_observe.sh` no longer reports a kept stack as leftovers.
 
+### Fixed
+
+- **Landlock on Docker Desktop 4.96+'s shared folders.** Docker Desktop now
+  serves `/Users` (and its other shares) through a `fakeowner` layer over
+  virtiofs, and Landlock never matches a rule for a `fakeowner` file: under the
+  `nono`/`nono+srt` enforcer no command could read `/work` (`Permission
+  denied`; a create left a 0-byte file). glove now probes it: a hardened
+  throwaway container (`glove/runtimes/landlock_probe.py`) restricts itself
+  with Landlock on a temp dir bound from its normal path and from the virtiofs
+  layer, and creates, writes, reads, lists, mmaps, locks, renames, links and
+  unlinks there. The mode (`native`, `virtiofs`, `broken`) is cached per engine
+  version and Docker Desktop settings in `~/.glove/runtime-cache.json`. `glove
+  check`/`doctor` report it as `landlock on a bind mount` (`fail` when
+  `broken`), and `glove up`/`plan` refuse a nono session whose mode is
+  `broken`. `throwaway_argv` gains `as_host` (the host user, keep-id on
+  rootless Podman) and `binds` (`--mount`, which refuses a missing source).
+
 ### Added
 
 - **Guardrails for a small core (contributors).** `tests/test_core_budget.py`

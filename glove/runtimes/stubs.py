@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
+from .landlock_mounts import MountMode
 
 if False:  # typing only
     from ..plan import SessionPlan
@@ -36,6 +37,9 @@ class _StubRuntime:
 
     def throwaway_argv(self, image: str, argv: list[str], **kw) -> list[str]:
         raise NotImplementedError(f"runtime {self.name!r} is not implemented yet ({self._desc})")
+
+    def landlock_mounts(self, *, refresh: bool = False) -> MountMode:
+        return MountMode("unknown", f"runtime {self.name!r} is not implemented yet")
 
     def doctor(self) -> list[Check]:
         return [Check(f"runtime {self.name}", "info", f"stub — not implemented ({self._desc})")]

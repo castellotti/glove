@@ -23,6 +23,7 @@ from .harnessconfig import render_home
 from .mounts import make_bind_sources, write_placeholders
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime
+from .runtimes.landlock_mounts import landlock_enforced
 from .sessiondir import SessionDir, SessionError
 from .sessions import list_sessions, match_session, sessions_dir, widening_warnings
 from .userconfig import load_user_config
@@ -183,6 +184,12 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     """Build the plan and write everything the session needs under .glove/
     (policies, placeholders, compose.yml, effective/baseline, the harness home).
     Returns (plan, compose yaml, seeded home files)."""
+    # Before anything is written: a nono session whose Landlock can't open /work is never started.
+    runtime = get_runtime(cfg.runtime)
+    if landlock_enforced(cfg.enforcer) and (mm := runtime.landlock_mounts()).mode == "broken":
+        raise ConfigError(f"Landlock can't open files on a {cfg.runtime} bind mount ({mm.detail}): under "
+                          f"enforcer {cfg.enforcer!r} no command could read /work. Refusing to start; see the "
+                          "README's \"Docker Desktop shared folders\" (e.g. `runtime: podman`).")
     want_resume = resume or session is not None
     prev_cfg = None
     resume_id = session
@@ -232,7 +239,7 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)
     if any(p.host_path is None for p in plan.protect):
         plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
-    rendered = get_runtime(cfg.runtime).render(plan, sd.state, overrides=overrides)
+    rendered = runtime.render(plan, sd.state, overrides=overrides)
     reg.update(sid, grants=plan.composition.grants)
     if plan.model is None:  # unreachable: `inference` is a required slot
         raise ConfigError("no inference provider")
