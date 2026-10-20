@@ -113,7 +113,8 @@ def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail, runs):
     project = session.project_name("s-0a0b0c")
     assert calls[0] == ["podman", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}",
                         "--filter", "label=com.docker.compose.oneoff=True"]
-    assert calls[1:] == ([["podman", "rm", "-f", "abc123", "def456"]] if runs else []) + [
+    assert calls[1:] == ([["podman", "rm", "-fv", "abc123", "def456"]] if runs else []) + [
+        ["podman", "compose", "-p", project, "rm", "-fsv"],  # anonymous volumes go, named ones stay
         ["podman", "compose", "-p", project, "down", "--remove-orphans", *tail]]
 
 

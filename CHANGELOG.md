@@ -62,6 +62,11 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove down` removes the containers' anonymous volumes**, which `compose
+  down` kept, so every `up`/`down` cycle left one more (`compose rm -fsv`
+  first, which stops the services as `down` would); named volumes stay unless
+  `--wipe`. A killed harness run's container and the containers `glove clean`
+  removes take their anonymous volumes with them too (`rm -v`).
 - **`glove skills refresh` asks only what it must.** It lists the relay's
   Keychain secrets first (stored or missing, without reading them; how each
   is refreshed; the env var or file that uses it). Name the ones to refresh

@@ -206,7 +206,7 @@ glove check [DIR] [--no-container] [--offline]   # schema, placeholders, secrets
                                              # (--offline: contact nothing)
 glove plan  [DIR] [--compose] [--resume|--session ID]   # render .glove/, print the grants
 glove up    [DIR] [--resume|-r] [--session ID] [--rebuild]   # runs the extensions' checks first
-glove down  [DIR] [--wipe]                   # --wipe: also volumes + the flow record
+glove down  [DIR] [--wipe]                   # anonymous volumes go; --wipe: also named ones + the flow record
 glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exports + row
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune

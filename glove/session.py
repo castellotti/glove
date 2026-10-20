@@ -429,8 +429,8 @@ def teardown(session: str, *, provider: str, wipe: bool) -> None:
                            "--filter", "label=com.docker.compose.oneoff=True"],
                           capture_output=True, text=True, check=False).stdout.split()
     if runs:
-        subprocess.run([provider, "rm", "-f", *runs], stdout=subprocess.DEVNULL, check=False)
-    cmd = [provider, "compose", "-p", project, "down", "--remove-orphans"]  # services since removed
-    if wipe:
-        cmd.append("--volumes")
-    subprocess.run(cmd, check=False, env=compose_process_env(provider))
+        subprocess.run([provider, "rm", "-fv", *runs], stdout=subprocess.DEVNULL, check=False)
+    # `down` keeps anonymous volumes (each `up` adds more): `rm -fsv` stops the services and removes
+    # them first, named volumes stay; --remove-orphans: services since removed
+    for args in (["rm", "-fsv"], ["down", "--remove-orphans", *(["--volumes"] if wipe else [])]):
+        subprocess.run([provider, "compose", "-p", project, *args], check=False, env=compose_process_env(provider))

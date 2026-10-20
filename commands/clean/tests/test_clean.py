@@ -86,7 +86,7 @@ def test_remove_takes_containers_then_networks_and_volumes_only_when_asked(monke
     monkeypatch.setattr(cli.subprocess, "run", run)
     s = cli.Stack("docker", "a-0a0b0c", {"c1": "exited"}, ["n1", "n2"], ["v1"])
     assert cli.remove(s, volumes=volumes) == ["docker network n2", *(["docker volume v1"] if volumes else [])]
-    assert cmds == [["docker", "rm", "c1"], ["docker", "network", "rm", "n1"], ["docker", "network", "rm", "n2"],
+    assert cmds == [["docker", "rm", "-v", "c1"], ["docker", "network", "rm", "n1"], ["docker", "network", "rm", "n2"],
                     *([["docker", "volume", "rm", "v1"]] if volumes else [])]
 
 

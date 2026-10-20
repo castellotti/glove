@@ -146,8 +146,9 @@ def remove(s: Stack, *, volumes: bool) -> list[str]:
     for kind, names in (("container", list(s.containers)), ("network", s.networks),
                         ("volume", s.volumes if volumes else [])):
         for name in names:
-            # no -f: a container started since it was listed is refused, not killed
-            if not _ok([s.runtime, "rm", name] if kind == "container" else [s.runtime, kind, "rm", name]):
+            # no -f: a container started since it was listed is refused, not killed; -v: its
+            # anonymous volumes (no later container can mount them) go with it, named ones stay
+            if not _ok([s.runtime, "rm", "-v", name] if kind == "container" else [s.runtime, kind, "rm", name]):
                 failed.append(f"{s.runtime} {kind} {name}")
     return failed
 

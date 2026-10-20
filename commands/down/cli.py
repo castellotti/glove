@@ -14,7 +14,8 @@ RANK = 5  # its place in `glove --help` (commands/README.md)
 def command(
     directory: Path | None = DIR_ARG,
     provider: str | None = typer.Option(None),
-    wipe: bool = typer.Option(False, "--wipe", help="also remove volumes and the network-observability record"),
+    wipe: bool = typer.Option(False, "--wipe",
+                              help="also remove named volumes (anonymous ones always go) and the flow record"),
 ) -> None:
     """Stop the session's containers and host services."""
     try:
