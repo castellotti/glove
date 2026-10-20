@@ -82,7 +82,7 @@ def test_a_stale_harness_is_removed_and_a_running_one_refused(monkeypatch, inspe
     else:
         session_mod.clear_stale_harness("docker", "glove-s-harness")
     assert calls[0] == ["docker", "container", "inspect", "-f", "{{.State.Running}}", "glove-s-harness"]
-    assert calls[1:] == ([["docker", "rm", "-f", "glove-s-harness"]] if removed else [])
+    assert calls[1:] == ([["docker", "rm", "-fv", "glove-s-harness"]] if removed else [])
 
 
 def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):

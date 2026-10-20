@@ -237,7 +237,7 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
     except subprocess.CalledProcessError:
         # never leave a half-started egress stack behind (fail closed)
         console.print("[bold red]starting the sidecars failed — stopping the session's sidecars.[/bold red]")
-        subprocess.run([*base, "down"], env=env, capture_output=True)
+        teardown(plan.session, provider=provider, wipe=False)  # its anonymous volumes too
         taken = _subnet_taken(provider, plan)
         if taken:
             raise SubnetTaken(f"another network took this session's subnet meanwhile: {taken}") from None
@@ -254,7 +254,7 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
             console.print(f"[dim]--- last log lines of {name} (key/password lines withheld):[/dim]")
             console.print(redact_log(logs.stdout + logs.stderr)[-3000:], markup=False)
         console.print("[bold red]verify failed — stopping the session's sidecars (fail closed).[/bold red]")
-        subprocess.run([*base, "down"], env=env, capture_output=True)
+        teardown(plan.session, provider=provider, wipe=False)  # its anonymous volumes too
         raise
 
 
@@ -303,7 +303,7 @@ def clear_stale_harness(provider: str, name: str) -> None:
     if state.stdout.strip() == "true":
         raise ConfigError(f"this session's harness is already running ({name}); "
                           "use that terminal, or `glove down` first")
-    subprocess.run([provider, "rm", "-f", name], stdout=subprocess.DEVNULL, check=False)
+    subprocess.run([provider, "rm", "-fv", name], stdout=subprocess.DEVNULL, check=False)
 
 
 # curl exit codes that mean "nothing answers yet", and fail fast: 6 (the name

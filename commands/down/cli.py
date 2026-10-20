@@ -15,7 +15,7 @@ def command(
     directory: Path | None = DIR_ARG,
     provider: str | None = typer.Option(None),
     wipe: bool = typer.Option(False, "--wipe",
-                              help="also remove named volumes (anonymous ones always go) and the flow record"),
+                              help="also remove named volumes (anonymous ones always go) and the netobs record"),
 ) -> None:
     """Stop the session's containers and host services."""
     try:
