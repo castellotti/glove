@@ -23,6 +23,8 @@ from glove.api.commands import (
     stop,
 )
 
+RANK = 6  # its place in `glove --help` (commands/README.md)
+
 
 def _remove_exports(sid: str) -> list[Path]:
     gone = []

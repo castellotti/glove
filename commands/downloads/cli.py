@@ -16,6 +16,8 @@ from glove.api.commands import (
     quarantine_supported,
 )
 
+RANK = 11  # its place in `glove --help` (commands/README.md)
+
 app = typer.Typer(add_completion=False, help="Files the session's sidecars saved (web_download, …).")
 
 

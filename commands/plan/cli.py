@@ -23,6 +23,8 @@ from glove.api.commands import (
     read_effective,
 )
 
+RANK = 2  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     directory: Path | None = DIR_ARG,

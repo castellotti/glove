@@ -42,6 +42,8 @@ from glove.api.commands import (
     write_effective,
 )
 
+RANK = 3  # its place in `glove --help` (commands/README.md)
+
 # `glove up` tries this many subnets when other sessions' networks keep taking
 # the one it picked (see SubnetTaken).
 SUBNET_ATTEMPTS = 3

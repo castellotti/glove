@@ -9,6 +9,8 @@ from rich.syntax import Syntax
 from glove.api import ConfigError
 from glove.api.commands import DIR_ARG, build_session_plan, console, fail, get_enforcer, open_session, print_extensions
 
+RANK = 15  # its place in `glove --help` (commands/README.md)
+
 
 def command(directory: Path | None = DIR_ARG) -> None:
     """Print the rendered ring-1 policies and the ring-0 hardening for review."""

@@ -8,6 +8,8 @@ import typer
 
 from glove.api.commands import console, default_enforcer, fail, known_runtimes, print_checks, run_doctor, worst_status
 
+RANK = 14  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),

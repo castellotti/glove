@@ -37,6 +37,10 @@ def test_help_lists_every_command():
     assert len(names) == 17
     for name in names:
         assert f" {name} " in out, name
+    # workflow order (each command's RANK); Typer lists the groups after the commands
+    shown = [line.split()[1] for line in out.splitlines() if line.startswith("│ ") and line[2:3].isalpha()]
+    assert shown[:17] == ["new", "plan", "up", "check", "down", "rm", "ls", "ps", "gc", "clean", "build", "doctor",
+                          "policy", "ext", "version", "downloads", "keychain"]
 
 
 # --- secrets ------------------------------------------------------------------------------

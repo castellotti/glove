@@ -9,6 +9,8 @@ import typer
 from glove.api import ConfigError, keychain_set
 from glove.api.commands import console, fail
 
+RANK = 12  # its place in `glove --help` (commands/README.md)
+
 app = typer.Typer(add_completion=False, help="Secrets in the macOS Keychain (referenced as keychain:<service>).")
 
 

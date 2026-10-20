@@ -8,6 +8,8 @@ import typer
 
 from glove.api.commands import DIR_ARG, SessionError, fail, find_session, stop
 
+RANK = 5  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     directory: Path | None = DIR_ARG,

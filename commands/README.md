@@ -6,7 +6,8 @@ extensions (`extensions/`, which add capabilities to sessions) and the harnesses
 
 - `commands/<name>/cli.py` exports either `command` (a function, mounted as
   `glove <name>`; its docstring is the help) or `app` (a `typer.Typer`, mounted
-  as the group `glove <name> …`).
+  as the group `glove <name> …`). Its `RANK` (an int; default 100) places it
+  in `glove --help`, in workflow order.
 - From core, a command imports only `glove.api` and `glove.api.commands` (the
   session machinery more than one command shares). It imports no extension
   and no other command. `tests/test_layering.py` enforces this, and

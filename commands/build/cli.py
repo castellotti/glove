@@ -6,6 +6,8 @@ import typer
 
 from glove.api.commands import autodetect_provider, build_forwarder, build_harness, get_profile, known_harnesses
 
+RANK = 13  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     harness: str | None = typer.Argument(

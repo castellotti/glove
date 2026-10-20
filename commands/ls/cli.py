@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from glove.api.commands import RegistryError, console, fail, load_registry, row_state
 
+RANK = 7  # its place in `glove --help` (commands/README.md)
+
 
 def command() -> None:
     """Registered sessions: id, harness, template, state, directory."""

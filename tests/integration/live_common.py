@@ -13,6 +13,7 @@ printed); a failed start ends the driver with its summary. Teardown is
 from __future__ import annotations
 
 import fnmatch
+import importlib
 import json
 import os
 import re
@@ -28,9 +29,9 @@ from pathlib import Path
 import yaml
 from ptyio import Tui
 
+import glove.cli  # noqa: F401  (mounts the commands)
 from extensions.observe.netview import read_records
 from glove import registry
-from glove.cli import COMMANDS_DIR
 from glove.enforcers.base import SECRET_DENY_VARS
 from glove.extensions import load_module
 from glove.plan import SessionPlan, secret_env
@@ -38,8 +39,8 @@ from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
 from glove.sessionops import materialize_plan, open_session
 
-# `glove up`'s own steps (commands/up/cli.py)
-_up = load_module(COMMANDS_DIR / "up" / "cli.py", "up", ns="glove_cmd")
+# `glove up`'s own steps: the commands/up/cli.py glove.cli mounted (load_module would make a second copy)
+_up = importlib.import_module("glove_cmd.up.cli")
 preflight, prepare_harness = _up.preflight, _up.prepare_harness
 
 RESULTS: list[bool] = []

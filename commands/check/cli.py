@@ -28,6 +28,8 @@ from glove.api.commands import (
     template_drift,
 )
 
+RANK = 4  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     directory: Path | None = DIR_ARG,

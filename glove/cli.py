@@ -58,21 +58,21 @@ COMMANDS_DIR = Path(__file__).resolve().parent.parent / "commands"
 
 
 def _mount_commands() -> None:
-    """Mount each in-tree command: its `cli.py`'s `command` (a function) as
-    `glove <name>`, or its `app` (a Typer) as the group `glove <name> …`.
-    Commands import only glove.api(.commands); core loads them by path. One that
-    fails to load is reported, and the others still work."""
+    """Mount each in-tree command (`commands/<name>/cli.py`, loaded by path): its
+    `command` (a function) as `glove <name>`, or its `app` (a Typer) as the group
+    `glove <name> …`, in `--help` order (its RANK, then its name). One that fails
+    to load is reported; the others still work."""
     from rich.markup import escape
 
     from .extensions import load_module
 
-    found = sorted(p for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file()) if COMMANDS_DIR.is_dir() else []
-    for d in found:
+    loaded = []
+    for d in (p for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file()) if COMMANDS_DIR.is_dir() else ():
         try:
-            m = load_module(d / "cli.py", d.name, ns="glove_cmd")
+            loaded.append((d, load_module(d / "cli.py", d.name, ns="glove_cmd")))
         except Exception as e:
             err.print(f"[yellow]warn:[/yellow] command {d.name!r} failed to load: {escape(str(e))}")
-            continue
+    for d, m in sorted(loaded, key=lambda dm: (getattr(dm[1], "RANK", 100), dm[0].name)):
         if callable(getattr(m, "command", None)):
             app.command(d.name)(m.command)
         elif isinstance(getattr(m, "app", None), typer.Typer):

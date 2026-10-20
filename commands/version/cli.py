@@ -6,6 +6,8 @@ from rich.console import Console
 
 from glove.api.commands import VERSION
 
+RANK = 17  # its place in `glove --help` (commands/README.md)
+
 
 def command() -> None:
     """Print the glove version."""

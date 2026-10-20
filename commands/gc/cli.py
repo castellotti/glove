@@ -9,6 +9,8 @@ import typer
 
 from glove.api.commands import ID_RE, RegistryError, console, fail, glove_home, load_registry, remove_rows, row_state
 
+RANK = 9  # its place in `glove --help` (commands/README.md)
+
 
 def command(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> None:
     """Remove registry rows whose directory is gone (or no longer that session),

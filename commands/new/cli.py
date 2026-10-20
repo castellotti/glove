@@ -22,6 +22,8 @@ from glove.api.commands import (
     template_drift,
 )
 
+RANK = 1  # its place in `glove --help` (commands/README.md)
+
 
 def command(
     template: str = typer.Argument(..., help="bundled template name, a path, or a git URL"),

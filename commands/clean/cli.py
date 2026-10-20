@@ -24,6 +24,8 @@ import typer
 
 from glove.api.commands import ID_RE, RegistryError, console, err, fail, load_registry, project_name, row_state
 
+RANK = 10  # its place in `glove --help` (commands/README.md)
+
 PROJECT_LABEL = "com.docker.compose.project"
 RUNTIMES = ("docker", "podman")
 STOPPED = frozenset({"exited", "dead"})

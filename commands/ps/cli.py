@@ -6,6 +6,8 @@ import typer
 
 from glove.api.commands import RegistryError, autodetect_provider, console, get_runtime, load_registry
 
+RANK = 8  # its place in `glove --help` (commands/README.md)
+
 
 def command(runtime: str | None = typer.Option(None, "--runtime", help="docker | podman")) -> None:
     """Running glove sessions (compose projects) and their directories."""
