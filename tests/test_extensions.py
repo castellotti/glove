@@ -251,6 +251,59 @@ def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     assert doc["services"]["glove-s-worker"]["cap_add"] == ["NET_ADMIN"]
 
 
+def test_a_writable_extension_paths_dir_is_skipped_with_a_warning(tmp_path, ghome, capsys):
+    from glove import extensions as ext
+
+    parent = tmp_path / "shared"
+    oot = parent / "oot"
+    d = _svc_ext(oot, "sharedish")
+    (d / "lib").mkdir()
+    (d / "lib" / "helper.py").write_text("")
+    ghome.mkdir(parents=True, exist_ok=True)
+    (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\n")
+    assert "sharedish" in discover()
+    # a non-private group (staff, users) counts as other users; a sticky ancestor (/tmp) does not
+    for target, mode, why in ((parent, 0o777, "writable by other users"), (oot, 0o777, "writable by other users"),
+                              (d, 0o775, "writable by other users"), (d / "extension.yml", 0o666, "writable"),
+                              (d / "lib" / "helper.py", 0o662, "writable"), (d / "lib", 0o000, "unreadable"),
+                              (parent, 0o1777, None)):
+        old = target.stat().st_mode
+        target.chmod(mode)
+        try:
+            ext._warn.cache_clear()
+            assert ("sharedish" in discover()) is (why is None)
+            discover()  # warned once per process
+            warned = capsys.readouterr().err
+            if why:
+                assert warned.count("is skipped") == 1 and f"is skipped: {target.resolve()} is {why}" in warned
+        finally:
+            target.chmod(old)
+    assert "sharedish" in discover()
+
+
+@pytest.mark.parametrize("key", ["cli", "hooks"])
+@pytest.mark.parametrize("path", ["../elsewhere.py", "/tmp/x.py"])
+def test_code_loads_only_from_the_extensions_own_directory(tmp_path, ghome, key, path):
+    _ext(tmp_path / "oot", "leaky", f"api: 2\nname: leaky\nsummary: x\n{key}: {path}\n")
+    ghome.mkdir(parents=True, exist_ok=True)
+    (ghome / "config.yml").write_text(f"extension_paths: [{tmp_path / 'oot'}]\n")
+    with pytest.raises(ExtensionError, match=f"`{key}` must be a file in the extension's directory"):
+        discover()
+
+
+def test_composition_never_imports_an_unselected_extensions_hooks(tmp_path, ghome):
+    from glove.doctor import extension_checks
+
+    marker = tmp_path / "marker"
+    _ext(tmp_path / "oot", "planted", "api: 2\nname: planted\nsummary: plants a marker\nhooks: hooks.py\n",
+         {"hooks.py": f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"})
+    ghome.mkdir(parents=True, exist_ok=True)
+    (ghome / "config.yml").write_text(f"extension_paths: [{tmp_path / 'oot'}]\ntrusted_extensions: [planted]\n")
+    _render_with(tmp_path / "s", {"direct": {}})
+    assert extension_checks({"llm": STUB_LLM, "direct": {}}, harness="pi")[0].status == "ok"
+    assert not marker.exists()
+
+
 def _render_with(tmp_path, extensions, **kw):
     tmp_path.mkdir(parents=True, exist_ok=True)
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=extensions)

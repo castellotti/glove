@@ -109,7 +109,10 @@ def run_teardown(sd: sdm.SessionDir, sid: str, runtime: str, given: Mapping[str,
         return [f"teardown hooks skipped: {e}"]
     warnings = []
     for name, raw in given.items():
-        if (m := found.get(name)) is None or m.hooks_path is None:
+        if (m := found.get(name)) is None:  # gone, or skipped as writable by others: what it started stays
+            warnings.append(f"extension {name!r}: not found, so its teardown hook did not run")
+            continue
+        if m.hooks_path is None:
             continue
         try:
             s = _session(sd, sid, runtime, m, raw)

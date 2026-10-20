@@ -150,6 +150,23 @@ Every capability (the model, search, the browser, …) is an extension in
   privilege exceptions or host ports unless trusted. A session file can't run
   host commands (`host_services:` is gone); an extension's hooks are host
   Python with your rights, which only the extension's trust contains.
+- **An extension's code runs only when a session selects it or you invoke its
+  CLI; an untrusted out-of-tree extension's CLI never runs.** `glove --help`
+  and `glove ext` list CLIs from the manifests (YAML) alone; `glove <name> …`
+  imports that one `cli.py`, and refuses an untrusted out-of-tree one with how
+  to trust it. Hooks (`hooks.py`) load only for the extensions a session
+  selects (plan, check, up, and `down`'s teardown for the last launch's set),
+  and `call_hook` refuses any other. An extension's CLI acting on a session
+  refuses one that doesn't select it (`ext_session`).
+- **`extension_paths` hygiene.** As ssh treats `~/.ssh`, an entry is skipped
+  with a warning when another user could plant code glove runs: the entry or
+  one of its ancestors (unless sticky, like `/tmp`), or anything in an
+  extension's directory (all of it, symlinks followed), is owned by someone
+  other than you or root, or writable by other users. Group-write counts as
+  other users unless the group is your private one (named after you, no other
+  members), as OpenSSH allows. A manifest's `cli` and `hooks` must name files
+  in the extension's own directory. Not covered: macOS ACLs (`ls -le`), and
+  `sudo glove` (root skips your extensions as another user's).
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
 - **Export roots** are the only session data outside the session directory, and
   core owns them: `~/.glove/observe/<id>/` exists only for the in-tree
@@ -159,7 +176,9 @@ Every capability (the model, search, the browser, …) is an extension in
 - **The forwarder slot.** An extension filling `forwarder` (observe) may replace
   the socat forwarders, but only with services core names, networks and
   hardens: its hook cannot choose networks, aliases outside the endpoint's own
-  name, security keys or privileges.
+  name, security keys or privileges. Filling the slot is itself a privilege
+  (its service sits on every endpoint's traffic): an untrusted out-of-tree
+  provider is refused before its hooks load.
 - **Names rendered into compose.** An extension's harness env keys (from its
   manifest or a `contribute` hook) must match `^[A-Z][A-Z0-9_]*$` and may not
   overwrite another extension's; endpoint and forwarder aliases must be

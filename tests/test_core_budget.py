@@ -6,7 +6,7 @@ from pathlib import Path
 
 CORE = Path(__file__).resolve().parent.parent / "glove"
 
-CORE_BUDGET = 9_531  # physical lines of glove/**/*.py; CLAUDE.md P2
+CORE_BUDGET = 9_638  # physical lines of glove/**/*.py; CLAUDE.md P2
 SLACK = 50  # how far core may shrink before the budget must follow it down
 # Scripts glove runs inside a container and never imports: data, not core.
 DATA = frozenset({"runtimes/landlock_probe.py"})

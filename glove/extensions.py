@@ -23,10 +23,15 @@ an export root). No other host path reaches a template.
 from __future__ import annotations
 
 import copy
+import functools
+import grp
 import importlib.util
 import ipaddress
+import os
+import pwd
 import re
 import secrets as pysecrets
+import stat
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -140,6 +145,9 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
         raise ExtensionError(f"extension {name!r}: unknown slot(s) {bad_slots} (known: {sorted(SLOTS)})")
     for key, spec in (raw.get("settings") or {}).items():
         _check_setting_spec(name, key, spec)
+    for key in ("cli", "hooks"):  # code glove imports: only from the extension's own directory
+        if raw.get(key) and not (directory / raw[key]).resolve().is_relative_to(directory.resolve()):
+            raise ExtensionError(f"{f}: `{key}` must be a file in the extension's directory, got {raw[key]!r}")
     return Manifest(name=name, path=directory.resolve(), raw=raw, out_of_tree=out_of_tree,
                     trusted=(not out_of_tree) or name in trusted)
 
@@ -153,6 +161,62 @@ def _candidate_dirs(root: Path) -> list[Path]:
     return sorted(p for p in root.iterdir() if (p / MANIFEST).is_file())
 
 
+@functools.cache
+def _warn(msg: str) -> None:  # once per process
+    print(f"warn: {msg}", file=sys.stderr)
+
+
+def _private_group(gid: int) -> bool:
+    """A user-private group (named after you, no other members), as OpenSSH accepts."""
+    try:
+        g, me = grp.getgrgid(gid), pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return False
+    return g.gr_name == me and set(g.gr_mem) <= {me}
+
+
+def _foreign(st: os.stat_result, *, ancestor: bool = False) -> str | None:
+    """Why another user could change this file or directory (None: only you or root)."""
+    if st.st_uid not in (0, os.getuid()):
+        return f"owned by uid {st.st_uid}"
+    if (st.st_mode & 0o002 or (st.st_mode & 0o020 and not _private_group(st.st_gid))) and not (
+            ancestor and st.st_mode & stat.S_ISVTX):  # a sticky ancestor (/tmp) keeps its entries yours
+        return "writable by other users"
+    return None
+
+
+def _tree(d: Path):
+    """`d` and everything under it, symlinks followed (each target once)."""
+    seen, todo = set(), [d]
+    while todo:
+        p = todo.pop()
+        st = p.stat()
+        if (st.st_dev, st.st_ino) not in seen:
+            seen.add((st.st_dev, st.st_ino))
+            yield p, st
+            if stat.S_ISDIR(st.st_mode):
+                todo.extend(p.iterdir())
+
+
+def _safe(d: Path, what: str, *, walk: bool) -> bool:
+    """Whether only you (or root) can change what glove would load from `d`, as
+    ssh asks of ~/.ssh; else another local user could plant code glove runs, so
+    it is skipped with a warning. `walk`: an extension's directory, all of it;
+    else an `extension_paths` entry, itself and its ancestors."""
+    if not d.is_dir():
+        return True
+    try:
+        r = d.resolve()
+        found = ((p, _foreign(st)) for p, st in _tree(r)) if walk else (
+            (p, _foreign(p.stat(), ancestor=p != r)) for p in (r, *r.parents))
+        bad = next(((p, f"{why} (`chmod go-w` it, or own it)") for p, why in found if why), None)
+    except OSError as e:
+        bad = (e.filename or d, f"unreadable ({e.strerror})")
+    if bad:
+        _warn(f"{what} {d} is skipped: {bad[0]} is {bad[1]}")
+    return bad is None
+
+
 def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
     """Every loadable manifest: in-tree first, then `extension_paths`."""
     user = load_user_config()
@@ -162,7 +226,10 @@ def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
         m = _load_manifest(d, out_of_tree=False, trusted=trusted)
         found[m.name] = m
     for root in user.extension_paths:
-        for d in _candidate_dirs(Path(root).expanduser()):
+        root = Path(root).expanduser()
+        for d in _candidate_dirs(root) if _safe(root, "the `extension_paths` entry", walk=False) else ():
+            if not _safe(d, "the extension directory", walk=True):
+                continue
             m = _load_manifest(d, out_of_tree=True, trusted=trusted)
             if m.name in found:
                 raise ExtensionError(
@@ -1190,7 +1257,7 @@ _SHARED = ("harness", "session", "names", "slot", "endpoint", "own_endpoints", "
 def hook_context(comp: Composition, a: Active) -> HookContext:
     """`a`'s hook context: see `HookContext`."""
     t = base_context(comp, a)
-    forwarder = comp.slots.get("forwarder") is a and a.manifest.trusted
+    forwarder = comp.slots.get("forwarder") is a  # trusted: compose checked
     return HookContext(
         name=a.name, settings=a.settings, renders=t["renders"], trusted=a.manifest.trusted,
         active=[x.name for x in comp.active], state_dir=comp.state_dir(a.name), assets=a.manifest.path,
@@ -1253,6 +1320,8 @@ def compose(
                            normalized_options({}) if enforcer_options is None else enforcer_options).items()},
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
+        if "forwarder" in a.manifest.provides:  # it sits on every endpoint's traffic
+            require_trust(a, f"extension {a.name!r}: the forwarder slot")
         if a.manifest.hooks_path:
             a.hooks = hooks_of(load_module(a.manifest.hooks_path, a.name), a.name)
         # Slot exports are visible to later extensions (topological order).

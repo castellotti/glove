@@ -677,6 +677,9 @@ and an extension's CLI).
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
+  An untrusted one's CLI never runs, and an `extension_paths` directory others
+  can write is skipped. An extension's code runs only when a session selects
+  it or you invoke its CLI (`glove <name> …`).
 
 `llm` is the inference engine, picked like a gluetun VPN provider: `provider:`
 names a catalog entry (`extensions/llm/providers/*.yml`). `location:` routes it:

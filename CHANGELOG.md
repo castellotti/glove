@@ -4,6 +4,32 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Only selected (and trusted) extension code runs** (round 18 A). Every
+  `glove` run used to import every discoverable extension's `cli.py`,
+  untrusted out-of-tree ones included. Now:
+  - `glove --help` lists extension CLIs from their manifests alone, and
+    `glove <name> …` imports only that `cli.py`;
+  - an untrusted out-of-tree extension's CLI never loads: `glove <name>` says
+    to list it under `trusted_extensions`;
+  - hooks load only for the extensions a session selects (unchanged, now
+    tested), and `glove ls`/`version`/`ext`/`--help` import no extension
+    module;
+  - an `extension_paths` entry another user could write (it, a non-sticky
+    ancestor, or anything in an extension's directory; group-write counts
+    unless the group is your private one) is skipped with a warning, and a
+    manifest's `cli`/`hooks` must name files in the extension's directory;
+  - `glove <typo>` suggests extension CLIs too, and names a discovery error
+    (e.g. a malformed `config.yml`) when an extension CLI is missing; `glove
+    ext` marks an untrusted CLI refused; `glove down` warns when an
+    extension the session used is gone, so its teardown hook did not run;
+  - `docs/SECURITY.md` states the guarantee.
+- **Providing the `forwarder` slot is a privilege** (R15.F): an untrusted
+  out-of-tree extension that provides it is refused before its hooks load
+  (before, it could fill the slot and sit on every endpoint's traffic, only
+  hidden the forwarder list and grants).
+
 ### Added
 
 - **`glove playwright solve`** (`playwright: {challenge_capture: {to:

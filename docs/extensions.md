@@ -28,7 +28,9 @@ a session. This document is the contract an extension author codes against.
 - **Out-of-tree:** from `extension_paths:` in `~/.glove/config.yml`, each
   entry an extension's directory or a directory of them. These are labelled
   *out-of-tree* (`glove ext`, `glove plan`), and none may reuse another's
-  name.
+  name. An entry another user could write (it, an ancestor, or anything in an
+  extension's directory) is skipped with a warning (`docs/SECURITY.md`), and
+  `cli`/`hooks` must name files in the extension's own directory.
 - **Trusted:** an out-of-tree extension the user also lists under
   `trusted_extensions:`. Only an in-tree or trusted extension may use the keys
   marked *trust* below, and only its hooks see host paths.
@@ -253,7 +255,10 @@ Harness adapters (in-tree only) also import `glove.api.harness`.
 
 ## An extension's CLI
 
-`cli.py` exports `app`, a `typer.Typer`. glove mounts it as `glove <name> …`.
+`cli.py` exports `app`, a `typer.Typer`. glove mounts it as `glove <name> …`:
+`glove --help` lists it with the manifest's `summary`, and `cli.py` is imported
+only when `glove <name> …` runs (never for another command). An untrusted
+out-of-tree extension's CLI never loads: `glove <name>` says how to trust it.
 It finds its session with `ext_session`:
 
 ```python
