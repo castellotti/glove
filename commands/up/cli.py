@@ -27,7 +27,6 @@ from glove.api.commands import (
     fail,
     harness_model,
     launch,
-    load_session_file,
     materialize_plan,
     now,
     one_resume,
@@ -100,8 +99,8 @@ def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
     """(session dir, id, Config, plan) for `glove up`, the harness home left for
     prepare_harness (it needs the resolved model)."""
     try:
-        sd, _, sid, cfg = open_session(directory, check_runtime=True)
-        todo = placeholders_left(load_session_file(sd))
+        sd, raw, sid, cfg = open_session(directory, check_runtime=True)
+        todo = placeholders_left(raw)
         if todo:
             raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {PLACEHOLDER})")
         if cfg.runtime not in ("docker", "podman"):

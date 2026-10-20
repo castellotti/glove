@@ -47,11 +47,12 @@ def command(
         ensure_home()
         load_registry()  # refuse early on a v2 registry, before writing the directory
         sd, sid = materialize_session(template, directory)
-        sync_registry(sd, sid, load_session_file(sd))
+        raw = load_session_file(sd)
+        sync_registry(sd, sid, raw)
     except (SessionError, RegistryError) as e:
         raise fail(str(e)) from e
     console.print(f"[green]✓[/green] session [bold]{sid}[/bold] from template [cyan]{template}[/cyan] at {sd.root}")
-    todo = placeholders_left(load_session_file(sd))
+    todo = placeholders_left(raw)
     if todo:
         console.print(f"  set these in [cyan]{sd.file}[/cyan]: {', '.join(todo)}")
     cd = "" if sd.root == Path.cwd().resolve() else f"cd {sd.root} && "

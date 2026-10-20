@@ -7,18 +7,13 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import make_session, session_id
+from helpers import lan_llm, make_session, session_id
 from typer.testing import CliRunner
 
 from glove import registry as reg
 from glove.cli import app
 
 runner = CliRunner()
-
-
-def _lan(extra: str = "") -> str:
-    return "{provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m" + extra + "}"
-
 
 
 def _seed_transcript(d: Path, uuid="01a09d62"):
@@ -174,7 +169,7 @@ def test_resume_grant_widening_warns_against_the_baseline(home, tmp_path):
 def test_the_llm_key_is_written_nowhere(home, tmp_path, monkeypatch, harness):
     secret = "sk-test-0123456789abcdef"
     monkeypatch.setenv("MY_LLM_KEY", secret)
-    d = make_session(tmp_path / "s", harness=harness, llm=_lan(", api_key: env:MY_LLM_KEY"))
+    d = make_session(tmp_path / "s", harness=harness, llm=lan_llm(", api_key: env:MY_LLM_KEY"))
     result = runner.invoke(app, ["plan", str(d), "--compose"])
     assert result.exit_code == 0, result.output
     assert secret not in result.output
@@ -191,7 +186,7 @@ def test_the_llm_key_is_written_nowhere(home, tmp_path, monkeypatch, harness):
 
 
 def test_a_literal_key_is_refused(home, tmp_path):
-    d = make_session(tmp_path / "s", llm=_lan(", api_key: sk-literal-key"))
+    d = make_session(tmp_path / "s", llm=lan_llm(", api_key: sk-literal-key"))
     result = runner.invoke(app, ["plan", str(d)])
     assert result.exit_code == 1 and "llm.api_key is a secret: use a reference" in result.output
     assert "sk-literal-key" not in result.output
@@ -205,7 +200,7 @@ def test_plan_never_resolves_a_keychain_reference(home, tmp_path, monkeypatch):
         raise AssertionError("planning must not resolve the key")
 
     monkeypatch.setattr(config_mod, "resolve_secret", boom)
-    d = make_session(tmp_path / "s", llm=_lan(", api_key: keychain:my-llm"))
+    d = make_session(tmp_path / "s", llm=lan_llm(", api_key: keychain:my-llm"))
     assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
 
 

@@ -8,16 +8,24 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
-from . import quarantine
+from . import exports, quarantine
 from . import registry as reg
+from . import session as _session
 from . import sessiondir as sdm
 from .config import ConfigError
-from .harness import adapter_call
+from .doctor import worst_status
+from .extensions import materialize
+from .extsession import run_teardown
+from .harness import adapter_call, get_profile
 from .harnessconfig import render_home
+from .mounts import make_bind_sources, write_placeholders
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime
 from .sessiondir import SessionDir, SessionError
+from .sessions import list_sessions, match_session, sessions_dir, widening_warnings
+from .userconfig import load_user_config
 
 console = Console()
 err = Console(stderr=True)
@@ -55,10 +63,6 @@ def mark_downloads(sd: SessionDir) -> quarantine.Marked | None:
 
 def print_checks(title: str, checks: list) -> None:
     """Print `glove check`/`glove doctor` results; exit 1 if any failed."""
-    from rich.markup import escape
-
-    from .doctor import worst_status
-
     glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
              "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
     console.print(f"{title}\n")
@@ -79,9 +83,7 @@ def now() -> str:
 
 def _foreign_subnets(raw: dict, sid: str) -> set[str]:
     """Subnets of the runtime's existing networks that are not this session's."""
-    from .session import foreign_networks
-
-    return {x for subnets in foreign_networks(raw.get("runtime") or "docker", sid).values() for x in subnets}
+    return {x for subnets in _session.foreign_networks(raw.get("runtime") or "docker", sid).values() for x in subnets}
 
 
 def sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = False) -> reg.SessionEntry:
@@ -93,9 +95,6 @@ def sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = 
     A directory copied with its ``.glove/`` carries the original's id; two live
     directories with one id would share compose projects and exports, so that
     is refused rather than guessed at."""
-
-    from .userconfig import load_user_config
-
     root = str(sd.root)
     ensure_home()
     # Asking the runtime can be slow: not under the lock (except a first allocation).
@@ -130,8 +129,6 @@ def sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = 
 
 def open_session(dir_arg: Path | None, *, register: bool = True, check_runtime: bool = False):
     """(session dir, raw file, id, Config) — the session at ``dir_arg``."""
-    from .userconfig import load_user_config
-
     sd = sdm.find(dir_arg)
     raw = sdm.load_file(sd)
     if register:
@@ -182,8 +179,7 @@ def print_extensions(plan) -> None:
 
 
 def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
-                      home: bool = True,
-                      overrides: frozenset[str] = frozenset()):
+                      home: bool = True, overrides: frozenset[str] = frozenset()):
     """Build the plan and write everything the session needs under .glove/
     (policies, placeholders, compose.yml, effective/baseline, the harness home).
     Returns (plan, compose yaml, seeded home files)."""
@@ -191,8 +187,6 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     prev_cfg = None
     resume_id = session
     if want_resume:
-        from .harness import get_profile
-
         ref = _validate_resume(get_profile(cfg.harness), sd.home, session, sid)
         if ref is not None:
             resume_id = ref.id
@@ -208,8 +202,6 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
             err.print(f"[yellow]⚠ work/{o.name}/ has files that /work/{o.name} no longer shows: it is now "
                       f"{o.host}; move them there[/yellow]")
     if prev_cfg is not None:
-        from .sessions import widening_warnings
-
         widened = widening_warnings(prev_cfg, cfg)
         if widened:
             err.print("[yellow]⚠ resuming with broader access than the original session; prior "
@@ -219,16 +211,12 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     ensure_home()
     # Export roots (observe/<id>, control/<id>) and the grants they carry:
     # created for the active owners, control/<id> revoked when filter is gone.
-    from . import exports
-
     row = next((e for e in reg.load_registry() if e.id == sid), None)
     plan.composition.grants = exports.grants(plan.composition, row.grants if row else None)
     for note in exports.prepare(plan.composition, sd.ext):
         err.print(f"[yellow]{note}[/yellow]")
     # Extension state (e.g. SearXNG's settings) under .glove/ext/<name>/, and
     # what export-root owners write there (observe: net/session.json).
-    from .extensions import materialize
-
     materialize(plan.composition)
     # Ring-1 policies are written before render so the read-only bind source
     # exists; they live in .glove/, never inside /work, never agent-writable.
@@ -238,15 +226,11 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
         plan.policies_host_dir = str(enforcer_dir)
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
-    from .mounts import make_bind_sources
-
     write_system_files(plan, sd.state / "harness")
     # a pinned dir, the config home or a file protected in it, or a tmpfs mount
     # point under the read-only home may not exist yet
     make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)
     if any(p.host_path is None for p in plan.protect):
-        from .mounts import write_placeholders
-
         plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
     rendered = get_runtime(cfg.runtime).render(plan, sd.state, overrides=overrides)
     reg.update(sid, grants=plan.composition.grants)
@@ -287,8 +271,6 @@ def _validate_resume(profile, home_dir: Path, session_id: str | None, sid: str):
     can hand the harness its canonical id). `--resume` (continue-last) returns
     None: glove only confirms *some* transcript exists — the harness makes the
     final choice of which conversation to continue."""
-    from .sessions import match_session
-
     refs = conversations(profile, home_dir, sid)
     if not refs:
         raise ConfigError(f"no previous conversation to resume in session {sid!r}; run `glove up` without "
@@ -309,25 +291,19 @@ def _fmt_mtime(mtime: float) -> str:
 def conversations(profile, home_dir: Path, sid: str):
     """Transcripts in the harness home, plus observe's transcripts export (where
     they are written while `transcripts: true`), newest first."""
-    from .exports import export_dirs
-    from .sessions import list_sessions, sessions_dir
-
     dirs = [sessions_dir(profile, Path(home_dir))]
     if profile.transcript_subdir == profile.sessions_subdir:
-        dirs.append(export_dirs(sid)["observe"] / "transcripts")
+        dirs.append(reg.observe_dir(sid) / "transcripts")
     refs = [r for d in dirs if d.is_dir() for r in list_sessions(d)]
     return sorted(refs, key=lambda r: r.mtime, reverse=True)
 
 
 def stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
-    from .extsession import run_teardown
-    from .session import teardown
-
     cfg, _ = sdm.read_effective(sd.effective)
     provider = provider or sdm.session_provider(sd, cfg)
     for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
         err.print(f"[yellow]warn:[/yellow] {w}")
-    teardown(sid, provider=provider, wipe=wipe)
+    _session.teardown(sid, provider=provider, wipe=wipe)
     if mark:
         mark_downloads(sd)
     if wipe:

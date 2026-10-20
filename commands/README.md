@@ -14,8 +14,8 @@ extensions (`extensions/`, which add capabilities to sessions) and the harnesses
   `tests/test_api_surface.py` pins both APIs.
 - Core loads commands by path (`glove/cli.py` `_mount_commands`) and never
   imports `commands` (the import-linter contract in `pyproject.toml`).
-- A command's tests go in `commands/<name>/tests/` (`commands/conftest.py`
-  holds the shared fixtures). A test that invokes `glove.cli.app` patches the
+- A command's tests go in `commands/<name>/tests/` (the repo's
+  `conftest.py` holds the shared fixtures: `home`, the wide consoles). A test that invokes `glove.cli.app` patches the
   module glove mounted, `command_module("<name>")` from `tests/helpers.py`
   (`glove_cmd.<name>.cli`); one that calls the module directly may load its
   own copy with

@@ -61,6 +61,11 @@ def session_file(extra: str = "", *, harness: str = "pi", llm: str | None = None
     return f"glove: 3\ntemplate: test\nharness: {harness}\nextensions:\n  llm: {llm}\n{extra}"
 
 
+def lan_llm(extra: str = "") -> str:
+    """A LAN llama.cpp provider as a flow mapping (`session_file`'s `llm`), plus `extra` keys."""
+    return "{provider: llama.cpp, location: lan, endpoint: \"example.test:8080\", model: m" + extra + "}"
+
+
 def make_session(root, extra: str = "", **kw):
     """Write a session directory (file + work/) without `glove new`; returns its Path."""
     from pathlib import Path

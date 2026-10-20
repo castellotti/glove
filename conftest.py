@@ -26,3 +26,20 @@ def _throwaway_glove_home(tmp_path_factory, monkeypatch):
     under it, and materialising writes there. A test that needs a specific
     home sets GLOVE_HOME itself (this default is replaced)."""
     monkeypatch.setenv("GLOVE_HOME", str(tmp_path_factory.mktemp("glove-home")))
+
+
+@pytest.fixture(autouse=True)
+def _wide_console(monkeypatch):
+    """No wrapping of long paths in CLI output assertions."""
+    from glove import sessionops
+
+    for c in (sessionops.console, sessionops.err):
+        monkeypatch.setattr(c, "width", 400)
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A fresh GLOVE_HOME the test can inspect."""
+    ghome = tmp_path / "ghome"
+    monkeypatch.setenv("GLOVE_HOME", str(ghome))
+    return ghome

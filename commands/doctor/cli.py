@@ -26,6 +26,5 @@ def command(
         raise fail(str(e)) from e
     if json_out:
         console.print_json(json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]}))
-    else:
-        print_checks(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}", checks)
-    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+        raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
+    print_checks(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}", checks)

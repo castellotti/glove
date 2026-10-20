@@ -13,11 +13,10 @@ from glove.api.commands import (
     RegistryError,
     SessionError,
     console,
-    control_dir,
     err,
+    export_dirs,
     fail,
     find_session,
-    observe_dir,
     remove_rows,
     remove_state,
     stop,
@@ -28,7 +27,7 @@ RANK = 6  # its place in `glove --help` (commands/README.md)
 
 def _remove_exports(sid: str) -> list[Path]:
     gone = []
-    for p in (observe_dir(sid), control_dir(sid)):
+    for p in export_dirs(sid).values():
         if p.is_dir():
             shutil.rmtree(p)
             gone.append(p)

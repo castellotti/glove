@@ -14,21 +14,6 @@ from glove.config import ConfigError
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def _wide_console(monkeypatch):
-    from glove import sessionops
-
-    for c in (sessionops.console, sessionops.err):
-        monkeypatch.setattr(c, "width", 400)  # no wrapping of long paths in assertions
-
-
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    ghome = tmp_path / "ghome"
-    monkeypatch.setenv("GLOVE_HOME", str(ghome))
-    return ghome
-
-
 def test_help_lists_every_command():
     from glove.cli import COMMANDS_DIR
 
