@@ -179,23 +179,6 @@ def test_compose_runs_without_podmans_banner(monkeypatch, provider, banner_off):
     assert ("PODMAN_COMPOSE_WARNING_LOGS" in envs[-1]) is banner_off
 
 
-def test_rm_keeps_work_unless_all(home, tmp_path, monkeypatch):
-    monkeypatch.setattr("glove.session.teardown", lambda *a, **k: None)
-    d = make_session(tmp_path / "s", "  observe: {}\n  filter: {}\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    sid = _sid(d)
-    assert (home / "observe" / sid / "net" / "session.json").is_file() and (home / "control" / sid).is_dir()
-    (d / "work" / "keep.txt").write_text("x")
-    assert runner.invoke(app, ["rm", str(d), "--yes", "--provider", "docker"]).exit_code == 0
-    assert not (d / ".glove").exists() and (d / "work" / "keep.txt").is_file()
-    assert (d / "glove-session.yml").exists()
-    assert not (home / "observe" / sid).exists() and not (home / "control" / sid).exists()
-    assert reg.find(sid) is None
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0  # a fresh identity
-    assert runner.invoke(app, ["rm", str(d), "--yes", "--all", "--provider", "docker"]).exit_code == 0
-    assert not d.exists()
-
-
 def test_the_v2_commands_are_gone():
     for cmd in (["init", "pi"], ["run", "pi"], ["config"], ["pi"]):
         assert runner.invoke(app, cmd).exit_code != 0, cmd
@@ -262,7 +245,7 @@ def test_up_gives_up_after_three_taken_subnets(home, tmp_path, monkeypatch):
 def test_down_and_rm_use_the_sessions_runtime_not_path(home, tmp_path, monkeypatch):
     d = make_session(tmp_path / "s", "runtime: podman\n")
     assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    monkeypatch.setattr("glove.cli.shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
+    monkeypatch.setattr("shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
     calls = []
     monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append(k["provider"]))
     assert runner.invoke(app, ["down", str(d)]).exit_code == 0

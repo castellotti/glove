@@ -56,6 +56,7 @@ COMMANDS = {
     "PLACEHOLDER": "str",
     "RegistryError": "class(ValueError)",
     "SCHEMA_VERSION": "int",
+    "SESSION_FILE": "str",
     "SessionDir": "dataclass(root)",
     "SessionError": "class(ConfigError)",
     "VERSION": "str",
@@ -68,6 +69,7 @@ COMMANDS = {
                      "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
                      "plan: 'SessionPlan | None' = None, force: 'bool' = False) -> 'str'",
     "console": "Console",
+    "control_dir": "(session_id: 'str') -> 'Path'",
     "default_enforcer": "(runtime: 'str') -> 'str'",
     "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
     "ensure_home": "() -> 'None'",
@@ -88,6 +90,7 @@ COMMANDS = {
     "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
     "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
                         "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+    "observe_dir": "(session_id: 'str') -> 'Path'",
     "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
     "placeholders_left": "(raw: 'Any', path: 'str' = '') -> 'list[str]'",
@@ -99,11 +102,13 @@ COMMANDS = {
     "quarantine_supported": "() -> 'bool'",
     "read_effective": "(path: 'Path') -> 'tuple[Config | None, dict[str, Any]]'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
+    "remove_state": "(sd: 'SessionDir') -> 'None'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
     "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
+    "stop": "(sd: 'SessionDir', sid: 'str', provider: 'str | None', *, wipe: 'bool', mark: 'bool' = True) -> 'None'",
     "sync_registry": "(sd: 'SessionDir', sid: 'str', raw: 'dict', *, check_runtime: 'bool' = False) "
                      "-> 'reg.SessionEntry'",
     "template_drift": "(sd: 'SessionDir') -> 'tuple[str, str] | None'",

@@ -13,18 +13,16 @@ and otherwise uses the nearest session at or above the cwd:
 
 from __future__ import annotations
 
-import shutil
 import time
 from pathlib import Path
 
 import typer
 
-from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
 from .hardening import HardeningError
 from .harnessconfig import render_home
-from .sessiondir import SessionDir, SessionError
+from .sessiondir import SessionError
 from .sessionops import (
     DIR_ARG,
     IKNOW,
@@ -32,11 +30,11 @@ from .sessionops import (
     conversations,
     err,
     fail,
-    mark_downloads,
     materialize_plan,
     now,
     one_resume,
     open_session,
+    stop,
 )
 
 app = typer.Typer(
@@ -200,27 +198,6 @@ def _print_resume_hint(profile, home_dir: Path, sid: str, *, since: float) -> No
 # --- down / rm -----------------------------------------------------------
 
 
-def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
-    from .extsession import run_teardown
-    from .session import teardown
-
-    cfg, _ = sdm.read_effective(sd.effective)
-    provider = provider or sdm.session_provider(sd, cfg)
-    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
-        err.print(f"[yellow]warn:[/yellow] {w}")
-    teardown(sid, provider=provider, wipe=wipe)
-    if mark:
-        mark_downloads(sd)
-    if wipe:
-        # the flow/exit record and status; session.json and transcripts stay
-        net = reg.observe_dir(sid) / "net"
-        gone = [f for f in (*net.glob("flows*.ndjson"), *net.glob("exit*.ndjson"), net / "status.json") if f.is_file()]
-        for f in gone:
-            f.unlink()
-        if gone:
-            console.print(f"[dim]removed {len(gone)} network-observability file(s) from {net}[/dim]")
-
-
 @app.command()
 def down(
     directory: Path | None = DIR_ARG,
@@ -235,48 +212,7 @@ def down(
     sid = sd.read_id()
     if sid is None:
         raise fail(f"{sd.root} has never been launched (no .glove/id)")
-    _stop(sd, sid, provider, wipe=wipe)
-
-
-def _remove_exports(sid: str) -> list[Path]:
-    gone = []
-    for p in (reg.observe_dir(sid), reg.control_dir(sid)):
-        if p.is_dir():
-            shutil.rmtree(p)
-            gone.append(p)
-    return gone
-
-
-@app.command()
-def rm(
-    directory: Path | None = DIR_ARG,
-    all_: bool = typer.Option(False, "--all", help="also delete the directory itself (work/ included)"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask"),
-    provider: str | None = typer.Option(None),
-) -> None:
-    """`down --wipe`, then delete .glove/, the exports and the registry row.
-    work/ and glove-session.yml stay unless --all."""
-    try:
-        sd = sdm.find(directory)
-    except SessionError as e:
-        raise fail(str(e)) from e
-    sid = sd.read_id()
-    what = f"the whole directory {sd.root}" if all_ else f"{sd.state} (work/ and {sdm.SESSION_FILE} stay)"
-    if not yes and not typer.confirm(f"Remove session {sid or '(never launched)'}: {what}?", default=False):
-        raise typer.Exit(1)
-    if sid is not None:
-        _stop(sd, sid, provider, wipe=True, mark=not all_)  # --all deletes them
-        for p in _remove_exports(sid):
-            console.print(f"[dim]removed {p}[/dim]")
-        try:
-            reg.remove({sid})
-        except reg.RegistryError as e:
-            err.print(f"[yellow]warn:[/yellow] {e}")
-    if all_:
-        shutil.rmtree(sd.root)
-    elif sd.state.exists():
-        sdm.remove_state(sd)
-    console.print(f"[green]✓[/green] removed {what}")
+    stop(sd, sid, provider, wipe=wipe)
 
 
 # --- extension CLIs (`cli:` in a manifest → `glove <name> …`) ------------------------

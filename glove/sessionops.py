@@ -317,3 +317,24 @@ def conversations(profile, home_dir: Path, sid: str):
         dirs.append(export_dirs(sid)["observe"] / "transcripts")
     refs = [r for d in dirs if d.is_dir() for r in list_sessions(d)]
     return sorted(refs, key=lambda r: r.mtime, reverse=True)
+
+
+def stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
+    from .extsession import run_teardown
+    from .session import teardown
+
+    cfg, _ = sdm.read_effective(sd.effective)
+    provider = provider or sdm.session_provider(sd, cfg)
+    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
+        err.print(f"[yellow]warn:[/yellow] {w}")
+    teardown(sid, provider=provider, wipe=wipe)
+    if mark:
+        mark_downloads(sd)
+    if wipe:
+        # the flow/exit record and status; session.json and transcripts stay
+        net = reg.observe_dir(sid) / "net"
+        gone = [f for f in (*net.glob("flows*.ndjson"), *net.glob("exit*.ndjson"), net / "status.json") if f.is_file()]
+        for f in gone:
+            f.unlink()
+        if gone:
+            console.print(f"[dim]removed {len(gone)} network-observability file(s) from {net}[/dim]")

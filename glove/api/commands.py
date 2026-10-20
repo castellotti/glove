@@ -12,7 +12,7 @@ from ..harness import get_profile, known_harnesses
 from ..naming import project_name
 from ..plan import build_session_plan, secret_refs
 from ..quarantine import supported as quarantine_supported
-from ..registry import RegistryError, glove_home, load_registry
+from ..registry import RegistryError, control_dir, glove_home, load_registry, observe_dir
 from ..registry import remove as remove_rows
 from ..runtimes import get_runtime, known_runtimes
 from ..runtimes.base import Check
@@ -21,11 +21,13 @@ from ..sessiondir import (
     ID_RE,
     PLACEHOLDER,
     SCHEMA_VERSION,
+    SESSION_FILE,
     SessionDir,
     SessionError,
     autodetect_provider,
     placeholders_left,
     read_effective,
+    remove_state,
     template_drift,
 )
 from ..sessiondir import find as find_session
@@ -45,15 +47,16 @@ from ..sessionops import (
     print_checks,
     print_extensions,
     row_state,
+    stop,
     sync_registry,
 )
 
-__all__ = ["DIR_ARG", "ID_RE", "IKNOW", "OPTION_SECTIONS", "PLACEHOLDER", "SCHEMA_VERSION", "VERSION", "Check",
-           "HardeningError", "RegistryError", "SessionDir", "SessionError", "autodetect_provider", "build_forwarder",
-           "build_harness", "build_session_plan", "console", "default_enforcer", "discover", "ensure_home", "err",
-           "extension_checks", "fail", "find_session", "get_enforcer", "get_profile", "get_runtime", "glove_home",
-           "known_harnesses", "known_runtimes", "load_registry", "load_session_file", "mark_downloads",
-           "materialize_plan", "materialize_session", "one_resume", "open_session", "placeholders_left",
-           "print_checks", "print_extensions", "probe_direct", "project_name", "quarantine_supported",
-           "read_effective", "remove_rows", "row_state", "run_doctor", "secret_exists", "secret_refs",
-           "sync_registry", "template_drift", "worst_status"]
+__all__ = ["DIR_ARG", "ID_RE", "IKNOW", "OPTION_SECTIONS", "PLACEHOLDER", "SCHEMA_VERSION", "SESSION_FILE", "VERSION",
+           "Check", "HardeningError", "RegistryError", "SessionDir", "SessionError", "autodetect_provider",
+           "build_forwarder", "build_harness", "build_session_plan", "console", "control_dir", "default_enforcer",
+           "discover", "ensure_home", "err", "extension_checks", "fail", "find_session", "get_enforcer",
+           "get_profile", "get_runtime", "glove_home", "known_harnesses", "known_runtimes", "load_registry",
+           "load_session_file", "mark_downloads", "materialize_plan", "materialize_session", "observe_dir",
+           "one_resume", "open_session", "placeholders_left", "print_checks", "print_extensions", "probe_direct",
+           "project_name", "quarantine_supported", "read_effective", "remove_rows", "remove_state", "row_state",
+           "run_doctor", "secret_exists", "secret_refs", "stop", "sync_registry", "template_drift", "worst_status"]
