@@ -59,6 +59,7 @@ COMMANDS = {
                      "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
                      "plan: 'SessionPlan | None' = None, force: 'bool' = False) -> 'str'",
     "console": "Console",
+    "default_enforcer": "(runtime: 'str') -> 'str'",
     "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
     "err": "Console",
     "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
@@ -67,12 +68,17 @@ COMMANDS = {
     "get_runtime": "(name: 'str')",
     "glove_home": "() -> 'Path'",
     "known_harnesses": "() -> 'list[str]'",
+    "known_runtimes": "() -> 'list[str]'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
+    "print_checks": "(title: 'str', checks: 'list') -> 'None'",
     "project_name": "(session: 'str') -> 'str'",
     "quarantine_supported": "() -> 'bool'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
+    "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
+                  "-> 'list[Check]'",
+    "worst_status": "(checks: 'list[Check]') -> 'str'",
 }
 HARNESS = {
     "CONTAINER_HOME": "str",

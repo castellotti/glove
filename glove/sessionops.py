@@ -45,3 +45,17 @@ def mark_downloads(sd: SessionDir) -> quarantine.Marked | None:
     for path, why in r.failed:
         err.print(f"[yellow]warn:[/yellow] not quarantined: {path}: {why}")
     return r
+
+
+def print_checks(title: str, checks: list) -> None:
+    """Print `glove check`/`glove doctor` results; exit 1 if any failed."""
+    from rich.markup import escape
+
+    from .doctor import worst_status
+
+    glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
+             "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
+    console.print(f"{title}\n")
+    for c in checks:
+        console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
+    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)

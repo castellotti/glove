@@ -29,9 +29,9 @@ from .harness import adapter_call
 from .harnessconfig import render_home
 from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
-from .runtimes import get_runtime, known_runtimes
+from .runtimes import get_runtime
 from .sessiondir import SessionDir, SessionError
-from .sessionops import DIR_ARG, console, err, fail, mark_downloads
+from .sessionops import DIR_ARG, console, err, fail, mark_downloads, print_checks
 
 app = typer.Typer(
     add_completion=False,
@@ -51,20 +51,6 @@ def _ensure_home() -> None:
     """``registry.ensure_home``, printing its warnings (see there)."""
     for w in reg.ensure_home():
         err.print(f"[yellow]⚠[/yellow] {w}")
-
-
-def _print_checks(title: str, checks: list) -> None:
-    """Print `glove check`/`glove doctor` results; exit 1 if any failed."""
-    from rich.markup import escape
-
-    from .doctor import worst_status
-
-    glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]",
-             "info": "[cyan]·[/cyan]", "skip": "[dim]-[/dim]"}
-    console.print(f"{title}\n")
-    for c in checks:
-        console.print(f"  {glyph.get(c.status, '?')} [bold]{escape(c.name)}[/bold]  [dim]{escape(c.detail)}[/dim]")
-    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
 
 
 # `glove up` tries this many subnets when other sessions' networks keep taking
@@ -630,7 +616,7 @@ def check(
                                    probe=None if offline or no_container else partial(probe_direct, cfg.provider))
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
-    _print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)
+    print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)
 
 
 # --- down / rm / ls / ps / gc -----------------------------------------------------------
@@ -715,33 +701,7 @@ def rm(
     console.print(f"[green]✓[/green] removed {what}")
 
 
-# --- doctor / policy ---------------------------------------------------
-
-@app.command()
-def doctor(
-    runtime: str | None = typer.Option(None, "--runtime", help=f"probe a runtime: {', '.join(known_runtimes())}"),
-    enforcer: str | None = typer.Option(None, "--enforcer", help="probe an enforcer: nono | nono+srt | srt | none"),
-    json_out: bool = typer.Option(False, "--json", help="machine-readable output"),
-    no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
-) -> None:
-    """Probe host + runtime + enforcer readiness (`glove check` adds a session's extensions)."""
-    import json as _json
-
-    from .doctor import run_doctor, worst_status
-    from .enforcers.base import default_enforcer
-
-    rt = runtime or "docker"
-    enf = enforcer or default_enforcer(rt)
-    try:
-        checks = run_doctor(runtime=rt, enforcer=enf, include_container_probes=not no_container)
-    except ValueError as e:
-        raise fail(str(e)) from e
-    if json_out:
-        console.print_json(_json.dumps({"runtime": rt, "enforcer": enf, "checks": [c.to_dict() for c in checks]}))
-    else:
-        _print_checks(f"[bold]glove doctor[/bold]  runtime={rt}  enforcer={enf}", checks)
-    raise typer.Exit(1 if worst_status(checks) == "fail" else 0)
-
+# --- policy ---------------------------------------------------
 
 @app.command()
 def policy(directory: Path | None = DIR_ARG) -> None:
