@@ -24,6 +24,7 @@ from glove.api.commands import (
     probe_direct,
     run_doctor,
     secret_refs,
+    session_bind_layer,
     template_drift,
 )
 
@@ -50,8 +51,8 @@ def command(
         checks.append(Check("placeholders", "fail", f"still {PLACEHOLDER}: {', '.join(todo)}"))
     else:
         try:
-            plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work),
-                                      state_dir=str(sd.ext), session_dir=str(sd.root))
+            plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                                      session_dir=str(sd.root), bind_layer=session_bind_layer(cfg))
             checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
             try:  # in memory: every render-time invariant, for this runtime
                 n = len(yaml.safe_load(get_runtime(cfg.runtime).render(plan, sd.state).compose_yaml)["services"])

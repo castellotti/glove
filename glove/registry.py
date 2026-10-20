@@ -115,12 +115,15 @@ def load_registry() -> list[SessionEntry]:
     return out
 
 
-def save_registry(entries: list[SessionEntry]) -> None:
-    path = registry_path()
+def write_json_atomic(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"v": REGISTRY_VERSION, "sessions": [asdict(e) for e in entries]}, indent=2) + "\n")
-    os.replace(tmp, path)  # readers (Layman) never see a half-written file
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, path)  # readers (Layman, concurrent launches) never see a half-written file
+
+
+def save_registry(entries: list[SessionEntry]) -> None:
+    write_json_atomic(registry_path(), {"v": REGISTRY_VERSION, "sessions": [asdict(e) for e in entries]})
 
 
 @contextmanager

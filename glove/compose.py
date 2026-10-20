@@ -41,6 +41,7 @@ from .extensions import render_value as _render
 from .hardening import SIDECAR_ONLY_SECCOMP
 from .mounts import WORK_TARGET
 from .naming import scoped
+from .runtimes.landlock_mounts import host_under_virtiofs
 from .runtimes.seccomp import SECCOMP_DIR
 
 if TYPE_CHECKING:
@@ -374,7 +375,8 @@ def harden_fragments(comp: Composition, plan: SessionPlan, extra: dict) -> dict[
     extension fragments plus the `forwarder` provider's per-endpoint services."""
     services: dict[str, Any] = {}
     volumes: dict[str, Any] = {}
-    reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service}
+    reserved = {scoped(comp.session, e.name) for e in comp.endpoints} | {plan.harness_service,
+                                                                         scoped(comp.session, "mount-watch")}
     declared_by: dict[str, set[str]] = {}
     _channel_volumes(comp, extra, volumes)
     for a, doc in comp.fragments:
@@ -462,6 +464,16 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             src = v.get("source", "") if isinstance(v, dict) else str(v).split(":")[0]
             if "docker.sock" in str(src):
                 raise ExtensionError(f"service {name!r}: the docker socket is never mounted")
+            if (host_under_virtiofs(str(src)) is not None
+                    and not (name == plan.harness_service and plan.bind_layer == "virtiofs")):
+                raise ExtensionError(f"service {name!r}: only a Landlock harness binds from Docker Desktop's "
+                                     f"virtiofs layer ({src})")
+        if name == scoped(session, "mount-watch"):  # never wider than the harness: its own binds, read-only
+            harness = {host_under_virtiofs(str(v.get("source"))) for v in services[plan.harness_service]["volumes"]
+                       if isinstance(v, dict)}
+            if any(not (isinstance(v, dict) and v.get("read_only") and v.get("source") in harness)
+                   for v in svc.get("volumes") or []):
+                raise ExtensionError("mount-watch binds only the harness's own binds, read-only")
         if name == plan.harness_service:
             nets = svc.get("networks") or []
             nets = list(nets) if isinstance(nets, list) else list(nets.keys())
@@ -471,7 +483,15 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             channels = {c.volume(session) for c in comp.channels}
             for v in svc.get("volumes") or []:
                 bind = isinstance(v, dict) and v.get("type") == "bind"
-                if bind and _within(str(v["source"]), str(comp.state_root)):
+                src = str(v["source"]) if bind else ""
+                if bind and plan.bind_layer == "virtiofs":
+                    # each bind a translated host path, never a top-level directory (/Users: every share's tree)
+                    host = host_under_virtiofs(src)
+                    if host is None or host.count("/") < 2:
+                        raise ExtensionError(f"the harness's bind {src} is not a host path on Docker Desktop's "
+                                             "virtiofs layer")
+                    src = host
+                if bind and _within(src, str(comp.state_root)):
                     raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
                 if isinstance(v, dict) and v.get("type") == "volume" and v.get("source") not in channels:
                     raise ExtensionError(f"the harness mounts no volume but a channel ({v.get('source')})")

@@ -69,22 +69,24 @@ services:
       {{ k }}: {{ v | tojson }}
 {% endfor %}
     volumes:
+{# every host bind source below goes through `src`: Docker Desktop's virtiofs
+   layer when the plan's bind_layer is virtiofs (Landlock), else unchanged #}
       # the harness home, read-only: its config home is re-bound read-write below
       - type: bind
-        source: {{ home.host_path | tojson }}
+        source: {{ home.host_path | src | tojson }}
         target: {{ home.container_path }}
         read_only: true
 {% if policies_host_dir %}
       # ring-1 enforcer policies (read-only; never inside /work, PLAN §4.1)
       - type: bind
-        source: {{ policies_host_dir | tojson }}
+        source: {{ policies_host_dir | src | tojson }}
         target: {{ policies_container_dir }}
         read_only: true
 {% endif %}
 {% for host, target in system_mounts %}
       # the harness's own system config (read-only; outside its writable home)
       - type: bind
-        source: {{ host | tojson }}
+        source: {{ host | src | tojson }}
         target: {{ target }}
         read_only: true
 {% endfor %}
@@ -92,13 +94,13 @@ services:
       # corporate_ca: a public CA certificate the harness trusts in addition to
       # the public roots (NODE_EXTRA_CA_CERTS); read-only, never a secret
       - type: bind
-        source: {{ corporate_ca_host_path | tojson }}
+        source: {{ corporate_ca_host_path | src | tojson }}
         target: {{ corporate_ca_container_path }}
         read_only: true
 {% endif %}
 {% for m in mounts %}
       - type: bind
-        source: {{ m.host_path | tojson }}
+        source: {{ m.host_path | src | tojson }}
         target: {{ m.container_path }}
 {% if m.read_only %}
         read_only: true
@@ -110,7 +112,7 @@ services:
       else "re-bound read-write: a mount point, so it cannot be renamed away" }}
       # (after the bind it sits in, so it overlays it)
       - type: bind
-        source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.placeholder) | tojson }}
+        source: {{ (p.host_path or placeholder_host_dir ~ "/" ~ p.placeholder) | src | tojson }}
         target: {{ p.container_path | tojson }}
 {% if p.read_only %}
         read_only: true
@@ -121,7 +123,7 @@ services:
       # observe export: the harness writes its transcripts straight into
       # ~/.glove/observe/<id>/transcripts (after the home bind, so it overlays it)
       - type: bind
-        source: {{ transcripts_host_dir | tojson }}
+        source: {{ transcripts_host_dir | src | tojson }}
         target: {{ transcripts_container_dir | tojson }}
 {% endif %}
 {% for c in channels %}
@@ -187,6 +189,37 @@ services:
       - "{{ host_gateway_name }}:host-gateway"
 {% endif %}
 {% endfor %}
+{% set watched = watch_paths() %}
+{% if watched %}
+
+  # --- mount-watch: Docker Desktop's virtiofs layer (the harness's binds) shows
+  # host-side changes only under a dir a running container binds on the normal
+  # path; this one binds the harness's own binds so, read-only, and `glove up`
+  # walks them here first (what changed while nothing watched). Runs nothing
+  # but sleep; no network.
+  glove-{{ session }}-mount-watch:
+    container_name: glove-{{ session }}-mount-watch
+    image: {{ harness_image }}
+    entrypoint: ["sleep", "infinity"]
+    stop_signal: SIGKILL
+    restart: unless-stopped
+    user: "{{ uid }}:{{ gid }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    pids_limit: 64
+    mem_limit: 256m
+    network_mode: none
+    volumes:
+{% for d in watched %}
+      - type: bind
+        source: {{ d | tojson }}
+        target: /watch/{{ loop.index }}
+        read_only: true
+{% endfor %}
+{% endif %}
 {% if extension_services %}
 
   # --- extension sidecars (validated + hardened by glove/compose.py) ---------

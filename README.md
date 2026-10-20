@@ -446,8 +446,9 @@ Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's own mount roots
 (`/work` and each add-dir) as `safe.directory`, exact paths only (the images'
 git 2.39 has no `dir/*` patterns), so `git init` in `/work` works. A repo
 nested deeper (a clone, or `git init` in `/work/<dir>`) needs an opt-in on
-Docker Desktop (Podman's shares report the right owner): the `github`
-extension adds `'*'`, or the session adds it with `git_config:`
+Docker Desktop (Podman's shares report the right owner; glove adds it itself
+when the binds come from Docker Desktop's virtiofs layer, see "Docker Desktop
+shared folders"): the `github` extension adds `'*'`, or the session adds it with `git_config:`
 (`git_config: { safe.directory: "*" }`; a key takes a value or a list). glove
 alone sets git's config env vars: `env:` may not.
 
@@ -1205,12 +1206,87 @@ profile (like `srt`); the harness starts ~0.1 s slower; the image is
 `<harness image>-srt-<hash>` (srt, bubblewrap and its own Node layered on).
 Refused on podman: its compose provider can't apply the profile.
 
+## Docker Desktop shared folders
+
+Docker Desktop 4.96 serves its shared folders (`/Users`, `/Volumes`, `/private`,
+`/tmp`, `/var/folders`) through `fakeowner`, a layer that reports every file as
+owned by whoever asks, stacked on virtiofs. Landlock never matches a rule for a
+`fakeowner` file, so under the `nono` and `nono+srt` enforcers no command can
+read a bind-mounted `/work` (`Permission denied`; a create leaves a 0-byte file).
+The same folder bound from the virtiofs layer (`/run/host_virtiofs/<path>` in
+Docker Desktop's VM) works.
+
+glove probes this rather than assuming it. A hardened throwaway container
+(`glove/runtimes/landlock_probe.py`, as your uid, no network) restricts itself
+with Landlock on a temp dir under `~/.glove`, bound from its normal path and from
+the virtiofs layer. It then creates, writes, reads, lists, mmaps, locks,
+renames, links and unlinks a file there. It runs the same steps without Landlock
+first, so a plain permission problem is not blamed on Landlock. The result is a
+mode:
+
+| mode | meaning | what glove does |
+|---|---|---|
+| `native` | Landlock works on the normal path (Linux Docker, Podman, a fixed Docker Desktop) | nothing |
+| `virtiofs` | only the virtiofs layer works (Docker Desktop 4.96) | the harness's binds come from that layer (below) |
+| `broken` | neither works | `glove up`/`plan` refuse a session whose enforcer runs nono |
+| `unknown` | the engine couldn't be probed, or the control run failed too | nothing refused; `glove check` warns |
+
+The mode is cached in `~/.glove/runtime-cache.json`, keyed by the engine's
+version and kernel (and Docker Desktop's settings file), so an update or a
+settings change probes again; a failure is never cached. `glove check` and
+`glove doctor` probe afresh and report it as `landlock on a bind mount`. If the
+mode is `broken`, `runtime: podman` works: its applehv machine mounts plain
+virtiofs, verified with Landlock ABI 9. No setting lets Landlock skip `/work`.
+
+In `virtiofs` mode, under a nono enforcer, every host bind of the **harness**
+(`/work`, add-dirs, outputs and inputs, the home, `/etc/glove/enforcer`, its
+system files, protected files, transcripts) has its source rewritten to
+`/run/host_virtiofs/<realpath>`. Targets and read-only flags stay the same.
+Sidecars keep the normal path. `glove plan` says so (`binds: from Docker
+Desktop's virtiofs layer`), `glove plan --compose` shows the rewritten sources,
+and `.glove/effective.yml` records `bind_layer: virtiofs`. The merged project
+is re-checked: only the harness of a `virtiofs` plan may bind from
+`/run/host_virtiofs`, each source a host path below a top-level directory
+(never `/Users` or `/Volumes` itself, which would expose a whole tree). A path outside Docker Desktop's shares
+fails at `glove up`, as it does on the normal path.
+
+Two consequences:
+
+- **git's `safe.directory` is `'*'`** in this mode, so the agent can use git in
+  any repo in its mounts. On the raw virtiofs layer a directory the container
+  creates can report its owner as `0:0` about a second after it gets its first
+  entry, and git then refuses it ("dubious ownership"). The exact mount roots
+  aren't enough (see "git in `/work`"). This widens git's trust to every repo
+  the harness can see: a repo's own `.git/config` (its hooks, `core.fsmonitor`)
+  is honoured even if another uid seems to own it. The container has one user,
+  so that guard has nothing to protect there.
+- **`allow_root` is refused**: root without capabilities can't write the host
+  user's files on the raw layer.
+- **A `mount-watch` sidecar.** The raw layer shows host-side changes (an edit
+  in your editor, a re-rendered policy, a deleted file) only under a directory
+  that some running container binds from the normal path; elsewhere a container
+  keeps seeing the old file, or none, even a new container (measured on
+  4.96.0). So the session runs `glove-<id>-mount-watch`: the harness image
+  running only `sleep`, as your uid, no network, no capabilities, read-only
+  rootfs, binding the harness's own binds (never more) read-only from the
+  normal path. `glove up` first walks them there (`find`), which brings in what
+  changed while nothing watched; a `/work` of a few hundred thousand files
+  (`node_modules`, a large `.git`) adds seconds to each start, and a walk that
+  fails or takes over 5 minutes stops the session.
+
+`docker_desktop_mounts:` in `~/.glove/config.yml` overrides the choice on the
+`docker` runtime (Podman ignores it: it has no such layer): `auto` (the
+default) follows the probe; `native` never rewrites (a `broken` mode is still
+refused; in `virtiofs` mode glove warns that no command will read `/work`);
+`virtiofs` always rewrites, and refuses a session if the probe didn't see the
+layer work. `glove check` and `glove policy` plan with the same choice.
+
 ## Support matrix
 
 | Component | Option | Status |
 |---|---|---|
-| Runtime | docker | hardened + doctor probes |
-| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`; srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
+| Runtime | docker | hardened + doctor probes. Docker Desktop 4.96.0 (engine 29.9.1, kernel 7.0.14-linuxkit, Landlock ABI 8): the `nono`/`nono+srt` enforcers run through its virtiofs layer with `mount-watch` ("Docker Desktop shared folders"), verified live 2026-10-20: `test_landlock_mounts` (incl. host-side replace/delete seen by a running harness; `MOUNTS=native` control fails), `test_pi_nono`, `test_vibe_nono`, `test_pi_srt`, `test_ring0_protect`, `test_tool_confine` (Pi nono, Vibe nono+srt), `test_config_protect` (Pi, Vibe, Claude Code), `test_teardown`, `test_session_dir`, `test_nono_srt` (Pi, Vibe), `test_cc_nono`, `test_skills`, `test_vibe_skills`, `test_llm_inject`, `test_llm_host_stub`, `test_subnet_race`, `test_toolchains`, `test_downloads direct`, `test_egress direct`, `test_observe direct`, `test_playwright headless`, `test_github`, `test_corporate`, `test_github_ghes` |
+| Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`, and again with podman 6.1.2 on 2026-10-20 (Landlock on its bind mounts: `native`; `test_landlock_mounts`, `test_skills`, `test_llm_inject`, `test_subnet_race`, `test_egress`, `test_observe`, `test_corporate`, `test_github_ghes`); srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
 | Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi and Vibe verified (`test_pi_nono`, `test_vibe_nono`, `test_config_protect`, `test_tool_confine`, `test_vibe_skills`) |
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi, Vibe and Claude Code (`test_nono_srt.sh`, `test_config_protect.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |

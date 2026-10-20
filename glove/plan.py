@@ -74,6 +74,9 @@ class SessionPlan:
     composition: Composition
     runtime: str = "docker"
     enforcer: str = "nono"
+    # where the harness's bind sources come from: native, or virtiofs (Docker
+    # Desktop's virtiofs layer, glove/runtimes/landlock_mounts.py)
+    bind_layer: str = "native"
     enforcer_options: dict = field(default_factory=dict)
     forwarder_image: str = field(default_factory=forwarder_image)
     tools: dict = field(default_factory=dict)
@@ -324,6 +327,7 @@ def build_session_plan(
     session_id: str | None = None,
     state_dir: str | None = None,
     session_dir: str | None = None,
+    bind_layer: str = "native",
 ) -> SessionPlan:
     """Resolve a ``Config`` into a runtime-agnostic ``SessionPlan``.
 
@@ -390,6 +394,10 @@ def build_session_plan(
     # Exact paths only: bookworm's git (2.39) has no `dir/*` patterns, so a repo
     # nested deeper (a clone into /work/<repo>) needs an opt-in: an extension's
     # `harness.git_config` (github: '*') or the session's `git_config:`.
+    # On Docker Desktop's virtiofs layer any directory the agent creates can
+    # read as 0:0, so there every repo is safe ('*').
+    if bind_layer == "virtiofs":
+        session_roots.append("*")
     environment["GIT_CONFIG_PARAMETERS"] = git_config_parameters([
         *(("safe.directory", r) for r in session_roots), *comp.git_config,
         *git_config_pairs(cfg.git_config, "git_config"),
@@ -453,6 +461,7 @@ def build_session_plan(
         gid=gid,
         runtime=cfg.runtime,
         enforcer=cfg.enforcer,
+        bind_layer=bind_layer,
         enforcer_options=cfg.enforcer_options,
         tools=dict(cfg.tools),
         composition=comp,

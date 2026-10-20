@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from .runtimes import get_runtime
 from .runtimes.base import Check
+from .runtimes.landlock_mounts import landlock_enforced
 
 if TYPE_CHECKING:
     from .extensions import Composition
@@ -114,6 +115,16 @@ def egress_host_checks(comp: Composition, a) -> list[Check]:
     return [Check(f"{a.name} egress", "ok", f"{egress.name} admits {', '.join(wanted)}{cidrs}")]
 
 
+def landlock_mounts_check(rt) -> Check:
+    """Whether Landlock (nono) can open files on a bind mount, probed afresh."""
+    mm = rt.landlock_mounts(refresh=True)
+    note = {"virtiofs": "; the harness's binds come from Docker Desktop's virtiofs layer (its fakeowner layer "
+                        "breaks Landlock)",
+            "broken": "; a session whose enforcer runs nono is refused (README: Docker Desktop shared folders)"}
+    return Check("landlock on a bind mount", {"broken": "fail", "unknown": "warn"}.get(mm.mode, "ok"),
+                 f"{mm.mode}: {mm.detail}{note.get(mm.mode, '')}")
+
+
 def run_doctor(
     *,
     runtime: str = "docker",
@@ -133,6 +144,8 @@ def run_doctor(
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
     checks.extend(_enforcer_checks(enforcer, rt))
+    if include_container_probes and landlock_enforced(enforcer) and rt.caps.implemented:
+        checks.append(landlock_mounts_check(rt))
     # Docker Desktop's File sharing list is a docker-only concept; podman shares
     # the whole home via the machine mount, so the hint is misleading there.
     if runtime == "docker":

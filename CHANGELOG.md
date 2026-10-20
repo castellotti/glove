@@ -203,6 +203,37 @@ All notable changes to glove are documented here.
   teardown does); a driver's own `ON_EXIT` (e.g. its Keychain cleanup) still
   runs. `test_observe.sh` no longer reports a kept stack as leftovers.
 
+### Fixed
+
+- **Landlock on Docker Desktop 4.96+'s shared folders.** Docker Desktop now
+  serves `/Users` (and its other shares) through a `fakeowner` layer over
+  virtiofs, and Landlock never matches a rule for a `fakeowner` file: under the
+  `nono`/`nono+srt` enforcer no command could read `/work` (`Permission
+  denied`; a create left a 0-byte file). glove now probes it: a hardened
+  throwaway container (`glove/runtimes/landlock_probe.py`) restricts itself
+  with Landlock on a temp dir bound from its normal path and from the virtiofs
+  layer, and creates, writes, reads, lists, mmaps, locks, renames, links and
+  unlinks there. The mode (`native`, `virtiofs`, `broken`) is cached per engine
+  version and Docker Desktop settings in `~/.glove/runtime-cache.json`. `glove
+  check`/`doctor` report it as `landlock on a bind mount` (`fail` when
+  `broken`), and `glove up`/`plan` refuse a nono session whose mode is
+  `broken`. `throwaway_argv` gains `as_host` (the host user, keep-id on
+  rootless Podman) and `binds` (`--mount`, which refuses a missing source).
+  In `virtiofs` mode a nono session's harness binds every host path from
+  `/run/host_virtiofs/<realpath>` (sidecars keep the normal path), with
+  `safe.directory '*'` in its git config: on the raw layer a new directory can
+  read as `0:0`. `glove plan` shows it, `effective.yml` records `bind_layer`,
+  `validate_project` allows the layer only there (never a share's root), and
+  `allow_root` is refused. `docker_desktop_mounts: auto|native|virtiofs` in
+  `~/.glove/config.yml` overrides the choice. That layer shows host-side
+  changes only under a dir some running container binds from the normal path
+  (else a replaced, re-created or deleted file stays as it was, a re-rendered
+  policy too), so in this mode the session also runs a `mount-watch` sidecar
+  (the harness image running `sleep`: no network, no capabilities, read-only)
+  binding the harness's own binds read-only from the normal path, and `glove
+  up` walks them there first. The hand-built nono runs (`test_pi_nono.sh`,
+  `test_vibe_nono.sh`) bind as glove does (`host_src`).
+
 ### Added
 
 - **Guardrails for a small core (contributors).** `tests/test_core_budget.py`

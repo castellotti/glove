@@ -360,4 +360,5 @@ def test_a_failed_compose_up_stops_everything(tmp_path, monkeypatch):
         session.start_sidecars(plan, f, provider="podman", env={})
     assert [c[0][-2:] for c in calls[-2:]] == [["rm", "-fsv"], ["down", "--remove-orphans"]]  # never half-started
     ups = [c for c, _ in calls if "up" in c]
-    assert len(ups[0]) == len(["podman", "compose", "-p", "x", "-f", "f", "up", "-d"]) + 1  # podman: one at a time
+    up = ["podman", "compose", "-p", "x", "-f", "f", "up", "-d", "--remove-orphans"]
+    assert len(ups[0]) == len(up) + 1  # podman: one at a time

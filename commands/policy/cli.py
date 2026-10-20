@@ -7,7 +7,16 @@ from pathlib import Path
 from rich.syntax import Syntax
 
 from glove.api import ConfigError
-from glove.api.commands import DIR_ARG, build_session_plan, console, fail, get_enforcer, open_session, print_extensions
+from glove.api.commands import (
+    DIR_ARG,
+    build_session_plan,
+    console,
+    fail,
+    get_enforcer,
+    open_session,
+    print_extensions,
+    session_bind_layer,
+)
 
 RANK = 15  # its place in `glove --help` (commands/README.md)
 
@@ -17,7 +26,7 @@ def command(directory: Path | None = DIR_ARG) -> None:
     try:
         sd, _, sid, cfg = open_session(directory, register=False)
         plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
-                                  session_dir=str(sd.root))
+                                  session_dir=str(sd.root), bind_layer=session_bind_layer(cfg))
     except (ConfigError, ValueError) as e:
         raise fail(str(e)) from e
 

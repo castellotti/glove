@@ -17,14 +17,6 @@ IMAGE="${GLOVE_VIBE_IMAGE:-$(ensure_image vibe)}" || exit 1
 PASS=0 FAIL=0
 mkdir -p "$HOMEDIR/.vibe"
 
-hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
-          --read-only --tmpfs /tmp -w /work
-          # nono's state roots on tmpfs, exactly as glove renders them
-          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
-          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
-          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777 -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
-          -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
-
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
@@ -33,7 +25,17 @@ echo "== rendering glove policies (glove plan) =="
 new_session "$GLOVE_HOME/s" vibe 'enforcer: nono\n'
 POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered" || { bad "no policies"; exit 1; }
-MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
+hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
+          --read-only --tmpfs /tmp -w /work
+          # nono's state roots on tmpfs, exactly as glove renders them
+          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
+          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
+          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777 -v "$(host_src "$WORKDIR"):/work" -v "$(host_src "$HOMEDIR"):/home/agent"
+          -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
+
+# host_src binds with no mount-watch: each dir is written before a container first sees it
+# (README: Docker Desktop shared folders), so no host-side change can go stale
+MNT=(-v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro")
 run_tool() { "$RT" run "${hardened[@]}" "${MNT[@]}" "$IMAGE" \
   nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c "$1" 2>&1; }
 
@@ -66,7 +68,7 @@ echo "not json" | "$RT" run -i "${hardened[@]}" "${MNT[@]}" "$IMAGE" /opt/glove/
   && bad "hook exited 0 on bad input" || ok "hook exits non-zero on bad input (strict -> deny)"
 
 echo "== entrypoint validates policies =="
-"$RT" run "${hardened[@]}" -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint execs with valid policies" || bad "entrypoint rejected valid policies"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="

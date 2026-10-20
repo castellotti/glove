@@ -8,6 +8,7 @@ anything, and exposes the container/landlock probes ``glove doctor`` needs.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from ..exports import validate_export_isolation
 from ..hardening import HardeningError, validate_hardening
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
+from .landlock_mounts import MIN_LANDLOCK_ABI, MountMode, mount_mode, virtiofs_source, watch_paths
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
@@ -106,6 +108,10 @@ class DockerRuntime:
     )
     # The CLI binary this runtime shells out to (podman overrides).
     cli = "docker"
+    # what a cached Landlock mount mode depends on (landlock_mounts.py)
+    engine_key_argv: ClassVar[tuple[str, ...]] = (
+        "version", "--format", "{{.Server.Platform.Name}} {{.Server.Version}} {{.Server.KernelVersion}}")
+    probe_image = PROBE_IMAGE
 
     # --- compatibility -----------------------------------------------------
 
@@ -140,11 +146,18 @@ class DockerRuntime:
             "bind_selinux": None,
         }
 
+    def landlock_mounts(self, *, refresh: bool = False) -> MountMode:
+        return mount_mode(self, refresh=refresh)
+
+    def host_userns(self) -> str | None:
+        """The user namespace that maps the host user through (podman: keep-id)."""
+        return None
+
     def throwaway_argv(
         self, image: str, argv: list[str], *, plan: SessionPlan | None = None, network: str = "none",
         user: str = "65534:65534", env: Iterable[str] = (), mounts: Iterable[tuple[str, str]] = (),
         entrypoint: str | None = None, seccomp: str | None = None, pids: int = 64, memory: str = "128m",
-        add_hosts: Iterable[str] = (),
+        add_hosts: Iterable[str] = (), as_host: bool = False, binds: Iterable[tuple[str, str, bool]] = (),
     ) -> list[str]:
         """`run` of a hardened throwaway container (a probe, a check): removed on
         exit, no capabilities, no-new-privileges, read-only rootfs (a tmpfs
@@ -155,12 +168,18 @@ class DockerRuntime:
         `env`: names only, the values come from the caller's environment (never
         an argv); `mounts`: (source, target) pairs, read-only, never relabelled
         (a probe must not change a host file's SELinux label); `add_hosts`:
-        `name:address` entries (e.g. a forwarder's `host.docker.internal:host-gateway`)."""
+        `name:address` entries (e.g. a forwarder's `host.docker.internal:host-gateway`);
+        `as_host`: as the host user, without a plan; `binds`: (source, target,
+        writable) as `--mount`, which refuses a missing source (`-v` creates it)."""
         userns = None
         if plan is not None:
             user, userns = f"{plan.uid}:{plan.gid}", self.compose_extra(plan)["userns_mode"]
+        elif as_host:
+            user, userns = f"{os.getuid()}:{os.getgid()}", self.host_userns()
         sec = ["--security-opt", f"seccomp={seccomp}"] if seccomp else self._probe_seccomp_args()
         vols = [x for src, dst in mounts for x in ("-v", f"{src}:{dst}:ro")]
+        vols += [x for src, dst, rw in binds
+                 for x in ("--mount", f"type=bind,source={src},target={dst}{'' if rw else ',readonly'}")]
         return [
             self.cli, "run", "--rm", "--network", network, *(["--userns", userns] if userns else []),
             "--user", user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", *sec,
@@ -250,7 +269,13 @@ class DockerRuntime:
             **extra,
             **_extension_blocks(plan, extra),
         }
-        compose_yaml = self._jinja().get_template("compose.yml.j2").render(**ctx)
+        env, hosts = self._jinja(), []
+        # the harness's bind sources (never a sidecar's): from Docker Desktop's
+        # virtiofs layer when its fakeowner layer breaks Landlock; mount-watch
+        # (rendered after them) binds the same on the normal path
+        env.filters["src"] = (lambda p: hosts.append(p) or virtiofs_source(p)) if plan.bind_layer == "virtiofs" else str
+        env.globals["watch_paths"] = lambda: watch_paths(hosts)
+        compose_yaml = env.get_template("compose.yml.j2").render(**ctx)
         # Not waivable: re-check §3.4 on the merged project (extension sidecars
         # included), so a merge bug cannot ship a weaker project.
         from ..compose import validate_project
@@ -378,7 +403,7 @@ class DockerRuntime:
         except (json.JSONDecodeError, IndexError):
             return Check("landlock (hardened container)", "warn", proc.stdout.strip()[-200:])
         abi = data.get("landlock_abi")
-        status = "ok" if isinstance(abi, int) and abi >= 4 else "fail"
+        status = "ok" if isinstance(abi, int) and abi >= MIN_LANDLOCK_ABI else "fail"
         detail = (
             f"ABI {abi}; userns={data.get('userns_ok')}; kvm={data.get('kvm')}; "
             f"CapEff={data.get('CapEff')}; NoNewPrivs={data.get('NoNewPrivs')}"

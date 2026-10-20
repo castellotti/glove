@@ -22,19 +22,6 @@ image_driver
 IMAGE="${GLOVE_PI_IMAGE:-$(ensure_image pi)}" || exit 1
 PASS=0 FAIL=0
 
-# Mirror the real glove hardening set, with /work and /home/agent as writable
-# bind mounts (as compose renders them) on an otherwise read-only rootfs. The
-# Pi config subdir is pre-created so nono grants it (it skips nonexistent dirs).
-mkdir -p "$HOMEDIR/.pi/agent"
-hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
-          --read-only --tmpfs /tmp -w /work
-          # nono's state roots on tmpfs, exactly as glove renders them
-          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
-          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
-          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777
-          -v "$WORKDIR:/work" -v "$HOMEDIR:/home/agent"
-          -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
-
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
@@ -45,7 +32,23 @@ new_session "$GLOVE_HOME/s" pi 'enforcer: nono\n'
 POLDIR="$S_POLICIES"
 ls "$POLDIR"/*.json >/dev/null 2>&1 && ok "policies rendered to $POLDIR" || { bad "no policies rendered"; exit 1; }
 
-MNT=(-v "$POLDIR:/etc/glove/enforcer:ro")
+# Mirror the real glove hardening set, with /work and /home/agent as writable
+# bind mounts (as compose renders them, host_src: from Docker Desktop's virtiofs
+# layer where glove would) on an otherwise read-only rootfs. The
+# Pi config subdir is pre-created so nono grants it (it skips nonexistent dirs).
+mkdir -p "$HOMEDIR/.pi/agent"
+hardened=(--rm --cap-drop ALL --security-opt no-new-privileges:true --user 1000:1000
+          --read-only --tmpfs /tmp -w /work
+          # nono's state roots on tmpfs, exactly as glove renders them
+          # (NonoEnforcer.extra_tmpfs); nono ≥0.78 refuses a state dir it
+          # doesn't own, which a reused Docker Desktop bind mount reports as 0.
+          --tmpfs /home/agent/.nono:mode=1777 --tmpfs /home/agent/.local/state/nono:mode=1777
+          -v "$(host_src "$WORKDIR"):/work" -v "$(host_src "$HOMEDIR"):/home/agent"
+          -e HOME=/home/agent -e GLOVE_LLM_API_KEY=sk-INTEGRATION-SECRET)
+
+# host_src binds with no mount-watch: each dir is written before a container first sees it
+# (README: Docker Desktop shared folders), so no host-side change can go stale
+MNT=(-v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro")
 TOOL=(nono wrap -s --allow-cwd --profile /etc/glove/enforcer/tool.json -- bash -c)
 HARNESS=(nono run -s --allow-cwd --profile /etc/glove/enforcer/harness.json -- bash -c)
 
@@ -83,10 +86,10 @@ run_harness 'echo cfg > /home/agent/.pi/agent/x && echo wrote_home_ok' | grep -q
   2>&1 | grep -qi 'permission denied' && ok "nested tool denied harness transcript" || bad "nested tool read transcript"
 
 echo "== entrypoint fail-closed =="
-"$RT" run "${hardened[@]}" -v "$POLDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$(host_src "$POLDIR"):/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && ok "entrypoint validates good policies and execs" || bad "entrypoint rejected valid policies"
 BADDIR="$TMPROOT/bad"; mkdir "$BADDIR"; printf '{ this is not valid json ' > "$BADDIR/harness.json"; printf '{}' > "$BADDIR/tool.json"
-"$RT" run "${hardened[@]}" -v "$BADDIR:/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
+"$RT" run "${hardened[@]}" -v "$(host_src "$BADDIR"):/etc/glove/enforcer:ro" --entrypoint /opt/glove/entrypoint.sh "$IMAGE" true >/dev/null 2>&1 \
   && bad "entrypoint ran with an invalid policy" || ok "entrypoint fails closed on invalid policy"
 
 echo "== tool commands have no controlling terminal (no TIOCSTI into the harness) =="

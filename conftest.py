@@ -21,6 +21,17 @@ def _no_runtime_networks(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_landlock_probe(monkeypatch):
+    """`glove up`/`plan` ask the runtime which bind mode Landlock needs (a
+    container probe); unit tests get `native` without shelling out."""
+    from glove.runtimes import landlock_mounts as lm
+    from glove.runtimes.docker import DockerRuntime
+
+    monkeypatch.setattr(DockerRuntime, "landlock_mounts",
+                        lambda self, *, refresh=False: lm.MountMode("native", "stubbed in tests"))
+
+
+@pytest.fixture(autouse=True)
 def _throwaway_glove_home(tmp_path_factory, monkeypatch):
     """Unit tests never touch the real ~/.glove: plans compute export-root paths
     under it, and materialising writes there. A test that needs a specific

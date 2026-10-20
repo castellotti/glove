@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from ..plan import SessionPlan
+    from .landlock_mounts import MountMode
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,10 @@ class Runtime(Protocol):
     # compatibility gate calls it directly, and a runtime that omits it is a
     # type error rather than a combo silently reported as OK. None == supported.
     def unsupported_enforcer_reason(self, enforcer: str) -> str | None: ...
+
+    # The bind mode a Landlock-wrapped container needs (landlock_mounts.py),
+    # cached per engine; `refresh` probes again.
+    def landlock_mounts(self, *, refresh: bool = False) -> MountMode: ...
 
     # The `run` argv of a hardened throwaway container (probes, checks); a
     # runtime that can't run one raises NotImplementedError.

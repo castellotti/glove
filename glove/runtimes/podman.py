@@ -121,6 +121,7 @@ class PodmanRuntime(DockerRuntime):
 
     _rootless: bool | None = None
     network_subnets_format: ClassVar[str] = "{{.Name}}{{range .Subnets}} {{.Subnet}}{{end}}"
+    engine_key_argv: ClassVar[tuple[str, ...]] = ("info", "--format", "{{.Version.Version}} {{.Host.Kernel}}")
 
     # --- rootless detection ------------------------------------------------
 
@@ -137,6 +138,9 @@ class PodmanRuntime(DockerRuntime):
         # absent or the probe fails: _host_info returns {} → "" → rootless.
         self._rootless = _host_info(self.cli).get("rootless", "") != "false"
         return self._rootless
+
+    def host_userns(self) -> str | None:
+        return "keep-id" if self.is_rootless() else None
 
     def selinux_enabled(self) -> bool:
         """Whether the podman host enforces SELinux labels. False when unknown:
@@ -167,7 +171,7 @@ class PodmanRuntime(DockerRuntime):
             **super().compose_extra(plan),
             # Map the host uid/gid through so bind mounts stay owned by the
             # non-root harness user (rootless only; rootful maps 1:1 already).
-            "userns_mode": "keep-id" if rootless else None,
+            "userns_mode": self.host_userns(),
             # Rely on podman's built-in default seccomp (see module docstring).
             "emit_seccomp": False,
             # Rootless podman mounts a tmpfs volume inside its user namespace,
