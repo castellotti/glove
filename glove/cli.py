@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import shutil
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -25,13 +25,24 @@ from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
 from .hardening import HardeningError
-from .harness import adapter_call
 from .harnessconfig import render_home
 from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime
 from .sessiondir import SessionDir, SessionError
-from .sessionops import DIR_ARG, console, err, fail, mark_downloads, print_checks
+from .sessionops import (
+    DIR_ARG,
+    console,
+    ensure_home,
+    err,
+    fail,
+    mark_downloads,
+    now,
+    open_session,
+    print_checks,
+    print_extensions,
+    sync_registry,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -47,87 +58,9 @@ app = typer.Typer(
     ]),
 )
 
-def _ensure_home() -> None:
-    """``registry.ensure_home``, printing its warnings (see there)."""
-    for w in reg.ensure_home():
-        err.print(f"[yellow]⚠[/yellow] {w}")
-
-
 # `glove up` tries this many subnets when other sessions' networks keep taking
 # the one it picked (see session.SubnetTaken).
 SUBNET_ATTEMPTS = 3
-
-
-def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _foreign_subnets(raw: dict, sid: str) -> set[str]:
-    """Subnets of the runtime's existing networks that are not this session's."""
-    from .session import foreign_networks
-
-    return {x for subnets in foreign_networks(raw.get("runtime") or "docker", sid).values() for x in subnets}
-
-
-def _sync_registry(sd: SessionDir, sid: str, raw: dict, *, check_runtime: bool = False) -> reg.SessionEntry:
-    """Register the session (or follow a moved directory) and give it a subnet.
-
-    The subnet avoids other sessions' and — when allocating, or with
-    ``check_runtime`` (``glove up``) — the runtime's existing networks; a
-    session whose subnet a foreign network has since taken is re-allocated.
-    A directory copied with its ``.glove/`` carries the original's id; two live
-    directories with one id would share compose projects and exports, so that
-    is refused rather than guessed at."""
-
-    from .userconfig import load_user_config
-
-    root = str(sd.root)
-    _ensure_home()
-    # Asking the runtime can be slow: not under the lock (except a first allocation).
-    foreign = _foreign_subnets(raw, sid) if check_runtime else None
-    with reg.registry_lock():
-        entries = reg.load_registry()
-        row = next((e for e in entries if e.id == sid), None)
-        if row is not None and row.dir != root:
-            other = SessionDir(Path(row.dir))
-            if other.root.is_dir() and other.read_id() == sid:
-                raise SessionError(
-                    f"{sd.root} and {other.root} carry the same session id {sid} (a copied directory?). "
-                    f"Give this copy its own identity with `rm {sd.state / 'id'}`, then re-run.")
-            err.print(f"[yellow]⚠[/yellow] session {sid} moved: {row.dir} → {root}")
-            row.dir = root
-        if row is None:
-            row = reg.SessionEntry(id=sid, dir=root, harness=raw["harness"], created=_now())
-            entries.append(row)
-        row.harness = raw["harness"]
-        row.template = raw.get("template")
-        if foreign is None:
-            foreign = set() if row.subnet else _foreign_subnets(raw, sid)
-        if row.subnet and reg.overlapping([row.subnet], foreign):
-            err.print(f"[yellow]⚠[/yellow] subnet {row.subnet} is now used by another network; re-allocating")
-            row.subnet = None
-        if not row.subnet:
-            taken = {e.subnet for e in entries if e.id != sid and e.subnet} | foreign
-            row.subnet = reg.allocate_subnet(load_user_config().subnet_pool, taken)
-        reg.save_registry(entries)
-    return row
-
-
-def _open(dir_arg: Path | None, *, register: bool = True, check_runtime: bool = False):
-    """(session dir, raw file, id, Config) — the session at ``dir_arg``."""
-    from .userconfig import load_user_config
-
-    sd = sdm.find(dir_arg)
-    raw = sdm.load_file(sd)
-    if register:
-        sid = sdm.ensure_state(sd)
-        subnet = _sync_registry(sd, sid, raw, check_runtime=check_runtime).subnet
-    else:  # read-only callers (check): never create state or registry rows
-        sid = sd.read_id() or sdm.new_id(sd.root.name)
-        row = reg.find(sid)
-        subnet = row.subnet if row else None
-    cfg = sdm.to_config(sd, raw, sid, subnet=subnet, default_runtime=load_user_config().runtime)
-    return sd, raw, sid, cfg
 
 
 # --- glove new ---------------------------------------------------------------------
@@ -153,10 +86,10 @@ def new(
         console.print(Syntax(drift[1], "diff", theme="ansi_dark"))
         return
     try:
-        _ensure_home()
+        ensure_home()
         reg.load_registry()  # refuse early on a v2 registry, before writing the directory
         sd, sid = sdm.materialize(template, directory)
-        _sync_registry(sd, sid, sdm.load_file(sd))
+        sync_registry(sd, sid, sdm.load_file(sd))
     except (SessionError, reg.RegistryError) as e:
         raise fail(str(e)) from e
     console.print(f"[green]✓[/green] session [bold]{sid}[/bold] from template [cyan]{template}[/cyan] at {sd.root}")
@@ -205,7 +138,7 @@ def _materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, se
                       "conversation context will run with the new grants:[/yellow]")
             for w in widened:
                 err.print(f"  [yellow]•[/yellow] {w}")
-    _ensure_home()
+    ensure_home()
     # Export roots (observe/<id>, control/<id>) and the grants they carry:
     # created for the active owners, control/<id> revoked when filter is gone.
     from . import exports
@@ -280,7 +213,7 @@ def plan_cmd(
     """Render the session (writes .glove/, launches nothing) and show what it grants."""
     _one_resume(resume, session)
     try:
-        sd, _, sid, cfg = _open(directory)
+        sd, _, sid, cfg = open_session(directory)
         plan, compose_yaml, home_files = _materialize_plan(sd, sid, cfg, resume=resume, session=session,
                                                            overrides=frozenset(iknow))
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
@@ -301,7 +234,7 @@ def plan_cmd(
     if compose:
         console.print()
         console.print(Syntax(compose_yaml, "yaml", theme="ansi_dark"))
-    _print_extensions(plan)
+    print_extensions(plan)
     _, resolved = sdm.read_effective(sd.effective)
     if resolved.get("model"):
         m = resolved["model"]
@@ -369,7 +302,7 @@ def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
     """(session dir, id, Config, plan) for `glove up`, the harness home left for
     prepare_harness (it needs the resolved model)."""
     try:
-        sd, _, sid, cfg = _open(directory, check_runtime=True)
+        sd, _, sid, cfg = open_session(directory, check_runtime=True)
         todo = sdm.placeholders_left(sdm.load_file(sd))
         if todo:
             raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {sdm.PLACEHOLDER})")
@@ -408,7 +341,7 @@ def prepare_harness(sd, cfg, plan) -> None:
     _resolve_extensions(plan, cfg.provider)
     # keeps what plan time recorded (the extensions' resolutions)
     _, resolved = sdm.read_effective(sd.effective)
-    sdm.write_effective(sd.effective, cfg, {**resolved, "at": _now(), "model": asdict(plan.model)})
+    sdm.write_effective(sd.effective, cfg, {**resolved, "at": now(), "model": asdict(plan.model)})
     render_home(cfg, plan, sd.home)
 
 
@@ -521,42 +454,6 @@ def _print_summary(plan, home_files) -> None:
     )
 
 
-def _print_extensions(plan) -> None:
-    """Every active extension and exactly what it grants (reviewable)."""
-    comp = plan.composition
-    console.print("\n[bold]extensions[/bold]")
-    for a in comp.active:
-        tags = [a.manifest.taint]
-        if a.auto_added:
-            tags.append("auto")
-        if a.manifest.provides:
-            tags.append("provides " + ",".join(a.manifest.provides))
-        console.print(f"  [cyan]{a.name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {a.manifest.summary}")
-    for e in comp.endpoints:
-        where = "harness" if e.harness else "sidecars only"
-        console.print(f"    endpoint {e.name} :{e.port} → {e.target.host}:{e.target.port} "
-                      f"[dim]({e.extension}; {where}; via {e.target.network or 'net'})[/dim]")
-    for ext, layer in comp.image_layers:
-        shown = ", ".join(f"{k}={v}" for k, v in layer.items() if k in ("apt", "pip", "npm") and v)
-        if shown:
-            console.print(f"    image layer ({ext}): {shown}")
-    for ext, item in comp.mcp:
-        console.print(f"    mcp server ({ext}): {item.get('name')}")
-    for ext, _src, dest in comp.skills:
-        console.print(f"    skill ({ext}): {dest}")
-    for line in adapter_call(plan.profile, "describe", plan.adapter, default=[]):
-        console.print(f"    {line}")
-    for key, privs in comp.privileges.items():
-        console.print(f"    [yellow]privilege exception[/yellow] {key}: {privs}")
-    for a in comp.active:
-        for k, v in (a.exports.get("resolved") or {}).items():
-            console.print(f"    resolved ({a.name}): {k} = {v}")
-    if plan.model is not None:
-        m = plan.model
-        console.print(f"    model: {m.model} via {m.base_url} ({m.api}; vision={m.vision}, "
-                      f"context={m.context_window}, key={'yes' if m.api_key_env else 'no'})")
-
-
 # --- check -------------------------------------------------------------------------
 
 
@@ -580,7 +477,7 @@ def check(
     from .session import probe_direct
 
     try:
-        sd, raw, sid, cfg = _open(directory, register=False)
+        sd, raw, sid, cfg = open_session(directory, register=False)
     except (ConfigError, ValueError) as e:
         raise fail(str(e)) from e
     checks: list[Check] = [Check("session file", "ok", f"{sd.file} (schema v{sdm.SCHEMA_VERSION})")]
@@ -699,47 +596,6 @@ def rm(
     elif sd.state.exists():
         sdm.remove_state(sd)
     console.print(f"[green]✓[/green] removed {what}")
-
-
-# --- policy ---------------------------------------------------
-
-@app.command()
-def policy(directory: Path | None = DIR_ARG) -> None:
-    """Print the rendered ring-1 policies and the ring-0 hardening for review."""
-    try:
-        sd, _, sid, cfg = _open(directory, register=False)
-        plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
-                                  session_dir=str(sd.root))
-    except (ConfigError, ValueError) as e:
-        raise fail(str(e)) from e
-
-    h = plan.hardening
-    console.print(f"[bold]{sid}[/bold]  runtime={cfg.runtime}  enforcer={cfg.enforcer}  "
-                  f"extensions={', '.join(a.name for a in plan.composition.active)}\n")
-    console.print("[bold]ring 0 — hardening[/bold]")
-    console.print(f"  user={h.user or 'root (allow_root)'}  cap_drop={list(h.cap_drop)}  "
-                  f"cap_add={list(h.cap_add) or '[]'}  no_new_privileges={h.no_new_privileges}")
-    console.print(f"  read_only={h.read_only}  ipc={h.ipc}  pids={h.limits.pids}  "
-                  f"mem={h.limits.memory}  cpus={h.limits.cpus}")
-    console.print(f"  seccomp={h.seccomp_profile}")
-    if h.systempaths_unconfined:
-        console.print("  [yellow]systempaths=unconfined[/yellow] — masked /proc,/sys exposed to the container "
-                      "(srt strong)")
-    console.print(f"\n[bold]harness command[/bold]\n  {' '.join(plan.harness_command)}")
-    _print_extensions(plan)
-    if not plan.policies:
-        console.print("\n[red]no ring-1 policies (enforcer: none — container only)[/red]")
-    else:
-        for fname in sorted(plan.policies):
-            console.print(f"\n[bold]ring 1 — {fname}[/bold]")
-            console.print(Syntax(plan.policies[fname].rstrip(), "json", theme="ansi_dark"))
-    from .enforcers import get_enforcer
-
-    enf = get_enforcer(cfg.enforcer)
-    if hasattr(enf, "gaps"):
-        console.print("\n[bold yellow]documented gaps[/bold yellow]")
-        for g in enf.gaps(plan):
-            console.print(f"  [yellow]![/yellow] {g}")
 
 
 # --- extension CLIs (`cli:` in a manifest → `glove <name> …`) ------------------------

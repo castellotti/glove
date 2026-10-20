@@ -54,6 +54,9 @@ COMMANDS = {
     "SessionError": "class(ConfigError)",
     "VERSION": "str",
     "autodetect_provider": "() -> 'str'",
+    "build_session_plan": "(cfg: 'Config', *, home_dir: 'str', cwd: 'str | None' = None, uid: 'int | None' = None, "
+                          "gid: 'int | None' = None, resume: 'bool' = False, session_id: 'str | None' = None, "
+                          "state_dir: 'str | None' = None, session_dir: 'str | None' = None) -> 'SessionPlan'",
     "build_forwarder": "(provider: 'str', *, force: 'bool' = False) -> 'None'",
     "build_harness": "(provider: 'str', profile: 'HarnessProfile', *, apt_packages: 'list[str] | None' = None, "
                      "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
@@ -64,6 +67,7 @@ COMMANDS = {
     "err": "Console",
     "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
     "find_session": "(path: 'str | Path | None' = None) -> 'SessionDir'",
+    "get_enforcer": "(name: 'str')",
     "get_profile": "(name: 'str') -> 'HarnessProfile'",
     "get_runtime": "(name: 'str')",
     "glove_home": "() -> 'Path'",
@@ -71,7 +75,9 @@ COMMANDS = {
     "known_runtimes": "() -> 'list[str]'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
+    "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
     "print_checks": "(title: 'str', checks: 'list') -> 'None'",
+    "print_extensions": "(plan) -> 'None'",
     "project_name": "(session: 'str') -> 'str'",
     "quarantine_supported": "() -> 'bool'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
