@@ -22,6 +22,7 @@ API = {
     "keychain_service": "(ref: 'str') -> 'str | None'",
     "keychain_set": "(service: 'str', secret: 'str | None' = None) -> 'int'",
     "resolve_secret": "(value: 'str') -> 'str'",
+    "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
     "existing_host_path": "(root: 'Path | None', value: 'str', kind: 'str') -> 'Path'",
     "exposes_private": "(root: 'Path | None', host: 'Path') -> 'tuple[Path, str] | None'",
     "host_path": "(root: 'Path | None', value: 'str') -> 'Path'",

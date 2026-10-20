@@ -6,6 +6,19 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove skills refresh` asks only what it must.** It lists the relay's
+  Keychain secrets first (stored or missing, without reading them; how each
+  is refreshed; the env var or file that uses it). Name the ones to refresh
+  (`glove skills refresh connectors CONFLUENCE_PAT`, by Keychain service or by
+  the env var or `files:` key using it; `--secret` is now repeatable) and
+  nothing else is asked. A typed value's prompt keeps the stored value on
+  Enter (or skips a missing one) instead of `security`'s mandatory prompt; a
+  refresh hook is confirmed first when every secret is refreshed (Enter: no);
+  and a secret that `playwright.login.capture` stores is offered to `glove
+  playwright login`, run for all of them at once. It reloads the relay only
+  when something changed, and a failure names what was already stored.
+  `glove.api` exports `secret_exists`.
+
 - **Host services belong to `playwright` (breaking for session files).** The
   session key `host_services:` is refused with a pointer: a session file can
   no longer run host commands. `playwright`'s host mode starts its Chrome and
