@@ -735,23 +735,6 @@ def rm(
     console.print(f"[green]✓[/green] removed {what}")
 
 
-@app.command("ps")
-def ps_cmd(runtime: str | None = typer.Option(None, "--runtime", help="docker | podman")) -> None:
-    """Running glove sessions (compose projects) and their directories."""
-    rt = get_runtime(runtime or sdm.autodetect_provider())
-    running = rt.ps()
-    if not running:
-        console.print("[dim]no running glove sessions[/dim]")
-        return
-    try:
-        dirs = {e.id: e.dir for e in reg.load_registry()}
-    except reg.RegistryError:
-        dirs = {}
-    for s in sorted(running, key=lambda x: x.project):
-        console.print(f"[bold]{s.session}[/bold]  {dirs.get(s.session, '[dim](not registered)[/dim]')}  "
-                      f"[dim]({len(s.services)} containers: {', '.join(sorted(s.services))})[/dim]")
-
-
 @app.command()
 def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> None:
     """Remove registry rows whose directory is gone (or no longer that session),
