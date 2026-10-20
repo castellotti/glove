@@ -48,8 +48,11 @@ API = {
 }
 COMMANDS = {
     "DIR_ARG": "ArgumentInfo",
+    "HardeningError": "class(ValueError)",
     "ID_RE": "Pattern",
     "Check": "dataclass(name, status, detail)",
+    "IKNOW": "OptionInfo",
+    "OPTION_SECTIONS": "dict",
     "PLACEHOLDER": "str",
     "RegistryError": "class(ValueError)",
     "SCHEMA_VERSION": "int",
@@ -83,6 +86,9 @@ COMMANDS = {
     "load_session_file": "(sd: 'SessionDir') -> 'dict[str, Any]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
     "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
+    "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
+                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+    "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
     "placeholders_left": "(raw: 'Any', path: 'str' = '') -> 'list[str]'",
     "print_checks": "(title: 'str', checks: 'list') -> 'None'",
@@ -91,6 +97,7 @@ COMMANDS = {
                     "headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
     "project_name": "(session: 'str') -> 'str'",
     "quarantine_supported": "() -> 'bool'",
+    "read_effective": "(path: 'Path') -> 'tuple[Config | None, dict[str, Any]]'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "

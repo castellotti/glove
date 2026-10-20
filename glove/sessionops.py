@@ -12,7 +12,11 @@ from rich.console import Console
 from . import quarantine
 from . import registry as reg
 from . import sessiondir as sdm
+from .config import ConfigError
 from .harness import adapter_call
+from .harnessconfig import render_home
+from .plan import build_session_plan, write_in_place, write_system_files
+from .runtimes import get_runtime
 from .sessiondir import SessionDir, SessionError
 
 console = Console()
@@ -175,3 +179,141 @@ def print_extensions(plan) -> None:
         m = plan.model
         console.print(f"    model: {m.model} via {m.base_url} ({m.api}; vision={m.vision}, "
                       f"context={m.context_window}, key={'yes' if m.api_key_env else 'no'})")
+
+
+def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
+                      home: bool = True,
+                      overrides: frozenset[str] = frozenset()):
+    """Build the plan and write everything the session needs under .glove/
+    (policies, placeholders, compose.yml, effective/baseline, the harness home).
+    Returns (plan, compose yaml, seeded home files)."""
+    want_resume = resume or session is not None
+    prev_cfg = None
+    resume_id = session
+    if want_resume:
+        from .harness import get_profile
+
+        ref = _validate_resume(get_profile(cfg.harness), sd.home, session, sid)
+        if ref is not None:
+            resume_id = ref.id
+        prev_cfg, _ = sdm.read_effective(sd.baseline)
+    plan = build_session_plan(
+        cfg, home_dir=str(sd.home), cwd=str(sd.work),
+        resume=want_resume, session_id=resume_id, state_dir=str(sd.ext), session_dir=str(sd.root),
+    )
+    for o in plan.composition.outputs:
+        # an older glove kept these in work/<name>/: the new mount hides that directory
+        old = sd.work / o.name
+        if old.is_dir() and not old.is_symlink() and any(old.iterdir()):
+            err.print(f"[yellow]⚠ work/{o.name}/ has files that /work/{o.name} no longer shows: it is now "
+                      f"{o.host}; move them there[/yellow]")
+    if prev_cfg is not None:
+        from .sessions import widening_warnings
+
+        widened = widening_warnings(prev_cfg, cfg)
+        if widened:
+            err.print("[yellow]⚠ resuming with broader access than the original session; prior "
+                      "conversation context will run with the new grants:[/yellow]")
+            for w in widened:
+                err.print(f"  [yellow]•[/yellow] {w}")
+    ensure_home()
+    # Export roots (observe/<id>, control/<id>) and the grants they carry:
+    # created for the active owners, control/<id> revoked when filter is gone.
+    from . import exports
+
+    row = next((e for e in reg.load_registry() if e.id == sid), None)
+    plan.composition.grants = exports.grants(plan.composition, row.grants if row else None)
+    for note in exports.prepare(plan.composition, sd.ext):
+        err.print(f"[yellow]{note}[/yellow]")
+    # Extension state (e.g. SearXNG's settings) under .glove/ext/<name>/, and
+    # what export-root owners write there (observe: net/session.json).
+    from .extensions import materialize
+
+    materialize(plan.composition)
+    # Ring-1 policies are written before render so the read-only bind source
+    # exists; they live in .glove/, never inside /work, never agent-writable.
+    if plan.policies:
+        enforcer_dir = sd.state / "enforcer"
+        write_in_place(enforcer_dir, plan.policies)
+        plan.policies_host_dir = str(enforcer_dir)
+    # The adapter's read-only system config (e.g. Claude Code's managed
+    # settings), likewise in .glove/ and bound read-only.
+    from .mounts import make_bind_sources
+
+    write_system_files(plan, sd.state / "harness")
+    # a pinned dir, the config home or a file protected in it, or a tmpfs mount
+    # point under the read-only home may not exist yet
+    make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)
+    if any(p.host_path is None for p in plan.protect):
+        from .mounts import write_placeholders
+
+        plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
+    rendered = get_runtime(cfg.runtime).render(plan, sd.state, overrides=overrides)
+    reg.update(sid, grants=plan.composition.grants)
+    if plan.model is None:  # unreachable: `inference` is a required slot
+        raise ConfigError("no inference provider")
+    sd.compose.write_text(rendered.compose_yaml)
+    # effective.yml tracks the current run (`glove down` stops its host
+    # services; `glove plan` shows its resolutions); baseline.yml is written
+    # once, so the widening check compares against the session's origin.
+    _, resolved = sdm.read_effective(sd.effective)
+    # what extensions resolved from the host at plan time (e.g. corporate's
+    # routes via an interface), for the record and `glove plan`
+    ext_resolved = {a.name: a.exports["resolved"] for a in plan.composition.active if a.exports.get("resolved")}
+    resolved = {k: v for k, v in resolved.items() if k != "extensions"}
+    if ext_resolved:
+        resolved["extensions"] = ext_resolved
+    # the dirs sidecars write (`glove down` quarantines them without re-planning)
+    resolved["outputs"] = [o.name for o in plan.composition.outputs if not o.input]
+    sdm.write_effective(sd.effective, cfg, resolved)
+    if not sd.baseline.exists():
+        sdm.write_effective(sd.baseline, cfg)
+    home_files = render_home(cfg, plan, sd.home) if home else []
+    return plan, rendered.compose_yaml, home_files
+
+
+def one_resume(resume: bool, session: str | None) -> None:
+    if resume and session is not None:
+        raise fail("pass either --resume (last) or --session <id> (specific), not both.")
+
+
+IKNOW = typer.Option([], "--i-know-what-i-am-doing", help="waive a hardening row by key (repeatable)")
+
+
+def _validate_resume(profile, home_dir: Path, session_id: str | None, sid: str):
+    """Validate a resume request, returning the resolved `SessionRef` or None.
+
+    `--session <id>` returns the transcript find_session resolved (so the caller
+    can hand the harness its canonical id). `--resume` (continue-last) returns
+    None: glove only confirms *some* transcript exists — the harness makes the
+    final choice of which conversation to continue."""
+    from .sessions import match_session
+
+    refs = conversations(profile, home_dir, sid)
+    if not refs:
+        raise ConfigError(f"no previous conversation to resume in session {sid!r}; run `glove up` without "
+                          "--resume/--session to start one.")
+    if session_id is None:
+        return None
+    ref = match_session(refs, session_id)
+    if ref is None:
+        available = "\n".join(f"  {r.id}  [{_fmt_mtime(r.mtime)}]" for r in refs)
+        raise ConfigError(f"no conversation matching {session_id!r} in session {sid!r}. available:\n{available}")
+    return ref
+
+
+def _fmt_mtime(mtime: float) -> str:
+    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def conversations(profile, home_dir: Path, sid: str):
+    """Transcripts in the harness home, plus observe's transcripts export (where
+    they are written while `transcripts: true`), newest first."""
+    from .exports import export_dirs
+    from .sessions import list_sessions, sessions_dir
+
+    dirs = [sessions_dir(profile, Path(home_dir))]
+    if profile.transcript_subdir == profile.sessions_subdir:
+        dirs.append(export_dirs(sid)["observe"] / "transcripts")
+    refs = [r for d in dirs if d.is_dir() for r in list_sessions(d)]
+    return sorted(refs, key=lambda r: r.mtime, reverse=True)
