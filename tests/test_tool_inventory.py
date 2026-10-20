@@ -40,8 +40,9 @@ def test_the_harness_classes_render(tmp_path):
 def test_extensions_add_their_tools(tmp_path):
     exts = {"direct": {}, "search": {}, "webfetch": {}, "playwright": {"tools": ["browser_navigate"]}}
     pi = _tools(_plan(tmp_path / "pi", extensions=exts))["allow"]
-    assert {"web_search", "web_fetch", "browser_status", "browser_navigate"} <= set(pi)
-    assert "browser_click" not in pi  # not in the session's allowlist
+    # Pi names MCP tools mcp__<server>__<tool>
+    assert {"mcp__searxng__web_search", "mcp__webfetch__fetch_url", "mcp__playwright__browser_navigate"} <= set(pi)
+    assert "mcp__playwright__browser_click" not in pi and "web_search" not in pi  # not in the allowlist
     vibe = _tools(_plan(tmp_path / "vibe", harness="vibe", extensions=exts))["allow"]
     # Vibe 2.26 calls MCP tools from run_typescript, as mcp_<server>.<tool>
     assert {"mcp_searxng.web_search", "mcp_webfetch.fetch_url", "mcp_playwright.browser_navigate"} <= set(vibe)

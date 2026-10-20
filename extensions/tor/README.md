@@ -21,6 +21,6 @@ The first circuit can take a minute or two. Many sites block or CAPTCHA Tor
 exits; the `search` extension picks engines that tolerate Tor.
 
 Exit identity: observe's `exit_identity: auto` (its default) polls the same
-check through the harness's proxy gate every 5 minutes. Tor isolates circuits
+check through one gate every 5 minutes (see observe's README). Tor isolates circuits
 per client, so the exit it records is the gate's own, not necessarily the
 agent's.

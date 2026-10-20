@@ -185,8 +185,8 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         # (appended below) never turn it on or off.
         "extensions": [] if servers else ["-builtin:mcp"],
     }
-    # Endpoint URLs (e.g. SEARXNG_URL) reach Pi as container env from the
-    # extensions' `harness.env`, which the Pi extensions read directly.
+    # An extension's own Pi code reads what it needs (e.g. an endpoint URL) from
+    # container env, its `harness.env`; nothing goes into settings.
 
     # Let the (git-tracked) session file's `harness_config` override Pi settings
     # and model fields without a code change — e.g. `defaultThinkingLevel: xhigh`,

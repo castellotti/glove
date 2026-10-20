@@ -96,9 +96,10 @@ def test_tcp_endpoints_dial_over_wan(tmp_path):
 
 
 def test_webfetch_gets_the_allowlist_and_the_observed_proxy_the_exceptions(tmp_path):
-    plan, doc = _render(tmp_path, exts={"webfetch": {}, "observe": {}})
-    assert plan.environment["GLOVE_FETCH_ALLOW"] == "*.corp.example,git.example.internal,10.20.0.0/16"
-    cmd = doc["services"]["glove-s-proxy"]["command"]
+    _, doc = _render(tmp_path, exts={"webfetch": {}, "observe": {}})
+    allow = doc["services"]["glove-s-fetcher"]["environment"]["GLOVE_FETCH_ALLOW"]
+    assert allow == "*.corp.example,git.example.internal,10.20.0.0/16"
+    cmd = doc["services"]["glove-s-webfetch-egress"]["command"]
     assert _flags(cmd, "--upstream") == ["chain:http://glove-s-corporate-proxy:8888"]
     assert _flags(cmd, "--guard-allow-host") == ["*.corp.example", "git.example.internal"]
     assert "--resolver" not in cmd  # the corporate gate resolves; no in-tunnel resolver
@@ -108,8 +109,8 @@ def test_other_egress_routes_give_webfetch_no_allowlist(tmp_path):
     work = tmp_path / "w"
     work.mkdir()
     cfg = make_cfg(harness="pi", name="s", workdir=str(work), extensions={"direct": {}, "webfetch": {}})
-    plan, _ = render(cfg, tmp_path)
-    assert "GLOVE_FETCH_ALLOW" not in plan.environment
+    _, text = render(cfg, tmp_path)
+    assert yaml.safe_load(text)["services"]["glove-s-fetcher"]["environment"]["GLOVE_FETCH_ALLOW"] == ""
 
 
 @pytest.mark.parametrize(("corp", "match"), [
@@ -140,7 +141,7 @@ def test_low_port_forwarders_may_bind_as_non_root(tmp_path):
     _, doc = _render(tmp_path, {"tcp": [{"name": "git-ssh", "to": "git.example.internal:22"}]},
                      exts={"webfetch": {}, "observe": {}})
     assert doc["services"]["glove-s-git-ssh"]["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": 0}
-    assert "sysctls" not in doc["services"]["glove-s-proxy"]  # 8888
+    assert "sysctls" not in doc["services"]["glove-s-webfetch-egress"]  # 8888
     assert "sysctls" not in doc["services"]["glove-s-harness"]
     _, plain = _render(tmp_path / "p", {"tcp": [{"name": "git-ssh", "to": "git.example.internal:22"}]})
     assert plain["services"]["glove-s-git-ssh"]["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": 0}

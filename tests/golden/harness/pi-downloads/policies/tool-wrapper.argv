@@ -22,10 +22,6 @@ GLOVE_LLM_API_KEY
 PAT_*
 -u
 *_PAT_*
--u
-GLOVE_DOWNLOAD_MCP_URL
--u
-GLOVE_FETCH_PROXY
 --
 /usr/bin/nono
 wrap

@@ -97,6 +97,25 @@ All notable changes to glove are documented here.
   without a `tools` allowlist, names that collide once Pi replaces their `-`,
   and an `env` value Pi would expand (`$`) or run (`!…`). Pi sessions with `search`,
   `playwright` or `webfetch` `downloads: work` now start those MCP sidecars.
+- **Pi gets search, fetch and the browser over MCP only (breaking for Pi tool
+  names).** The `search`, `webfetch` and `playwright` extensions no longer
+  bake their own Pi code (`pi-extension/`, about 630 lines of TypeScript, and
+  the `SEARXNG_URL`, `GLOVE_FETCH_*`, `GLOVE_DOWNLOAD_MCP_URL` and `BROWSER_*`
+  harness variables). Pi's `web_search`, `web_fetch`, `web_download(_status)`
+  and `browser_*` are now `mcp__searxng__web_search`,
+  `mcp__webfetch__fetch_url`, `mcp__webdownload__web_download(_status)` and
+  `mcp__playwright__browser_*` (`browser_status` is gone). A Pi `webfetch`
+  session starts the `fetcher` sidecar, as Vibe's does: its fetches go
+  harness → `webfetch-mcp` → `webfetch-egress` (observe: `client: webfetch`),
+  not through the `proxy` endpoint, which is now Claude Code's alone, and
+  search's Pi-only `search` endpoint is gone. The fetch guard and body rules
+  exist once, in the fetcher.
+- **observe polls the exit from one gate in every session:** the harness's
+  own hop to the egress proxy when it has one (Claude Code's `proxy`), else
+  the first egress consumer's (`searxng-egress`, `webfetch-egress`, …), so Vibe
+  sessions (and Pi's, now without a `proxy` hop) get `exit.ndjson` too. vpn's
+  `exit` volume is mounted read-only into that gate. Hook contexts' `endpoint`
+  entries gain `harness` and `target_kind`.
 - **playwright `mode: host` never allows `browser_run_code_unsafe`**, for any
   harness, even if `tools` lists it.
 - **`glove up` explains what happened after the harness exits.**

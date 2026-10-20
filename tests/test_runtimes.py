@@ -308,7 +308,8 @@ def test_podman_keep_id_only_where_a_container_writes_a_host_bind(tmp_path):
     doc = yaml.safe_load(rt.render(plan, tmp_path).compose_yaml)
     svcs = doc["services"]
     assert svcs["glove-s-harness"]["userns_mode"] == "keep-id"
-    for name in ("glove-s-llm", "glove-s-search", "glove-s-searxng", "glove-s-valkey", "glove-s-direct-proxy"):
+    for name in ("glove-s-llm", "glove-s-search-mcp", "glove-s-searxng", "glove-s-searxng-mcp", "glove-s-valkey",
+                 "glove-s-direct-proxy"):
         assert "userns_mode" not in svcs[name], name
         assert svcs[name]["user"] == "501:20", name
 

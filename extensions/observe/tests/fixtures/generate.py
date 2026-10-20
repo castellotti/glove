@@ -15,8 +15,9 @@ One directory per scenario, each holding `home/`: a tree shaped like
   orphaned                the session dir was deleted: registry row + export
   not-observable          a registry row only (grants null), no export
   claude-code             observe on a Claude Code session: its transcript
-                          layout (-work/<uuid>.jsonl + subagents/); WebFetch
-                          flows through `proxy` as Pi's do
+                          layout (-work/<uuid>.jsonl + subagents/); its own
+                          WebFetch flows through `proxy` (Pi's fetch_url, as
+                          Vibe's, through `webfetch-mcp` and `webfetch-egress`)
   llm-auth                glove injects the provider key: two model calls,
                           each an `llm` flow (harness → the llm-auth sidecar)
                           and the `llm-upstream` flow it causes (client llm,
@@ -87,8 +88,10 @@ class Scenario:
     harness: str = "pi"
     llm: str = LLM
     webfetch: str = "{}"
-    flows: tuple[Flow, ...] = (Flow("proxy", "en.wikipedia.org:443", 512, 40960, .5, 1),
-                               Flow("proxy", "169.254.169.254:443", 48, 120, 2, 2, "builtin:ssrf-guard"))
+    # Pi's fetch_url: the harness's MCP hop and the fetcher's egress flow behind it
+    flows: tuple[Flow, ...] = (Flow("webfetch-egress", "en.wikipedia.org:443", 512, 40960, .6, .9),
+                               Flow("webfetch-mcp", None, 300, 9000, .5, 1),
+                               Flow("webfetch-egress", "169.254.169.254:443", 48, 120, 2, 2, "builtin:ssrf-guard"))
     bash: tuple[tuple[str, str, bool], ...] = ()  # Pi's bash calls: (command, output, is_error)
     files: tuple[tuple[str, str], ...] = ()  # session-dir files `glove plan` checks (not part of ~/.glove)
 
@@ -107,13 +110,15 @@ AUTH_LLM = "{provider: anthropic, location: internet, model: claude-test, api_ke
 SCENARIOS = {
     "observe-only": Scenario(OBSERVE),
     "observe-filter": Scenario(OBSERVE + "  filter: {}\n", flows=(
-        Scenario.flows[0], Flow("proxy", "ads.example.com:443", 48, 120, 2, 2, "r_fixture_1"))),
+        *Scenario.flows[:2], Flow("webfetch-egress", "ads.example.com:443", 48, 120, 2, 2, "r_fixture_1"))),
     "observe-no-transcripts": Scenario("  observe: {transcripts: false}\n"),
     "filter-revoked": Scenario(OBSERVE + "  filter: {}\n"),  # then filter is removed
     "orphaned": Scenario(OBSERVE),  # then the session dir is deleted
     "not-observable": Scenario(""),
     "claude-code": Scenario(OBSERVE, harness="claude-code", llm=(
-        '{provider: anthropic-compatible, location: host, endpoint: "127.0.0.1:8080", model: claude-test}')),
+        '{provider: anthropic-compatible, location: host, endpoint: "127.0.0.1:8080", model: claude-test}'),
+        flows=(Flow("proxy", "en.wikipedia.org:443", 512, 40960, .5, 1),
+               Flow("proxy", "169.254.169.254:443", 48, 120, 2, 2, "builtin:ssrf-guard"))),
     # the harness's `llm` hop is plain HTTP to llm-auth (dest: the sidecar);
     # `llm-upstream` carries llm-auth's TLS to the provider (dest: its SNI)
     "llm-auth": Scenario(OBSERVE, llm=AUTH_LLM + "}", flows=_model_calls(None, 900, 2400)),
@@ -158,8 +163,7 @@ def _net(net: Path, sc: Scenario, control: Path | None) -> None:
     write them: each flow is built by the gate's own classes (`ForwardSpec` from
     the service's session.json entry, `_Flow`, the record builder: scope,
     dest.ip and resolution are the gate's) and ingested by the collector.
-    Claude Code's own WebFetch goes through the same `proxy` endpoint as Pi's
-    web_fetch."""
+    Claude Code's own WebFetch goes through the `proxy` endpoint."""
     from datetime import datetime
 
     from extensions.gate.netgate import guard

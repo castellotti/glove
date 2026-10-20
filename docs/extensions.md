@@ -175,7 +175,7 @@ those of the fragment's template context.
 | `session` | `{id, subnet, secrets_dir}` |
 | `names` | `{project, harness_network, prefix}` |
 | `slot` | `{slot: {provider, **exports}}`, for the slots filled so far |
-| `endpoint`, `own_endpoints` | every endpoint declared so far; its own |
+| `endpoint`, `own_endpoints` | every endpoint declared so far (`{host, port, url, harness, aliases, interposed, target_kind}`); its own (`{host, port}`) |
 | `state_dir` | its own state directory (`.glove/ext/<name>/`) |
 | `assets` | its own directory |
 | `images`, `libs` | image tags: its own, and its libraries' |

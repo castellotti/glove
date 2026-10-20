@@ -503,7 +503,7 @@ def test_unselected_extension_contributes_nothing(tmp_path):
     assert [a.name for a in plan.composition.active] == ["llm"]
 
 
-def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path):
+def test_image_layers_yield_a_content_addressed_image(tmp_path):
     exts = {"media": {}, "direct": {}, "search": {}}
     cfg = make_cfg(harness="pi", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan, _ = render(cfg, tmp_path)
@@ -512,9 +512,8 @@ def test_image_layers_and_pi_extensions_yield_a_content_addressed_image(tmp_path
     df = plan.derived_dockerfile
     assert f"FROM {base}\n" in df
     assert "ffmpeg" in df and "python3-pil" in df
-    assert "COPY search/pi-extension /opt/glove/ext/search/pi-extension" in df
-    assert "-e" in plan.command and "/opt/glove/ext/search/pi-extension" in plan.command
-    # vibe gets search over MCP from a sidecar: no Pi extension, nothing baked for it
+    # search is an MCP sidecar: nothing baked into the image for it, nothing loaded with `-e`
+    assert "search" not in df and "/opt/glove/ext/" not in " ".join(plan.command)
     cfg = make_cfg(harness="vibe", name="s", workdir=str(_work(tmp_path)), extensions=exts)
     plan2, _ = render(cfg, tmp_path / "v")
     assert "searxng" not in plan2.derived_dockerfile and "pi-extension" not in plan2.derived_dockerfile

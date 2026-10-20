@@ -26,19 +26,8 @@ def test_requires_an_egress_provider(tmp_path):
         _plan(tmp_path, egress=None)
 
 
-def test_pi_wiring(tmp_path):
-    plan = _plan(tmp_path)
-    assert plan.environment["SEARXNG_URL"] == "http://glove-s-search:8080"
-    assert "SEARXNG_URL" in plan.composition.shell_hidden_env
-    assert "/opt/glove/ext/search/pi-extension" in plan.command
-    fwd = next(s for s in plan.network.sidecars if s.role == "search")
-    assert fwd.target == "glove-s-searxng:8080" and fwd.listen_port == 8080
-    # the harness forwarder reaches SearXNG on its private net, not on egress
-    assert fwd.networks == ("glove-s-searchnet",)
-
-
-@pytest.mark.parametrize("harness", ["vibe", "claude-code"])
-def test_mcp_harnesses_get_web_search_from_a_sidecar_over_http(tmp_path, harness):
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
+def test_every_harness_gets_web_search_from_a_sidecar_over_http(tmp_path, harness):
     llm = {"llm": {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080",
                    "model": "m"}} if harness == "claude-code" else {}
     work = tmp_path / "work"
@@ -53,14 +42,9 @@ def test_mcp_harnesses_get_web_search_from_a_sidecar_over_http(tmp_path, harness
     assert set(svc["networks"]) == {"glove-s-searchnet"}  # never on egress
     assert svc["environment"]["MCP_ALLOWED_HOST"] == "glove-s-search-mcp:8000"
     assert svc["read_only"] is True and svc["cap_drop"] == ["ALL"]
-    # nothing baked into the harness image for search any more
-    assert "searxng_mcp" not in (plan.derived_dockerfile or "")
-
-
-def test_pi_gets_the_mcp_sidecar(tmp_path):
-    plan = _plan(tmp_path)
-    assert any(s.role == "search-mcp" for s in plan.network.sidecars)
-    assert [s["name"] for _, s in plan.composition.mcp] == ["searxng"]
+    # nothing baked into the harness image for search, and the harness never reaches SearXNG itself
+    assert "search" not in (plan.derived_dockerfile or "") and "SEARXNG_URL" not in plan.environment
+    assert "search" not in {s.role for s in plan.network.sidecars}
 
 
 def test_the_sidecar_image_is_hash_pinned():

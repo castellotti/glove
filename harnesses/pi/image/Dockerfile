@@ -61,8 +61,8 @@ RUN if [ -n "$GLOVE_PIP" ]; then \
 # glove/enforcers/srt_image layered on top, never baked in here.
 
 # The always-on ring-1 enforcer extension (pure node builtins, no deps to
-# install). Loaded via `pi -e /opt/glove/pi-extensions/enforcer`. Capability
-# extensions are added by plugins into a per-session image variant, not here.
+# install). Loaded via `pi -e /opt/glove/pi-extensions/enforcer`. An
+# extension's own Pi code goes into a per-session image variant, not here.
 COPY extensions/enforcer /opt/glove/pi-extensions/enforcer
 
 # Baked entrypoint (glove/enforcers/entrypoint, shared by every harness, passed as

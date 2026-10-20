@@ -264,7 +264,7 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
 - **vpn's `exit` volume.** gluetun's start script is wrapped to publish the exit
   IP in a plain volume (`/run/glove-exit/ip`). vpn lists it in its `shares`
   export; core lets a forwarder mount such a volume **read-only** only, and
-  observe mounts it into the harness's proxy gate alone. The harness mounts no
+  observe mounts it only into the one gate that polls the exit. The harness mounts no
   volume but its channels, so it never sees the file.
 - **Privileges.** Only gluetun takes exceptions (root, `NET_ADMIN`,
   `/dev/net/tun`, writable rootfs; no sysctls). It is never on a network with
@@ -278,14 +278,14 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   `local/`, which is never mounted, so a symlink into `work/` is refused) gets
   the account credentials on stdin. Its key goes to gluetun the same way; nothing
   is written to disk.
-- **No way in through the proxy.** `web_fetch` refuses non-public destinations
+- **No way in through the proxy.** `fetch_url` refuses non-public destinations
   before the request is sent: non-global IP literals, single-label and local
   names, credentials in the URL. It follows redirects itself so every hop is
   checked. `direct`'s tinyproxy refuses the same shapes (CONNECT included) and
   allows CONNECT only to 443/80. Tor exits and gluetun's kill switch already
   refuse private destinations. **Known gap:** names are judged by shape and never
   resolved, so a public name that resolves privately passes both checks under
-  `direct`. With observe on, the proxy gate's in-tunnel resolver closes this for
+  `direct`. With observe on, the proxy gates' in-tunnel resolver closes this for
   vpn and tor (a name resolving to a private address is refused); `direct` has
   no in-tunnel resolver, so the gap stays there.
 - **`direct` is not anonymous.** Its flows are labelled `route: direct`. Its
@@ -306,7 +306,7 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   loopback, link-local/metadata (`169.254.0.0/16`, `100.100.100.200`),
   multicast, the runtime's host gateway (resolved from its fixed names at
   start), the session's own /24, and names like `host.docker.internal`.
-  `web_fetch` gets the same allowlist for its own pre-check. Measured live (a
+  `fetch_url` gets the same allowlist for its own pre-check. Measured live (a
   public host standing in for a corporate one): the allowed host is reached,
   everything else is refused with the gate's reason, and the host gateway,
   metadata and the session's network are refused even inside an allowed CIDR.
@@ -708,7 +708,7 @@ Claude Code from starting (fail closed).
   Code expects rather than substituting one, and points it at the egress:
   managed `HTTPS_PROXY`/`HTTP_PROXY` = the `proxy` endpoint, `NO_PROXY` = every
   session forwarder name and alias plus loopback (managed, so the agent cannot
-  change either). Compared with Pi's `web_fetch` and Vibe's `fetch_url`, this
+  change either). Compared with Pi's and Vibe's `fetch_url`, this
   is broader in these ways:
   - **no client-side destination guard.** Private, loopback and metadata
     destinations are refused only at the egress: tinyproxy's filter under
@@ -953,7 +953,7 @@ Landlock cannot grant).
   an internal network whose only hosts are the session's forwarders, with no
   external DNS; srt's allowlist would name the same forwarders, and confining
   the harness in srt's netns broke every client that speaks its own proxy
-  protocol (web_fetch) and raw-TCP endpoints. srt's CLI always confines the
+  protocol (Claude Code's WebFetch) and raw-TCP endpoints. srt's CLI always confines the
   network, so `glove-srt` (a small launcher on srt's library, validating the
   settings with srt's own schema) runs srt without it.
 - **Only paths present at launch.** For a missing path bwrap creates an empty

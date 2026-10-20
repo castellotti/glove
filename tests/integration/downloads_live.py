@@ -4,11 +4,10 @@
 
 The session has an egress provider, `webfetch: {downloads: work}`, observe +
 filter, and its llm pointed at the tool-driving stub. It checks, against real
-containers and the harness's real tool path (Pi's web_download, the
-webdownload MCP for Vibe and Claude Code):
+containers and the harness's real tool path (the webdownload MCP):
   1. the fetcher binds <session>/downloads (never a path under work/), the
      harness reads it at /work/downloads read-only: a tool command can neither
-     write there nor plant a link; the harness-only vars (GLOVE_FETCH_PROXY, …)
+     write there nor plant a link; the fetcher's vars (GLOVE_FETCH_PROXY, …)
      are not in a tool command's env;
   2. a small PDF downloads to /work/downloads/, its sha256 matches the host
      file's and the shell's; the fetch tool (Pi, Vibe) describes the PDF
@@ -49,7 +48,7 @@ CDX = "http://web.archive.org/cdx/search/cdx?url=theoldrobots.com&matchType=doma
 BLOCKED = "https://httpbin.org/bytes/4096"
 ROBOTS = "https://www.worldradiohistory.com/robots.txt"
 DEBIAN = "https://cdimage.debian.org/debian-cd/current/amd64/{}/"
-HIDDEN = ("GLOVE_FETCH_PROXY", "GLOVE_DOWNLOAD_MCP_URL", "GLOVE_FETCH_ALLOW")
+HIDDEN = ("GLOVE_FETCH_PROXY", "GLOVE_DOWNLOAD_PROXY", "GLOVE_FETCH_ALLOW")  # the fetcher's, never the harness's
 
 
 def sha256(p: Path) -> str:
@@ -148,7 +147,7 @@ def main(directory: str) -> int:
         check("a tool command can't write /work/downloads or plant a link there",
               out.count("rc=1") == 2 and not (out_dir / "evil.part").is_symlink(), out[-240:])
         out = live.sh("env | grep -o '^GLOVE_[A-Z_]*' | sort | tr '\\n' ' '; echo END")
-        check("no harness-only var in a tool command's env", "END" in out and not any(n in out for n in HIDDEN),
+        check("no fetcher var in a tool command's env", "END" in out and not any(n in out for n in HIDDEN),
               out[-200:])
 
         print(f"== {dl}: a small PDF")

@@ -58,11 +58,14 @@ def _secret(name: str) -> bool:
 # Each harness's own tools, by what they do: shell, file write (name, path
 # argument, content argument), web search, fetch and download; and its CLI. Vibe's MCP
 # tools by the name its hook sees (`mcp_<server>.<tool>`; `call` runs them
-# from run_typescript, the only place Vibe 2.26 offers them).
+# from run_typescript, the only place Vibe 2.26 offers them); Pi's and Claude
+# Code's as `mcp__<server>__<tool>`.
 TOOLS = {
-    "pi": {"bash": "bash", "write": ("write", "path", "content"), "search": "web_search", "fetch": "web_fetch",
-           "download": "web_download", "download_status": "web_download_status", "cli": "/usr/local/bin/pi",
-           "browser": ""},
+    "pi": {"bash": "bash", "write": ("write", "path", "content"),
+           "search": "mcp__searxng__web_search", "fetch": "mcp__webfetch__fetch_url",
+           "download": "mcp__webdownload__web_download",
+           "download_status": "mcp__webdownload__web_download_status", "cli": "/usr/local/bin/pi",
+           "browser": "mcp__playwright__"},
     "vibe": {"bash": "bash", "write": ("write_file", "path", "content"),
              "search": "mcp_searxng.web_search", "fetch": "mcp_webfetch.fetch_url",
              "download": "mcp_webdownload.web_download", "download_status": "mcp_webdownload.web_download_status",

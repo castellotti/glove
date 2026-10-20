@@ -1,6 +1,6 @@
 api: 2
 name: search
-summary: Web search through a per-session SearXNG behind the egress slot — Pi's web_search extension / an MCP server (Vibe, Claude Code).
+summary: Web search through a per-session SearXNG behind the egress slot, served to the harness as an MCP server.
 requires: [egress]
 settings:
   # Engine groups to remove (all on by default): engines that block Tor, need
@@ -16,10 +16,6 @@ images:
   mcp: { build: image, when: { renders: mcp } }
 services: compose/services.yml.j2
 endpoints:
-  search:                               # Pi's extension queries SearXNG itself
-    when: { harness: pi }
-    port: 8080
-    target: { service: searxng, network: searchnet, port: 8080 }
   search-mcp:
     when: { renders: mcp }
     port: 8000
@@ -39,9 +35,6 @@ verify:
       network: searchnet, retries: 20, interval: 3, service: searxng }
   - { name: search-mcp-up, kind: container-healthy, service: searxng-mcp, when: { renders: mcp } }
 harness:
-  env:                                  # Pi's extension reads it; shell commands have no network
-    SEARXNG_URL: { value: "{{ endpoint.search.url }}", when: { endpoint.search: { set: true } }, shell: false }
-  pi: { extensions: [pi-extension], tools: [web_search] }   # Pi has no MCP: its own extension
   mcp:                                  # rendered by harnesses that speak MCP
     - { name: searxng, transport: http, url: "{{ endpoint['search-mcp'].url }}/mcp", tools: web_search }
   brief: brief.md

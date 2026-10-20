@@ -74,8 +74,8 @@ to it through one forwarder:
 
 ```
  harness container ──internal net──▶ glove-<session>-browser (forwarder)
-   pi browser extension                     │
-   (reads BROWSER_MCP_URL)                  ▼
+   Pi's MCP (mcp.json: playwright)          │
+                                            ▼
                                     host 127.0.0.1:<mcp port>  (Playwright MCP)
                                            │ CDP 127.0.0.1:<cdp port>
                                            ▼
@@ -93,11 +93,12 @@ to it through one forwarder:
 - **Pinned to the forwarder.** `--allowed-hosts` accepts only requests arriving
   through `glove-<session>-browser`. Shell commands can't reach it (ring 1 blocks
   their network).
-- **Tools.** Pi exposes only the `tools:` setting's list, and never
-  `browser_run_code_unsafe` in host mode (it runs arbitrary code in the MCP
-  process, on your Mac). Vibe hides every other tool too, but that is a client
-  filter, not a boundary, so glove refuses `vibe` + host mode unless you set
-  `i_accept_host_rce: true`.
+- **Tools.** Pi offers only the `tools:` setting's list (as
+  `mcp__playwright__browser_*`; its enforcer extension refuses any other), and
+  never `browser_run_code_unsafe` in host mode (it runs arbitrary code in the
+  MCP process, on your Mac). Vibe and Claude Code hide or deny every other tool
+  too, but that is a client filter, not a boundary, so glove refuses them in
+  host mode unless you set `i_accept_host_rce: true`.
 - **No anonymity.** The browser uses your Mac's network directly, so host mode
   is refused with a `vpn` or `tor` egress. For a browser that goes through the
   egress (and that you can still watch), use `mode: novnc`: see

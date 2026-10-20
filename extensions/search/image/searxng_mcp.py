@@ -6,8 +6,8 @@ plain JSON responses), which the harness reaches through the `search-mcp`
 forwarder. It only ever talks to SearXNG on the extension's internal network,
 never the open internet. Requests must name the forwarder as their Host
 (`MCP_ALLOWED_HOST`): anything else is refused, as with the Playwright MCP.
-Mirrors Pi's web_search extension: it rate-limits and NEVER auto-retries on
-429 — the shared exit IP is easily throttled.
+It rate-limits and NEVER auto-retries on 429 — the shared exit IP is easily
+throttled.
 """
 
 from __future__ import annotations

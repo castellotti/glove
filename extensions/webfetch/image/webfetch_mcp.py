@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""MCP server exposing `fetch_url` (one web page as readable text; Vibe's, the
-twin of Pi's web_fetch extension in pi-extension/) and, with webfetch
-downloads on, `web_download`/`web_download_status` (files saved to /work, for
-every harness), all through the session's egress proxy.
+"""MCP server exposing `fetch_url` (one web page as readable text, for Pi and
+Vibe) and, with webfetch downloads on, `web_download`/`web_download_status`
+(files saved to /work, for every harness), all through the session's egress
+proxy.
 
 Runs in the `fetcher` sidecar and serves streamable HTTP on :8000 (stateless,
 plain JSON responses), which the harness reaches through the `webfetch-mcp`
@@ -12,9 +12,9 @@ GLOVE_DOWNLOAD_PROXY (the egress provider's proxy, or with observe a gate in
 front of it, one per tool): the sidecar has no other route. Each tool is served
 only when its variable is set.
 
-The destination guard is pi-extension/guard.ts, ported: refuse anything that is
-not plainly a public internet host, judged by shape only and never resolved,
-before the request is sent and again on every redirect hop. Under the
+The destination guard refuses anything that is not plainly a public internet
+host, judged by shape only and never resolved, before the request is sent and
+again on every redirect hop. Under the
 `corporate` egress the operator's allowlist (GLOVE_FETCH_ALLOW) is let through
 even when private; this machine, link-local/metadata and multicast stay refused.
 When the egress gate refuses a request (a filter rule, the corporate allowlist,
@@ -237,7 +237,7 @@ def _policy(url: str, why: str) -> str:
             "route; tell the user if you need this source.")
 
 
-# --- what a fetch makes of a response it won't read as text (pi-extension/body.ts) --
+# --- what a fetch makes of a response it won't read as text ---------------------
 
 TEXT = re.compile(r"(text/.+|[^/]+/([^/]+\+)?(json|xml|yaml)|"
                   r"application/(x-)?(javascript|ecmascript|yaml|toml|ndjson|sql|graphql|sh|shellscript))")

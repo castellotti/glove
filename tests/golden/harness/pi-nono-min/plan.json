@@ -21,7 +21,7 @@
     "PI_CODING_AGENT_SESSION_DIR": "/home/agent/.pi/agent/sessions/--work--",
     "PI_OFFLINE": "1"
   },
-  "image": "glove/pi:0.5.0-5782abbef9",
+  "image": "glove/pi:0.5.0-2fb80a890c",
   "transcripts": [
     null,
     null

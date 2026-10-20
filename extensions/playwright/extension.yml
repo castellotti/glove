@@ -98,13 +98,6 @@ endpoints:
 verify:
   - { name: browser-up, kind: container-healthy, service: pw, when: { mode: [headless, novnc] } }
 harness:
-  env:                                 # Pi's extension reads these; shell commands have no network
-    BROWSER_MCP_URL: { value: "{{ endpoint.browser.url }}/mcp", when: { harness: pi }, shell: false }
-    BROWSER_MCP_TOOLS: { value: "{{ settings.tools | join(',') }}", when: { harness: pi }, shell: false }
-    BROWSER_MODE: { value: "{{ settings.mode }}", when: { harness: pi }, shell: false }
-  pi:                                  # Pi has no MCP: its own extension, registering the allowlist
-    extensions: [pi-extension]         # (or browser_status when the browser is unreachable)
-    tools: "browser_status,{{ settings.tools | join(',') }}"
   mcp:                                  # rendered by harnesses that speak MCP
     - name: playwright
       transport: http

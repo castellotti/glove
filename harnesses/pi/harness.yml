@@ -12,8 +12,8 @@ version: 1.1.0
 audited_version: 1.1.0
 # Load only the always-on ring-1 `enforcer` extension (deps are node builtins)
 # from a system path; the user's own extensions still load from the config home.
-# Capability extensions (search, browser) are added to this entry by the adapter
-# when an extension contributes `harness: {pi: {extensions: …}}`.
+# An extension's own Pi code (`harness: {pi: {extensions: …}}`; none in-tree:
+# capabilities come over MCP) is added to this entry by the adapter.
 # Pi runs on the image's node by path, not via its `#!/usr/bin/env node`
 # shebang: a `toolchains` node block puts a pinned node first on PATH.
 entry: [/usr/local/bin/node, /usr/local/bin/pi, -e, /opt/glove/pi-extensions/enforcer]

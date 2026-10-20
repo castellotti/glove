@@ -1,11 +1,10 @@
 # search
 
 Gives the agent a `web_search` tool backed by a per-session
-[SearXNG](https://docs.searxng.org/). Pi loads a native extension that queries
-SearXNG through the `search` endpoint (`glove-<id>-search:8080`). Harnesses that
-speak MCP (Vibe, Claude Code) get the `searxng` MCP server instead, served over
-streamable HTTP by the `searxng-mcp` sidecar and reached through the
-`search-mcp` endpoint (`glove-<id>-search-mcp:8000/mcp`), so the harness never
+[SearXNG](https://docs.searxng.org/). Every harness gets it from the `searxng`
+MCP server (Pi and Claude Code name it `mcp__searxng__web_search`, Vibe
+`mcp_searxng.web_search`), served over streamable HTTP by the `searxng-mcp`
+sidecar and reached through the `search-mcp` endpoint (`glove-<id>-search-mcp:8000/mcp`), so the harness never
 reaches SearXNG itself and nothing is baked into its image. The sidecar
 (`image/`: python slim + `mcp`, installed from a hash-pinned `requirements.txt`)
 sits only on `searchnet`, answers only requests naming its forwarder as Host,

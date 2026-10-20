@@ -1,13 +1,10 @@
-"""`webfetch`: Pi's web_fetch, and the fetch_url MCP sidecar (Vibe, Claude Code), through the egress provider."""
+"""`webfetch`: the fetch_url MCP sidecar (Pi, Vibe) and Claude Code's own WebFetch, through the egress provider."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
-import shutil
-import subprocess
 import threading
 import time
 import urllib.parse
@@ -29,16 +26,6 @@ def _plan(tmp_path, exts, harness="pi", session_dir=None):
                               session_dir=session_dir)
 
 
-def test_proxy_endpoint_targets_the_egress_proxy(tmp_path):
-    plan = _plan(tmp_path, {"tor": {}, "webfetch": {}})
-    assert plan.environment["GLOVE_FETCH_PROXY"] == "http://glove-s-proxy:8888"
-    fwd = next(s for s in plan.network.sidecars if s.role == "proxy")
-    assert fwd.target == "glove-s-privoxy:8118" and fwd.harness and fwd.networks == ("glove-s-egress",)
-    assert "/opt/glove/ext/webfetch/pi-extension" in plan.command
-    # Pi reads it in the harness process; shell commands (no network) never see it
-    assert "GLOVE_FETCH_PROXY" in plan.policies["tool-wrapper.argv"].splitlines()
-
-
 def test_requires_egress(tmp_path):
     with pytest.raises(ExtensionError, match="requires the 'egress' slot"):
         _plan(tmp_path, {"webfetch": {}})
@@ -47,10 +34,11 @@ def test_requires_egress(tmp_path):
 LOCAL_LLM = {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080", "model": "m"}
 
 
+@pytest.mark.parametrize("harness", ["pi", "vibe"])
 @pytest.mark.parametrize("observe", [False, True])
-def test_vibe_gets_fetch_url_from_a_sidecar(tmp_path, observe):
+def test_pi_and_vibe_get_fetch_url_from_a_sidecar(tmp_path, harness, observe):
     exts = {"direct": {}, "webfetch": {}, **({"observe": {}} if observe else {})}
-    cfg = make_cfg(harness="vibe", name="s", workdir=str(tmp_path), extensions=exts)
+    cfg = make_cfg(harness=harness, name="s", workdir=str(tmp_path), extensions=exts)
     plan, text = render(cfg, tmp_path)
     assert [s for _, s in plan.composition.mcp] == [
         {"name": "webfetch", "transport": "http", "url": "http://glove-s-webfetch-mcp:8000/mcp",
@@ -79,7 +67,7 @@ def test_claude_code_uses_its_own_webfetch_through_the_proxy_endpoint(tmp_path):
     plan, text = render(cfg, tmp_path)
     assert plan.composition.mcp == [] and "glove-s-fetcher" not in yaml.safe_load(text)["services"]
     fwd = next(s for s in plan.network.sidecars if s.role == "proxy")
-    assert fwd.harness and fwd.target == "glove-s-direct-proxy:8888"
+    assert fwd.harness and fwd.target == "glove-s-direct-proxy:8888" and fwd.networks == ("glove-s-egress",)
     assert "WebFetch" in dict(plan.composition.rendered_briefs())["webfetch"]
 
 
@@ -92,14 +80,8 @@ def test_downloads_put_the_fetcher_on_every_harness(tmp_path, harness):
     plan = _plan(tmp_path / "work", exts, harness, session_dir=str(tmp_path))
     comp = plan.composition
     assert {"webdownload-mcp", "webdownload-egress"} <= {e.name for e in comp.endpoints}
-    if harness == "pi":
-        assert plan.environment["GLOVE_DOWNLOAD_MCP_URL"] == "http://glove-s-webdownload-mcp:8000/mcp"
-        from glove.harnessconfig import adapter_context
-        from harnesses.pi.adapter import tool_names
-        assert {"web_fetch", "web_download", "web_download_status"} <= set(tool_names(adapter_context(comp)))
-    else:
-        assert comp.mcp[-1][1]["name"] == "webdownload"
-        assert comp.mcp[-1][1]["tools"] == ["web_download", "web_download_status"]
+    assert comp.mcp[-1][1]["name"] == "webdownload"
+    assert comp.mcp[-1][1]["tools"] == ["web_download", "web_download_status"]
     # written by the sidecar beside work/, read by the harness at /work/downloads
     mount = next(m for m in plan.mounts if m.container_path == "/work/downloads")
     assert (mount.host_path, mount.mode) == (str(tmp_path / "downloads"), "ro")
@@ -180,10 +162,9 @@ def test_trust_corporate_ca_points_ssl_at_roots_then_the_ca(tmp_path, monkeypatc
     assert _server().SYSTEM_ROOTS == relayd.SYSTEM_ROOTS
 
 
-def test_downloads_off_render_no_fetcher_for_pi(tmp_path):
-    plan = _plan(tmp_path, {"direct": {}, "webfetch": {}})
-    assert "GLOVE_DOWNLOAD_MCP_URL" not in plan.environment
-    assert not {"webfetch-mcp", "webdownload-egress"} & {e.name for e in plan.composition.endpoints}
+def test_downloads_off_render_no_downloader(tmp_path):
+    names = {e.name for e in _plan(tmp_path, {"direct": {}, "webfetch": {}}).composition.endpoints}
+    assert "webfetch-mcp" in names and not {"webdownload-mcp", "webdownload-egress"} & names
 
 
 def test_the_sidecar_image_is_hash_pinned():
@@ -193,18 +174,6 @@ def test_the_sidecar_image_is_hash_pinned():
     assert (d / "requirements.txt").read_text() == (d.parents[1] / "search" / "image" / "requirements.txt").read_text()
 
 
-def test_npm_dependencies_are_pinned_exactly():
-    pkg = json.loads((Path(__file__).parents[1] / "pi-extension" / "package.json").read_text())
-    for name, version in pkg["dependencies"].items():
-        assert re.fullmatch(r"\d+\.\d+\.\d+", version), (name, version)
-
-
-def test_pi_sends_plain_http_unwrapped():
-    # undici's ProxyAgent tunnels http:// too unless told not to (index.ts says
-    # why); a source check: undici isn't on the host
-    assert "proxyTunnel: false" in (Path(__file__).parents[1] / "pi-extension" / "index.ts").read_text()
-
-
 # --- the fetch_url server (webfetch_mcp.py), without the MCP layer ------------------
 
 
@@ -212,7 +181,7 @@ def _server():
     return load_module(Path(__file__).parents[1] / "image" / "webfetch_mcp.py", "webfetch")
 
 
-# the same table as guard.ts's behaviour (README "Destinations")
+# the guard's table (README "Destinations")
 @pytest.mark.parametrize("url,ok", [
     ("https://example.com/x", True), ("http://93.184.215.14/", True), ("http://[2606:4700::1111]/", True),
     ("ftp://example.com/", False), ("https://u:p@example.com/", False),
@@ -365,7 +334,6 @@ def test_fetch_returns_no_binary_body(server, monkeypatch):
         "session has (e.g. pdftotext, 7z).")
 
 
-# the same cases through pi-extension/body.ts and its Python port
 BODY_CASES = [
     ("text/html; charset=utf-8", b"<p>x</p>"), ("application/json", b"{}"), ("application/ld+json", b"{}"),
     ("image/svg+xml", b"<svg/>"), ("text/xml", b"<a/>"), ("application/javascript", b"x"),
@@ -380,30 +348,8 @@ RETRY_CASES = [None, "", "0", "120", "-5", "1.5", "soon", "2015", "Wed, 21 Oct 2
                "Sat, 31 Feb 2015 07:28:00 GMT", "Thu, 21 Oct 2015 07:28:00 GMT"]
 
 
-@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
-def test_pi_body_rules_match_the_python_port():
+def test_body_rules():
     m = _server()
-    body = Path(__file__).parents[1] / "pi-extension" / "body.ts"
-    script = f"""
-import {{ isBinary, binaryNotice, rateLimited }} from {json.dumps(str(body))};
-const cases = {json.dumps([[c, list(h)] for c, h in BODY_CASES])};
-const retries = {json.dumps(RETRY_CASES)};
-console.log(JSON.stringify({{
-  binary: cases.map(([c, h]) => isBinary(c, Uint8Array.from(h))),
-  notices: [binaryNotice("t", "u", "application/pdf; q=1", "12", 3, true),
-            binaryNotice("t", "u", "", null, 3, false), binaryNotice("t", "u", "image/png", "1e3", 0, false)],
-  retries: retries.map((r) => rateLimited(r, 1445412420000)),
-}}));
-"""
-    res = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
-    assert res.returncode == 0, res.stderr
-    assert json.loads(res.stdout) == {
-        "binary": [m.is_binary(c, h) for c, h in BODY_CASES],
-        "notices": [m.binary_notice("t", "u", "application/pdf; q=1", "12", 3, True),
-                    m.binary_notice("t", "u", "", None, 3, False),
-                    m.binary_notice("t", "u", "image/png", "1e3", 0, False)],
-        "retries": [m.rate_limited(r, now=1445412420) for r in RETRY_CASES],
-    }
     assert [m.is_binary(c, h) for c, h in BODY_CASES] == [
         False, False, False, False, False, False, True, True, True, False,
         True, False, True, False, True, True, False, False, False, False, True]

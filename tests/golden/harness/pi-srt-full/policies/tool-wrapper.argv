@@ -22,16 +22,6 @@ GLOVE_LLM_API_KEY
 PAT_*
 -u
 *_PAT_*
--u
-BROWSER_MCP_TOOLS
--u
-BROWSER_MCP_URL
--u
-BROWSER_MODE
--u
-GLOVE_FETCH_PROXY
--u
-SEARXNG_URL
 --
 /usr/bin/nono
 wrap

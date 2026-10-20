@@ -34,12 +34,7 @@
       "*COOKIE*",
       "*_PAT",
       "PAT_*",
-      "*_PAT_*",
-      "BROWSER_MCP_TOOLS",
-      "BROWSER_MCP_URL",
-      "BROWSER_MODE",
-      "GLOVE_FETCH_PROXY",
-      "SEARXNG_URL"
+      "*_PAT_*"
     ]
   },
   "security": {

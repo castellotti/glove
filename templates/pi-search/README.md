@@ -1,7 +1,7 @@
 # pi-search template
 
 Private web research with Pi: `web_search` (a per-session SearXNG) and
-`web_fetch`, both leaving only through the session's egress provider, which is a
+`fetch_url`, both leaving only through the session's egress provider, which is a
 VPN tunnel by default (Tor or direct are one line away).
 
 ```sh

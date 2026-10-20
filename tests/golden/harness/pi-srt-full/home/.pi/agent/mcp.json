@@ -24,6 +24,13 @@
       "toolExposure": {
         "web_search": "direct"
       }
+    },
+    "webfetch": {
+      "url": "http://glove-s-webfetch-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "fetch_url": "direct"
+      }
     }
   }
 }

@@ -1,8 +1,9 @@
 # playwright — a real Chromium for the agent
 
 Provides the `browser` slot: Playwright's MCP server (`playwright-core mcp`,
-pinned in `image/package.json` + its lockfile), exposed to Pi as native
-`browser_*` tools and to Vibe and Claude Code as the `playwright` MCP server.
+pinned in `image/package.json` + its lockfile), exposed to every harness as
+the `playwright` MCP server (Pi and Claude Code name its tools
+`mcp__playwright__browser_*`, Vibe `mcp_playwright.browser_*`).
 Three modes:
 
 | | `headless` (default) | `novnc` | `host` |

@@ -381,7 +381,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-mcp:
     container_name: glove-s-searxng-mcp
-    image: glove/ext-search-mcp:1e59a8fb36
+    image: glove/ext-search-mcp:0fa501a2e0
     environment:
       SEARXNG_URL: http://glove-s-searxng:8080
       MCP_ALLOWED_HOST: glove-s-search-mcp:8000

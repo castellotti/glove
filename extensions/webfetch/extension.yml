@@ -1,6 +1,6 @@
 api: 2
 name: webfetch
-summary: Read a URL through the egress provider's proxy — Pi's web_fetch, Claude Code's own WebFetch, a fetch_url MCP server (Vibe).
+summary: Read a URL through the egress provider's proxy — Claude Code's own WebFetch, a fetch_url MCP server (Pi, Vibe).
 requires: [egress]
 settings:
   # `work`: web_download saves files to <session>/downloads/ (no size cap),
@@ -13,26 +13,25 @@ outputs:
   downloads: { services: [fetcher], when: { downloads: work } }
 networks:
   # the fetcher sidecar and its harness forwarder (and, with observe, its gates)
-  fetchnet: { internal: true, when: &fetcher { any: [{ harness: vibe }, { downloads: work }] } }
+  fetchnet: { internal: true, when: &fetcher { any: [{ harness: [pi, vibe] }, { downloads: work }] } }
 images:
-  # The fetcher sidecar: Vibe's fetch_url (its own web_fetch has no guard), and
-  # every harness's web_download
+  # The fetcher sidecar: Pi's and Vibe's fetch_url (Vibe's own web_fetch has no
+  # guard), and every harness's web_download
   mcp: { build: image, when: *fetcher }
 services: compose/services.yml.j2
 # the fetcher trusts the session's corporate_ca too (webfetch_mcp: trust_corporate_ca; manifest `trust:`)
 trust: [fetcher]
 endpoints:
-  # Pi and Claude Code: the harness reaches the egress proxy only through this
-  # forwarder. Pi attaches it per request (never as a global dispatcher, so LLM
-  # traffic is unaffected); Claude Code's WebFetch uses it as HTTPS_PROXY, with
-  # every session forwarder in NO_PROXY. Shell commands have no network either way.
+  # Claude Code: the harness reaches the egress proxy only through this
+  # forwarder, which its WebFetch uses as HTTPS_PROXY, with every session
+  # forwarder in NO_PROXY. Shell commands have no network.
   proxy:
-    when: { harness: [pi, claude-code] }
+    when: { harness: claude-code }
     port: 8888
     target: { slot: egress }
-  # Vibe: the harness reaches the fetcher only, never the proxy
+  # Pi and Vibe: the harness reaches the fetcher only, never the proxy
   webfetch-mcp:
-    when: { harness: vibe }
+    when: { harness: [pi, vibe] }
     port: 8000
     target: { service: fetcher, network: fetchnet, port: 8000 }
     observe: { tool: web_fetch, feeds: [webfetch-egress] }
@@ -47,7 +46,7 @@ endpoints:
   # provider (observe) interposes a gate: then the fetcher leaves the egress
   # network and reaches the proxy only through it. Otherwise it dials the proxy.
   webfetch-egress:
-    when: { harness: vibe }
+    when: { harness: [pi, vibe] }
     harness: false
     interpose: true
     target: { slot: egress }
@@ -64,29 +63,11 @@ endpoints:
 verify:
   - { name: fetcher-up, kind: container-healthy, service: fetcher, when: *fetcher }
 harness:
-  # Pi's extension reads these in the harness process. Shell commands have no
-  # network, so they never see them (`shell: false`): a proxy URL there only
-  # invites a curl that fails.
-  env:
-    GLOVE_FETCH_PROXY: { value: "{{ endpoint.proxy.url }}", when: { harness: pi }, shell: false }
-    # Pi has no MCP: its extension calls the fetcher's web_download over it
-    GLOVE_DOWNLOAD_MCP_URL:
-      value: "{{ endpoint['webdownload-mcp'].url }}/mcp"
-      when: { harness: pi, downloads: work }
-      shell: false
-    # corporate egress only: its allowlist (private hosts the guard lets through)
-    GLOVE_FETCH_ALLOW:
-      value: "{{ (slot.egress.guard_hosts + slot.egress.guard_cidrs) | join(',') }}"
-      when: { harness: pi, slot.egress.provider: corporate }
-      shell: false
-  pi:                                   # Pi's web_fetch (and web_download) tools
-    extensions: [pi-extension]
-    tools: "web_fetch{{ ',web_download,web_download_status' if settings.downloads == 'work' else '' }}"
   claude-code:                          # Claude Code's own WebFetch, through the proxy
     web_fetch: { proxy: "{{ endpoint.proxy.url }}" }
-  mcp:                                  # Vibe (its native web_fetch is blocked by its hook)
+  mcp:                                  # Pi, Vibe (Vibe's native web_fetch is blocked by its hook)
     - { name: webfetch, transport: http, url: "{{ endpoint['webfetch-mcp'].url }}/mcp",
-        tools: fetch_url, when: { harness: vibe } }
+        tools: fetch_url, when: { harness: [pi, vibe] } }
     - { name: webdownload, transport: http, url: "{{ endpoint['webdownload-mcp'].url }}/mcp",
         tools: "web_download,web_download_status", when: { downloads: work } }
   brief: brief.md

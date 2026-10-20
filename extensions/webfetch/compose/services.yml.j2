@@ -1,10 +1,10 @@
-{% set fetch, downloads = harness == "vibe", settings.downloads == "work" %}
+{% set fetch, downloads = harness in ("pi", "vibe"), settings.downloads == "work" %}
 services:
 {% if fetch or downloads %}
 {% set hop = endpoint['webfetch-egress'] if fetch else endpoint['webdownload-egress'] %}
 {% set mcp_hosts = ([endpoint['webfetch-mcp'].host] if fetch else [])
                  + ([endpoint['webdownload-mcp'].host] if downloads else []) %}
-  # The fetcher: Vibe's fetch_url and, with downloads, web_download. Streamable
+  # The fetcher: Pi's and Vibe's fetch_url and, with downloads, web_download. Streamable
   # HTTP on :8000, reached only through the harness's `webfetch-mcp` and
   # `webdownload-mcp` forwarders (and only under those names: MCP_ALLOWED_HOST).
   # Every fetch goes through

@@ -99,14 +99,14 @@ def test_classify_scope_by_shape(host, gw, scope):
 def test_every_endpoint_becomes_a_gate_dropin(tmp_path):
     plan, doc, _ = render(tmp_path)
     g = gates(doc)
-    assert set(g) == {"glove-ps-llm", "glove-ps-search", "glove-ps-search-mcp", "glove-ps-proxy",
-                      "glove-ps-searxng-egress", "glove-ps-netgate"}
+    assert set(g) == {"glove-ps-llm", "glove-ps-search-mcp", "glove-ps-searxng-egress", "glove-ps-webfetch-mcp",
+                      "glove-ps-webfetch-egress", "glove-ps-netgate"}
     assert not any(s.get("image") == plan.forwarder_image for s in doc["services"].values())
-    proxy = g["glove-ps-proxy"]
+    mcp = g["glove-ps-webfetch-mcp"]
     # same name, networks and port as the socat it replaces
-    assert set(proxy["networks"]) == {"glove-ps-net", "glove-ps-egress"}
-    assert proxy["networks"]["glove-ps-net"]["aliases"] == ["glove-ps-proxy-ingress"]
-    cmd = proxy["command"]
+    assert set(mcp["networks"]) == {"glove-ps-net", "glove-ps-fetchnet"}
+    assert mcp["networks"]["glove-ps-net"]["aliases"] == ["glove-ps-webfetch-mcp-ingress"]
+    cmd = g["glove-ps-webfetch-egress"]["command"]
     assert (flag(cmd, "--mode"), flag(cmd, "--upstream"), flag(cmd, "--route"), flag(cmd, "--listen")) == \
         ("http-proxy", "chain:http://glove-ps-direct-proxy:8888", "direct", "8888")
     assert flag(cmd, "--tool") == "web_fetch"
@@ -139,8 +139,8 @@ def test_searxng_reaches_egress_only_through_its_gate(tmp_path):
 
 
 @pytest.mark.parametrize(("exts", "harness", "want"), [
-    (PI_SEARCH, "pi", {"llm": [], "search": ["searxng-egress"], "search-mcp": ["searxng-egress"],
-                       "searxng-egress": [], "proxy": []}),
+    (PI_SEARCH, "pi", {"llm": [], "search-mcp": ["searxng-egress"], "searxng-egress": [],
+                       "webfetch-mcp": ["webfetch-egress"], "webfetch-egress": []}),
     # the fetcher sends each tool through its own egress gate, both on fetchnet
     ({"direct": {}, "search": {}, "webfetch": {"downloads": "work"}, "playwright": {}}, "vibe",
      {"llm": [], "browser": ["browser-egress"], "browser-egress": [], "search-mcp": ["searxng-egress"],
@@ -185,12 +185,12 @@ def test_observe_feeds_must_name_other_egress_endpoints(feeds):
         HOOKS.next_gates(fw)
 
 
-@pytest.mark.parametrize("skip", ["searxng-egress", "search"])
+@pytest.mark.parametrize("skip", ["searxng-egress", "search-mcp"])
 def test_a_skipped_gate_keeps_its_place_in_next(tmp_path, skip):
     # a skipped egress gate still carries the traffic (socat, unrecorded: observed false)
     plan = plan_for(tmp_path, observe={"skip": [skip]})
     fw = {f["service"]: f for f in plan.composition.forwarders}
-    assert HOOKS.next_gates(list(fw.values()))["search"] == ["searxng-egress"] and not fw[skip]["observed"]
+    assert HOOKS.next_gates(list(fw.values()))["search-mcp"] == ["searxng-egress"] and not fw[skip]["observed"]
 
 
 def test_a_hook_editing_a_forwarders_endpoint_changes_no_other_hooks_view(tmp_path):
@@ -223,15 +223,26 @@ def test_collector_has_no_network_and_a_tmpfs_event_volume(tmp_path):
     assert all(any(v.get("source") == "glove-ps-observe-events" for v in s["volumes"]) for s in gates(doc).values())
 
 
-def test_resolver_and_exit_identity_only_on_proxy_gates(tmp_path):
+def test_resolver_on_every_proxy_gate_and_exit_identity_on_one(tmp_path):
     _, doc, _ = render(tmp_path, exts={"tor": {}, "search": {}, "webfetch": {}})
     g = gates(doc)
-    proxy, hop, llm = (g[f"glove-ps-{n}"]["command"] for n in ("proxy", "searxng-egress", "llm"))
-    assert flag(proxy, "--resolver") == flag(hop, "--resolver") == "tor-socks://glove-ps-tor:9150"
-    assert flag(proxy, "--route") == "tor"
-    # auto: tor's own export, the Tor Project's check
-    assert flag(proxy, "--exit-url") == "https://check.torproject.org/api/ip"
-    assert "--exit-url" not in hop and "--resolver" not in llm and "--exit-url" not in llm
+    search, fetch, llm = (g[f"glove-ps-{n}"]["command"] for n in ("searxng-egress", "webfetch-egress", "llm"))
+    assert flag(search, "--resolver") == flag(fetch, "--resolver") == "tor-socks://glove-ps-tor:9150"
+    assert flag(search, "--route") == flag(fetch, "--route") == "tor"
+    # auto: tor's own export, the Tor Project's check, from the first egress consumer's gate only
+    # (no harness hop to the proxy here; Tor builds each gate its own circuit)
+    assert flag(search, "--exit-url") == "https://check.torproject.org/api/ip"
+    assert "--exit-url" not in fetch and "--resolver" not in llm and "--exit-url" not in llm
+
+
+def test_the_harness_hop_to_the_proxy_polls_the_exit_before_any_consumer(tmp_path):
+    ep = {"harness": False, "target_kind": "slot"}
+    ctx = hook_ctx(settings={"skip": []}, endpoint={
+        "llm": {"harness": True, "target_kind": "host_port"}, "searxng-egress": ep,
+        "proxy": {**ep, "harness": True}, "webfetch-egress": ep})
+    assert HOOKS._poller(ctx) == "proxy"
+    assert HOOKS._poller(hook_ctx(settings={"skip": ["proxy"]}, endpoint=ctx.endpoint)) == "searxng-egress"
+    assert HOOKS._poller(hook_ctx(settings={"skip": []}, endpoint={"llm": ctx.endpoint["llm"]})) is None
 
 
 VPN = {"vpn": {"provider": "custom", "wireguard_key": "keychain:wg"}, "webfetch": {}}
@@ -252,17 +263,17 @@ def test_exit_identity_url_or_none(tmp_path, exts, observe, url):
     assert not any(v.get("source") == "glove-ps-vpn-exit" for s in gates(doc).values() for v in s["volumes"])
 
 
-def test_vpn_exit_is_read_from_its_file_by_the_proxy_gate_only(tmp_path):
+def test_vpn_exit_is_read_from_its_file_by_the_polling_gate_only(tmp_path):
     plan, doc, _ = render(tmp_path, exts=VPN)
-    proxy = doc["services"]["glove-ps-proxy"]
+    proxy = doc["services"]["glove-ps-webfetch-egress"]
     assert flag(proxy["command"], "--exit-file") == "vpn-endpoint=/run/glove-exit/ip"
     assert "--exit-url" not in proxy["command"]
     shared = {"type": "volume", "source": "glove-ps-vpn-exit", "target": "/run/glove-exit", "read_only": True}
     assert shared in proxy["volumes"]
-    # only gluetun (which writes it) and the proxy gate (read-only) mount it — never the harness
+    # only gluetun (which writes it) and the polling gate (read-only) mount it — never the harness
     mounts = {n for n, svc in doc["services"].items()
               if any(v.get("source") == "glove-ps-vpn-exit" for v in svc.get("volumes") or [] if isinstance(v, dict))}
-    assert mounts == {"glove-ps-gluetun", "glove-ps-proxy"} and plan.harness_service not in mounts
+    assert mounts == {"glove-ps-gluetun", "glove-ps-webfetch-egress"} and plan.harness_service not in mounts
 
 
 FILE = {"source": "vpn-endpoint", "volume": "exit", "file": "ip"}
@@ -283,14 +294,15 @@ def test_session_json_names_the_exit_source(setting, egress, fact):
 
 
 def test_no_exit_identity_without_a_polling_gate(tmp_path):
-    # the proxy endpoint skipped: no gate polls, so session.json claims nothing
-    _, doc, _ = render(tmp_path, exts=VPN, observe={"skip": ["proxy"]})
+    # the only egress hop skipped: no gate polls, so session.json claims nothing
+    _, doc, _ = render(tmp_path, exts=VPN, observe={"skip": ["webfetch-egress"]})
     assert not any("--exit-file" in s["command"] for s in gates(doc).values())
-    fwd = {"harness": True, "observed": True, "mode": "http-proxy", "route": {"kind": "vpn", "upstream": "x:1"}}
-    assert HOOKS._polled(hook_ctx(forwarders=[fwd]))
-    for other in ({"observed": False}, {"harness": False}, {"mode": "tcp"},
+    fwd = {"service": "p", "observed": True, "mode": "http-proxy", "route": {"kind": "vpn", "upstream": "x:1"}}
+    eps = {"p": {"harness": False, "target_kind": "slot"}}
+    assert HOOKS._polled(hook_ctx(settings={"skip": []}, endpoint=eps, forwarders=[fwd]))
+    for other in ({"observed": False}, {"service": "q"}, {"mode": "tcp"},
                   {"route": {"kind": "corporate", "upstream": "direct"}}):
-        assert not HOOKS._polled(hook_ctx(forwarders=[{**fwd, **other}]))
+        assert not HOOKS._polled(hook_ctx(settings={"skip": []}, endpoint=eps, forwarders=[{**fwd, **other}]))
     # its shape is the slot schema's (tests/test_api.py); its values are checked here
     for bad in ({"url": "http://x/"}, {"url": "https://"}, {"url": None}, {**FILE, "file": "../ip"},
                 {**FILE, "file": None}):
@@ -302,8 +314,8 @@ def test_a_forwarder_reads_only_the_egress_exit_volume(tmp_path):
     from glove.compose import harden_fragments
 
     plan = plan_for(tmp_path, exts=VPN)
-    proxy = next(s for s in plan.network.implemented if s.role == "proxy")
-    vols = proxy.impl["volumes"]
+    poller = next(s for s in plan.network.implemented if s.role == "webfetch-egress")
+    vols = poller.impl["volumes"]
     exit_vol = next(v for v in vols if v["source"] == "egress:exit")
     for bad, match in [({**exit_vol, "read_only": False}, "mounts read-only"),
                        ({**exit_vol, "source": "egress:data"}, "must be declared")]:  # gluetun's state: not shared

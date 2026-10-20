@@ -674,8 +674,8 @@ def base_context(comp: Composition, a: Active) -> dict[str, Any]:
         "names": _names(comp.session),
         "slot": {s: {"provider": p.name, **p.exports} for s, p in comp.slots.items()},
         "endpoint": {
-            e.name: {"host": e.host(comp.session), "port": e.port, "url": e.url(comp.session),
-                     "aliases": list(e.aliases), "interposed": e.interposed}
+            e.name: {"host": e.host(comp.session), "port": e.port, "url": e.url(comp.session), "harness": e.harness,
+                     "aliases": list(e.aliases), "interposed": e.interposed, "target_kind": e.target.kind}
             for e in comp.endpoints
         },
         # the endpoints this extension declared, e.g. for a sidecar dialling its own forwarders

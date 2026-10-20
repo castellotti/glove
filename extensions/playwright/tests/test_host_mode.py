@@ -193,16 +193,12 @@ def test_glove_check_shows_what_runs_on_the_host(tmp_path):
 
 def test_harness_wiring(tmp_path):
     plan = _plan(tmp_path, tools=["browser_navigate", "browser_snapshot"])
-    env = plan.environment
-    assert env["BROWSER_MCP_URL"] == "http://glove-s-browser:8931/mcp"
-    assert env["BROWSER_MCP_TOOLS"] == "browser_navigate,browser_snapshot"
-    assert env["BROWSER_MODE"] == "host"
-    assert {"BROWSER_MCP_URL", "BROWSER_MCP_TOOLS", "BROWSER_MODE"} <= plan.composition.shell_hidden_env
-    vibe = _plan(tmp_path, harness="vibe", i_accept_host_rce=True)
-    assert not any(k.startswith("BROWSER_") for k in vibe.environment)  # Vibe has the MCP server instead
+    [pw] = [s for _, s in plan.composition.mcp if s["name"] == "playwright"]
+    assert pw["url"] == "http://glove-s-browser:8931/mcp" and pw["tools"] == ["browser_navigate", "browser_snapshot"]
+    assert not any(k.startswith("BROWSER_") for k in plan.environment)
     fwd = next(s for s in plan.network.sidecars if s.role == "browser")
     assert fwd.target == f"host.docker.internal:{_ports(plan)[0]}" and fwd.host_gateway
-    assert "/opt/glove/ext/playwright/pi-extension" in plan.command
+    assert "/opt/glove/ext/" not in " ".join(plan.command)
     assert not any(doc.get("services") for _, doc in plan.composition.fragments)  # no sidecar
     assert "REAL Chrome on the operator's own desktop" in dict(plan.composition.rendered_briefs())["playwright"]
 
@@ -244,10 +240,3 @@ def test_host_mode_never_allows_run_code(tmp_path):
     headless = _plan(tmp_path / "h", extra={"direct": {}}, tools=tools, mode="headless")
     assert next(s for _, s in headless.composition.mcp if s["name"] == "playwright")["tools"] == tools
 
-
-def test_pi_extension_never_exposes_run_code_in_host_mode():
-    from glove.extensions import IN_TREE_DIR
-
-    src = (IN_TREE_DIR / "playwright" / "pi-extension" / "index.ts").read_text()
-    assert 'process.env.BROWSER_MODE === "host"' in src
-    assert 'ALLOW.delete("browser_run_code_unsafe")' in src
