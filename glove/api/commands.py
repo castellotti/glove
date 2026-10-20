@@ -27,9 +27,12 @@ from ..sessiondir import (
     template_drift,
 )
 from ..sessiondir import find as find_session
+from ..sessiondir import load_file as load_session_file
+from ..sessiondir import materialize as materialize_session
 from ..sessionops import (
     DIR_ARG,
     console,
+    ensure_home,
     err,
     fail,
     mark_downloads,
@@ -37,12 +40,14 @@ from ..sessionops import (
     print_checks,
     print_extensions,
     row_state,
+    sync_registry,
 )
 
 __all__ = ["DIR_ARG", "ID_RE", "PLACEHOLDER", "SCHEMA_VERSION", "VERSION", "Check", "RegistryError", "SessionDir",
            "SessionError", "autodetect_provider", "build_forwarder", "build_harness", "build_session_plan", "console",
-           "default_enforcer", "discover", "err", "extension_checks", "fail", "find_session", "get_enforcer",
-           "get_profile", "get_runtime", "glove_home", "known_harnesses", "known_runtimes", "load_registry",
-           "mark_downloads", "open_session", "placeholders_left", "print_checks", "print_extensions", "probe_direct",
-           "project_name", "quarantine_supported", "remove_rows", "row_state", "run_doctor", "secret_exists",
-           "secret_refs", "template_drift", "worst_status"]
+           "default_enforcer", "discover", "ensure_home", "err", "extension_checks", "fail", "find_session",
+           "get_enforcer", "get_profile", "get_runtime", "glove_home", "known_harnesses", "known_runtimes",
+           "load_registry", "load_session_file", "mark_downloads", "materialize_session", "open_session",
+           "placeholders_left", "print_checks", "print_extensions", "probe_direct", "project_name",
+           "quarantine_supported", "remove_rows", "row_state", "run_doctor", "secret_exists", "secret_refs",
+           "sync_registry", "template_drift", "worst_status"]

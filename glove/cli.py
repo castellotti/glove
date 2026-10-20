@@ -40,7 +40,6 @@ from .sessionops import (
     now,
     open_session,
     print_extensions,
-    sync_registry,
 )
 
 app = typer.Typer(
@@ -60,43 +59,6 @@ app = typer.Typer(
 # `glove up` tries this many subnets when other sessions' networks keep taking
 # the one it picked (see session.SubnetTaken).
 SUBNET_ATTEMPTS = 3
-
-
-# --- glove new ---------------------------------------------------------------------
-
-
-@app.command()
-def new(
-    template: str = typer.Argument(..., help="bundled template name, a path, or a git URL"),
-    directory: Path = typer.Argument(Path("."), help="the session directory (created if missing)"),
-    diff: bool = typer.Option(False, "--diff", help="show how the template changed since `glove new`"),
-) -> None:
-    """Materialize a session: glove-session.yml, work/ and .glove/ (0700)."""
-    if diff:
-        try:
-            sd = sdm.find(directory)
-        except SessionError as e:
-            raise fail(str(e)) from e
-        drift = sdm.template_drift(sd)
-        if drift is None:
-            console.print("[green]✓[/green] the template is unchanged since `glove new`")
-            return
-        console.print(f"[bold]template {drift[0]} changed since `glove new`[/bold] (your file ← template now)\n")
-        console.print(Syntax(drift[1], "diff", theme="ansi_dark"))
-        return
-    try:
-        ensure_home()
-        reg.load_registry()  # refuse early on a v2 registry, before writing the directory
-        sd, sid = sdm.materialize(template, directory)
-        sync_registry(sd, sid, sdm.load_file(sd))
-    except (SessionError, reg.RegistryError) as e:
-        raise fail(str(e)) from e
-    console.print(f"[green]✓[/green] session [bold]{sid}[/bold] from template [cyan]{template}[/cyan] at {sd.root}")
-    todo = sdm.placeholders_left(sdm.load_file(sd))
-    if todo:
-        console.print(f"  set these in [cyan]{sd.file}[/cyan]: {', '.join(todo)}")
-    cd = "" if sd.root == Path.cwd().resolve() else f"cd {sd.root} && "
-    console.print(f"  then: [cyan]{cd}glove check && glove up[/cyan]")
 
 
 # --- plan / up ---------------------------------------------------------------------

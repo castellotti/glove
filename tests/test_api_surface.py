@@ -67,6 +67,7 @@ COMMANDS = {
     "console": "Console",
     "default_enforcer": "(runtime: 'str') -> 'str'",
     "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
+    "ensure_home": "() -> 'None'",
     "err": "Console",
     "extension_checks": "(requested: 'dict', *, harness: 'str', comp: 'Composition | None' = None, probe=None, "
                         "**session) -> 'list[Check]'",
@@ -79,7 +80,9 @@ COMMANDS = {
     "known_harnesses": "() -> 'list[str]'",
     "known_runtimes": "() -> 'list[str]'",
     "load_registry": "() -> 'list[SessionEntry]'",
+    "load_session_file": "(sd: 'SessionDir') -> 'dict[str, Any]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
+    "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
     "placeholders_left": "(raw: 'Any', path: 'str' = '') -> 'list[str]'",
     "print_checks": "(title: 'str', checks: 'list') -> 'None'",
@@ -94,6 +97,8 @@ COMMANDS = {
                   "-> 'list[Check]'",
     "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
+    "sync_registry": "(sd: 'SessionDir', sid: 'str', raw: 'dict', *, check_runtime: 'bool' = False) "
+                     "-> 'reg.SessionEntry'",
     "template_drift": "(sd: 'SessionDir') -> 'tuple[str, str] | None'",
     "worst_status": "(checks: 'list[Check]') -> 'str'",
 }
