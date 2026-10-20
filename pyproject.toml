@@ -41,6 +41,8 @@ testpaths = ["tests", "extensions", "harnesses", "commands"]
 pythonpath = [".", "tests"]
 # importlib: plugin test files share basenames (extensions|harnesses/*/tests/test_*.py)
 addopts = "--import-mode=importlib"
+# pytest's default minus `build` (commands/build/ is the `glove build` command)
+norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 
 [tool.ruff]
 target-version = "py311"

@@ -25,7 +25,7 @@ from . import registry as reg
 from . import sessiondir as sdm
 from .config import ConfigError
 from .hardening import HardeningError
-from .harness import adapter_call, known_harnesses
+from .harness import adapter_call
 from .harnessconfig import render_home
 from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
@@ -715,28 +715,7 @@ def rm(
     console.print(f"[green]✓[/green] removed {what}")
 
 
-# --- build / doctor / policy ---------------------------------------------------
-
-@app.command()
-def build(
-    harness: str | None = typer.Argument(
-        None, help=f"harness image to build ({', '.join(known_harnesses())}); "
-                   "omit to build the forwarder only"
-    ),
-    provider: str | None = typer.Option(None),
-    enforcer: str | None = typer.Option(None, "--enforcer", help="enforcer variant (srt, nono+srt → -srt image)"),
-    rebuild: bool = typer.Option(False, "--rebuild", help="force rebuild"),
-) -> None:
-    """Build the forwarder and (optionally) a harness base image. Extension
-    images and layers are built per session by `glove up`."""
-    from .harness import get_profile
-    from .session import build_forwarder, build_harness
-
-    prov = provider or sdm.autodetect_provider()
-    build_forwarder(prov, force=rebuild)
-    if harness:
-        build_harness(prov, get_profile(harness), enforcer=enforcer or "nono", force=rebuild)
-
+# --- doctor / policy ---------------------------------------------------
 
 @app.command()
 def doctor(
