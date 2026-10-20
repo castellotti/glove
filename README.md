@@ -211,6 +211,7 @@ glove rm    [DIR] [--all] [--yes]            # down --wipe, delete .glove/ + exp
 glove policy [DIR]                           # ring-1 policies + ring-0 hardening + gaps
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove clean [--dry-run] [--yes] [--volumes] [--runtime R]   # stopped stacks of gone sessions
+glove clean 7d [--build-cache]               # + idle sessions' containers/networks, glove images unused for 7d
 glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv; a long
                                              # one in parts, <service>.part<n>; ASCII only)
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)

@@ -15,6 +15,15 @@ All notable changes to glove are documented here.
   session's stack and one with any container not `exited`/`dead` are left
   alone. `--dry-run` lists, `--yes` skips the question, `--runtime` picks one.
   `glove gc` still removes the rows and exports.
+- **`glove clean <age>`** (`12h`, `3d`, `2w`) also reclaims what has not been
+  used for that long: an idle session's stopped containers and networks (its
+  volumes stay, so `glove up` restarts it) and the `glove/*` images
+  (Podman's `localhost/glove/*`) that no remaining container uses. A session's
+  last use is its `.glove/compose.yml`'s mtime (else its row's `created`) and
+  its images that file's `image:`s; an image no session names falls back to
+  its creation time, and a base tag of a kept image stays. `--build-cache`
+  (Docker; machine-wide, so opt-in) prunes the build cache older than `<age>`.
+  The summary reports the disk reclaimed (`system df` before and after).
 - **Commands live in `commands/<name>/`** (`commands/README.md`), apart from
   extensions: core mounts each `cli.py`'s `command` or `app` and never imports
   them. A command imports only `glove.api` and the new `glove.api.commands`
@@ -22,7 +31,7 @@ All notable changes to glove are documented here.
   other command moved there too (`version`, `ext`, `ls`, `ps`, `gc`,
   `keychain`, `downloads`, `build`, `doctor`, `policy`, `check`, `new`, `plan`,
   `rm`, `down`, `up`), each with its own tests, and each command's CLI is
-  unchanged (`glove --help` now lists them alphabetically). `glove/cli.py` keeps
+  unchanged (`glove --help` lists them in workflow order, by each one's `RANK`). `glove/cli.py` keeps
   only the app and the mounting. What two or more commands share moved to
   `glove/sessionops.py` (the consoles, `fail`, `DIR_ARG`, `IKNOW`,
   `open_session`, `sync_registry`, `materialize_plan`, `stop`, …).

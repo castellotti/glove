@@ -1,6 +1,8 @@
 """`glove clean`: glove's stacks on a runtime, found by compose's project label."""
 
+import os
 import subprocess
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import typer
@@ -157,3 +159,134 @@ def test_glove_mounts_it():
     from glove.cli import app as glove
 
     assert "--dry-run" in runner.invoke(glove, ["clean", "--help"]).output
+
+
+# --- <age> ----------------------------------------------------------------------------
+
+def test_age_is_hours_days_or_weeks_and_build_cache_needs_one(home):
+    assert [cli.parse_age(a) for a in ("12h", "3d", "2w", "0h")] == [12, 72, 336, 0]
+    for bad in ("3", "3 d", "-1d", "1y", "d"):
+        assert runner.invoke(app, ["--", bad]).exit_code == 1
+    result = runner.invoke(app, ["--build-cache"])
+    assert result.exit_code == 1 and "needs an AGE" in result.output
+
+
+def test_when_reads_docker_podman_and_registry_times():
+    want = datetime(2026, 10, 19, 6, 44, 54, tzinfo=UTC)
+    assert cli._when("2026-10-19T06:44:54.558174589Z") == want
+    assert cli._when("2026-10-19 06:44:54.805380182 +0000 UTC") == want
+    assert cli._when("2026-10-19T08:44:54+02:00") == want
+    assert cli._when("2026-10-19T06:44:54") == want  # naive: UTC
+    assert cli._when("") is None and cli._when("yesterday") is None and cli._when(None) is None
+
+
+def _entry(tmp_path, sid: str, *, images=(), mtime: datetime | None = None, created: str | None = None):
+    d = tmp_path / sid
+    if mtime is not None:
+        f = d / ".glove" / "compose.yml"
+        f.parent.mkdir(parents=True)
+        f.write_text("services:\n" + "".join(f"  s{i}:\n    image: {t}\n" for i, t in enumerate(images)))
+        os.utime(f, (mtime.timestamp(), mtime.timestamp()))
+    return reg.SessionEntry(id=sid, dir=str(d), harness="pi", created=created)
+
+
+def test_last_uses_are_the_compose_files_mtime_else_the_rows_created(tmp_path):
+    old, new = datetime(2026, 10, 1, tzinfo=UTC), datetime(2026, 10, 15, tzinfo=UTC)
+    images, sessions = cli.last_uses([
+        _entry(tmp_path, "a-0a0a0a", images=["glove/pi:1-x", "docker.io/valkey:9", "'glove/gate:g'"], mtime=old),
+        _entry(tmp_path, "b-0b0b0b", images=["glove/gate:g"], mtime=new),
+        _entry(tmp_path, "c-0c0c0c", created="2026-09-01T00:00:00Z"),
+        _entry(tmp_path, "d-0d0d0d")])
+    assert images == {"glove/pi:1-x": old, "glove/gate:g": new}
+    assert sessions == {"a-0a0a0a": old, "b-0b0b0b": new, "c-0c0c0c": datetime(2026, 9, 1, tzinfo=UTC)}
+
+
+def _fake_images(monkeypatch, images: list[str], containers: list[str]):
+    def out(rt, *args, partial=False):
+        if args[:2] == ("image", "ls"):
+            assert args[-1] == "reference=glove/*"
+            return [r.split("|")[0] for r in images]
+        if args[0] == "ps":
+            return [c.split()[0] for c in containers]
+        return images if args[0] == "image" else containers
+    monkeypatch.setattr(cli, "_out", out)
+
+
+def test_unused_images_spare_the_used_the_recent_and_the_bases_of_kept_ones(monkeypatch):
+    cutoff = datetime(2026, 10, 10, tzinfo=UTC)
+    _fake_images(monkeypatch, [
+        "i1|2026-10-01T00:00:00Z|glove/pi:1 other/pi:latest",  # base of a kept tag
+        "i2|2026-10-01T00:00:00Z|glove/pi:1-aa glove/pi:1-aa-srt",  # one tag recently used
+        "i3|2026-10-01T00:00:00Z|glove/pi:1-bb",  # old: goes
+        "i4|2026-10-01T00:00:00Z|glove/pi:1-cc",  # a container uses it
+        "i5|2026-10-01T00:00:00Z|glove/pi:1-dd",  # only a container that goes uses it
+        "i6|2026-10-12 00:00:00 +0000 UTC|localhost/glove/vibe:2",  # recent (Podman)
+        "i7|2026-10-01 00:00:00 +0000 UTC|localhost/glove/vibe:1",  # old (Podman)
+        "i8|garbled|glove/vibe:0",  # unreadable: kept
+    ], ["c1 i4", "c2 i5"])
+    used = {"glove/pi:1-aa-srt": datetime(2026, 10, 15, tzinfo=UTC), "glove/pi:1-bb": datetime(2026, 10, 2, tzinfo=UTC)}
+    old = cli.unused_images("podman", cutoff, used, leaving={"c2"})
+    assert [(i.ref, i.tag) for i in old] == [("glove/pi:1-bb", "glove/pi:1-bb"), ("glove/pi:1-dd", "glove/pi:1-dd"),
+                                             ("localhost/glove/vibe:1", "glove/vibe:1")]  # 1-aa: the base of 1-aa-srt
+    assert old[0].last == used["glove/pi:1-bb"]
+
+
+def test_unused_images_is_none_when_the_runtime_does_not_answer(monkeypatch):
+    monkeypatch.setattr(cli, "_out", lambda rt, *a, partial=False: None if a[0] == "ps" else [])
+    assert cli.unused_images("docker", datetime.now(UTC), {}, set()) is None
+
+
+def test_disk_sums_system_df(monkeypatch):
+    monkeypatch.setattr(cli, "_out", lambda rt, *a, partial=False: ["100.7GB", "491.5kB", "0B", "1.5 MB", "?"])
+    assert cli.disk("docker") == pytest.approx(100.7e9 + 491.5e3 + 1.5e6)
+    monkeypatch.setattr(cli, "_out", lambda rt, *a, partial=False: None)
+    assert cli.disk("docker") is None
+
+
+def test_clean_with_an_age_takes_idle_stacks_old_images_and_the_build_cache(home, tmp_path, monkeypatch):
+    long_ago = datetime.now(UTC) - timedelta(days=30)
+    for sid in ("idle-0a0a0a", "busy-0b0b0b", "fresh-0c0c0c"):
+        _session(tmp_path, sid, sid, holds=sid)
+        f = tmp_path / sid / ".glove" / "compose.yml"
+        f.write_text("services:\n  h:\n    image: glove/pi:1\n")
+        if sid != "fresh-0c0c0c":
+            os.utime(f, (long_ago.timestamp(), long_ago.timestamp()))
+    found = {"docker": [cli.Stack("docker", "idle-0a0a0a", {"c1": "exited"}, ["n1"], ["v1"]),
+                        cli.Stack("docker", "busy-0b0b0b", {"c2": "running"}),
+                        cli.Stack("docker", "fresh-0c0c0c", {"c3": "exited"})],
+             "podman": []}
+    images = {rt: [cli.Image(rt, f"glove/{rt}:1", long_ago)] for rt in found}
+    monkeypatch.setattr(cli, "runtimes", lambda only=None: ["docker", "podman"])
+    monkeypatch.setattr(cli, "stacks", lambda rt: found[rt])
+    monkeypatch.setattr(cli, "unused_images", lambda rt, cutoff, used, leaving: (
+        leaving == ({"c1"} if rt == "docker" else set()) or pytest.fail(leaving)) and images[rt])
+    sizes = iter([10e9, 1e9, 6e9, 1e9])
+    monkeypatch.setattr(cli, "disk", lambda rt: next(sizes))
+    removed, cmds = [], []
+    monkeypatch.setattr(cli, "remove", lambda s, volumes: removed.append((s.sid, volumes)) or [])
+    monkeypatch.setattr(cli, "_ok", lambda cmd, timeout=cli.TIMEOUT: cmds.append((cmd, timeout)) or "podman" not in cmd)
+
+    result = runner.invoke(app, ["7d", "--dry-run", "--build-cache"])
+    out = result.output
+    assert result.exit_code == 0 and not removed and not cmds
+    assert "docker stack glove-idle-0a0a0a: 1 container(s), 1 network(s) (idle: its volumes stay)" in out
+    assert "busy" not in out and "fresh" not in out
+    assert "docker image glove/docker:1" in out and "podman image glove/podman:1" in out
+    assert "docker build cache unused for 7d (machine-wide" in out and "podman build cache" not in out
+
+    result = runner.invoke(app, ["7d", "-y", "--build-cache"])
+    assert result.exit_code == 0, result.output
+    assert removed == [("idle-0a0a0a", False)]
+    assert cmds == [(["docker", "rmi", "glove/docker:1"], cli.TIMEOUT),
+                    (["podman", "rmi", "glove/podman:1"], cli.TIMEOUT),
+                    (["docker", "builder", "prune", "-f", "--filter", "until=168h"], cli.PRUNE_TIMEOUT)]
+    assert "could not remove podman image glove/podman:1" in result.output
+    assert "removed 1 stack(s), 2 image(s); reclaimed 4.0 GB on docker, 0.0 GB on podman" in result.output
+
+
+def test_clean_without_an_age_leaves_idle_sessions_and_images(home, tmp_path, monkeypatch):
+    _session(tmp_path, "idle", "idle-0a0a0a", holds="idle-0a0a0a")
+    monkeypatch.setattr(cli, "runtimes", lambda only=None: ["docker"])
+    monkeypatch.setattr(cli, "stacks", lambda rt: [cli.Stack("docker", "idle-0a0a0a", {"c1": "exited"})])
+    monkeypatch.setattr(cli, "unused_images", lambda *a: pytest.fail("images looked at without an AGE"))
+    assert "nothing to clean" in runner.invoke(app, ["--dry-run"]).output
