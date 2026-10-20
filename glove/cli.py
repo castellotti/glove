@@ -39,7 +39,6 @@ from .sessionops import (
     mark_downloads,
     now,
     open_session,
-    print_checks,
     print_extensions,
     sync_registry,
 )
@@ -454,69 +453,7 @@ def _print_summary(plan, home_files) -> None:
     )
 
 
-# --- check -------------------------------------------------------------------------
-
-
-@app.command()
-def check(
-    directory: Path | None = DIR_ARG,
-    no_container: bool = typer.Option(False, "--no-container", help="skip container probes (host-only, fast)"),
-    offline: bool = typer.Option(False, "--offline", help="contact nothing the session reaches (e.g. the LLM server)"),
-) -> None:
-    """Validate the session file, check its secrets exist (never reads them),
-    run doctor for its runtime, enforcer and extensions, and (unless --offline
-    or --no-container) ask the LLM server for its models from a throwaway
-    container (never from this machine)."""
-
-    from functools import partial
-
-    from .config import secret_exists
-    from .doctor import extension_checks, run_doctor
-    from .plan import secret_refs
-    from .runtimes.base import Check
-    from .session import probe_direct
-
-    try:
-        sd, raw, sid, cfg = open_session(directory, register=False)
-    except (ConfigError, ValueError) as e:
-        raise fail(str(e)) from e
-    checks: list[Check] = [Check("session file", "ok", f"{sd.file} (schema v{sdm.SCHEMA_VERSION})")]
-    plan = None
-    todo = sdm.placeholders_left(raw)
-    if todo:
-        checks.append(Check("placeholders", "fail", f"still {sdm.PLACEHOLDER}: {', '.join(todo)}"))
-    else:
-        try:
-            plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work),
-                                      state_dir=str(sd.ext), session_dir=str(sd.root))
-            checks.append(Check("plan", "ok", "extensions: " + ", ".join(a.name for a in plan.composition.active)))
-            import yaml
-
-            try:  # in memory: every render-time invariant, for this runtime
-                n = len(yaml.safe_load(get_runtime(cfg.runtime).render(plan, sd.state).compose_yaml)["services"])
-                checks.append(Check("render", "ok", f"{cfg.runtime}: {n} services"))
-            except (ConfigError, ValueError, NotImplementedError) as e:
-                checks.append(Check("render", "fail", str(e)))
-            for label, ref in secret_refs(plan):
-                ok, detail = secret_exists(ref)
-                checks.append(Check(f"secret {label}", "ok" if ok else "fail", f"{ref}: {detail}"))
-        except (ConfigError, ValueError) as e:
-            checks.append(Check("plan", "fail", str(e)))
-    drift = sdm.template_drift(sd)
-    if drift is not None:
-        checks.append(Check("template", "warn",
-                            f"{drift[0]} changed since `glove new`; review with `glove new --diff`"))
-    try:
-        checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
-        checks += extension_checks(cfg.extensions, harness=cfg.harness, comp=plan and plan.composition,
-                                   session_dir=sd.root, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
-                                   probe=None if offline or no_container else partial(probe_direct, cfg.provider))
-    except ValueError as e:
-        checks.append(Check("doctor", "fail", str(e)))
-    print_checks(f"[bold]glove check[/bold]  {sid}  ({sd.root})", checks)
-
-
-# --- down / rm / ls / ps / gc -----------------------------------------------------------
+# --- down / rm -----------------------------------------------------------
 
 
 def _stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:

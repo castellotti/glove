@@ -6,7 +6,7 @@ from pathlib import Path
 
 CORE = Path(__file__).resolve().parent.parent / "glove"
 
-CORE_BUDGET = 9_661  # physical lines of glove/**/*.py; CLAUDE.md P2
+CORE_BUDGET = 9_611  # physical lines of glove/**/*.py; CLAUDE.md P2
 SLACK = 50  # how far core may shrink before the budget must follow it down
 
 

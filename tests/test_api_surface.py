@@ -49,7 +49,10 @@ API = {
 COMMANDS = {
     "DIR_ARG": "ArgumentInfo",
     "ID_RE": "Pattern",
+    "Check": "dataclass(name, status, detail)",
+    "PLACEHOLDER": "str",
     "RegistryError": "class(ValueError)",
+    "SCHEMA_VERSION": "int",
     "SessionDir": "dataclass(root)",
     "SessionError": "class(ConfigError)",
     "VERSION": "str",
@@ -65,6 +68,8 @@ COMMANDS = {
     "default_enforcer": "(runtime: 'str') -> 'str'",
     "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
     "err": "Console",
+    "extension_checks": "(requested: 'dict', *, harness: 'str', comp: 'Composition | None' = None, probe=None, "
+                        "**session) -> 'list[Check]'",
     "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
     "find_session": "(path: 'str | Path | None' = None) -> 'SessionDir'",
     "get_enforcer": "(name: 'str')",
@@ -76,14 +81,20 @@ COMMANDS = {
     "load_registry": "() -> 'list[SessionEntry]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
+    "placeholders_left": "(raw: 'Any', path: 'str' = '') -> 'list[str]'",
     "print_checks": "(title: 'str', checks: 'list') -> 'None'",
     "print_extensions": "(plan) -> 'None'",
+    "probe_direct": "(provider: 'str', url: 'str', *, method: 'str' = 'GET', body: 'dict | None' = None, "
+                    "headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
     "project_name": "(session: 'str') -> 'str'",
     "quarantine_supported": "() -> 'bool'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
+    "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
+    "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
+    "template_drift": "(sd: 'SessionDir') -> 'tuple[str, str] | None'",
     "worst_status": "(checks: 'list[Check]') -> 'str'",
 }
 HARNESS = {
