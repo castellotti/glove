@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import darwin, make_session, quarantine_attr
+from helpers import make_session
 from typer.testing import CliRunner
 
 from glove import registry as reg
@@ -138,15 +138,6 @@ def test_secret_env_resolves_an_env_reference_in_memory(tmp_path, monkeypatch):
 # --- ls / down / rm / gc ----------------------------------------------------------------------
 
 
-def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    calls = []
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append((sid, k)))
-    assert runner.invoke(app, ["down", str(d), "--provider", "docker"]).exit_code == 0
-    assert calls == [(_sid(d), {"provider": "docker", "wipe": False})]
-
-
 @pytest.mark.parametrize(("wipe", "tail"), [(False, []), (True, ["--volumes"])])
 @pytest.mark.parametrize("runs", ["", "abc123\ndef456\n"])
 def test_teardown_removes_a_killed_harness_run(monkeypatch, wipe, tail, runs):
@@ -242,19 +233,6 @@ def test_up_gives_up_after_three_taken_subnets(home, tmp_path, monkeypatch):
     assert rebuilds == [True, False, False]  # the images are built once
 
 
-def test_down_and_rm_use_the_sessions_runtime_not_path(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s", "runtime: podman\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    monkeypatch.setattr("shutil.which", lambda c: f"/usr/bin/{c}")  # docker on PATH too
-    calls = []
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: calls.append(k["provider"]))
-    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
-    (d / ".glove" / "effective.yml").unlink()  # never planned since: the session file says
-    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
-    assert runner.invoke(app, ["rm", str(d), "-y"]).exit_code == 0
-    assert calls == ["podman", "podman", "podman"]
-
-
 def test_up_keeps_what_extensions_resolved_at_plan_time(home, tmp_path, monkeypatch):
     from glove import sessiondir as sdm
 
@@ -327,17 +305,3 @@ def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_
     assert events == [{"llm"}]  # torn down, never launched
 
 
-@darwin
-def test_down_and_downloads_mark_quarantine_the_outputs_not_the_inputs(home, tmp_path, monkeypatch):
-    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {downloads: work, uploads: work}\n")
-    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: None)
-    monkeypatch.setattr("glove.sessionops.build_session_plan", None)  # down never re-plans: plan time recorded them
-    (d / "browser-output" / "x.dmg").write_bytes(b"x")
-    (d / "browser-uploads" / "mine.pdf").write_bytes(b"y")
-
-    result = runner.invoke(app, ["down", str(d)])
-    assert result.exit_code == 0 and "quarantined 1 downloaded file" in result.output, result.output
-    assert quarantine_attr(d / "browser-output" / "x.dmg") and not quarantine_attr(d / "browser-uploads" / "mine.pdf")
-    result = runner.invoke(app, ["downloads", "mark", str(d)])
-    assert result.exit_code == 0 and "nothing new to quarantine (1 already marked)" in result.output

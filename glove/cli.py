@@ -34,7 +34,6 @@ from .sessionops import (
     now,
     one_resume,
     open_session,
-    stop,
 )
 
 app = typer.Typer(
@@ -193,26 +192,6 @@ def _print_resume_hint(profile, home_dir: Path, sid: str, *, since: float) -> No
     console.print(f"\n[bold]conversation saved:[/bold] {newest.id}")
     console.print("  resume last:     [cyan]glove up --resume[/cyan]")
     console.print(f"  resume this one: [cyan]glove up --session {newest.id}[/cyan]")
-
-
-# --- down / rm -----------------------------------------------------------
-
-
-@app.command()
-def down(
-    directory: Path | None = DIR_ARG,
-    provider: str | None = typer.Option(None),
-    wipe: bool = typer.Option(False, "--wipe", help="also remove volumes and the network-observability record"),
-) -> None:
-    """Stop the session's containers and host services."""
-    try:
-        sd = sdm.find(directory)
-    except SessionError as e:
-        raise fail(str(e)) from e
-    sid = sd.read_id()
-    if sid is None:
-        raise fail(f"{sd.root} has never been launched (no .glove/id)")
-    stop(sd, sid, provider, wipe=wipe)
 
 
 # --- extension CLIs (`cli:` in a manifest → `glove <name> …`) ------------------------
