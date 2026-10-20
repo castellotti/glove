@@ -27,6 +27,26 @@ def _key(password: str) -> bytes:
     return bytes(int(f"{b:08b}"[::-1], 2) for b in raw)
 
 
+def handshake(read, send, password: str) -> bool:
+    """RFB 3.8 with VncAuth, then ClientInit (shared); prints `auth ok` / `auth failed`."""
+    assert read(12).startswith(b"RFB ")
+    send(b"RFB 003.008\n")
+    types = read(read(1)[0])
+    if 2 not in types:
+        print(f"no VncAuth offered: {list(types)}")
+        return False
+    send(b"\x02")
+    send(DES.new(_key(password), DES.MODE_ECB).encrypt(read(16)))
+    if struct.unpack(">I", read(4))[0] != 0:
+        print("auth failed")
+        return False
+    print("auth ok", flush=True)
+    send(b"\x01")  # ClientInit: shared
+    read(20)  # width, height, pixel format
+    read(struct.unpack(">I", read(4))[0])  # desktop name
+    return True
+
+
 def main(runtime: str, container: str, secret: str, x: int, y: int) -> int:
     pw = subprocess.run([runtime, "exec", container, "cat", f"/tmp/vnc/{secret}"],
                         capture_output=True, text=True, check=True).stdout.strip()
@@ -48,23 +68,8 @@ def main(runtime: str, container: str, secret: str, x: int, y: int) -> int:
         w.flush()
 
     try:
-        assert read(12).startswith(b"RFB ")
-        send(b"RFB 003.008\n")
-        types = read(read(1)[0])
-        if 2 not in types:
-            print(f"no VncAuth offered: {list(types)}")
+        if not handshake(read, send, pw):
             return 1
-        send(b"\x02")
-        challenge = read(16)
-        send(DES.new(_key(pw), DES.MODE_ECB).encrypt(challenge))
-        if struct.unpack(">I", read(4))[0] != 0:
-            print("auth failed")
-            return 1
-        print("auth ok")
-        send(b"\x01")  # ClientInit: shared
-        _w, _h = struct.unpack(">HH", read(4))
-        read(16)  # pixel format
-        read(struct.unpack(">I", read(4))[0])  # desktop name
         for mask in (0, 1, 0):  # move, press, release
             send(struct.pack(">BBHH", 5, mask, x, y))
             time.sleep(0.2)

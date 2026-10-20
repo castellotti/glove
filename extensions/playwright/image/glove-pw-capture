@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""glove `playwright` challenge capture: record the operator's pointer on the
+novnc display while they solve a bot challenge (`glove playwright solve`).
+
+    glove-pw-capture start [--max-seconds N] [--motion-hz N] [--glove-version V]
+                                    arm, or find the running capture: prints
+                                    `<id>` (this call started it) or `<id> attached`
+    glove-pw-capture follow <id>    print windows.jsonl lines as they come;
+                                    exits once the recorder has stopped
+    glove-pw-capture stop [--reason viewer-closed|interrupted|stop]
+                                    stop the running capture and wait for it to
+                                    finish; prints its id; exit 1 if it hasn't
+    glove-pw-capture list           the finished capture ids under /tmp/capture
+
+Only one recorder runs at a time (`start` holds a lock while it arms). The
+`solve` that started it stops and saves it; one that attached only watches.
+
+Passive only: it selects XI2 *raw* events on the root window (they reach a
+root listener whatever holds focus or a grab, and carry no coordinates), and
+on each one asks QueryPointer where the pointer is. It never grabs, never
+selects input on Chromium's windows and never sends input. Keys, the
+clipboard and anything from the page or network are never recorded; window
+titles are (they say challenge → results).
+
+Output, on the sidecar's tmpfs, which `glove playwright solve` copies out
+(validating everything: this container runs a browser) and then removes:
+
+    /tmp/capture/<id>/events.jsonl   {"t", "xt", "wall", "type": down|up|move|wheel, "button", "x", "y", "mask"}
+    /tmp/capture/<id>/windows.jsonl  {"t", "wall", "reason", "display", "windows": [bottom → top]}
+    /tmp/capture/<id>/shots/<n>-<arm|down|up|stop>.png   the whole display
+    /tmp/capture/<id>/meta.json      written last, when it stops
+
+`t` is ms since arm when the event was read; `xt` is the X server's own
+timestamp of the input (ms, wrapping at 2^32), which a busy recorder can't skew.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import json
+import os
+import secrets
+import select
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import time
+import zlib
+from pathlib import Path
+
+ROOT = Path("/tmp/capture")
+CURRENT = ROOT / ".current"  # "<id> <pid>" while a recorder runs (glove-pw-front.js reads it too)
+LOCK = ROOT / ".lock"
+MAX_SHOTS = 400
+MAX_BYTES = 150 * 1024 * 1024
+TITLE_MAX = 300
+# XI2 raw events (XI2proto.h) and the core button masks
+GENERIC_EVENT, RAW_PRESS, RAW_RELEASE, RAW_MOTION = 35, 15, 16, 17
+BUTTONS = 0x100 | 0x200 | 0x400  # 1-3 held
+WHEEL = range(4, 8)
+SIGNAL_REASON = {signal.SIGUSR1: "viewer-closed", signal.SIGINT: "interrupted", signal.SIGTERM: "stop"}
+
+
+def wall() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def png(width: int, height: int, bgrx: bytes) -> bytes:
+    """A ZPixmap (32 bpp, BGRX) as an RGB PNG, stdlib only (slicing, not a pixel loop: ~4 ms)."""
+    rgb = bytearray(width * height * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = bgrx[2::4], bgrx[1::4], bgrx[0::4]
+    stride = width * 3
+    raw = b"".join(b"\0" + rgb[y * stride:(y + 1) * stride] for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 3)) + chunk(b"IEND", b""))
+
+
+def running() -> tuple[str, int] | None:
+    """The running capture, if `.current` names a live recorder (not a reused pid)."""
+    try:
+        cid, pid = CURRENT.read_text().split()
+        if b"glove-pw-capture" not in Path(f"/proc/{int(pid)}/cmdline").read_bytes():
+            return None
+        return cid, int(pid)
+    except (OSError, ValueError):
+        return None
+
+
+class Recorder:
+    def __init__(self, cid: str, max_seconds: int, motion_hz: int, glove_version: str) -> None:
+        from Xlib import X, display
+        from Xlib.ext import xinput
+
+        self.X = X
+        self.dir = ROOT / cid
+        self.d = display.Display(":1")
+        self.root = self.d.screen().root
+        # XI 2.2, sent by hand (python-xlib announces 2.0): a 2.0 client gets no
+        # raw events while a grab is active, i.e. none during a drag in Chromium
+        xinput.XIQueryVersion(display=self.d.display, opcode=self.d.display.get_extension_major(xinput.extname),
+                              major_version=2, minor_version=2)
+        self.root.xinput_select_events([(xinput.AllMasterDevices, xinput.RawButtonPressMask
+                                         | xinput.RawButtonReleaseMask | xinput.RawMotionMask)])
+        # window structure and titles: notify masks only, never input
+        self.root.change_attributes(event_mask=X.SubstructureNotifyMask)
+        self.net_wm_name, self.utf8 = self.d.intern_atom("_NET_WM_NAME"), self.d.intern_atom("UTF8_STRING")
+        self.name_atoms = {self.net_wm_name, self.d.intern_atom("WM_NAME")}
+        g = self.root.get_geometry()
+        self.size = (g.width, g.height)
+        self.meta = {"capture": 1, "glove_version": glove_version, "display": list(self.size),
+                     "viewport": os.environ.get("PW_VIEWPORT", ""), "armed": wall(), "max_seconds": max_seconds,
+                     "motion_hz": motion_hz}
+        self.max_seconds, self.motion_hz = max_seconds, motion_hz
+        (self.dir / "shots").mkdir(parents=True)
+        self.t0 = time.monotonic()
+        self.events = open(self.dir / "events.jsonl", "a")  # noqa: SIM115 (open for the recorder's life)
+        self.windows_log = open(self.dir / "windows.jsonl", "a")  # noqa: SIM115
+        self.counts = {"events": 0, "shots": 0, "dropped_shots": 0}
+        self.bytes = 0
+        self.shot_ms: list[float] = []
+        self.pending: list[tuple[str, bytes]] = []  # grabbed, not yet encoded (after the queue drains)
+        self.last_windows: list | None = None
+        self.last_move = 0.0
+        self.stop_reason: str | None = None
+        for w in self.root.query_tree().children:
+            self.watch(w)
+        CURRENT.write_text(f"{cid} {os.getpid()}\n")
+
+    def ms(self) -> int:
+        return int((time.monotonic() - self.t0) * 1000)
+
+    def watch(self, w) -> None:
+        try:
+            w.change_attributes(event_mask=self.X.PropertyChangeMask)
+        except Exception:  # noqa: BLE001 (gone already)
+            pass
+
+    def top_windows(self) -> list[dict]:
+        """Mapped top-level windows with a title, bottom to top (the stacking order)."""
+        out = []
+        for w in self.root.query_tree().children:
+            try:
+                if w.get_attributes().map_state != self.X.IsViewable:
+                    continue
+                prop = w.get_full_property(self.net_wm_name, self.utf8)
+                if prop is None:
+                    continue
+                g = w.get_geometry()
+                if g.width <= 10 or g.height <= 10:
+                    continue  # Chromium's helper windows
+                at = w.translate_coords(self.root, 0, 0)
+                title = bytes(prop.value).decode("utf-8", "replace")[:TITLE_MAX]
+                out.append({"id": w.id, "title": title, "x": -at.x, "y": -at.y, "w": g.width, "h": g.height})
+            except Exception:  # noqa: BLE001 (a window may vanish while we look)
+                continue
+        return out
+
+    def log_windows(self, reason: str) -> None:
+        wins = self.top_windows()
+        if reason == "change" and wins == self.last_windows:
+            return
+        self.last_windows = wins
+        self.windows_log.write(json.dumps({"t": self.ms(), "wall": wall(), "reason": reason,
+                                           "display": list(self.size), "windows": wins}) + "\n")
+        self.windows_log.flush()
+
+    def shot(self, kind: str, since: float) -> None:
+        """Grab the display now (~3 ms); encoding waits until the event queue is empty."""
+        if self.counts["shots"] >= MAX_SHOTS or self.bytes >= MAX_BYTES:
+            self.counts["dropped_shots"] += 1
+            self.stop_reason = self.stop_reason or "cap"
+            return
+        img = self.root.get_image(0, 0, *self.size, self.X.ZPixmap, 0xFFFFFFFF)
+        self.shot_ms.append(round((time.monotonic() - since) * 1000, 1))
+        self.counts["shots"] += 1
+        self.pending.append((f"{self.counts['shots']:04d}-{kind}.png", img.data))
+
+    def encode(self) -> None:
+        while self.pending:
+            name, data = self.pending.pop(0)
+            body = png(*self.size, data)
+            (self.dir / "shots" / name).write_bytes(body)
+            self.bytes += len(body)
+
+    def event(self, kind: str, button: int, xtime: int, received: float, q=None) -> None:
+        q = q or self.root.query_pointer()
+        line = json.dumps({"t": self.ms(), "xt": xtime, "wall": wall(), "type": kind, "button": button,
+                           "x": q.root_x, "y": q.root_y, "mask": q.mask})
+        self.events.write(line + "\n")
+        self.events.flush()
+        self.counts["events"] += 1
+        self.bytes += len(line) + 1
+        if kind in ("down", "up"):
+            self.shot(kind, received)
+
+    def handle(self, e) -> None:
+        X = self.X
+        if e.type == GENERIC_EVENT and e.evtype in (RAW_PRESS, RAW_RELEASE, RAW_MOTION):
+            now = time.monotonic()
+            # python-xlib leaves XI2 raw events unparsed: deviceid(2) time(4) detail(4), in the
+            # byte order it asked for at connect time (its native one)
+            _, xtime, detail = struct.unpack_from("=HII", e.data)
+            if e.evtype == RAW_MOTION:
+                if not self.motion_hz or now - self.last_move < 1 / self.motion_hz:
+                    return
+                self.last_move = now
+                q = self.root.query_pointer()
+                if q.mask & BUTTONS:
+                    self.event("move", 0, xtime, now, q)
+            elif detail in WHEEL:
+                if e.evtype == RAW_PRESS:
+                    self.event("wheel", detail, xtime, now)
+            else:
+                self.event("down" if e.evtype == RAW_PRESS else "up", detail, xtime, now)
+        elif e.type == X.CreateNotify:
+            self.watch(e.window)
+        elif (e.type == X.PropertyNotify and e.atom in self.name_atoms
+              or e.type in (X.MapNotify, X.UnmapNotify, X.DestroyNotify, X.ConfigureNotify)):
+            self.log_windows("change")
+
+    def run(self) -> None:
+        def on_signal(sig, _frame) -> None:
+            self.stop_reason = self.stop_reason or SIGNAL_REASON[sig]
+
+        for sig in SIGNAL_REASON:
+            signal.signal(sig, on_signal)
+        fd = self.d.fileno()
+        try:
+            self.log_windows("arm")
+            self.shot("arm", time.monotonic())
+            while self.stop_reason is None:
+                if time.monotonic() - self.t0 >= self.max_seconds:
+                    self.stop_reason = "max_seconds"
+                    break
+                while self.d.pending_events() and self.stop_reason is None:
+                    self.handle(self.d.next_event())
+                self.encode()
+                try:
+                    select.select([fd], [], [], 0.25)
+                except InterruptedError:  # a stop signal
+                    pass
+        except Exception as e:  # noqa: BLE001 (what was recorded so far is still saved)
+            self.stop_reason = "error"
+            self.meta["error"] = f"{type(e).__name__}: {e}"[:300]
+        self.finish()
+
+    def finish(self) -> None:
+        """Best effort for the last window list and shot; meta.json and `.current` always."""
+        try:
+            self.log_windows("stop")
+            self.shot("stop", time.monotonic())
+            self.encode()
+        except Exception as e:  # noqa: BLE001 (e.g. the X server went away)
+            self.stop_reason = self.stop_reason or "error"
+            self.meta.setdefault("error", f"at stop: {type(e).__name__}: {e}"[:300])
+        ms = sorted(self.shot_ms)
+        self.meta.update({"stopped": self.stop_reason, "stopped_at": wall(), "duration_ms": self.ms(),
+                          **self.counts,
+                          "shot_ms": {"min": ms[0], "median": ms[len(ms) // 2], "max": ms[-1]} if ms else {}})
+        for f in (self.events, self.windows_log):
+            with contextlib.suppress(OSError):
+                f.close()
+        try:
+            tmp = self.dir / "meta.json.tmp"
+            tmp.write_text(json.dumps(self.meta, indent=1) + "\n")
+            tmp.rename(self.dir / "meta.json")
+        finally:
+            if (cur := running()) is not None and cur[1] == os.getpid():
+                CURRENT.unlink(missing_ok=True)
+
+
+def start(args) -> int:
+    ROOT.mkdir(mode=0o700, exist_ok=True)
+    with open(LOCK, "w") as lock:  # one `start` at a time: never two recorders
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (cur := running()) is not None:
+            print(f"{cur[0]} attached")
+            return 0
+        # unguessable: the sidecar must not be able to pre-create the host's directory for it
+        cid = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        log_path = ROOT / f".{cid}.log"
+        with open(log_path, "w") as log:
+            proc = subprocess.Popen([sys.executable, __file__, "record", cid, str(args.max_seconds),
+                                     str(args.motion_hz), args.glove_version],
+                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+        for _ in range(100):
+            if (cur := running()) is not None and cur[0] == cid:
+                print(cid)
+                return 0
+            if proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        proc.kill()
+        proc.wait()
+        print("glove-pw-capture: the recorder did not start: " + log_path.read_text()[-400:], file=sys.stderr)
+        shutil.rmtree(ROOT / cid, ignore_errors=True)
+        log_path.unlink(missing_ok=True)
+        return 1
+
+
+def follow(cid: str) -> int:
+    path = ROOT / cid / "windows.jsonl"
+    pos = 0
+    while True:
+        alive = (cur := running()) is not None and cur[0] == cid
+        try:
+            with path.open("rb") as f:
+                f.seek(pos)
+                while line := f.readline():
+                    if not line.endswith(b"\n"):
+                        break
+                    pos += len(line)
+                    sys.stdout.buffer.write(line)
+                    sys.stdout.flush()
+        except FileNotFoundError:
+            pass
+        if not alive:
+            return 0
+        time.sleep(0.2)
+
+
+def stop(reason: str) -> int:
+    sig = {v: k for k, v in SIGNAL_REASON.items()}[reason]
+    cur = running()
+    if cur is None:
+        return 0
+    cid, pid = cur
+    os.kill(pid, sig)
+    for _ in range(300):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            print(cid)
+            return 0
+        time.sleep(0.1)
+    print(f"glove-pw-capture: the recorder of {cid} is still finishing", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="glove-pw-capture")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("start")
+    s.add_argument("--max-seconds", type=int, default=600)
+    s.add_argument("--motion-hz", type=int, default=120)
+    s.add_argument("--glove-version", default="")
+    sub.add_parser("follow").add_argument("id")
+    sub.add_parser("stop").add_argument("--reason", default="stop", choices=sorted(SIGNAL_REASON.values()))
+    sub.add_parser("list")
+    r = sub.add_parser("record")
+    for a in ("id", "max_seconds", "motion_hz", "glove_version"):
+        r.add_argument(a)
+    args = p.parse_args()
+    if args.cmd == "start":
+        return start(args)
+    if args.cmd == "follow":
+        return follow(args.id)
+    if args.cmd == "stop":
+        return stop(args.reason)
+    if args.cmd == "list":
+        live = running()
+        for d in sorted(ROOT.glob("*")) if ROOT.is_dir() else []:
+            if d.is_dir() and not d.name.startswith(".") and not (live and live[0] == d.name):
+                print(d.name)
+        return 0
+    Recorder(args.id, int(args.max_seconds), int(args.motion_hz), args.glove_version).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

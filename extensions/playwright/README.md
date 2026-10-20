@@ -34,6 +34,10 @@ extensions:
     # novnc only:
     # allow_control: false     # true: `glove playwright view --control` may click and type
     # clipboard: "off"         # off | to-browser | both
+    # challenge_capture: {}    # `glove playwright solve` records your solve (below); needs allow_control
+    #   to: session            # work: also <session>/browser-output/challenges/ (needs downloads: work)
+    #   max_seconds: 600       # a capture stops itself after this
+    #   motion_hz: 120         # pointer samples per second while a button is down (0: none)
     # host only:
     # port: <free port>        # host MCP port (default: a free one, kept for the session)
     # cdp_port: <free port>    # host Chrome remote-debugging port (likewise)
@@ -158,6 +162,75 @@ View-only is **enforced by the VNC server**: without `allow_control` it
 accepts no pointer or key input from anyone, and the view-only password never
 can. The clipboard is off server-side unless `clipboard: to-browser|both`.
 Anything you type while in control is visible to the agent.
+
+In `novnc`, `viewport` is the size of the VNC display **and** of Chromium's
+window (at `0,0`, so the whole window is on screen). The page gets the window
+minus Chromium's tab strip and address bar, about 88 px: 1280x712 for the
+default `1280x800`. In `headless` the page itself is `viewport`. Each MCP client
+(a harness restart starts a new one) opens its page in a **new** full-size
+window on top of the others, so the agent's page can be hidden behind
+another. So in `novnc` glove keeps the agent's page in front: an init page
+the MCP loads (`image/glove-pw-front.js`) raises the page each of the agent's
+tool calls acts on. It only raises the page; it never navigates, clicks or
+reads it. It relies on two internals of the pinned MCP, and if they move it
+logs one line and does nothing (the `capture` live test checks it).
+
+### Recording a challenge solve: `glove playwright solve` (`challenge_capture`)
+
+```sh
+glove playwright solve            # view --control + record; close the tab or Ctrl-C to stop and save
+glove playwright solve --no-open  # print the URL instead
+glove playwright solve --stop     # stop and save a capture left running (e.g. the terminal died)
+```
+
+With `challenge_capture` set (it needs `mode: novnc` and `allow_control:
+true`), the brief tells the agent that when it recognises a bot challenge it
+should leave that tab in front, not navigate it, and ask you to run `solve`.
+It also says the agent never touches the challenge itself. `solve` serves the
+viewer exactly as `view --control` does and starts a recorder in the sidecar
+(`glove-pw-capture`). While the recorder runs it prints the title of the
+window in front each time it changes, so you see "challenge → results". It
+stops 5 s after the last viewer tab closes, on Ctrl-C, or after `max_seconds`.
+Only one recorder runs at a time. A second `solve` while one runs attaches
+and only watches; the `solve` that started the capture stops and saves it.
+While a capture runs, glove stops raising the agent's page, so the agent
+can't cover the window you are working in.
+
+- **What is recorded** (only while you have armed it):
+  - every button press and release, with its display coordinates and button
+    mask;
+  - pointer positions while a button is down, up to `motion_hz` per second;
+  - a screenshot of the whole display at arm, at each press and release, and
+    at stop;
+  - the browser windows' titles, geometry and stacking order;
+  - timings.
+
+  The recorder listens to XI2 *raw* events on the X root window and asks the
+  server where the pointer is. It never grabs, never selects input on
+  Chromium's windows and never sends input. Keystrokes, the clipboard, page
+  content and network traffic are never recorded.
+- **Where it goes:** `.glove/ext/playwright/challenges/<id>/` (0700). With
+  `to: work` it also goes to `<session>/browser-output/challenges/<id>/`,
+  which the agent reads at `/work/browser-output/challenges/`. Each capture
+  holds `events.jsonl`, `windows.jsonl`, `meta.json` and `shots/*.png`. The
+  recorder writes to the sidecar's tmpfs; `solve` copies the capture out with
+  `exec … tar` and then removes it, and the sidecar gets no new mount.
+- **The sidecar's output is treated as hostile** (it runs a browser):
+  - only known file names are read, and sizes and the screenshot count are
+    capped;
+  - a PNG must start with the PNG signature;
+  - every JSON line is parsed, checked against its schema and written back
+    from the parsed value, and anything else is dropped and counted;
+  - files are written with `O_NOFOLLOW|O_EXCL` through directory descriptors,
+    so a link planted in `browser-output/` is refused, never followed;
+  - page-set titles are stripped of control characters before they are
+    printed.
+- **Privacy:** your mouse movement is a behavioural biometric. Captures stay
+  under `.glove/` (git-ignored) unless you choose `to: work`, which hands them
+  to the agent.
+- **Out of scope:** solving. glove records only your own input. It injects
+  nothing, and the agent's brief says to recognise a challenge, never to solve
+  it.
 
 ### Signing in on the host: `glove playwright login` and `storage_state`
 

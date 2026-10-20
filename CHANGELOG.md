@@ -6,6 +6,32 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`glove playwright solve`** (`playwright: {challenge_capture: {to:
+  session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
+  - It takes control of the noVNC view as `view --control` does, and records
+    the operator solving a bot challenge: presses and releases with display
+    coordinates, pointer positions while a button is down, a screenshot at
+    arm, each press and release, and stop, and the windows' titles and
+    stacking.
+  - The recorder (`glove-pw-capture`, python3-xlib) listens passively to XI2
+    raw events at XI 2.2 (a 2.0 client loses the drag to Chromium's grab); it
+    never grabs or sends input.
+  - It stops when the viewer closes, on Ctrl-C or after `max_seconds`
+    (`--stop` saves one left running). The host copies the capture out of the
+    sidecar's tmpfs, validates it as hostile input (names, sizes, PNG
+    signature, JSON schemas, rewritten from parsed values), and writes it
+    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/challenges/<id>/`
+    (0700) and, with `to: work`, to `browser-output/challenges/<id>/`.
+  - The brief tells the agent to leave a challenge in front and hand off,
+    never to solve it.
+  - Live: `tests/integration/test_playwright.sh capture` drives a drag
+    through `solve`'s own noVNC WebSocket and compares it with the page's
+    pointer log (±1 px).
+- **playwright novnc keeps the agent's page in front.**
+  - A second MCP client's window, a popup or a tab a link opened used to
+    cover the page the agent was still acting on.
+  - An init page (`image/glove-pw-front.js`) raises the page each tool call
+    acts on.
 - **`glove clean`.** Removes the stopped stacks (found by compose's project
   label `glove-<id>`) of sessions that no longer exist here, on Docker and
   Podman: their containers and networks, and their volumes only when the
@@ -62,6 +88,25 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove up` explains what happened after the harness exits.**
+  - The resume hint is best effort: an error becomes one dim line
+    ("`glove up --resume` still works"), never a traceback that hides the
+    harness's own exit. This happened once when an editable install was
+    updated mid-session and the old `cli.py` imported new modules.
+  - If glove's source changed while the session ran, `up` says to run
+    `glove down` with the new version before the next `up`.
+  - The container runtime restarted if, of the two or more sidecars running
+    as the harness started, none still has the start time it had then. The
+    `--rm` harness went with it and the sidecars came back alone, so `up`
+    says so and points to `glove up --resume` or `glove down`. Start times
+    are compared as the runtime reports them, so the VM's clock never meets
+    the host's, and one recreated sidecar doesn't count. The runtime calls
+    time out after 5 s, and nothing after the harness exits can raise.
+- **playwright README: what `viewport` means in `novnc`.** It is the VNC
+  display and Chromium's window (at `0,0`), and the page gets ~88 px less
+  (1280x712 for the default). Each new MCP client's page opens in a new
+  window on top, which can hide the agent's page (`browser_tabs` select
+  brings it back). A unit test holds the display and window to the same size.
 - **`glove down` removes the containers' anonymous volumes**, which `compose
   down` kept, so every `up`/`down` cycle left one more (`compose rm -fsv`
   first, which stops the services as `down` would); named volumes stay unless

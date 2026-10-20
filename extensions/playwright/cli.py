@@ -1,4 +1,4 @@
-"""`glove playwright view|status|login|reload` — the browser sidecar from the host.
+"""`glove playwright view|solve|status|login|reload` — the browser sidecar from the host.
 
 `view` opens a loopback-only listener on a random port for as long as the
 command runs. Each connection it accepts is checked (Host and Origin must be
@@ -32,8 +32,11 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from glove.api import ConfigError, ExtSession, ext_session, keychain_set, reload_sidecar, resolve_secret
+
+from . import capture
 
 app = typer.Typer(add_completion=False,
                   help="The playwright browser: watch or drive it (novnc), sign in on the host and hand the "
@@ -44,6 +47,8 @@ err = Console(stderr=True)
 DIR_OPT = typer.Option(None, "--dir", help="session directory (default: the nearest one)")
 WEBSOCKIFY = "TCP4:127.0.0.1:6080"
 MAX_HEAD = 16384
+VIEWER_GRACE = 5.0  # seconds without a viewer before `solve` stops
+CAPTURE = "glove-pw-capture"
 
 
 def _fail(msg: str) -> typer.Exit:
@@ -95,10 +100,21 @@ async def _pipe(reader: asyncio.StreamReader, writer) -> None:
             writer.close()
 
 
-async def _serve(runtime: str, container: str, password: str, *, control: bool, open_browser: bool) -> None:
+async def _serve(runtime: str, container: str, password: str, *, control: bool, open_browser: bool,
+                 viewers_gone: asyncio.Event | None = None) -> None:
+    """Serve noVNC until cancelled. `viewers_gone` (solve) is set once no viewer's
+    WebSocket has been open for VIEWER_GRACE seconds (noVNC reconnects by itself,
+    e.g. when the tab reloads)."""
     port = 0
+    live = 0
+    gone_timer: asyncio.TimerHandle | None = None
+
+    def check_gone() -> None:
+        if live == 0 and viewers_gone is not None:
+            viewers_gone.set()
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal live, gone_timer
         try:
             head = await reader.readuntil(b"\r\n\r\n")
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
@@ -109,15 +125,27 @@ async def _serve(runtime: str, container: str, password: str, *, control: bool, 
             await writer.drain()
             writer.close()
             return
-        proc = await asyncio.create_subprocess_exec(
-            runtime, "exec", "-i", container, "socat", "STDIO", WEBSOCKIFY,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        assert proc.stdin is not None and proc.stdout is not None
-        proc.stdin.write(head)
-        await asyncio.gather(_pipe(reader, proc.stdin), _pipe(proc.stdout, writer))
-        if proc.returncode is None:
-            proc.kill()
-        await proc.wait()
+        viewer = b"\r\nupgrade: websocket" in head.lower()
+        if viewer:
+            live += 1
+            if gone_timer is not None:
+                gone_timer.cancel()
+                gone_timer = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                runtime, "exec", "-i", container, "socat", "STDIO", WEBSOCKIFY,
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            assert proc.stdin is not None and proc.stdout is not None
+            proc.stdin.write(head)
+            await asyncio.gather(_pipe(reader, proc.stdin), _pipe(proc.stdout, writer))
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+        finally:
+            if viewer:
+                live -= 1
+                if live == 0 and viewers_gone is not None:
+                    gone_timer = asyncio.get_running_loop().call_later(VIEWER_GRACE, check_gone)
 
     server = await asyncio.start_server(handle, "127.0.0.1", 0, limit=MAX_HEAD)
     port = server.sockets[0].getsockname()[1]
@@ -130,6 +158,14 @@ async def _serve(runtime: str, container: str, password: str, *, control: bool, 
         console.print(f"open: {url}", soft_wrap=True)
     async with server:
         await server.serve_forever()
+
+
+def _vnc_password(runtime: str, container: str, which: str) -> str:
+    """The sidecar's `full` or `view` VNC password, into memory only."""
+    r = subprocess.run([runtime, "exec", container, "cat", f"/tmp/vnc/{which}"], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise _fail(f"cannot read the VNC password from {container}")
+    return r.stdout.strip()
 
 
 @app.command("view")
@@ -147,14 +183,189 @@ def view(
         raise _fail("--control needs `allow_control: true` in the session's playwright settings")
     if not s.running("pw"):
         raise _fail(f"{container} is not running — `glove up` first")
-    r = subprocess.run([runtime, "exec", container, "cat", f"/tmp/vnc/{'full' if control else 'view'}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0 or not r.stdout.strip():
-        raise _fail(f"cannot read the VNC password from {container}")
+    password = _vnc_password(runtime, container, "full" if control else "view")
     try:
-        asyncio.run(_serve(runtime, container, r.stdout.strip(), control=control, open_browser=not no_open))
+        asyncio.run(_serve(runtime, container, password, control=control, open_browser=not no_open))
     except KeyboardInterrupt:
         console.print("closed")
+
+
+@app.command("solve")
+def solve(
+    directory: Path | None = DIR_OPT,
+    no_open: bool = typer.Option(False, "--no-open", help="print the URL instead of opening it"),
+    stop: bool = typer.Option(False, "--stop", help="stop and save a capture left running (e.g. the terminal died)"),
+) -> None:
+    """Take control of the novnc browser to solve a bot challenge, recording your
+    pointer (challenge_capture); closing the tab or Ctrl-C stops and saves it."""
+    s = _session(directory)
+    runtime, container, pw = s.runtime, s.container("pw"), s.settings
+    try:
+        cc = capture.spec(dict(pw))
+    except ValueError as e:
+        raise _fail(str(e)) from e
+    if cc is None:
+        raise _fail("`solve` needs `playwright: {challenge_capture: {}}` (with mode: novnc and allow_control: true)")
+    if not s.running("pw"):
+        raise _fail(f"{container} is not running — `glove up` first")
+    if stop:
+        if not _stop(runtime, container, "stop"):
+            raise _fail("the recorder is still finishing; run `glove playwright solve --stop` again")
+        ids = _exec(runtime, container, CAPTURE, "list").split()
+        if not ids:
+            console.print("no capture to save")
+        for cid in ids:
+            _collect(s, cid, cc)
+        return
+    password = _vnc_password(runtime, container, "full")
+    started = _exec(runtime, container, CAPTURE, "start", "--max-seconds", str(cc["max_seconds"]),
+                    "--motion-hz", str(cc["motion_hz"]), "--glove-version", _glove_version()).split()
+    if not started or not capture.ID.fullmatch(started[0]):
+        raise _fail(f"the recorder in {container} did not start")
+    cid, owner = started[0], not started[1:]
+    console.print(f"[bold]recording[/bold] capture {cid}" + ("" if owner else " (attached: another `solve` runs it)")
+                  + f": your pointer, for up to {cc['max_seconds']} s")
+    reason = "interrupted"
+    try:
+        with contextlib.suppress(KeyboardInterrupt):
+            reason = asyncio.run(_solve(runtime, container, password, cid, open_browser=not no_open))
+    finally:  # also when serving failed: never leave the recorder running unsaved
+        if owner:
+            try:
+                if _stop(runtime, container, reason):
+                    _collect(s, cid, cc)
+                else:
+                    err.print(f"[yellow]capture {cid} is still finishing:[/yellow] "
+                              "`glove playwright solve --stop` saves it")
+            except KeyboardInterrupt:
+                err.print(f"[yellow]interrupted while saving capture {cid}:[/yellow] "
+                          "`glove playwright solve --stop` saves it")
+        else:
+            console.print(f"capture {cid} goes on: the `solve` that started it saves it "
+                          "(or `glove playwright solve --stop`)")
+
+
+async def _solve(runtime: str, container: str, password: str, cid: str, *, open_browser: bool) -> str:
+    """View with control and print the front window's title as it changes, until the
+    viewer has gone ("viewer-closed") or the recorder has stopped ("stop": `stop` is then a no-op)."""
+    gone = asyncio.Event()
+    serve = asyncio.create_task(_serve(runtime, container, password, control=True, open_browser=open_browser,
+                                       viewers_gone=gone))
+    follow = asyncio.create_task(_follow(runtime, container, cid))
+    waiter = asyncio.create_task(gone.wait())
+    done, _ = await asyncio.wait({serve, follow, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    for t in (serve, follow, waiter):
+        t.cancel()
+    if serve in done:
+        serve.result()  # its error, if it failed
+    return "viewer-closed" if waiter in done else "stop"
+
+
+async def _follow(runtime: str, container: str, cid: str) -> None:
+    """Print each change of the front window's title (page-set: checked, and stripped of
+    control characters); returns when the recorder stops. If the stream breaks, the
+    titles stop but the capture goes on: this then waits to be cancelled."""
+    proc = await asyncio.create_subprocess_exec(runtime, "exec", container, CAPTURE, "follow", cid, limit=1 << 20,
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    assert proc.stdout is not None
+    shown = None
+    try:
+        while line := await proc.stdout.readline():
+            row = capture.parse(line, capture.windows_row)
+            if row is not None and (title := capture.front_title(row)) != shown:
+                shown = title
+                console.print(f"  in front: {escape(title[:120]) or '(no window)'}")
+    except (ValueError, OSError) as e:  # a line over the limit, a broken exec
+        err.print(f"[dim]window titles stopped ({escape(str(e)[:80])}); the capture goes on[/dim]")
+        await asyncio.Event().wait()
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+        await proc.wait()
+
+
+def _exec(runtime: str, container: str, *argv: str) -> str:
+    r = subprocess.run([runtime, "exec", container, *argv], capture_output=True, text=True)
+    if r.returncode != 0:
+        out = capture.printable((r.stderr or r.stdout).strip()[-300:])
+        raise _fail(f"{argv[0]} {argv[1]} in {container} failed: {escape(out)}")
+    return r.stdout
+
+
+def _stop(runtime: str, container: str, reason: str) -> bool:
+    """Stop the running capture (a no-op if none runs); False if its recorder is still finishing."""
+    r = subprocess.run([runtime, "exec", container, CAPTURE, "stop", "--reason", reason], capture_output=True,
+                       text=True)
+    return r.returncode == 0
+
+
+def _glove_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("glove")
+    except PackageNotFoundError:
+        return ""
+
+
+def _read_capped(argv: list[str], cap: int) -> bytes:
+    """A command's stdout, refused past `cap` bytes (the sidecar's output is hostile)."""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    assert p.stdout is not None
+    chunks, n = [], 0
+    while chunk := p.stdout.read(1 << 20):
+        n += len(chunk)
+        if n > cap:
+            p.kill()
+            p.wait()
+            raise ValueError(f"the capture is over {cap // (1 << 20)} MB")
+        chunks.append(chunk)
+    if (rc := p.wait()) != 0:
+        raise ValueError(f"reading it failed (exit {rc})")
+    return b"".join(chunks)
+
+
+def _collect(s: ExtSession, cid: str, cc: dict) -> None:
+    """Copy the finished capture `cid` out of the sidecar, check it, write it to the
+    host (and browser-output/ with `to: work`), and remove it from the sidecar once
+    the host copy is safe."""
+    runtime, container = s.runtime, s.container("pw")
+    if not capture.ID.fullmatch(cid):
+        err.print(f"[yellow]skipped[/yellow] a capture with an unexpected name ({escape(capture.printable(cid[:40]))})")
+        return
+    if cid not in _exec(runtime, container, CAPTURE, "list").split():
+        console.print(f"[dim]capture {cid} was already saved (another `solve`)[/dim]")
+        return
+    kept = f"; it stays in {container}:/tmp/capture/{cid} (`glove playwright solve --stop` retries)"
+    try:
+        cap = capture.read_tar(_read_capped([runtime, "exec", container, "tar", "-C", "/tmp/capture", "-c", cid],
+                                            capture.MAX_TAR), cid)
+    except ValueError as e:
+        err.print(f"[red]error:[/red] capture {cid}: {e}{kept}")
+        return
+    state = s.state_dir()
+    try:
+        saved = [capture.write(state, cap, private=True)]
+    except FileExistsError:
+        saved = []
+        console.print(f"[dim]capture {cid} is already saved in {state}/challenges/[/dim]")
+    except OSError as e:
+        shutil.rmtree(state / "challenges" / cid, ignore_errors=True)  # ours, never the sidecar's
+        err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
+        return
+    if cc["to"] == "work":
+        try:
+            saved.append(capture.write(s.root / "browser-output", cap, private=False))
+        except FileExistsError:  # ids are unguessable: glove didn't make it, and its files are unchecked
+            err.print(f"[red]refused:[/red] browser-output/challenges/{cid} already exists, and glove did not "
+                      "write it (the browser sidecar can write there); the checked copy is the host's")
+        except OSError as e:
+            err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
+    subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
+                   capture_output=True, check=False)
+    console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
+    for p in saved:
+        console.print(f"  {p}")
 
 
 @app.command("status")

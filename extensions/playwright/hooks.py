@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from glove.api import HookContext, hook, resolve_ca_file, scoped
 
+from . import capture
 from .host import chrome
 from .host import login as lg
 from .host import services as hs
@@ -40,6 +41,8 @@ CA_FILE = "corporate-ca.pem"
 # MCP copies it into the output dir: Playwright's default is under /tmp, a
 # tmpfs that counts against the sidecar's memory.
 STAGING = "/data/staging"
+# novnc: raises the page each tool call acts on (image/glove-pw-front.js)
+FRONT_PAGE = "/opt/glove/pw/glove-pw-front.js"
 
 
 # With a stored session in the browser, the tools that read (or replace) its
@@ -142,6 +145,7 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     s = ctx.settings
     login = login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
     check_storage_state(s)
+    capture.spec(s)
     if s["mode"] != "host":
         corporate_ca(ctx)
         if not s.get("storage_state") or login is None:
@@ -179,16 +183,19 @@ def host_services(ctx: HookContext, ports: dict[str, int]) -> list[hs.Service]:
 def mcp_config(settings: dict[str, Any]) -> dict[str, Any]:
     """The sidecar MCP's config file: what the agent cannot choose."""
     args = list(CHROMIUM_ARGS)
+    browser: dict[str, Any] = {}
     if settings["mode"] == "novnc":  # headed: fill the VNC display
         w, h = settings["viewport"].split("x")
         args += [f"--window-size={w},{h}", "--window-position=0,0"]
-    # One browser context for every MCP client: a harness that restarts (a new MCP
-    # session) while its old session was never closed reuses it. Without it a
-    # session profile refuses the second launch ("Browser is already in use for
-    # /data/profile") and an ephemeral one leaks a context per restart.
+        browser["initPage"] = [FRONT_PAGE]  # the operator sees the page the agent acts on
+    # One browser for every MCP client: a harness that restarts (a new MCP session)
+    # while its old session was never closed reuses it. A session profile's
+    # clients share its one context (without this the second launch is refused:
+    # "Browser is already in use for /data/profile"); an ephemeral profile's each
+    # get their own, closed with the client (headed: a window each).
     return {"sharedBrowserContext": True,
             "browser": {"contextOptions": {"timezoneId": settings["timezone"], "locale": settings["locale"]},
-                        "launchOptions": {"args": args, "downloadsPath": STAGING}}}
+                        "launchOptions": {"args": args, "downloadsPath": STAGING}, **browser}}
 
 
 def chromium_policy(settings: dict[str, Any]) -> dict[str, Any]:
@@ -247,6 +254,16 @@ def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
         path = chrome.chrome_executable()
         checks.append(("playwright login: browser", "ok" if path else "warn",
                        path or "no Chrome/Chromium found for `glove playwright login`"))
+    try:
+        cc = capture.spec(ctx.settings)
+    except ValueError as e:
+        checks.append(("playwright challenge capture", "fail", str(e)))
+        cc = None
+    if cc is not None:
+        where = ".glove/ext/playwright/challenges/" + (" and browser-output/challenges/" if cc["to"] == "work" else "")
+        checks.append(("playwright challenge capture", "info",
+                       f"`glove playwright solve` records your pointer (presses, drags, screenshots) while you solve "
+                       f"a challenge, into {where}"))
     if ctx.settings["mode"] != "host":
         return checks
     for svc in host_services(ctx, ctx.slot["browser"]["host_ports"]):  # what `glove up` runs outside the sandbox

@@ -108,16 +108,17 @@ def test_mcp_config_and_dirs(tmp_path):
     state = tmp_path / "ext" / "playwright"
     cfg = json.loads((state / "mcp.json").read_text())
     assert cfg["browser"]["contextOptions"] == {"timezoneId": "Europe/Berlin", "locale": "de-DE"}
-    # every MCP client shares one context: a restarted harness's new session reuses the browser
+    # every MCP client shares one browser: a restarted harness's new session reuses it
     assert cfg["sharedBrowserContext"] is True
     assert cfg["browser"]["launchOptions"]["args"] == ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+    assert "initPage" not in cfg["browser"]  # nothing to keep in front without a display
     assert (state / "output").is_dir() and not (state / "profile").exists()
 
 
 def test_novnc_mode(tmp_path):
-    doc = _project(tmp_path, mode="novnc", clipboard="to-browser")
+    doc = _project(tmp_path, mode="novnc", clipboard="to-browser", viewport="1600x900")
     pw = doc["services"]["glove-s-pw"]
-    assert pw["command"] == ["glove-pw-start", "novnc"]
+    assert pw["command"] == ["glove-pw-start", "novnc"] and pw["environment"]["PW_VIEWPORT"] == "1600x900"
     assert pw["environment"]["VNC_ACCEPT_INPUT"] == "false" and pw["environment"]["VNC_CLIPBOARD"] == "to-browser"
     # the VNC passwords never leave the sidecar: no compose secret, no env, no file
     assert "secrets" not in pw and not doc.get("secrets")
@@ -126,7 +127,13 @@ def test_novnc_mode(tmp_path):
     plan = _plan(tmp_path / "p", mode="novnc", viewport="1600x900")
     materialize(plan.composition)
     args = json.loads((tmp_path / "p" / "ext" / "playwright" / "mcp.json").read_text())["browser"]["launchOptions"]
-    assert "--window-size=1600,900" in args["args"]
+    # the window is the display's size at its origin: the page's bottom is on screen
+    assert "--window-size=1600,900" in args["args"] and "--window-position=0,0" in args["args"]
+    # the page each tool call acts on is raised (image/glove-pw-front.js, copied there by the Dockerfile)
+    cfg = json.loads((tmp_path / "p" / "ext" / "playwright" / "mcp.json").read_text())
+    assert cfg["browser"]["initPage"] == ["/opt/glove/pw/glove-pw-front.js"]
+    assert "COPY glove-pw-front.js /opt/glove/pw/glove-pw-front.js" in (IMAGE / "Dockerfile").read_text()
+    assert 'Xvnc :1 -geometry "$PW_VIEWPORT"' in (IMAGE / "glove-pw-start").read_text()
     assert "operator may be watching" in dict(plan.composition.rendered_briefs())["playwright"]
 
 

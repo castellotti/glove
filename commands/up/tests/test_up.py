@@ -204,5 +204,69 @@ def test_resume_hint_reports_this_runs_transcript(tmp_path, capsys):
 
 
 
+def test_resume_hint_is_best_effort(tmp_path, capsys, monkeypatch):
+    # an editable install updated mid-session: the old cli.py lazily imports new modules
+    def broken(*a):
+        raise AttributeError("'str' object has no attribute 'config_home_path'")
+
+    monkeypatch.setattr(up, "conversations", broken)
+    up._print_resume_hint(get_profile("pi"), tmp_path, "s-000000", since=time_now())
+    out = capsys.readouterr().out
+    assert "couldn't list the saved conversation" in out and "glove up --resume` still works" in out
+    assert "Traceback" not in out
+
+
+def test_up_notes_glove_updated_while_it_ran(home, tmp_path, monkeypatch):
+    d = make_session(tmp_path / "s")
+    stamps = iter([1.0, 2.0])
+    monkeypatch.setattr(up, "_source_stamp", lambda: next(stamps))
+    monkeypatch.setattr(up, "_started", lambda *a: {})
+    monkeypatch.setattr(up, "launch", lambda *a, **k: None)
+    result = runner.invoke(app, ["up", str(d)])
+    assert result.exit_code == 0 and "glove was updated while this session ran" in result.output
+
+
+A, B = "2026-10-20T01:00:00.1Z", "2026-10-20T01:00:00.2Z"
+
+
+@pytest.mark.parametrize(("after", "restarted"), [
+    ({"c1": "2026-10-20T04:17:41.1Z", "c2": "2026-10-20T04:17:42.9Z"}, True),  # every sidecar started again
+    ({"c1": A, "c3": "2026-10-20T04:17:41.1Z"}, False),  # one recreated (e.g. playwright reload)
+    ({"c1": A, "c2": B}, False),  # nothing happened
+    ({}, False), (None, False),  # nothing running again / the runtime doesn't answer
+])
+def test_a_runtime_restart_is_every_sidecar_started_again(after, restarted):
+    assert up._runtime_restarted({"c1": A, "c2": B}, after) is restarted
+
+
+def test_one_sidecar_restarting_is_not_a_runtime_restart():
+    assert not up._runtime_restarted({"c1": A}, {"c1": B})
+
+
+def test_started_reads_the_runtime_and_gives_up_quietly(monkeypatch):
+    def run(argv, **k):
+        assert k["timeout"] == 5
+        out = "c1\nc2\n" if argv[1] == "ps" else f"c1 {A}\nc2 {B}\n"
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr(up.subprocess, "run", run)
+    assert up._started("docker", "glove-s-000000") == {"c1": A, "c2": B}
+
+    def wedged(argv, **k):
+        raise subprocess.TimeoutExpired(argv, k["timeout"])
+
+    monkeypatch.setattr(up.subprocess, "run", wedged)
+    assert up._started("docker", "glove-s-000000") is None
+
+
+def test_after_harness_never_raises(monkeypatch, capsys):
+    def boom(*a):
+        raise ValueError("[/bad] markup")
+
+    monkeypatch.setattr(up, "_started", boom)
+    up._after_harness("docker", "glove-s-000000", {"c1": A, "c2": B}, None)
+    assert "after the harness: [/bad] markup" in capsys.readouterr().err
+
+
 def time_now() -> float:
     return time.time()
