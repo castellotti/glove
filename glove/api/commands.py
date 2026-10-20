@@ -6,17 +6,28 @@ from ..config import secret_exists
 from ..doctor import extension_checks, run_doctor, worst_status
 from ..enforcers import OPTION_SECTIONS, get_enforcer
 from ..enforcers.base import default_enforcer
-from ..extensions import discover
+from ..extensions import call_hook, discover
+from ..extsession import run_teardown
 from ..hardening import HardeningError
 from ..harness import get_profile, known_harnesses
+from ..harnessconfig import harness_model, render_home
 from ..naming import project_name
-from ..plan import build_session_plan, secret_refs
+from ..plan import build_session_plan, secret_env, secret_refs
 from ..quarantine import supported as quarantine_supported
 from ..registry import RegistryError, control_dir, glove_home, load_registry, observe_dir
 from ..registry import remove as remove_rows
 from ..runtimes import get_runtime, known_runtimes
 from ..runtimes.base import Check
-from ..session import build_forwarder, build_harness, probe_direct
+from ..session import (
+    SubnetTaken,
+    build_forwarder,
+    build_harness,
+    clear_stale_harness,
+    launch,
+    probe_direct,
+    probe_http,
+    with_headers,
+)
 from ..sessiondir import (
     ID_RE,
     PLACEHOLDER,
@@ -29,6 +40,7 @@ from ..sessiondir import (
     read_effective,
     remove_state,
     template_drift,
+    write_effective,
 )
 from ..sessiondir import find as find_session
 from ..sessiondir import load_file as load_session_file
@@ -37,11 +49,13 @@ from ..sessionops import (
     DIR_ARG,
     IKNOW,
     console,
+    conversations,
     ensure_home,
     err,
     fail,
     mark_downloads,
     materialize_plan,
+    now,
     one_resume,
     open_session,
     print_checks,
@@ -52,11 +66,14 @@ from ..sessionops import (
 )
 
 __all__ = ["DIR_ARG", "ID_RE", "IKNOW", "OPTION_SECTIONS", "PLACEHOLDER", "SCHEMA_VERSION", "SESSION_FILE", "VERSION",
-           "Check", "HardeningError", "RegistryError", "SessionDir", "SessionError", "autodetect_provider",
-           "build_forwarder", "build_harness", "build_session_plan", "console", "control_dir", "default_enforcer",
-           "discover", "ensure_home", "err", "extension_checks", "fail", "find_session", "get_enforcer",
-           "get_profile", "get_runtime", "glove_home", "known_harnesses", "known_runtimes", "load_registry",
-           "load_session_file", "mark_downloads", "materialize_plan", "materialize_session", "observe_dir",
-           "one_resume", "open_session", "placeholders_left", "print_checks", "print_extensions", "probe_direct",
-           "project_name", "quarantine_supported", "read_effective", "remove_rows", "remove_state", "row_state",
-           "run_doctor", "secret_exists", "secret_refs", "stop", "sync_registry", "template_drift", "worst_status"]
+           "Check", "HardeningError", "RegistryError", "SessionDir", "SessionError", "SubnetTaken",
+           "autodetect_provider", "build_forwarder", "build_harness", "build_session_plan", "call_hook",
+           "clear_stale_harness", "console", "control_dir", "conversations", "default_enforcer", "discover",
+           "ensure_home", "err", "extension_checks", "fail", "find_session", "get_enforcer", "get_profile",
+           "get_runtime", "glove_home", "harness_model", "known_harnesses", "known_runtimes", "launch",
+           "load_registry", "load_session_file", "mark_downloads", "materialize_plan", "materialize_session", "now",
+           "observe_dir", "one_resume", "open_session", "placeholders_left", "print_checks", "print_extensions",
+           "probe_direct", "probe_http", "project_name", "quarantine_supported", "read_effective", "remove_rows",
+           "remove_state", "render_home", "row_state", "run_doctor", "run_teardown", "secret_env", "secret_exists",
+           "secret_refs", "stop", "sync_registry", "template_drift", "with_headers", "worst_status",
+           "write_effective"]

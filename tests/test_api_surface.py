@@ -59,6 +59,7 @@ COMMANDS = {
     "SESSION_FILE": "str",
     "SessionDir": "dataclass(root)",
     "SessionError": "class(ConfigError)",
+    "SubnetTaken": "class(Exception)",
     "VERSION": "str",
     "autodetect_provider": "() -> 'str'",
     "build_session_plan": "(cfg: 'Config', *, home_dir: 'str', cwd: 'str | None' = None, uid: 'int | None' = None, "
@@ -68,8 +69,11 @@ COMMANDS = {
     "build_harness": "(provider: 'str', profile: 'HarnessProfile', *, apt_packages: 'list[str] | None' = None, "
                      "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
                      "plan: 'SessionPlan | None' = None, force: 'bool' = False) -> 'str'",
+    "call_hook": "(comp: 'Composition', a: 'Active', name: 'str', *args: 'Any') -> 'Any'",
+    "clear_stale_harness": "(provider: 'str', name: 'str') -> 'None'",
     "console": "Console",
     "control_dir": "(session_id: 'str') -> 'Path'",
+    "conversations": "(profile, home_dir: 'Path', sid: 'str')",
     "default_enforcer": "(runtime: 'str') -> 'str'",
     "discover": "(in_tree: 'Path | None' = None) -> 'dict[str, Manifest]'",
     "ensure_home": "() -> 'None'",
@@ -82,14 +86,18 @@ COMMANDS = {
     "get_profile": "(name: 'str') -> 'HarnessProfile'",
     "get_runtime": "(name: 'str')",
     "glove_home": "() -> 'Path'",
+    "harness_model": "(profile: 'HarnessProfile', exports: 'dict[str, Any]') -> 'ModelDescriptor'",
     "known_harnesses": "() -> 'list[str]'",
     "known_runtimes": "() -> 'list[str]'",
+    "launch": "(cfg: 'Config', plan: 'SessionPlan', compose_file: 'Path', *, provider: 'str', rebuild: 'bool', "
+              "secrets: 'dict[str, str]', prepare: 'Callable[[], None] | None' = None) -> 'None'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "load_session_file": "(sd: 'SessionDir') -> 'dict[str, Any]'",
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
     "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
     "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
                         "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+    "now": "() -> 'str'",
     "observe_dir": "(session_id: 'str') -> 'Path'",
     "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
@@ -98,20 +106,27 @@ COMMANDS = {
     "print_extensions": "(plan) -> 'None'",
     "probe_direct": "(provider: 'str', url: 'str', *, method: 'str' = 'GET', body: 'dict | None' = None, "
                     "headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
+    "probe_http": "(provider: 'str', plan: 'SessionPlan', url: 'str', *, method: 'str' = 'GET', "
+                  "body: 'dict | None' = None, headers: 'dict[str, str] | None' = None) -> 'tuple[int, str]'",
     "project_name": "(session: 'str') -> 'str'",
     "quarantine_supported": "() -> 'bool'",
     "read_effective": "(path: 'Path') -> 'tuple[Config | None, dict[str, Any]]'",
     "remove_rows": "(session_ids: 'set[str]') -> 'int'",
     "remove_state": "(sd: 'SessionDir') -> 'None'",
+    "render_home": "(cfg: 'Config', plan: 'SessionPlan', home_dir: 'Path') -> 'list[Path]'",
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
+    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
+    "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
     "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
     "stop": "(sd: 'SessionDir', sid: 'str', provider: 'str | None', *, wipe: 'bool', mark: 'bool' = True) -> 'None'",
     "sync_registry": "(sd: 'SessionDir', sid: 'str', raw: 'dict', *, check_runtime: 'bool' = False) "
                      "-> 'reg.SessionEntry'",
     "template_drift": "(sd: 'SessionDir') -> 'tuple[str, str] | None'",
+    "with_headers": "(probe, exports: 'dict') -> 'Callable[..., tuple[int, str]]'",
+    "write_effective": "(path: 'Path', cfg: 'Config', resolved: 'dict[str, Any] | None' = None) -> 'None'",
     "worst_status": "(checks: 'list[Check]') -> 'str'",
 }
 HARNESS = {
