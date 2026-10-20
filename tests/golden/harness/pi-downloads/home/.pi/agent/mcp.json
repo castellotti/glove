@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "webdownload": {
+      "url": "http://glove-s-webdownload-mcp:8000/mcp",
+      "exposure": "hidden",
+      "toolExposure": {
+        "web_download": "direct",
+        "web_download_status": "direct"
+      }
+    }
+  }
+}

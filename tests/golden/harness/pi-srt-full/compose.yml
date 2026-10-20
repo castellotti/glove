@@ -382,6 +382,40 @@ services:
     ipc: private
     pids_limit: 256
     mem_limit: 512m
+  glove-s-searxng-mcp:
+    container_name: glove-s-searxng-mcp
+    image: glove/ext-search-mcp:1e59a8fb36
+    environment:
+      SEARXNG_URL: http://glove-s-searxng:8080
+      MCP_ALLOWED_HOST: glove-s-search-mcp:8000
+    tmpfs:
+    - /tmp
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -c
+      - import socket; socket.create_connection(('127.0.0.1', 8000), 2)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    networks:
+      glove-s-searchnet: {}
+    depends_on:
+      glove-s-searxng:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
     image: glove/ext-gate-netgate:be365e45ce
@@ -603,6 +637,68 @@ services:
       glove-s-net:
         aliases:
         - glove-s-search-ingress
+      glove-s-searchnet: {}
+    volumes:
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    - type: bind
+      source: <GLOVE_HOME>/control/s
+      target: /etc/glove/netgate-control
+      read_only: true
+    depends_on:
+      glove-s-netgate:
+        condition: service_started
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-search-mcp:
+    container_name: glove-s-search-mcp
+    image: glove/ext-gate-netgate:be365e45ce
+    command:
+    - forward
+    - --service
+    - search-mcp
+    - --mode
+    - tcp
+    - --listen
+    - '8000'
+    - --upstream
+    - tcp:glove-s-searxng-mcp:8000
+    - --route
+    - tcp
+    - --env
+    - s
+    - --session
+    - s
+    - --resolve
+    - in-tunnel
+    - --events
+    - /run/glove-netgate/events.sock
+    - --client
+    - unknown
+    - --record
+    - metadata
+    - --rules
+    - /etc/glove/netgate-control/rules.json
+    - --ingress-alias
+    - glove-s-search-mcp-ingress
+    - --scope
+    - local
+    - --tool
+    - web_search
+    networks:
+      glove-s-net:
+        aliases:
+        - glove-s-search-mcp-ingress
       glove-s-searchnet: {}
     volumes:
     - type: volume

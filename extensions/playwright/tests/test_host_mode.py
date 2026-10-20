@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from helpers import make_cfg, make_session
 
 from glove import sessiondir as sdm
@@ -220,6 +221,28 @@ def test_host_mode_refused_behind_an_anonymising_egress(tmp_path, egress):
     with pytest.raises(ExtensionError, match="bypasses the session's vpn/tor egress"):
         _plan(tmp_path, extra={egress: settings})
     _plan(tmp_path / "direct", extra={"direct": {}})  # no anonymity to lose
+
+
+def test_every_mcp_harness_but_pi_needs_the_host_rce_ack():
+    # the rule names harnesses (`when` has no "not pi"): a new one must join it,
+    # unless, like Pi, a glove hook refuses every tool its inventory lacks
+    from glove.harness import get_profile, known_harnesses
+
+    rules = yaml.safe_load((IN_TREE_DIR / "playwright" / "extension.yml").read_text())["validate"]
+    [rule] = [r["when"] for r in rules if "i_accept_host_rce" in r["when"]]
+    want = [h for h in known_harnesses() if h != "pi" and get_profile(h).renders("mcp")]
+    assert sorted(rule["harness"]) == want
+
+
+def test_host_mode_never_allows_run_code(tmp_path):
+    tools = ["browser_navigate", "browser_run_code_unsafe"]
+    plan = _plan(tmp_path, tools=tools)
+    [pw] = [s for _, s in plan.composition.mcp if s["name"] == "playwright"]
+    assert pw["tools"] == ["browser_navigate"]
+    assert "mcp__playwright__browser_run_code_unsafe" not in plan.policies["tools.json"]  # Pi's enforcer refuses it
+    # in a sidecar mode it reaches only the sidecar
+    headless = _plan(tmp_path / "h", extra={"direct": {}}, tools=tools, mode="headless")
+    assert next(s for _, s in headless.composition.mcp if s["name"] == "playwright")["tools"] == tools
 
 
 def test_pi_extension_never_exposes_run_code_in_host_mode():

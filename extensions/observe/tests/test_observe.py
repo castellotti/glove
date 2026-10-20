@@ -99,8 +99,8 @@ def test_classify_scope_by_shape(host, gw, scope):
 def test_every_endpoint_becomes_a_gate_dropin(tmp_path):
     plan, doc, _ = render(tmp_path)
     g = gates(doc)
-    assert set(g) == {"glove-ps-llm", "glove-ps-search", "glove-ps-proxy", "glove-ps-searxng-egress",
-                      "glove-ps-netgate"}
+    assert set(g) == {"glove-ps-llm", "glove-ps-search", "glove-ps-search-mcp", "glove-ps-proxy",
+                      "glove-ps-searxng-egress", "glove-ps-netgate"}
     assert not any(s.get("image") == plan.forwarder_image for s in doc["services"].values())
     proxy = g["glove-ps-proxy"]
     # same name, networks and port as the socat it replaces
@@ -139,7 +139,8 @@ def test_searxng_reaches_egress_only_through_its_gate(tmp_path):
 
 
 @pytest.mark.parametrize(("exts", "harness", "want"), [
-    (PI_SEARCH, "pi", {"llm": [], "search": ["searxng-egress"], "searxng-egress": [], "proxy": []}),
+    (PI_SEARCH, "pi", {"llm": [], "search": ["searxng-egress"], "search-mcp": ["searxng-egress"],
+                       "searxng-egress": [], "proxy": []}),
     # the fetcher sends each tool through its own egress gate, both on fetchnet
     ({"direct": {}, "search": {}, "webfetch": {"downloads": "work"}, "playwright": {}}, "vibe",
      {"llm": [], "browser": ["browser-egress"], "browser-egress": [], "search-mcp": ["searxng-egress"],

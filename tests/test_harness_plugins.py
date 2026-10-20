@@ -210,9 +210,9 @@ def test_unknown_harness_keys_are_refused(tmp_path, monkeypatch, section):
 
 
 def test_a_harness_section_reaches_only_its_adapter(tmp_path, monkeypatch):
-    section = "  pi: { extensions: [code] }\n  mcp: [{name: m, transport: http, url: 'http://m:1/mcp'}]\n"
+    section = "  pi: { extensions: [code] }\n  mcp: [{name: m, transport: http, url: 'http://m:1/mcp', tools: t}]\n"
     pi = _plan_with(tmp_path, monkeypatch, section)
-    assert pi.command[-2:] == ["-e", "/opt/glove/ext/x/code"] and pi.composition.mcp == []
+    assert pi.command[-2:] == ["-e", "/opt/glove/ext/x/code"] and [s["name"] for _, s in pi.composition.mcp] == ["m"]
     (tmp_path / "v").mkdir()
     vibe = _plan_with(tmp_path / "v", monkeypatch, section, harness="vibe")
     assert vibe.composition.harness_items == [] and [s["name"] for _, s in vibe.composition.mcp] == ["m"]

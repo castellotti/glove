@@ -174,12 +174,12 @@ def test_when_a_star_matches_any_key_and_gives_what_it_found():
     assert not when_matches({"settings.plugins.*.relay": {"set": True}}, {"settings": {}})
 
 
-@pytest.mark.parametrize(("harness", "mcp"), [("pi", False), ("vibe", True), ("claude-code", True)])
-def test_when_renders_follows_the_harness_contributions(harness, mcp):
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
+def test_when_renders_follows_the_harness_contributions(harness):
     from glove.extensions import when_context
 
     ctx = when_context({"dir": "", "n": 0}, harness)
-    assert when_matches({"renders": "mcp"}, ctx) is mcp
+    assert when_matches({"renders": "mcp"}, ctx)  # every in-tree harness renders MCP
     assert when_matches({"renders": ["mcp", "skills"]}, ctx)  # every harness renders skills
     assert when_matches({"dir": {"set": False}, "n": {"set": True}}, ctx)  # 0 is a value; "" is not
 
@@ -671,13 +671,20 @@ def _mcp(tree, *items: str, harness="vibe", ext="e"):
                    manifests=discover(tree)).mcp
 
 
-def test_an_mcp_item_is_normalized(tree):
+def test_an_mcp_item_is_normalized(tree, monkeypatch):
+    import dataclasses
+
+    import glove.extensions as ext_mod
+
     got = _mcp(tree, "{ name: h, transport: streamable-http, url: 'http://h/mcp', tools: 'a, b', all_tools: [a, c] }",
                "{ name: s, command: srv, args: [-p, 1], env: { PORT: 1 } }")
     assert got == [
         ("e", {"name": "h", "transport": "http", "url": "http://h/mcp", "tools": ["a", "b"], "all_tools": ["a", "c"]}),
         ("e", {"name": "s", "transport": "stdio", "command": "srv", "args": ["-p", "1"], "env": {"PORT": "1"}})]
-    assert _mcp(tree, "{ name: s, command: srv }", harness="pi", ext="p") == []  # Pi renders no MCP
+    # a harness that doesn't render MCP gets none
+    real = ext_mod.get_profile
+    monkeypatch.setattr(ext_mod, "get_profile", lambda h: dataclasses.replace(real(h), contributions=frozenset()))
+    assert _mcp(tree, "{ name: s, command: srv }", ext="p") == []
 
 
 @pytest.mark.parametrize("item,why", [

@@ -348,8 +348,10 @@ has no server-side switch for it). The controls:
   CDP port or `--allow-unrestricted-file-access`. Chromium's own sandbox is
   on (`chromium-userns`, above); on podman it must be `off`, and then the
   container is the only boundary.
-- **The tool allowlist.** Pi registers only the `tools` setting (never
-  `browser_run_code_unsafe` in host mode, even if listed). Vibe gets a
+- **The tool allowlist.** The MCP server's allowlist is the `tools` setting
+  (never `browser_run_code_unsafe` in host mode, even if listed). Pi shows the
+  model only those tools, and its enforcer extension refuses any other (glove's
+  own code, as the `mcp__playwright__…` names are not in its inventory). Vibe gets a
   `disabled_tools` regex hiding every other `playwright_*` tool (verified
   live). That is a client-side filter: it keeps the model from calling the
   tool, it is not a boundary around the MCP. A `javascript:` URL passed to
@@ -851,14 +853,24 @@ wrapper and the planted hook ran in the harness.
   well-meant extension that rewrites commands from silently unwrapping them,
   not a hostile one: an extension is code in the harness process and could
   start a process itself. **Load only extensions you trust.**
-- **Pi's built-in MCP is off** (`extensions: ["-builtin:mcp"]` in the rendered,
-  read-only settings): Pi 1.x starts stdio MCP servers from the harness
-  process, outside ring 1, with the harness's rights (its home, the session's
-  forwarders). Measured on by default: a server in `mcp.json` ran on a plain
-  turn. The project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`
-  even with MCP on. A session's own `harness_config.settings.extensions` are
-  added after glove's entry, and any naming `builtin:mcp` is dropped: there is
-  no opt-in until glove extensions contribute Pi MCP servers.
+- **Pi's built-in MCP loads only glove's servers.** Pi 1.x starts stdio MCP
+  servers from the harness process, with the harness's rights (its home, the
+  session's forwarders); measured: a server in `mcp.json` ran on a plain turn.
+  So glove renders `~/.pi/agent/mcp.json` itself from the extensions' neutral
+  `mcp` items and binds it read-only (`/mcp` exposure changes fail to save),
+  and the project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`.
+  Without a server the file is empty and MCP is off (`extensions:
+  ["-builtin:mcp"]`). A session's own `harness_config.settings.extensions` are
+  added after glove's entry, and any naming `builtin:mcp` is dropped.
+  Each server is `"exposure": "hidden"` with only its allowlisted tools
+  `direct` (Pi's default, `codemode`, would let a script reach every tool), and
+  those tools, named `mcp__<server>__<tool>`, are the only MCP tools in the
+  inventory the enforcer extension passes (codemode's nested calls are
+  classified one by one). A stdio server runs as its extension wrote it: the
+  `skills` extension's run under `glove-confine` (the tool wrapper: no network,
+  no home). Pi expands `${VAR}` and runs a `!command` in `env` (and `headers`)
+  values, so glove refuses an `env` value that looks like either; it renders no
+  `headers`.
 - **Pi's codemode** (model-written JavaScript in QuickJS calling Pi's tools)
   is off as Pi ships it; `harness_config.settings.defaultTools: ["+codemode"]`
   turns it on. Its nested calls are wrapped and held like direct ones

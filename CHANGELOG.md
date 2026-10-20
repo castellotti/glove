@@ -88,6 +88,17 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
+  built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
+  [mcp, skills]`): each server `hidden` but for its allowed tools, named
+  `mcp__<server>__<tool>` in Pi and in the tool inventory. Pi's MCP stays off
+  in a session without a server. A stdio server runs as its extension wrote
+  it (the `skills` plugins' under `glove-confine`). Refused for Pi: a server
+  without a `tools` allowlist, names that collide once Pi replaces their `-`,
+  and an `env` value Pi would expand (`$`) or run (`!…`). Pi sessions with `search`,
+  `playwright` or `webfetch` `downloads: work` now start those MCP sidecars.
+- **playwright `mode: host` never allows `browser_run_code_unsafe`**, for any
+  harness, even if `tools` lists it.
 - **`glove up` explains what happened after the harness exits.**
   - The resume hint is best effort: an error becomes one dim line
     ("`glove up --resume` still works"), never a traceback that hides the

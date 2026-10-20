@@ -14,7 +14,9 @@
     "codemode",
     "web_fetch",
     "web_download",
-    "web_download_status"
+    "web_download_status",
+    "mcp__webdownload__web_download",
+    "mcp__webdownload__web_download_status"
   ],
   "ask": [],
   "deny": []

@@ -57,10 +57,10 @@ def test_mcp_harnesses_get_web_search_from_a_sidecar_over_http(tmp_path, harness
     assert "searxng_mcp" not in (plan.derived_dockerfile or "")
 
 
-def test_pi_gets_no_mcp_sidecar(tmp_path):
+def test_pi_gets_the_mcp_sidecar(tmp_path):
     plan = _plan(tmp_path)
-    assert not any(s.role == "search-mcp" for s in plan.network.sidecars)
-    assert not any(n.endswith("searxng-mcp") for n in plan.composition.fragments[-1][1]["services"])
+    assert any(s.role == "search-mcp" for s in plan.network.sidecars)
+    assert [s["name"] for _, s in plan.composition.mcp] == ["searxng"]
 
 
 def test_the_sidecar_image_is_hash_pinned():

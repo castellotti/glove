@@ -1,11 +1,21 @@
-"""Pi adapter: models.json + settings.json, and Pi's `-e` extensions.
+"""Pi adapter: models.json + settings.json + mcp.json, and Pi's `-e` extensions.
 
-Extensions contribute Pi code as `harness: {pi: {extensions: [<dir>, …],
-tools: [<name>, …]}}` (Pi has no MCP): each directory is baked into the derived
-image under /opt/glove/ext/<ext>/ and loaded with `pi -e <path>`, and the tools
-it registers are added to the session's tool inventory (passthrough; the
-enforcer extension refuses any tool not in it). Skills come from the
-neutral `harness.skills` contribution (`actx.skills`).
+MCP servers come from the neutral `harness.mcp` contribution (`actx.mcp`) and
+are rendered into the read-only `mcp.json` for Pi's built-in MCP, which is on
+only when there is one. A server's `tools` allowlist becomes `"exposure":
+"hidden"` with each listed tool `direct` (Pi's default, `codemode`, would hide
+them from the model, and its scripts could reach the rest). Pi names them
+`mcp__<server>__<tool>`; those names join the session's tool inventory, which
+the enforcer extension refuses every other tool by. A stdio server runs as its
+contributor wrote it (the `skills` extension's go through `glove-confine`, the
+tool wrapper). Pi expands `${VAR}` and runs a `!command` in `env` values, so
+glove's literal values may hold no `$` and start with no `!`.
+
+Extensions may also contribute Pi code as `harness: {pi: {extensions: [<dir>,
+…], tools: [<name>, …]}}`: each directory is baked into the derived image under
+/opt/glove/ext/<ext>/ and loaded with `pi -e <path>`, and the tools it
+registers are added to the session's tool inventory (passthrough). Skills come
+from the neutral `harness.skills` contribution (`actx.skills`).
 """
 
 from __future__ import annotations
@@ -38,11 +48,48 @@ def _sections(actx: AdapterContext) -> list[tuple[HarnessSection, str]]:
     return out
 
 
+def _pi_name(name: str) -> str:
+    """Pi's form of a server or tool name in `mcp__<server>__<tool>` (core
+    allows letters, digits, `_` and `-`; Pi replaces the rest with `_`)."""
+    return name.replace("-", "_")
+
+
+def _mcp_servers(actx: AdapterContext) -> dict[str, dict[str, Any]]:
+    """mcp.json's `mcpServers`, from the neutral `mcp` contribution. Refused:
+    a server without a `tools` allowlist (the inventory names every tool Pi may
+    call), and names that are one once Pi has replaced their `-` (Pi drops the
+    second server, or suffixes both tools, so the inventory would miss them)."""
+    servers: dict[str, dict[str, Any]] = {}
+    pi_names: set[str] = set()
+    for _ext, item in actx.mcp:
+        name, tools = item["name"], item.get("tools")  # core checked them
+        where = f"pi mcp {name!r}"
+        if tools is None:
+            raise ExtensionError(f"{where}: Pi needs its `tools` allowlist")
+        if _pi_name(name) in pi_names:
+            raise ExtensionError(f"{where}: another server has the same name in Pi")
+        pi_names.add(_pi_name(name))
+        if len({_pi_name(t) for t in tools}) != len(tools):
+            raise ExtensionError(f"{where}: two tools have the same name in Pi")
+        if item["transport"] == "http":
+            server: dict[str, Any] = {"url": item["url"]}
+        else:
+            env = item.get("env") or {}  # core made the values strings
+            if bad := sorted(k for k, v in env.items() if v.lstrip().startswith("!") or "$" in v):
+                raise ExtensionError(f"{where}: env {bad}: Pi would run a `!command` or expand a `$`")
+            server = {"command": item["command"], "args": item.get("args", []), **({"env": env} if env else {})}
+        servers[name] = {**server, "exposure": "hidden", "toolExposure": dict.fromkeys(tools, "direct")}
+    return servers
+
+
 def tool_names(actx: AdapterContext) -> list[str]:
     """The tools the session's Pi extensions register (`pi: {tools: …}`, a list
-    or comma-separated)."""
-    return [n for sec, where in _sections(actx)
-            for n in checked_tool_names(f"{where} pi", sec.data.get("tools") or [])]
+    or comma-separated), then the MCP tools glove's servers allow, as Pi names
+    them."""
+    return [*(n for sec, where in _sections(actx)
+              for n in checked_tool_names(f"{where} pi", sec.data.get("tools") or [])),
+            *(f"mcp__{_pi_name(s)}__{_pi_name(t)}"
+              for s, srv in _mcp_servers(actx).items() for t in srv["toolExposure"])]
 
 
 def extensions(actx: AdapterContext) -> list[tuple[str, Path]]:
@@ -79,7 +126,8 @@ def image_lines(actx: AdapterContext) -> tuple[list[str], list[tuple[str, Path]]
 
 def describe(actx: AdapterContext) -> list[str]:
     """Lines for `glove plan`."""
-    return [f"pi extension ({ext}): {extension_dest(ext, src)}" for ext, src in extensions(actx)]
+    return [*(f"pi extension ({ext}): {extension_dest(ext, src)}" for ext, src in extensions(actx)),
+            *(f"mcp server: {n}" for n in _mcp_servers(actx))]
 
 
 def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
@@ -106,6 +154,7 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
     cfg_dir.mkdir(parents=True, exist_ok=True)
     model_id = model.model
 
+    servers = _mcp_servers(actx)
     glove_provider: dict[str, Any] = {"baseUrl": model.base_url, "api": model.api}
     # Pi treats a provider with no credential as unconfigured ("No models
     # available"). When the endpoint needs a key, name the env var glove passes
@@ -131,10 +180,10 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         # skip the project's `.pi/` and `.agents/skills` without asking (the
         # empty trust store below holds no saved decision to override it)
         "defaultProjectTrust": "never",
-        # Pi's built-in MCP starts stdio servers from the harness process, outside
-        # ring 1; no glove extension contributes Pi MCP, so it's off, and stays off
-        # when a session lists extensions of its own (appended below).
-        "extensions": ["-builtin:mcp"],
+        # Pi's built-in MCP loads only glove's read-only mcp.json (the project's
+        # stays behind trust). Off without a server; a session's own extensions
+        # (appended below) never turn it on or off.
+        "extensions": [] if servers else ["-builtin:mcp"],
     }
     # Endpoint URLs (e.g. SEARXNG_URL) reach Pi as container env from the
     # extensions' `harness.env`, which the Pi extensions read directly.
@@ -166,17 +215,19 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         # no credentials: llm-auth holds the key (read-only, so /login can't
         # store one where the agent's next start would use it)
         ("auth.json", {}),
+        *((("mcp.json", {"mcpServers": servers}),) if servers else ()),
     ):
         p = cfg_dir / name
         p.write_text(json.dumps(data, indent=2) + "\n")
         written.append(p)
 
     # Files Pi loads that glove has nothing for: its system prompt (in place of,
-    # or after, its own), MCP servers and keybindings. glove renders them empty
-    # (Pi 1.x ignores an empty one) and `protect` binds them read-only, so
-    # whatever an earlier run left there (before they were protected) goes. Not
-    # deleted: a bind source must exist, or the runtime makes it a directory.
-    for name in ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json"):
+    # or after, its own), keybindings and, without a server, MCP servers. glove
+    # renders them empty (Pi 1.x ignores an empty one) and `protect` binds them
+    # read-only, so whatever an earlier run left there (before they were
+    # protected) goes, and `/mcp` exposure changes fail to save. Not deleted: a
+    # bind source must exist, or the runtime makes it a directory.
+    for name in ("SYSTEM.md", "APPEND_SYSTEM.md", "keybindings.json", *(() if servers else ("mcp.json",))):
         (cfg_dir / name).write_text("")
     # glove's brief from before it moved to AGENTS.override.md
     (cfg_dir / "AGENTS.md").unlink(missing_ok=True)

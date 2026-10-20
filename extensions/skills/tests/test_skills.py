@@ -180,10 +180,9 @@ def test_mcp_is_opt_in_and_needs_its_tools_listed(tmp_path, plugin):
 
 def test_mcp_per_harness(tmp_path, plugin):
     tools = {"demo": ["search"]}
-    pi = _plan(tmp_path, mcp=True, tools=tools)
-    assert not pi.composition.mcp and "glove-confine" not in pi.derived_dockerfile  # Pi: no MCP; skills still load
-    [(_, item)] = _plan(tmp_path, harness="vibe", mcp=True, tools=tools).composition.mcp
-    assert item["command"] == "/opt/glove/bin/glove-confine"
+    for harness in ("pi", "vibe"):
+        [(_, item)] = _plan(tmp_path, harness=harness, mcp=True, tools=tools).composition.mcp
+        assert item["command"] == "/opt/glove/bin/glove-confine"
     with pytest.raises(ExtensionError, match=r"tools maps a server of \['demo'\]"):
         _plan(tmp_path, harness="claude-code", mcp=True, tools={"other": ["x"]})
 

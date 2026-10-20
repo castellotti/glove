@@ -430,11 +430,13 @@ session can use glove's bridge (`transport: stdio`, `command:
 
 Pi 1.x features, as glove renders them:
 
-- **Built-in MCP: off** (`extensions: ["-builtin:mcp"]`). Pi starts stdio MCP
-  servers from the harness process, outside ring 1. A session's own
-  `harness_config.settings.extensions` are added after that entry, and any
-  naming `builtin:mcp` is dropped: there is no opt-in until glove extensions
-  contribute Pi MCP servers.
+- **Built-in MCP: glove's servers only.** glove renders the extensions' MCP
+  servers into the read-only `~/.pi/agent/mcp.json`, each `"exposure":
+  "hidden"` but for its allowed tools (`direct`), which Pi names
+  `mcp__<server>__<tool>` and the enforcer extension passes; without a server
+  it is off (`extensions: ["-builtin:mcp"]`). A session's own
+  `harness_config.settings.extensions` are added after glove's, and any naming
+  `builtin:mcp` is dropped.
 - **Codemode: off**, as Pi ships it. `harness_config: {settings: {defaultTools:
   ["+codemode"]}}` turns it on; its nested `tools.bash` and `tools.write` go
   through the enforcer like direct calls.
@@ -627,8 +629,8 @@ and an extension's CLI).
     `/opt/glove/cc/.claude/skills`, `--add-dir`; Vibe: links under
     `/opt/glove/vibe/skills`, its `skill_paths`);
   - `<harness>: {...}`: a section only that harness's adapter reads, e.g.
-    `pi: {extensions: [pi-extension], tools: [web_search]}` (glove renders no
-    MCP for Pi: its built-in MCP is off, so it loads its own code with `pi -e`).
+    `pi: {extensions: [pi-extension], tools: [web_search]}` (Pi code loaded
+    with `pi -e`; an MCP server is the one path for a tool every harness gets).
     `tools` (a list or comma-separated) names the tools that code registers;
     they join the tool inventory, and Pi refuses any it doesn't name.
 
@@ -965,7 +967,7 @@ extensions:
         env: { WIKI_SPACE: team }                   # plain values only: a secret is refused
       notes:
         path: skills/notes-repo/notes
-        mcp: true                                   # its .mcp.json servers (Claude Code, Vibe; Pi has no MCP)
+        mcp: true                                   # its .mcp.json servers (every harness)
         tools: { notes: [search, fetch] }           # each server's allowed tools (required)
 ```
 

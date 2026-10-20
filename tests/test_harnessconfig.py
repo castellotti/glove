@@ -129,7 +129,7 @@ def test_vibe_no_hooks_for_none_enforcer(tmp_path):
 
 
 def test_pi_config(tmp_path):
-    _, _, home = _home("pi", tmp_path)
+    _, plan, home = _home("pi", tmp_path)
     agent = home / ".pi" / "agent"
     prov = json.loads((agent / "models.json").read_text())["providers"]["glove"]
     assert prov["baseUrl"] == "http://glove-pi-sess-llm:8080/v1"
@@ -142,18 +142,60 @@ def test_pi_config(tmp_path):
     # the project's .pi/ never loads: no prompt, and no saved decision to override it
     assert settings["defaultProjectTrust"] == "never"
     assert json.loads((agent / "trust.json").read_text()) == {}
-    assert settings["extensions"] == ["-builtin:mcp"]  # Pi's MCP would start servers outside ring 1
+    assert settings["extensions"] == []  # Pi's MCP is on: search and playwright render servers
+    servers = json.loads((agent / "mcp.json").read_text())["mcpServers"]
+    assert servers["searxng"] == {"url": "http://glove-pi-sess-search-mcp:8000/mcp", "exposure": "hidden",
+                                  "toolExposure": {"web_search": "direct"}}
+    assert servers["playwright"]["exposure"] == "hidden"
+    tools = json.loads(plan.policies["tools.json"])["allow"]
+    assert "mcp__searxng__web_search" in tools and "mcp__playwright__browser_navigate" in tools
+
+
+def test_pi_mcp_is_off_without_a_server(tmp_path):
+    _, _, home = _home("pi", tmp_path, extensions={"direct": {}})
+    agent = home / ".pi" / "agent"
+    # Pi's MCP would start what a planted mcp.json says (it is read-only, rendered empty)
+    assert json.loads((agent / "settings.json").read_text())["extensions"] == ["-builtin:mcp"]
+    assert (agent / "mcp.json").read_text() == ""
+
+
+def test_pi_renders_stdio_mcp_as_given_and_refuses_what_pi_would_interpret(tmp_path):
+    from types import SimpleNamespace
+
+    from glove.harness import adapter_call, get_profile
+    from glove.manifest import ExtensionError
+
+    def call(name):
+        return adapter_call(get_profile("pi"), name, actx)
+
+    stdio = {"name": "s-1", "transport": "stdio", "command": "/c", "args": ["a"], "env": {"K": "v"}, "tools": ["t-x"]}
+    actx = SimpleNamespace(mcp=[("x", stdio)], sections=[])
+    assert call("_mcp_servers") == {"s-1": {"command": "/c", "args": ["a"], "env": {"K": "v"}, "exposure": "hidden",
+                                            "toolExposure": {"t-x": "direct"}}}
+    assert call("tool_names") == ["mcp__s_1__t_x"]  # Pi's name for it
+    for value in ("!gh auth token", " !id", "Bearer ${TOKEN}", "$HOME"):
+        actx.mcp = [("x", {**stdio, "env": {"K": value}})]
+        with pytest.raises(ExtensionError, match="Pi would run"):
+            call("_mcp_servers")
+    http = {"name": "h", "transport": "http", "url": "http://o/mcp"}
+    for items, why in [([http], "needs its `tools`"),
+                       ([stdio, {**http, "name": "s_1", "tools": ["t"]}], "same name in Pi"),
+                       ([{**http, "tools": ["a-b", "a_b"]}], "two tools have the same name")]:
+        actx.mcp = [("x", i) for i in items]
+        with pytest.raises(ExtensionError, match=why):
+            call("_mcp_servers")
 
 
 def test_pi_empties_the_loaders_left_in_its_home(tmp_path):
     agent = tmp_path / "home" / ".pi" / "agent"
     agent.mkdir(parents=True)
-    names = ("SYSTEM.md", "APPEND_SYSTEM.md", "mcp.json", "keybindings.json")
-    for name in (*names, "AGENTS.md"):
+    names = ("SYSTEM.md", "APPEND_SYSTEM.md", "keybindings.json")
+    for name in (*names, "mcp.json", "AGENTS.md"):
         (agent / name).write_text("planted")
     _home("pi", tmp_path)
     # rendered empty, not removed: each is a read-only bind source, which must stay a file
     assert all((agent / n).is_file() and (agent / n).read_text() == "" for n in names)
+    assert "mcpServers" in json.loads((agent / "mcp.json").read_text())  # glove's servers, not the planted file
     assert not (agent / "AGENTS.md").exists()
     assert "planted" not in (agent / "AGENTS.override.md").read_text()  # glove's brief, rendered
 
@@ -217,8 +259,8 @@ def test_pi_harness_config_overrides(tmp_path):
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"
     assert settings["env"]["FOO"] == "bar"
-    # a session's own extensions are added; none turns Pi's MCP back on
-    assert settings["extensions"] == ["-builtin:mcp", "npm:x"]
+    # a session's own extensions are added; none names Pi's MCP (on here: glove renders servers)
+    assert settings["extensions"] == ["npm:x"]
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
     assert model["contextWindow"] == 131072
     assert model["maxTokens"] == 100000
