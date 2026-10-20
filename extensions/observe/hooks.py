@@ -141,6 +141,9 @@ def forwarder(ctx: HookContext, ep: dict[str, Any]) -> dict[str, Any] | None:
     s = ctx.settings
     if ep["name"] in (s["skip"] or []):
         return None
+    obs = ep["observe"]
+    if isinstance(obs, dict) and "feeds" in obs:  # observe's own (`next_gates`), not the gate's
+        ep = {**ep, "observe": {k: v for k, v in obs.items() if k != "feeds"}}
     gate = gatelib.gate_spec(ep, ctx.slot.get("egress") or {})
     rules = _rules(ctx)
     volumes = [{"type": "volume", "source": EVENTS_VOLUME, "target": gatelib.EVENTS_DIR}]
