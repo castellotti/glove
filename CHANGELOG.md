@@ -6,6 +6,32 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`glove playwright solve`** (`playwright: {challenge_capture: {to:
+  session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
+  - It takes control of the noVNC view as `view --control` does, and records
+    the operator solving a bot challenge: presses and releases with display
+    coordinates, pointer positions while a button is down, a screenshot at
+    arm, each press and release, and stop, and the windows' titles and
+    stacking.
+  - The recorder (`glove-pw-capture`, python3-xlib) listens passively to XI2
+    raw events at XI 2.2 (a 2.0 client loses the drag to Chromium's grab); it
+    never grabs or sends input.
+  - It stops when the viewer closes, on Ctrl-C or after `max_seconds`
+    (`--stop` saves one left running). The host copies the capture out of the
+    sidecar's tmpfs, validates it as hostile input (names, sizes, PNG
+    signature, JSON schemas, rewritten from parsed values), and writes it
+    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/challenges/<id>/`
+    (0700) and, with `to: work`, to `browser-output/challenges/<id>/`.
+  - The brief tells the agent to leave a challenge in front and hand off,
+    never to solve it.
+  - Live: `tests/integration/test_playwright.sh capture` drives a drag
+    through `solve`'s own noVNC WebSocket and compares it with the page's
+    pointer log (±1 px).
+- **playwright novnc keeps the agent's page in front.**
+  - A second MCP client's window, a popup or a tab a link opened used to
+    cover the page the agent was still acting on.
+  - An init page (`image/glove-pw-front.js`) raises the page each tool call
+    acts on.
 - **`glove clean`.** Removes the stopped stacks (found by compose's project
   label `glove-<id>`) of sessions that no longer exist here, on Docker and
   Podman: their containers and networks, and their volumes only when the

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live (v3 M7): the playwright browser sidecar end to end.
 #
-#   bash tests/integration/test_playwright.sh [headless|novnc|control|vibe|claude-code]   (default: headless)
+#   bash tests/integration/test_playwright.sh [headless|novnc|control|capture|vibe|claude-code]   (default: headless)
 #   RT=podman …                                                                # Podman
 #
 #   headless  Pi, direct egress, observe + filter: hardening, confinement,
@@ -9,6 +9,8 @@
 #   novnc     Pi, direct egress: the above minus observe, plus loopback-only
 #             VNC, `glove playwright view` and server-side view-only
 #   control   novnc with allow_control: the full password's click lands
+#   capture   control + challenge_capture {to: work}: a second client's window covers the agent's page and
+#             its next call raises it; `glove playwright solve` records a drag through its noVNC WebSocket
 #   vibe      Vibe, headless, direct egress: the allowlist hides the rest
 #   claude-code  Claude Code, headless, direct egress, observe: the allowlist
 #             is allow rules, every other known tool a managed deny
@@ -34,6 +36,7 @@ case "$CASE" in
   headless) EXTRA=$'  observe: {}\n  filter: {}\n' ;;
   novnc)    PW="{mode: novnc}" ;;
   control)  PW="{mode: novnc, allow_control: true}" ;;
+  capture)  PW="{mode: novnc, allow_control: true, downloads: work, challenge_capture: {to: work}}" ;;
   vibe)     HARNESS=vibe ;;
   claude-code) HARNESS=claude-code; EXTRA=$'  observe: {}\n' ;;
   downloads) HARNESS="$CASE_HARNESS"

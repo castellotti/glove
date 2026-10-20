@@ -268,7 +268,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:2ab34b06ca
+    image: glove/ext-playwright-pw:6daf8c9595
     init: true
     command:
     - glove-pw-start

@@ -8,7 +8,7 @@ FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b7
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tigervnc-standalone-server tigervnc-tools novnc python3-websockify socat fonts-noto-core \
-      libnss3-tools \
+      libnss3-tools python3-xlib \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/glove/pw
@@ -17,8 +17,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force \
     && ln -s /opt/glove/pw/node_modules/.bin/playwright-core /usr/local/bin/playwright-core
 
-COPY glove-pw-start /usr/local/bin/glove-pw-start
-RUN chmod 0755 /usr/local/bin/glove-pw-start \
+COPY glove-pw-start glove-pw-capture /usr/local/bin/
+# novnc: keeps the page the agent acts on in front (mcp.json's browser.initPage)
+COPY glove-pw-front.js /opt/glove/pw/glove-pw-front.js
+RUN chmod 0755 /usr/local/bin/glove-pw-start /usr/local/bin/glove-pw-capture \
     && mkdir -p /data/output /data/uploads /data/staging /data/profile /etc/glove/playwright \
     && chmod 0777 /data/output /data/profile
 

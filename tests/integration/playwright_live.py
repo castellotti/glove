@@ -63,6 +63,17 @@ UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().t
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
 BUTTON_PAGE = "data:text/html,<title>WAITING</title><button onclick=\"document.title='CLICKED'\">Go</button>"
+# challenge capture: the page titles itself with where it saw the press and the release (screen coordinates,
+# which are the display's: the window is at 0,0); the recorder logs titles, so the capture carries both
+POINTER_PAGE = ("data:text/html,<title>AGENT</title><body style='margin:0;height:100vh' "
+                "onpointerdown=\"window.d='D:'+event.screenX+','+event.screenY\" "
+                "onpointerup=\"document.title=window.d+' U:'+event.screenX+','+event.screenY\"></body>")
+OTHER_PAGE = "data:text/html,<title>OTHER</title>"
+STACK = ("from Xlib import X, display\nd = display.Display(':1'); r = d.screen().root\n"
+         "N = d.intern_atom('_NET_WM_NAME'); U = d.intern_atom('UTF8_STRING')\n"
+         "for w in r.query_tree().children:\n    p = w.get_full_property(N, U)\n"
+         "    if p and w.get_attributes().map_state == X.IsViewable and w.get_geometry().width > 10:\n"
+         "        print(bytes(p.value).decode())\n")
 
 
 @contextlib.contextmanager
@@ -389,7 +400,82 @@ def main(directory: str) -> int:
             check(f"full password, allow_control {pws['allow_control']}: the click "
                   + ("lands" if want == "CLICKED" else "does NOT land"), auth == "auth ok" and title == want,
                   f"{auth}; title {title}")
+            if pws.get("challenge_capture") is not None:
+                capture_checks(sd, rt, s, mcp_argv, exec_pw)
     return summary()
+
+
+def front(rt: str, container: str) -> str:
+    """The title of the top-most mapped window on the sidecar's display."""
+    r = subprocess.run([rt, "exec", "-i", container, "python3", "-"], input=STACK, capture_output=True, text=True)
+    lines = r.stdout.strip().splitlines()
+    return lines[-1] if lines else r.stderr[-120:]
+
+
+def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
+    print("== challenge capture (`glove playwright solve`)")
+    agent = subprocess.Popen(mcp_argv([["browser_navigate", {"url": POINTER_PAGE}], ["sleep", {"s": 20}],
+                                       ["browser_snapshot", {}], ["sleep", {"s": 120}]]),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    other = None
+    try:
+        wait_for(lambda: front(rt, f"{s}-pw").startswith("AGENT"), timeout=60, step=2)
+        other = subprocess.Popen(mcp_argv([["browser_navigate", {"url": OTHER_PAGE}], ["sleep", {"s": 120}]]),
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        covered = wait_for(lambda: front(rt, f"{s}-pw").startswith("OTHER"), timeout=60, step=1)
+        check("a second MCP client's window covers the agent's page", bool(covered), front(rt, f"{s}-pw"))
+        back = wait_for(lambda: front(rt, f"{s}-pw").startswith("AGENT"), timeout=60, step=1)
+        check("the agent's next tool call brings its page back in front (glove-pw-front.js)", bool(back),
+              front(rt, f"{s}-pw"))
+        solve = subprocess.Popen([sys.executable, "-m", "glove.cli", "playwright", "solve", "--no-open"],
+                                 cwd=sd.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        url, lines = "", []
+        for line in solve.stdout:  # the URL carries the password: never printed here
+            if line.startswith("open: "):
+                url = line.split(" ", 1)[1].strip()
+                break
+            lines.append(line)
+        check("`solve` arms the recorder and serves the viewer", bool(url), "".join(lines)[-200:])
+        again = exec_pw("glove-pw-capture start").stdout.split()
+        check("a second start attaches to it (one recorder at a time)", again[1:] == ["attached"], " ".join(again))
+        drag = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pycryptodome", "python",
+                               str(HERE / "ws_rfb_drag.py"), "300", "400", "700", "420"],
+                              input=url + "\n", capture_output=True, text=True, timeout=120)
+        check("a drag through solve's noVNC WebSocket (Host/Origin of the listener)", "auth ok" in drag.stdout,
+              (drag.stdout + drag.stderr)[-160:])
+        out, _ = solve.communicate(timeout=90)  # the viewer is gone: solve stops and saves by itself
+        check("`solve` stops once the viewer has gone and saves the capture", "✓ capture" in out, out[-300:])
+    finally:
+        for p in (agent, other):
+            if p is not None:
+                p.terminate()
+    host = sorted((sd.root / ".glove" / "ext" / "playwright" / "challenges").glob("*"))
+    if not host:
+        check("the capture is on the host", False)
+        return
+    cap = host[-1]
+    meta = json.loads((cap / "meta.json").read_text())
+    events = [json.loads(line) for line in (cap / "events.jsonl").read_text().splitlines()]
+    shots = sorted(p.name for p in (cap / "shots").iterdir())
+    check("host copy 0700, stopped viewer-closed, arm/down/up/stop shots",
+          (cap.stat().st_mode & 0o777) == 0o700 and meta.get("stopped") == "viewer-closed"
+          and [n.split("-", 1)[1] for n in shots] == ["arm.png", "down.png", "up.png", "stop.png"],
+          f"{oct(cap.stat().st_mode & 0o777)} {meta.get('stopped')} {shots}")
+    down = next((e for e in events if e["type"] == "down"), None)
+    up = next((e for e in events if e["type"] == "up"), None)
+    moves = sum(e["type"] == "move" for e in events)
+    titles = [w["windows"][-1]["title"] for line in (cap / "windows.jsonl").read_text().splitlines()
+              if (w := json.loads(line))["windows"]]
+    seen = next((m for t in reversed(titles) if (m := re.search(r"D:(\d+),(\d+) U:(\d+),(\d+)", t))), None)
+    ok = bool(down and up and seen) and all(
+        abs(a - int(b)) <= 1 for a, b in zip((down["x"], down["y"], up["x"], up["y"]), seen.groups(), strict=True))
+    check("press and release match the page's own pointer log (±1 px), with the drag's moves",
+          ok and moves >= 5, f"down {down} up {up} page {seen.group(0) if seen else titles[-3:]} moves {moves}")
+    work = sd.root / "browser-output" / "challenges" / cap.name
+    check("to: work: also in browser-output/challenges/ (read-only at /work/browser-output)",
+          (work / "meta.json").is_file() and (work / "shots").is_dir())
+    left = exec_pw(f"ls -A /tmp/capture 2>/dev/null; test -e /tmp/capture/{cap.name} && echo LEFT").stdout
+    check("removed from the sidecar's tmpfs", "LEFT" not in left, left.strip())
 
 
 if __name__ == "__main__":
