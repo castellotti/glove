@@ -62,6 +62,11 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **playwright README: what `viewport` means in `novnc`.** It is the VNC
+  display and Chromium's window (at `0,0`), and the page gets ~88 px less
+  (1280x712 for the default). Each new MCP client's page opens in a new
+  window on top, which can hide the agent's page (`browser_tabs` select
+  brings it back). A unit test holds the display and window to the same size.
 - **`glove down` removes the containers' anonymous volumes**, which `compose
   down` kept, so every `up`/`down` cycle left one more (`compose rm -fsv`
   first, which stops the services as `down` would); named volumes stay unless

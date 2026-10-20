@@ -159,6 +159,14 @@ accepts no pointer or key input from anyone, and the view-only password never
 can. The clipboard is off server-side unless `clipboard: to-browser|both`.
 Anything you type while in control is visible to the agent.
 
+In `novnc`, `viewport` is the size of the VNC display **and** of Chromium's
+window (at `0,0`, so the whole window is on screen). The page gets the window
+minus Chromium's tab strip and address bar, about 88 px: 1280x712 for the
+default `1280x800`. In `headless` the page itself is `viewport`. Each MCP client
+(a harness restart starts a new one) opens its page in a **new** full-size
+window on top of the others, so the agent's page can be hidden behind
+another. The agent brings it back to the front with `browser_tabs` (select).
+
 ### Signing in on the host: `glove playwright login` and `storage_state`
 
 For sites behind single sign-on, especially SSO that needs your machine's
