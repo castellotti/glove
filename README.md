@@ -1021,11 +1021,13 @@ sidecar's tmpfs), and never enter the harness. A subcommand not listed is
 refused, so a script's minting or posting commands run only when you list them.
 Relayed scripts run on the relay's Python (standard library only) with no
 stdin, and any argument that names a path must be under `/work`. When a token
-expires: `glove skills status` runs the checks, `glove skills refresh <plugin>`
-stores a new value (printed by the secret's `refresh:` hook, run on this machine
-with the Keychain service name, or typed at a prompt) and `glove skills reload
-<plugin>` recreates only that relay's sidecar, with the harness and the agent's
-conversation left running. Details in
+expires: `glove skills status` runs the checks, `glove skills refresh <plugin>
+[<secret>…]` stores new values (all the relay's Keychain secrets, or only the
+ones named, by service or by the env var using it; each printed by its
+`refresh:` hook, run on this machine with the Keychain service name, captured
+by `glove playwright login`, or typed at a prompt where Enter keeps the stored
+value) and `glove skills reload <plugin>` recreates only that relay's
+sidecar, with the harness and the agent's conversation left running. Details in
 [extensions/skills/README.md](extensions/skills/README.md).
 
 ### Browser: `playwright`

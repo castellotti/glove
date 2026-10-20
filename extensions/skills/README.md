@@ -156,17 +156,35 @@ which holds the secrets and the only route to the service:
 
 ```sh
 glove skills status [<plugin>]          # each relay's checks: ok, or the exit code (output withheld)
-glove skills refresh <plugin> [--secret <service>]   # new values, then reload
+glove skills refresh <plugin> [<secret>…]   # new values, then reload
 glove skills reload <plugin>            # resolve its secrets again, recreate only its sidecar
 ```
 
-`refresh` runs each Keychain secret's `refresh:` hook on this machine (in the
-session directory, with the Keychain service name as its argument; it prints
-the new value on stdout) and stores the value with `glove keychain set`; a
-secret without a hook is prompted for. One secret has one hook wherever it is
-used. Then it reloads the relay: the harness, its channel and the agent's
-conversation keep running. `reload` re-resolves only the secrets: a change to
-the relay's commands, hosts or `allow` takes the next `glove up`. glove ships
+`refresh` first lists the relay's Keychain secrets: whether an item is stored
+(its attributes only; nothing is read), how it is refreshed, and what uses it.
+Name one or more (`glove skills refresh connectors CONFLUENCE_PAT`: a Keychain
+service, or the env var or `files:` secret key that uses it; `--secret
+<service>` still works) and only those are refreshed, with no other question.
+Each one gets its value from:
+
+- its `refresh:` hook, run on this machine (in the session directory, with the
+  Keychain service name as its argument; it prints the new value on stdout);
+- `glove playwright login`, when the session's `playwright.login.capture`
+  names the same Keychain service and the secret has no hook: one sign-in in
+  the Chrome window it opens covers them all (it stores every capture and the
+  browser session, as it always does, so another plugin's relay using one
+  takes `glove skills reload <plugin>`);
+- else a hidden prompt: Enter keeps the stored value (or skips a missing one),
+  so a one-time key you no longer have is never asked for.
+
+Refreshing every secret asks before each hook and the sign-in; Enter at any
+question skips that secret. Without a terminal, hooks run and the rest is
+skipped (an error when that secret was named). Values are stored with `glove
+keychain set`; when a step fails, the ones already stored are named. One
+secret has one hook wherever it is used. When something changed, it reloads
+the relay: the harness, its channel and the agent's conversation keep
+running. `reload` re-resolves only the secrets: a change to the relay's
+commands, hosts or `allow` takes the next `glove up`. glove ships
 no hooks; a hook can run the plugin's own minting script here, where the
 browser and the SSO session live. The agent's brief tells it to ask for
 `glove skills refresh <plugin>` on a 401 or `invalid_auth`, never to mint or
