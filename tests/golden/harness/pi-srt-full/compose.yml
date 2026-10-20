@@ -379,7 +379,7 @@ services:
     mem_limit: 512m
   glove-s-searxng-mcp:
     container_name: glove-s-searxng-mcp
-    image: glove/ext-search-mcp:0fa501a2e0
+    image: glove/ext-search-mcp:8c576760bb
     environment:
       SEARXNG_URL: http://glove-s-searxng:8080
       MCP_ALLOWED_HOST: glove-s-search-mcp:8000
@@ -413,7 +413,7 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:cd753a6adf
+    image: glove/ext-webfetch-mcp:e26a01b977
     environment:
       GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
       GLOVE_FETCH_ALLOW: ''

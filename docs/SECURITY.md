@@ -146,12 +146,6 @@ Every capability (the model, search, the browser, …) is an extension in
   `/work`, read-write, at `/work` in one named sidecar, and `glove policy` lists
   it. It exists for `github` (below). `/work` itself is the session's `work/`,
   which the agent cannot replace.
-- **Harness-process-only variables.** An extension's harness env entry with
-  `shell: false` (what Pi's webfetch, search and playwright extensions read:
-  their service URLs and settings) is unset by the tool wrapper before every
-  shell command, like the secret-shaped names (every enforcer but `none`,
-  which wraps nothing). Not a secret: shell commands have no network to use it
-  on, and seeing it only invites a failing `curl`.
 - Out-of-tree extensions (`extension_paths`) are labelled as such and get no
   privilege exceptions or host ports unless trusted. A session file can't run
   host commands (`host_services:` is gone); an extension's hooks are host

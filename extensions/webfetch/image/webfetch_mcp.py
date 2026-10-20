@@ -279,7 +279,7 @@ def rate_limited(retry_after: str | None, now: float | None = None) -> str:
             if email.utils.format_datetime(date, usegmt=True) == v:
                 s = round(date.timestamp() - (time.time() if now is None else now))
     return "Rate-limited (HTTP 429). Back off; " + (
-        f"the server asks to wait {max(0, s)} s before retrying." if s is not None else "do not retry immediately.")
+        f"the server asks to wait {s} s before retrying." if s and s > 0 else "do not retry immediately.")
 
 
 class Refusal(Exception):
@@ -706,7 +706,7 @@ def main() -> None:
             allowed_origins=[]),
     )
 
-    if PROXY:  # Vibe
+    if PROXY:  # fetch_url: Pi, Vibe
         @mcp.tool()
         async def fetch_url(url: str, max_chars: int = 20000, raw: bool = False) -> str:
             """Fetch a URL and return its main text content (HTML converted to readable

@@ -103,14 +103,12 @@ def render_settings(plan: SessionPlan) -> dict:
 def denied_env(plan: SessionPlan) -> list[str]:
     """The names srt unsets for tool commands: the LLM key's (a guard: the
     harness holds a placeholder) and each harness env name nono's secret globs
-    match in any case (over-denying is the safe side), by exact name, and the
-    harness-process-only ones."""
-    secret = (k for k in plan.environment if is_secret_env_name(k))
-    return sorted({LLM_API_KEY_ENV, *secret, *plan.composition.shell_hidden_env})
+    match in any case (over-denying is the safe side), by exact name."""
+    return sorted({LLM_API_KEY_ENV, *(k for k in plan.environment if is_secret_env_name(k))})
 
 
 def tool_wrapper_argv(plan: SessionPlan) -> list[str]:
-    return [*scrub_argv(plan), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
+    return [*scrub_argv(), SRT, "-s", f"{ENFORCER_DIR}/{SETTINGS_FILE}", "--"]
 
 
 class SrtEnforcer:

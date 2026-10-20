@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import email.message
+import io
+import json
 import stat
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -115,3 +119,29 @@ def test_groups_and_engine_overrides():
 def test_bad_engine_override_fails_at_plan_time(tmp_path):
     with pytest.raises(ValueError, match="enable\\|disable"):
         _plan(tmp_path, engines={"google": "maybe"})
+
+
+def test_a_throttled_engine_is_named_and_the_agent_told_not_to_retry(monkeypatch):
+    m = load_module(Path(__file__).parents[1] / "image" / "searxng_mcp.py", "searxng_mcp")
+    monkeypatch.setattr(m, "MIN_INTERVAL", 0)
+
+    def answer(body):
+        def urlopen(req, timeout):
+            if body is None:
+                raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", email.message.Message(), None)
+            return io.BytesIO(json.dumps(body).encode())
+        monkeypatch.setattr(m.urllib.request, "urlopen", urlopen)
+
+    down = [["google", "too many requests"], ["brave", "CAPTCHA"]]
+    advice = "Do NOT retry immediately — wait and lower query cadence, or ask the operator."
+    answer({"results": [], "unresponsive_engines": down})
+    assert m.web_search("q") == \
+        f"No results for: q\n\n[unresponsive engines: google: too many requests; brave: CAPTCHA. {advice}]"
+    answer({"results": [{"title": "t", "url": "u", "content": "c", "engine": "bing"}],
+            "unresponsive_engines": down[:1]})
+    assert m.web_search("q").endswith(
+        f"[engines: bing | 1 shown]\n\n[unresponsive engines: google: too many requests. {advice}]")
+    answer({"results": [], "unresponsive_engines": []})
+    assert m.web_search("q") == "No results for: q"
+    answer(None)
+    assert m.web_search("q") == f"SearXNG rate-limited (HTTP 429). {advice}"

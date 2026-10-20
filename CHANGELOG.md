@@ -110,6 +110,11 @@ All notable changes to glove are documented here.
   not through the `proxy` endpoint, which is now Claude Code's alone, and
   search's Pi-only `search` endpoint is gone. The fetch guard and body rules
   exist once, in the fetcher.
+- **`web_search` names the engines SearXNG found unresponsive** (e.g.
+  `google: too many requests`, how a throttled exit shows with SearXNG's
+  limiter off) and tells the agent not to retry immediately, instead of a bare
+  "No results". `fetch_url` no longer reads a `Retry-After` of 0 (or a past
+  date) as "wait 0 s": it says not to retry immediately.
 - **observe polls the exit from one gate in every session:** the harness's
   own hop to the egress proxy when it has one (Claude Code's `proxy`), else
   the first egress consumer's (`searxng-egress`, `webfetch-egress`, …), so Vibe
@@ -450,13 +455,6 @@ All notable changes to glove are documented here.
   Podman). Fragments see `output.<name>.path`/`input.<name>.path`.
 - **`when: {any: [...]}`** in manifests: any-of across keys (e.g. `harness:
   vibe` or `downloads: work`).
-- **`env: {…, shell: false}`** for an extension's harness env var the harness
-  process reads and shell commands never need: the tool wrapper unsets it.
-  webfetch's `GLOVE_FETCH_PROXY`, `GLOVE_DOWNLOAD_MCP_URL` and
-  `GLOVE_FETCH_ALLOW`, search's `SEARXNG_URL` and playwright's
-  `BROWSER_MCP_URL`, `BROWSER_MCP_TOOLS` and `BROWSER_MODE` use it (a proxy
-  or service URL in the shell only invited a `curl` that fails). Playwright's
-  are now set for Pi only: Vibe and Claude Code use its MCP server.
 - `web_fetch`/`fetch_url` **describe a binary body** instead of returning it: a
   response whose content type isn't text, or an unlabelled one with a NUL in
   its first 4 KB, becomes `[binary: <type>, <size>] <url>` and the rest is

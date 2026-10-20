@@ -523,10 +523,6 @@ class Composition:
     state_root: Path
     endpoints: list[Endpoint] = field(default_factory=list)
     harness_env: dict[str, str] = field(default_factory=dict)
-    # harness env vars the harness process reads and shell commands never see
-    # (`env: {…, shell: false}`; the tool wrapper unsets them, enforcers.base.scrub_argv;
-    # `enforcer: none` has no wrapper)
-    shell_hidden_env: set[str] = field(default_factory=set)
     git_config: list[tuple[str, str]] = field(default_factory=list)  # `harness.git_config` pairs
     image_layers: list[tuple[str, dict]] = field(default_factory=list)  # (ext, layer)
     # Neutral contributions, collected only when the harness renders them
@@ -1039,22 +1035,17 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[
                 raise ExtensionError(f"{where}: image `copy_host` comes only from a contribute hook")
             comp.image_layers.append((a.name, layer))
     comp.image_layers += [(a.name, layer) for layer in contributed.get("image") or []]
-    # a value, or {value:, when:, shell:} (unset unless `when` matches; `shell: false`
-    # hides it from shell commands)
+    # a value, or {value:, when:} (unset unless `when` matches)
     for k, v in (h.get("env") or {}).items():
-        shell = True
         if isinstance(v, dict):
-            shell = v.get("shell", True)
-            if set(v) - {"value", "when", "shell"} or "value" not in v or not isinstance(shell, bool):
-                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …, shell: false}}")
+            if set(v) - {"value", "when"} or "value" not in v:
+                raise ExtensionError(f"{where}: env {k!r}: want a value or {{value: …, when: …}} (no `shell:`)")
             if not when_matches(v.get("when"), ctx):
                 continue
             v = v["value"]
         if v is None:
             raise ExtensionError(f"{where}: env {k!r} has no value (use `when:` to leave it unset)")
         set_harness_env(comp, where, k, render_value(v, ctx, f"{where} env {k!r}"))
-        if not shell:
-            comp.shell_hidden_env.add(k)
     for k, v in (contributed.get("env") or {}).items():
         set_harness_env(comp, f"extension {a.name!r} contribute", k, v)
     comp.git_config += git_config_pairs(render_value(h.get("git_config"), ctx, where), f"{where} git_config")

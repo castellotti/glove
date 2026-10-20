@@ -599,11 +599,9 @@ and an extension's CLI).
   home or another session's state).
 - **Harness contributions** are harness-neutral where they can be, under
   `harness:` — `env`, `image` (`"*"` or per harness), `brief`, and:
-  - `env: {K: value}` or `{K: {value: …, when: …, shell: false}}`: a value is set
-    as rendered, even when empty; `when:` leaves the variable unset unless it
-    matches; `shell: false` keeps it from shell commands (the tool wrapper
-    unsets it; any enforcer but `none`), for a variable only the harness
-    process uses. A
+  - `env: {K: value}` or `{K: {value: …, when: …}}`: a value is set as
+    rendered, even when empty; `when:` leaves the variable unset unless it
+    matches. A
     `when:` (here, on endpoints, services, verify checks and list items) matches
     setting names, `harness`, `renders` (the contributions the harness renders,
     e.g. `renders: mcp` rather than a list of harnesses), dotted

@@ -359,7 +359,7 @@ def test_body_rules():
         return "do not retry immediately." if n is None else f"the server asks to wait {n} s before retrying."
 
     assert [m.rate_limited(r, now=1445412420).split("; ")[1] for r in RETRY_CASES] == \
-        [wait(n) for n in (None, None, 0, 120, None, None, None, 2015, 60, 0, None, None, None, None)]
+        [wait(n) for n in (None, None, None, 120, None, None, None, 2015, 60, None, None, None, None, None)]
 
 
 def test_fetch_asks_the_proxy_why_only_when_a_tunnel_is_refused(server, monkeypatch):

@@ -1,4 +1,5 @@
-{% set fetch, downloads = harness in ("pi", "vibe"), settings.downloads == "work" %}
+{# fetch: the manifest's &mcp_fetch harnesses, by the endpoint it renders for them #}
+{% set fetch, downloads = "webfetch-mcp" in endpoint, settings.downloads == "work" %}
 services:
 {% if fetch or downloads %}
 {% set hop = endpoint['webfetch-egress'] if fetch else endpoint['webdownload-egress'] %}

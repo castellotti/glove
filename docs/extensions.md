@@ -91,7 +91,7 @@ Legend:
   `GIT_CONFIG_*`: use `git_config`). Only a hook's
   layers may `copy_host`. Layers render in extension order, then those with
   `stage: late` (e.g. the toolchains), then those that `copy_host`.
-- `env`: `{VAR: value}` or `{VAR: {value, when, shell: false}}`. A variable is
+- `env`: `{VAR: value}` or `{VAR: {value, when}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
 - `brief`: a file (or `{file, when}`) the agent reads at start.
