@@ -6,7 +6,7 @@ from ..extensions import discover
 from ..naming import project_name
 from ..registry import RegistryError, load_registry
 from ..sessiondir import ID_RE, SessionDir
-from ..sessionops import console, err, fail
+from ..sessionops import console, err, fail, row_state
 
 __all__ = ["ID_RE", "VERSION", "RegistryError", "SessionDir", "console", "discover", "err", "fail", "load_registry",
-           "project_name"]
+           "project_name", "row_state"]

@@ -57,6 +57,7 @@ COMMANDS = {
     "fail": "(msg: 'str', code: 'int' = 1) -> 'typer.Exit'",
     "load_registry": "() -> 'list[SessionEntry]'",
     "project_name": "(session: 'str') -> 'str'",
+    "row_state": "(e: 'reg.SessionEntry') -> 'str'",
 }
 HARNESS = {
     "CONTAINER_HOME": "str",

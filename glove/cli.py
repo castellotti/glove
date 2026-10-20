@@ -32,7 +32,7 @@ from .naming import scoped
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime, known_runtimes
 from .sessiondir import SessionDir, SessionError
-from .sessionops import console, err, fail
+from .sessionops import console, err, fail, row_state
 
 app = typer.Typer(
     add_completion=False,
@@ -735,33 +735,6 @@ def rm(
     console.print(f"[green]✓[/green] removed {what}")
 
 
-def _row_state(e: reg.SessionEntry) -> str:
-    sd = SessionDir(Path(e.dir))
-    if not sd.root.is_dir():
-        return "missing"
-    return "ok" if sd.read_id() == e.id else "stale"
-
-
-@app.command("ls")
-def list_cmd() -> None:
-    """Registered sessions: id, harness, template, state, directory."""
-    try:
-        entries = reg.load_registry()
-    except reg.RegistryError as e:
-        raise fail(str(e)) from e
-    if not entries:
-        console.print("[dim]no sessions — create one with `glove new <template> <dir>`[/dim]")
-        return
-    colour = {"ok": "green", "missing": "red", "stale": "yellow"}
-    for e in sorted(entries, key=lambda x: x.id):
-        st = _row_state(e)
-        observed = " [cyan]observe[/cyan]" if (e.grants or {}).get("observe") else ""
-        console.print(f"[bold]{e.id}[/bold]  [cyan]{e.harness}[/cyan]  {e.template or '-'}  "
-                      f"[{colour[st]}]{st}[/{colour[st]}]{observed}  {e.dir}")
-    if any(_row_state(e) != "ok" for e in entries):
-        console.print("[dim]missing/stale rows (and their exports) are removed by `glove gc`[/dim]")
-
-
 @app.command("ps")
 def ps_cmd(runtime: str | None = typer.Option(None, "--runtime", help="docker | podman")) -> None:
     """Running glove sessions (compose projects) and their directories."""
@@ -787,7 +760,7 @@ def gc(yes: bool = typer.Option(False, "--yes", "-y", help="do not ask")) -> Non
         entries = reg.load_registry()
     except reg.RegistryError as e:
         raise fail(str(e)) from e
-    dead = {e.id for e in entries if _row_state(e) != "ok"}
+    dead = {e.id for e in entries if row_state(e) != "ok"}
     live = {e.id for e in entries} - dead
     orphans: list[Path] = []
     for root in (reg.glove_home() / "observe", reg.glove_home() / "control"):

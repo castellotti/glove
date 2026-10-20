@@ -71,6 +71,23 @@ def make_session(root, extra: str = "", **kw):
     return root
 
 
+def session_id(d) -> str:
+    """The id `glove new`/`plan` gave the session directory `d`."""
+    from pathlib import Path
+
+    return (Path(d) / ".glove" / "id").read_text().strip()
+
+
+def command_module(name: str):
+    """The `commands/<name>/cli.py` module `glove.cli` mounted: patch this one
+    when invoking `glove.cli.app` (another `load_module` makes a second copy)."""
+    import importlib
+
+    import glove.cli  # noqa: F401  (mounts the commands)
+
+    return importlib.import_module(f"glove_cmd.{name}.cli")
+
+
 def path_rule_cases(tmp) -> tuple[str, list[tuple[str, str | None]]]:
     """harnesses/path_rule_cases.json laid out under `tmp` (resolved): the write
     root (also the cwd), and (path, checked path or None) per case."""

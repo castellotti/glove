@@ -402,15 +402,6 @@ def test_check_asks_the_llm_server_only_from_a_container(home, tmp_path, monkeyp
 # --- ls / down / rm / gc ----------------------------------------------------------------------
 
 
-def test_ls_shows_rows_and_their_state(home, tmp_path):
-    a, b = make_session(tmp_path / "a"), make_session(tmp_path / "b")
-    for d in (a, b):
-        assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    shutil.rmtree(b)
-    out = runner.invoke(app, ["ls"]).output
-    assert _sid(a) in out and "ok" in out and "missing" in out and "glove gc" in out
-
-
 def test_down_tears_down_the_sessions_project(home, tmp_path, monkeypatch):
     d = make_session(tmp_path / "s")
     assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
