@@ -19,11 +19,17 @@ All notable changes to glove are documented here.
   used for that long: an idle session's stopped containers and networks (its
   volumes stay, so `glove up` restarts it) and the `glove/*` images
   (Podman's `localhost/glove/*`) that no remaining container uses. A session's
-  last use is its `.glove/compose.yml`'s mtime (else its row's `created`) and
-  its images that file's `image:`s; an image no session names falls back to
-  its creation time, and a base tag of a kept image stays. `--build-cache`
-  (Docker; machine-wide, so opt-in) prunes the build cache older than `<age>`.
-  The summary reports the disk reclaimed (`system df` before and after).
+  last use is the newest of its `.glove/compose.yml`'s mtime (else its row's
+  `created`) and its containers' last start or stop; its images are that
+  file's `image:`s. An image's last use is the newest of the sessions naming
+  it and the containers that ran it, else its creation time. An image a kept
+  one was built from (its layers begin the kept one's: the srt and apt/pip
+  bases) stays. `<age>` is at least `1h`, so a `0d` typo is refused. Containers
+  are removed without `-f`, so one started since the listing is refused, not
+  killed. `--build-cache` (Docker; machine-wide, so opt-in) prunes the build
+  cache older than `<age>`, and warns when Docker was not looked at. The
+  summary counts what was actually removed and the disk reclaimed (`system df`
+  before and after, on the runtimes it removed from).
 - **Commands live in `commands/<name>/`** (`commands/README.md`), apart from
   extensions: core mounts each `cli.py`'s `command` or `app` and never imports
   them. A command imports only `glove.api` and the new `glove.api.commands`

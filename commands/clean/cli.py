@@ -14,14 +14,16 @@ directory may have moved, and a project with no row may be another
 GLOVE_HOME's (an integration test's): their volumes stay unless `--volumes`.
 
 With an `<age>` (`12h`, `3d`, `2w`), `clean` also reclaims what has not been
-used for that long. A session's last use is the mtime of its
-`.glove/compose.yml` (every `glove plan`/`up` rewrites it; else its row's
-`created`), and that file's `image:`s are the images it uses.
+used for that long. A session's last use is the newest of its
+`.glove/compose.yml`'s mtime (every `glove plan`/`up` rewrites it; else its
+row's `created`) and its containers' last start or stop; that file's `image:`s
+are the images it uses.
 - An idle session (live here, nothing running, unused for `<age>`) loses its
   stopped containers and networks; its volumes stay, so `glove up` restarts it.
 - A `glove/*` image goes when no container left uses it and its last use (the
-  newest of the sessions naming it, else its creation) is older than `<age>`.
-  A base tag a kept image was built from (the kept tag's prefix) stays.
+  newest of the sessions naming it and the containers that ran it, else its
+  creation) is older than `<age>`. An image a kept one was built from (its
+  layers are the kept one's first layers: the srt and apt/pip bases) stays.
 - `--build-cache` also prunes Docker's build cache (machine-wide) older than `<age>`.
 """
 
@@ -35,6 +37,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import typer
+import yaml
 
 from glove.api.commands import ID_RE, RegistryError, console, err, fail, load_registry, project_name, row_state
 
@@ -48,7 +51,7 @@ PRUNE_TIMEOUT = 1800  # a build cache can hold ~100 GB
 _PREFIX = project_name("")
 AGE_RE = re.compile(r"([0-9]+)([hdw])\Z")
 HOURS = {"h": 1, "d": 24, "w": 24 * 7}
-IMAGE_RE = re.compile(r"^\s*image:\s*['\"]?(glove/[^'\"\s]+)", re.M)
+MAX_HOURS = 24 * 365 * 100
 _WHEN_RE = re.compile(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d:\d\d)(?:\.\d+)?\s*(Z|[+-]\d\d:?\d\d)?")
 UNITS = {"B": 1, "kB": 1e3, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}
 
@@ -62,6 +65,7 @@ class Stack:
     containers: dict[str, str] = field(default_factory=dict)  # id → state
     networks: list[str] = field(default_factory=list)
     volumes: list[str] = field(default_factory=list)
+    ran: datetime | None = None  # its containers' last start or stop
 
     @property
     def active(self) -> bool:
@@ -99,16 +103,18 @@ def _inspect(cli: str, kind: str, ls: list[str], fmt: str) -> list[str] | None:
 
 def _labelled(cli: str, kind: str, labels: str, *fields: str) -> list[list[str]] | None:
     """[project, *fields] of each `kind` (container|network|volume) carrying
-    compose's project label; `labels` is where `inspect` keeps its labels."""
+    compose's project label; `labels` is where `inspect` keeps its labels. The
+    fields are `|`-separated: Podman's times hold spaces."""
     ls = ["ps", "-aq"] if kind == "container" else [kind, "ls", "-q"]
-    fmt = " ".join([f'{{{{index {labels} "{PROJECT_LABEL}"}}}}', *(f"{{{{{f}}}}}" for f in fields)])
+    fmt = "|".join([f'{{{{index {labels} "{PROJECT_LABEL}"}}}}', *(f"{{{{{f}}}}}" for f in fields)])
     rows = _inspect(cli, kind, [*ls, "--filter", f"label={PROJECT_LABEL}"], fmt)
-    return None if rows is None else [r.split() for r in rows]
+    return None if rows is None else [[f.strip() for f in r.split("|")] for r in rows]
 
 
 def stacks(cli: str) -> list[Stack] | None:
     """Every glove v3 session's stack on `cli`; None when it can't be asked."""
-    found = (_labelled(cli, "container", ".Config.Labels", ".Id", ".State.Status"),
+    found = (_labelled(cli, "container", ".Config.Labels", ".Id", ".State.Status", ".State.StartedAt",
+                       ".State.FinishedAt"),
              _labelled(cli, "network", ".Labels", ".Name"),
              _labelled(cli, "volume", ".Labels", ".Name"))
     if any(f is None for f in found):
@@ -122,9 +128,10 @@ def stacks(cli: str) -> list[Stack] | None:
         return by.setdefault(sid, Stack(cli, sid))
 
     containers, networks, volumes = found
-    for project, cid, state in (r for r in containers if len(r) == 3):
+    for project, cid, state, *times in (r for r in containers if len(r) == 5):
         if (s := stack(project)) is not None:
             s.containers[cid] = state
+            s.ran = _newest(s.ran, *map(_when, times))
     for rows, attr in ((networks, "networks"), (volumes, "volumes")):
         for project, name in (r for r in rows if len(r) == 2):
             if (s := stack(project)) is not None:
@@ -139,7 +146,8 @@ def remove(s: Stack, *, volumes: bool) -> list[str]:
     for kind, names in (("container", list(s.containers)), ("network", s.networks),
                         ("volume", s.volumes if volumes else [])):
         for name in names:
-            if not _ok([s.runtime, "rm", "-f", name] if kind == "container" else [s.runtime, kind, "rm", name]):
+            # no -f: a container started since it was listed is refused, not killed
+            if not _ok([s.runtime, "rm", name] if kind == "container" else [s.runtime, kind, "rm", name]):
                 failed.append(f"{s.runtime} {kind} {name}")
     return failed
 
@@ -155,10 +163,10 @@ def _ok(cmd: list[str], timeout: int = TIMEOUT) -> bool:
 
 
 def parse_age(age: str) -> int:
-    """`<n>h|d|w` in hours."""
-    if not (m := AGE_RE.match(age)):
-        raise fail(f"<age>: expected <n>h, <n>d or <n>w (e.g. 3d), got {age!r}")
-    return int(m[1]) * HOURS[m[2]]
+    """`<n>h|d|w` in hours, at least 1 (`0d` is too likely a typo of `10d`)."""
+    if not (m := AGE_RE.match(age)) or not 1 <= (hours := int(m[1]) * HOURS[m[2]]) <= MAX_HOURS:
+        raise fail(f"<age>: expected <n>h, <n>d or <n>w of at least 1h (e.g. 3d), got {age!r}")
+    return hours
 
 
 def _when(s: str | None) -> datetime | None:
@@ -170,22 +178,28 @@ def _when(s: str | None) -> datetime | None:
     return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
+def _newest(*whens: datetime | None) -> datetime | None:
+    return max((w for w in whens if w is not None), default=None)
+
+
 def last_uses(entries) -> tuple[dict[str, datetime], dict[str, datetime]]:
     """(each `glove/*` image's last use by a registered session, each
     session's last use): its compose file's mtime, else its row's `created`."""
     images: dict[str, datetime] = {}
     sessions: dict[str, datetime] = {}
     for e in entries:
-        f = Path(e.dir) / ".glove" / "compose.yml"
+        f = Path(e.dir) / ".glove" / "compose.yml"  # SessionDir.compose
         try:
-            used, text = datetime.fromtimestamp(f.stat().st_mtime, UTC), f.read_text()
-        except OSError:
+            used, compose = datetime.fromtimestamp(f.stat().st_mtime, UTC), yaml.safe_load(f.read_text())
+        except (OSError, yaml.YAMLError):
             if (created := _when(e.created)) is not None:
                 sessions[e.id] = created
             continue
         sessions[e.id] = used
-        for tag in IMAGE_RE.findall(text):
-            images[tag] = max(images.get(tag, used), used)
+        services = (compose or {}).get("services") if isinstance(compose, dict) else None
+        for svc in (services or {}).values() if isinstance(services, dict) else ():
+            if isinstance(svc, dict) and str(tag := svc.get("image", "")).startswith("glove/"):
+                images[tag] = max(images.get(tag, used), used)
     return images, sessions
 
 
@@ -196,6 +210,7 @@ class Image:
     runtime: str
     ref: str  # as the runtime names it (Podman: `localhost/glove/…`)
     last: datetime
+    layers: tuple[str, ...] = ()
 
     @property
     def tag(self) -> str:
@@ -204,25 +219,32 @@ class Image:
 
 def unused_images(cli: str, cutoff: datetime, used: dict[str, datetime], leaving: set[str]) -> list[Image] | None:
     """The `glove/*` tags on `cli` last used before `cutoff` that no container
-    uses but those in `leaving`, derived tags first; None when it can't be asked."""
+    uses but those in `leaving`, and that no kept image was built from (its
+    layers begin with theirs); children first. None when it can't be asked."""
     images = _inspect(cli, "image", ["image", "ls", "-q", "--filter", "reference=glove/*"],
-                      '{{.Id}}|{{.Created}}|{{join .RepoTags " "}}')
-    users = _inspect(cli, "container", ["ps", "-aq"], "{{.Id}} {{.Image}}")
+                      '{{.Id}}|{{.Created}}|{{join .RepoTags " "}}|{{join .RootFS.Layers " "}}')
+    users = _inspect(cli, "container", ["ps", "-aq"], "{{.Id}}|{{.Image}}|{{.State.StartedAt}}|{{.State.FinishedAt}}")
     if images is None or users is None:
         return None
-    in_use = {r.split()[1] for r in users if len(r.split()) == 2 and r.split()[0] not in leaving}
-    old, kept = [], set()
-    for iid, created, tags in (r.split("|", 2) for r in images if r.count("|") == 2):
+    in_use: set[str] = set()
+    ran: dict[str, datetime | None] = {}  # image id → its containers' last start or stop
+    for cid, iid, *times in (r.split("|") for r in users if r.count("|") == 3):
+        if cid not in leaving:
+            in_use.add(iid)
+        ran[iid] = _newest(ran.get(iid), *map(_when, times))
+    old, kept = [], set()  # kept: each kept image's layers and their prefixes
+    for iid, created, tags, layers in (r.split("|") for r in images if r.count("|") == 3):
+        layers = tuple(layers.split())
         for ref in tags.split():
-            img = Image(cli, ref, used.get(ref.removeprefix("localhost/")) or _when(created) or datetime.now(UTC))
+            img = Image(cli, ref, _newest(used.get(ref.removeprefix("localhost/")), ran.get(iid))
+                        or _when(created) or datetime.now(UTC), layers)
             if not img.tag.startswith("glove/"):
                 continue
             if iid in in_use or img.last >= cutoff:
-                kept.add(img.tag)
+                kept.update(layers[:n] for n in range(1, len(layers) + 1))
             else:
                 old.append(img)
-    old = [i for i in old if not any(k.startswith(f"{i.tag}-") for k in kept)]
-    return sorted(old, key=lambda i: (-len(i.tag), i.tag))
+    return sorted((i for i in old if i.layers not in kept), key=lambda i: (-len(i.layers), i.tag))
 
 
 def disk(cli: str) -> float | None:
@@ -264,13 +286,11 @@ def command(
     dead: list[tuple[Stack, bool]] = []  # (stack, its volumes go)
     images: list[Image] = []
     prune: list[str] = []
-    looked: list[str] = []
     for rt in runtimes(runtime):
         found = stacks(rt)
         if found is None:
             err.print(f"[yellow]warn:[/yellow] {rt} did not answer: its stacks were not checked")
             continue
-        looked.append(rt)
         for s in found:
             state = states.get(s.sid)
             if s.active:
@@ -278,7 +298,7 @@ def command(
                     err.print(f"[yellow]warn:[/yellow] {rt} stack {project_name(s.sid)} is active: left alone")
                 continue
             if state == "ok":
-                when = last.get(s.sid)
+                when = _newest(last.get(s.sid), s.ran)
                 if cutoff and when and when < cutoff and (s.containers or s.networks):
                     dead.append((s, False))  # idle: its volumes stay
                 continue
@@ -296,6 +316,8 @@ def command(
             images += old or []
             if build_cache and rt == "docker":
                 prune.append(rt)
+    if build_cache and not prune:
+        err.print("[yellow]warn:[/yellow] --build-cache: docker was not looked at, so its build cache was not pruned")
     if not (dead or images or prune):
         console.print("[green]✓[/green] nothing to clean")
         return
@@ -311,14 +333,16 @@ def command(
         return
     if not yes and not typer.confirm("Remove these?", default=False):
         raise typer.Exit(1)
-    before = {rt: disk(rt) for rt in looked}
-    failed = [f for s, gone in dead for f in remove(s, volumes=gone)]
-    failed += [f"{i.runtime} image {i.ref}" for i in images if not _ok([i.runtime, "rmi", i.ref])]
+    before = {rt: disk(rt) for rt in dict.fromkeys([*(s.runtime for s, _ in dead), *(i.runtime for i in images),
+                                                     *prune])}
+    stacks_failed = [remove(s, volumes=gone) for s, gone in dead]
+    images_failed = [f"{i.runtime} image {i.ref}" for i in images if not _ok([i.runtime, "rmi", i.ref])]
+    failed = [f for fs in stacks_failed for f in fs] + images_failed
     failed += [f"{rt} build cache" for rt in prune
                if not _ok([rt, "builder", "prune", "-f", "--filter", f"until={hours}h"], PRUNE_TIMEOUT)]
     for f in failed:
         err.print(f"[yellow]warn:[/yellow] could not remove {f}")
     freed = [f"{(b - a) / 1e9:.1f} GB on {rt}" for rt, b in before.items()
              if b is not None and (a := disk(rt)) is not None]
-    console.print(f"[green]✓[/green] removed {len(dead)} stack(s), {len(images)} image(s)"
-                  + (f"; reclaimed {', '.join(freed)}" if freed else ""))
+    console.print(f"[green]✓[/green] removed {sum(not fs for fs in stacks_failed)} stack(s), "
+                  f"{len(images) - len(images_failed)} image(s)" + (f"; reclaimed {', '.join(freed)}" if freed else ""))
