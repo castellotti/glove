@@ -446,8 +446,9 @@ Every harness gets `GIT_CONFIG_PARAMETERS` naming the session's own mount roots
 (`/work` and each add-dir) as `safe.directory`, exact paths only (the images'
 git 2.39 has no `dir/*` patterns), so `git init` in `/work` works. A repo
 nested deeper (a clone, or `git init` in `/work/<dir>`) needs an opt-in on
-Docker Desktop (Podman's shares report the right owner): the `github`
-extension adds `'*'`, or the session adds it with `git_config:`
+Docker Desktop (Podman's shares report the right owner; glove adds it itself
+when the binds come from Docker Desktop's virtiofs layer, see "Docker Desktop
+shared folders"): the `github` extension adds `'*'`, or the session adds it with `git_config:`
 (`git_config: { safe.directory: "*" }`; a key takes a value or a list). glove
 alone sets git's config env vars: `env:` may not.
 
@@ -1226,7 +1227,7 @@ mode:
 | mode | meaning | what glove does |
 |---|---|---|
 | `native` | Landlock works on the normal path (Linux Docker, Podman, a fixed Docker Desktop) | nothing |
-| `virtiofs` | only the virtiofs layer works (Docker Desktop 4.96) | the harness's binds need that layer |
+| `virtiofs` | only the virtiofs layer works (Docker Desktop 4.96) | the harness's binds come from that layer (below) |
 | `broken` | neither works | `glove up`/`plan` refuse a session whose enforcer runs nono |
 | `unknown` | the engine couldn't be probed, or the control run failed too | nothing refused; `glove check` warns |
 
@@ -1236,6 +1237,38 @@ settings change probes again; a failure is never cached. `glove check` and
 `glove doctor` probe afresh and report it as `landlock on a bind mount`. If the
 mode is `broken`, `runtime: podman` works: its applehv machine mounts plain
 virtiofs, verified with Landlock ABI 9. No setting lets Landlock skip `/work`.
+
+In `virtiofs` mode, under a nono enforcer, every host bind of the **harness**
+(`/work`, add-dirs, outputs and inputs, the home, `/etc/glove/enforcer`, its
+system files, protected files, transcripts) has its source rewritten to
+`/run/host_virtiofs/<realpath>`. Targets and read-only flags stay the same.
+Sidecars keep the normal path. `glove plan` says so (`binds: from Docker
+Desktop's virtiofs layer`), `glove plan --compose` shows the rewritten sources,
+and `.glove/effective.yml` records `bind_layer: virtiofs`. The merged project
+is re-checked: only the harness of a `virtiofs` plan may bind from
+`/run/host_virtiofs`, each source a host path below a top-level directory
+(never `/Users` or `/Volumes` itself, which would expose a whole tree). A path outside Docker Desktop's shares
+fails at `glove up`, as it does on the normal path.
+
+Two consequences:
+
+- **git's `safe.directory` is `'*'`** in this mode, so the agent can use git in
+  any repo in its mounts. On the raw virtiofs layer a directory the container
+  creates can report its owner as `0:0` about a second after it gets its first
+  entry, and git then refuses it ("dubious ownership"). The exact mount roots
+  aren't enough (see "git in `/work`"). This widens git's trust to every repo
+  the harness can see: a repo's own `.git/config` (its hooks, `core.fsmonitor`)
+  is honoured even if another uid seems to own it. The container has one user,
+  so that guard has nothing to protect there.
+- **`allow_root` is refused**: root without capabilities can't write the host
+  user's files on the raw layer.
+
+`docker_desktop_mounts:` in `~/.glove/config.yml` overrides the choice on the
+`docker` runtime (Podman ignores it: it has no such layer): `auto` (the
+default) follows the probe; `native` never rewrites (a `broken` mode is still
+refused; in `virtiofs` mode glove warns that no command will read `/work`);
+`virtiofs` always rewrites, and refuses a session if the probe didn't see the
+layer work. `glove check` and `glove policy` plan with the same choice.
 
 ## Support matrix
 

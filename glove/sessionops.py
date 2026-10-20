@@ -23,7 +23,7 @@ from .harnessconfig import render_home
 from .mounts import make_bind_sources, write_placeholders
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime
-from .runtimes.landlock_mounts import landlock_enforced
+from .runtimes.landlock_mounts import bind_layer
 from .sessiondir import SessionDir, SessionError
 from .sessions import list_sessions, match_session, sessions_dir, widening_warnings
 from .userconfig import load_user_config
@@ -179,6 +179,15 @@ def print_extensions(plan) -> None:
                       f"context={m.context_window}, key={'yes' if m.api_key_env else 'no'})")
 
 
+def session_bind_layer(cfg) -> str:
+    """Where this session's harness binds come from (landlock_mounts.bind_layer),
+    warning when its commands won't read /work."""
+    layer, warn = bind_layer(get_runtime(cfg.runtime), cfg, load_user_config().docker_desktop_mounts)
+    if warn:
+        err.print(f"[yellow]⚠ {warn}[/yellow]")
+    return layer
+
+
 def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
                       home: bool = True, overrides: frozenset[str] = frozenset()):
     """Build the plan and write everything the session needs under .glove/
@@ -186,10 +195,7 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     Returns (plan, compose yaml, seeded home files)."""
     # Before anything is written: a nono session whose Landlock can't open /work is never started.
     runtime = get_runtime(cfg.runtime)
-    if landlock_enforced(cfg.enforcer) and (mm := runtime.landlock_mounts()).mode == "broken":
-        raise ConfigError(f"Landlock can't open files on a {cfg.runtime} bind mount ({mm.detail}): under "
-                          f"enforcer {cfg.enforcer!r} no command could read /work. Refusing to start; see the "
-                          "README's \"Docker Desktop shared folders\" (e.g. `runtime: podman`).")
+    layer = session_bind_layer(cfg)
     want_resume = resume or session is not None
     prev_cfg = None
     resume_id = session
@@ -201,6 +207,7 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     plan = build_session_plan(
         cfg, home_dir=str(sd.home), cwd=str(sd.work),
         resume=want_resume, session_id=resume_id, state_dir=str(sd.ext), session_dir=str(sd.root),
+        bind_layer=layer,
     )
     for o in plan.composition.outputs:
         # an older glove kept these in work/<name>/: the new mount hides that directory
@@ -251,11 +258,13 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     # what extensions resolved from the host at plan time (e.g. corporate's
     # routes via an interface), for the record and `glove plan`
     ext_resolved = {a.name: a.exports["resolved"] for a in plan.composition.active if a.exports.get("resolved")}
-    resolved = {k: v for k, v in resolved.items() if k != "extensions"}
+    resolved = {k: v for k, v in resolved.items() if k not in ("extensions", "bind_layer")}
     if ext_resolved:
         resolved["extensions"] = ext_resolved
     # the dirs sidecars write (`glove down` quarantines them without re-planning)
     resolved["outputs"] = [o.name for o in plan.composition.outputs if not o.input]
+    if plan.bind_layer != "native":  # the harness's binds come from Docker Desktop's virtiofs layer
+        resolved["bind_layer"] = plan.bind_layer
     sdm.write_effective(sd.effective, cfg, resolved)
     if not sd.baseline.exists():
         sdm.write_effective(sd.baseline, cfg)

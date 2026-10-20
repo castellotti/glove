@@ -49,6 +49,9 @@ def command(
         f"[bold]session:[/bold] {sid}  [bold]dir:[/bold] {sd.root}  [bold]harness:[/bold] {cfg.harness}  "
         f"[bold]enforcer:[/bold] {cfg.enforcer}{f' ({changed})' if changed else ''}  "
         f"[bold]subnet:[/bold] {cfg.subnet or '-'}")
+    if plan.bind_layer == "virtiofs":
+        console.print("[bold]binds:[/bold] from Docker Desktop's virtiofs layer (/run/host_virtiofs/<host path>; "
+                      "its fakeowner layer breaks Landlock), git's safe.directory '*'")
     console.print(f"[dim]compose project written to {sd.compose}[/dim]")
     if compose:
         console.print()

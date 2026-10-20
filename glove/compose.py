@@ -41,6 +41,7 @@ from .extensions import render_value as _render
 from .hardening import SIDECAR_ONLY_SECCOMP
 from .mounts import WORK_TARGET
 from .naming import scoped
+from .runtimes.landlock_mounts import host_under_virtiofs
 from .runtimes.seccomp import SECCOMP_DIR
 
 if TYPE_CHECKING:
@@ -462,6 +463,10 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             src = v.get("source", "") if isinstance(v, dict) else str(v).split(":")[0]
             if "docker.sock" in str(src):
                 raise ExtensionError(f"service {name!r}: the docker socket is never mounted")
+            if (host_under_virtiofs(str(src)) is not None
+                    and not (name == plan.harness_service and plan.bind_layer == "virtiofs")):
+                raise ExtensionError(f"service {name!r}: only a Landlock harness binds from Docker Desktop's "
+                                     f"virtiofs layer ({src})")
         if name == plan.harness_service:
             nets = svc.get("networks") or []
             nets = list(nets) if isinstance(nets, list) else list(nets.keys())
@@ -471,7 +476,15 @@ def validate_project(doc: dict, plan: SessionPlan, comp: Composition) -> None:
             channels = {c.volume(session) for c in comp.channels}
             for v in svc.get("volumes") or []:
                 bind = isinstance(v, dict) and v.get("type") == "bind"
-                if bind and _within(str(v["source"]), str(comp.state_root)):
+                src = str(v["source"]) if bind else ""
+                if bind and plan.bind_layer == "virtiofs":
+                    # each bind a translated host path, never a top-level directory (/Users: every share's tree)
+                    host = host_under_virtiofs(src)
+                    if host is None or host.count("/") < 2:
+                        raise ExtensionError(f"the harness's bind {src} is not a host path on Docker Desktop's "
+                                             "virtiofs layer")
+                    src = host
+                if bind and _within(src, str(comp.state_root)):
                     raise ExtensionError(f"the harness never mounts extension state ({v['source']})")
                 if isinstance(v, dict) and v.get("type") == "volume" and v.get("source") not in channels:
                     raise ExtensionError(f"the harness mounts no volume but a channel ({v.get('source')})")

@@ -34,7 +34,8 @@ def make_cfg(**kw) -> Config:
     return Config(**kw)
 
 
-def render(cfg: Config, tmp_path, *, cwd=None, uid=501, gid=20, overrides=frozenset(), session_dir=None):
+def render(cfg: Config, tmp_path, *, cwd=None, uid=501, gid=20, overrides=frozenset(), session_dir=None,
+           bind_layer="native"):
     """Plan + docker render (what `glove run --dry-run` writes); returns (plan, yaml text)."""
     from pathlib import Path
 
@@ -43,7 +44,7 @@ def render(cfg: Config, tmp_path, *, cwd=None, uid=501, gid=20, overrides=frozen
 
     plan = build_session_plan(
         cfg, home_dir=str(tmp_path / "home"), cwd=cwd, uid=uid, gid=gid,
-        state_dir=str(tmp_path / "ext"), session_dir=session_dir,
+        state_dir=str(tmp_path / "ext"), session_dir=session_dir, bind_layer=bind_layer,
     )
     return plan, DockerRuntime().render(plan, Path(tmp_path), overrides=overrides).compose_yaml
 

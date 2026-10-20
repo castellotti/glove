@@ -7,7 +7,8 @@ the virtiofs layer (``/run/host_virtiofs/<path>`` in the VM) works. The probe
 normal path works), ``virtiofs`` (only that layer does), ``broken`` (neither: a
 nono session is refused), ``unknown`` (not probed, or a failure that isn't
 Landlock's). Cached per engine (version, kernel, Docker Desktop settings) in
-``~/.glove/runtime-cache.json``.
+``~/.glove/runtime-cache.json``. ``bind_layer`` picks a session's: in ``virtiofs``
+the harness's bind sources become ``/run/host_virtiofs/<realpath>``.
 """
 
 from __future__ import annotations
@@ -21,9 +22,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..config import ConfigError
 from ..registry import glove_home, write_json_atomic
 
 if TYPE_CHECKING:
+    from ..config import Config
     from .docker import DockerRuntime
 
 VIRTIOFS_ROOT = "/run/host_virtiofs"
@@ -37,6 +40,7 @@ _IN = "/glove-probe"  # where the probe's binds land in its container
 class MountMode:
     mode: str  # native | virtiofs | broken | unknown
     detail: str
+    virtiofs: bool = False  # Docker Desktop's virtiofs layer passed (a forced `virtiofs` needs it)
 
 
 def landlock_enforced(enforcer: str) -> bool:
@@ -67,7 +71,7 @@ def classify(report: dict) -> MountMode:
         ok[name] = bad is None and (name == "native" or m.get("fstype", "").startswith("virtiofs"))
         parts.append(f"{label} {m.get('fstype', '?')}: {bad or 'ok'}")
     mode = "native" if ok.get("native") else "virtiofs" if ok.get("virtiofs") else "broken"
-    return MountMode(mode, "; ".join(parts))
+    return MountMode(mode, "; ".join(parts), bool(ok.get("virtiofs")))
 
 
 def probe(rt: DockerRuntime, desktop: bool) -> MountMode:
@@ -77,7 +81,7 @@ def probe(rt: DockerRuntime, desktop: bool) -> MountMode:
     tmp = tempfile.mkdtemp(prefix="landlock-probe-", dir=glove_home())
     binds = [(tmp, f"{_IN}/native", True)]
     if desktop:  # --mount refuses a missing source: a moved layer fails, then only the normal path runs
-        binds.append((f"{VIRTIOFS_ROOT}{os.path.realpath(tmp)}", f"{_IN}/virtiofs", True))
+        binds.append((virtiofs_source(tmp), f"{_IN}/virtiofs", True))
     try:
         for b in (binds, binds[:1]) if desktop else (binds,):
             proc = subprocess.run(rt.throwaway_argv(
@@ -111,9 +115,53 @@ def mount_mode(rt: DockerRuntime, *, refresh: bool = False) -> MountMode:
         cache = {}
     cache = cache if isinstance(cache, dict) else {}  # damaged: a miss, rewritten below
     hit = cache.get(rt.name)
-    if not refresh and isinstance(hit, dict) and hit.get("key") == key and hit.get("mode") in ("native", "virtiofs"):
-        return MountMode(hit["mode"], str(hit.get("detail", "")))
+    if (not refresh and isinstance(hit, dict) and hit.get("key") == key and hit.get("mode") in ("native", "virtiofs")
+            and isinstance(hit.get("virtiofs"), bool)):  # an entry without it (an older glove's) is a miss
+        return MountMode(hit["mode"], str(hit.get("detail", "")), hit["virtiofs"])
     mm = probe(rt, desktop)
     if mm.mode in ("native", "virtiofs"):  # a failure is never cached: the next launch probes again
         write_json_atomic(path, {**cache, rt.name: {"key": key, **asdict(mm)}})
     return mm
+
+
+def virtiofs_source(host: str) -> str:
+    """A host path as Docker Desktop's VM sees it on the virtiofs layer."""
+    return f"{VIRTIOFS_ROOT}{os.path.realpath(host)}"
+
+
+def host_under_virtiofs(src: str) -> str | None:
+    """The host path a source on the virtiofs layer names ("/" for the layer's
+    root), or None for any other source. A leading `//` is the same path."""
+    n = "/" + os.path.normpath(src).lstrip("/")
+    if n == VIRTIOFS_ROOT or n.startswith(VIRTIOFS_ROOT + "/"):
+        return n.removeprefix(VIRTIOFS_ROOT) or "/"
+    return None
+
+
+def bind_layer(rt: DockerRuntime, cfg: Config, setting: str = "auto") -> tuple[str, str | None]:
+    """Where the harness's binds come from, ``virtiofs`` (Docker Desktop's
+    virtiofs layer) or ``native``, and a warning. Only a Landlock enforcer
+    needs the choice; ``setting`` is the user's ``docker_desktop_mounts``
+    (Docker only: Podman has no such layer). Refuses a session whose commands
+    could not read /work."""
+    if not landlock_enforced(cfg.enforcer):
+        return "native", None
+    setting = setting if rt.name == "docker" else "auto"
+    mm = rt.landlock_mounts()
+    if mm.mode == "broken":
+        raise ConfigError(f"Landlock can't open files on a {rt.name} bind mount ({mm.detail}): under "
+                          f"enforcer {cfg.enforcer!r} no command could read /work. Refusing to start; see the "
+                          "README's \"Docker Desktop shared folders\" (e.g. `runtime: podman`).")
+    if setting == "virtiofs" and not mm.virtiofs:
+        raise ConfigError(f"docker_desktop_mounts: virtiofs (~/.glove/config.yml), but {rt.name} has no working "
+                          f"virtiofs layer ({mm.mode}: {mm.detail}); set it to auto")
+    layer = "virtiofs" if setting == "virtiofs" or (setting == "auto" and mm.mode == "virtiofs") else "native"
+    if layer == "virtiofs" and cfg.allow_root:
+        # the raw layer shows the host user's files as theirs: uid 0 without capabilities can't write them
+        raise ConfigError("`allow_root` runs the harness as root, which can't write /work through Docker "
+                          "Desktop's virtiofs layer (README: Docker Desktop shared folders)")
+    warn = None
+    if layer == "native" and mm.mode == "virtiofs":
+        warn = (f"docker_desktop_mounts: native (~/.glove/config.yml), but Landlock can't open files on {rt.name}'s "
+                f"normal bind path ({mm.detail}): no command will read /work")
+    return layer, warn

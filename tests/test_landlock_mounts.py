@@ -8,11 +8,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from helpers import make_session
+import yaml
+from helpers import make_cfg, make_session, render
 from typer.testing import CliRunner
 
 from glove.cli import app
+from glove.compose import validate_project
+from glove.config import ConfigError
 from glove.doctor import run_doctor
+from glove.extensions import ExtensionError
 from glove.runtimes import landlock_mounts as lm
 from glove.runtimes import podman
 from glove.runtimes.docker import DockerRuntime
@@ -45,6 +49,11 @@ def report(native=None, virtiofs=None, *, abi=8, vfs_type="virtiofs.virtiofs0", 
 ])
 def test_classify(rep, mode):
     assert lm.classify(rep).mode == mode
+
+
+def test_classify_records_whether_the_virtiofs_layer_passed():
+    assert [lm.classify(r).virtiofs for r in (report(DENIED, OK), report(OK, OK), report(OK, DENIED), report(OK),
+                                              report(DENIED, OK, vfs_type="ext4"))] == [True, True, False, False, False]
 
 
 def test_classify_names_the_first_failing_step():
@@ -84,6 +93,7 @@ def test_mode_is_cached_per_engine_version_and_settings(engine, home):
     assert lm.mount_mode(rt).mode == "virtiofs" and engine["probes"] == 1
     cached = json.loads((home / "runtime-cache.json").read_text())["docker"]
     assert cached["key"].startswith("Docker Desktop 4.96.0") and "settings@" in cached["key"]
+    assert cached["virtiofs"] is False  # the fake probe's MountMode("virtiofs", "d") leaves the flag unset
     engine["version"] = "Docker Desktop 4.97.0 (2) 29.9.2 7.0"  # an update re-probes
     lm.mount_mode(rt)
     assert engine["probes"] == 2
@@ -92,6 +102,17 @@ def test_mode_is_cached_per_engine_version_and_settings(engine, home):
     assert engine["probes"] == 3
     lm.mount_mode(rt, refresh=True)
     assert engine["probes"] == 4
+
+
+def test_an_entry_without_the_virtiofs_flag_is_a_miss(engine, home):
+    rt = DockerRuntime()
+    lm.mount_mode(rt)
+    path = home / "runtime-cache.json"
+    data = json.loads(path.read_text())
+    del data["docker"]["virtiofs"]  # as phase 1's glove wrote it
+    path.write_text(json.dumps(data))
+    lm.mount_mode(rt)
+    assert engine["probes"] == 2
 
 
 @pytest.mark.parametrize("damaged", ["[1]", "{", '{"docker": "x"}', '{"docker": {"key": 1}}'])
@@ -176,3 +197,147 @@ def test_doctor_reports_the_mode_for_a_nono_enforcer(monkeypatch):
     assert check.status == "ok" and check.detail.startswith("virtiofs: ") and "fakeowner layer" in check.detail
     assert "landlock on a bind mount" not in {c.name for c in run_doctor(enforcer="none")}
     assert "landlock on a bind mount" not in {c.name for c in run_doctor(include_container_probes=False)}
+
+
+def _mm(monkeypatch, mode, virtiofs=None):
+    probes = []
+
+    def landlock_mounts(self, *, refresh=False):
+        probes.append(1)
+        return lm.MountMode(mode, "d", mode == "virtiofs" if virtiofs is None else virtiofs)
+
+    monkeypatch.setattr(DockerRuntime, "landlock_mounts", landlock_mounts)
+    return probes
+
+
+@pytest.mark.parametrize(("mode", "virtiofs", "setting", "layer"), [
+    ("virtiofs", None, "auto", "virtiofs"),     # Docker Desktop 4.96
+    ("native", None, "auto", "native"),         # Linux, Podman, a fixed Docker Desktop
+    ("unknown", None, "auto", "native"),        # not refused, not translated (check warns)
+    ("virtiofs", None, "native", "native"),     # the user's override: no translation
+    ("native", True, "virtiofs", "virtiofs"),   # forced, and the layer works
+    ("unknown", False, "virtiofs", "refused"),  # forced, but the probe saw no working layer
+    ("native", False, "virtiofs", "refused"),   # e.g. Podman: there is no such layer
+    ("broken", None, "native", "refused"),      # the override never skips the refusal
+])
+def test_bind_layer(monkeypatch, mode, virtiofs, setting, layer):
+    _mm(monkeypatch, mode, virtiofs)
+    cfg = make_cfg(enforcer="nono+srt")
+    if layer == "refused":
+        with pytest.raises(ConfigError):
+            lm.bind_layer(DockerRuntime(), cfg, setting)
+    else:
+        assert lm.bind_layer(DockerRuntime(), cfg, setting)[0] == layer
+
+
+def test_native_over_a_virtiofs_mode_warns(monkeypatch):
+    _mm(monkeypatch, "virtiofs")
+    layer, warn = lm.bind_layer(DockerRuntime(), make_cfg(enforcer="nono"), "native")
+    assert layer == "native" and "no command will read /work" in warn
+    assert lm.bind_layer(DockerRuntime(), make_cfg(enforcer="nono"), "auto")[1] is None
+
+
+def test_podman_ignores_docker_desktop_mounts(monkeypatch):
+    monkeypatch.setattr(PodmanRuntime, "landlock_mounts", lambda self, *, refresh=False: lm.MountMode("native", "d"))
+    assert lm.bind_layer(PodmanRuntime(), make_cfg(enforcer="nono", runtime="podman"), "virtiofs") == ("native", None)
+
+
+def test_bind_layer_probes_only_for_a_landlock_enforcer(monkeypatch):
+    probes = _mm(monkeypatch, "broken")
+    assert lm.bind_layer(DockerRuntime(), make_cfg(enforcer="srt"), "virtiofs") == ("native", None) and not probes
+
+
+@pytest.mark.parametrize(("src", "host"), [
+    ("/run/host_virtiofs/Users/a", "/Users/a"), ("//run/host_virtiofs/Users/a", "/Users/a"),
+    ("/run/host_virtiofs", "/"), ("/run/host_virtiofs/../etc", None), ("/run/host_virtiofsX/a", None),
+    ("/Users/a", None),
+])
+def test_host_under_virtiofs(src, host):
+    assert lm.host_under_virtiofs(src) == host
+
+
+def test_root_is_refused_on_the_virtiofs_layer(monkeypatch):
+    _mm(monkeypatch, "virtiofs")
+    with pytest.raises(ConfigError, match="allow_root"):
+        lm.bind_layer(DockerRuntime(), make_cfg(enforcer="nono", allow_root=True))
+
+
+def _harness_sources(doc, plan):
+    return [v["source"] for v in doc["services"][plan.harness_service]["volumes"] if v["type"] == "bind"]
+
+
+def test_virtiofs_translates_every_harness_bind_and_widens_safe_directory(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    plan, native = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path)
+    plan_v, text = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path, bind_layer="virtiofs")
+    doc, before = yaml.safe_load(text), _harness_sources(yaml.safe_load(native), plan)
+    assert _harness_sources(doc, plan_v) == [f"/run/host_virtiofs{os.path.realpath(s)}" for s in before]
+    assert {v["target"] for v in doc["services"][plan.harness_service]["volumes"]} == {
+        v["target"] for v in yaml.safe_load(native)["services"][plan.harness_service]["volumes"]}
+    for name, svc in doc["services"].items():  # sidecars keep the normal path
+        if name != plan.harness_service:
+            assert not any("host_virtiofs" in str(v) for v in svc.get("volumes") or [])
+    assert "'safe.directory'='*'" in plan_v.environment["GIT_CONFIG_PARAMETERS"]
+    assert "'*'" not in plan.environment["GIT_CONFIG_PARAMETERS"]
+
+
+def test_validate_project_keeps_the_virtiofs_layer_to_a_landlock_harness(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    plan, native = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path)
+    plan_v, text = render(make_cfg(workdir=str(work), enforcer="nono"), tmp_path, bind_layer="virtiofs")
+    h = plan.harness_service
+
+    def bad(doc, p, match):
+        with pytest.raises(ExtensionError, match=match):
+            validate_project(doc, p, p.composition)
+
+    doc = yaml.safe_load(native)  # a native plan never binds from the layer
+    doc["services"][h]["volumes"][0]["source"] = "/run/host_virtiofs/Users/x"
+    bad(doc, plan, "only a Landlock harness")
+    doc = yaml.safe_load(text)  # nor does a sidecar, ever
+    side = next(n for n in doc["services"] if n != h)
+    for src in ("/run/host_virtiofs/Users", "//run/host_virtiofs/Users/x"):
+        doc["services"][side]["volumes"] = [{"type": "bind", "source": src, "target": "/x"}]
+        bad(doc, plan_v, "only a Landlock harness")
+    for src in ("/run/host_virtiofs/Users", "/run/host_virtiofs", str(work), "/run/host_virtiofs/../etc/x"):
+        doc = yaml.safe_load(text)  # a virtiofs plan: each a translated host path below a share
+        doc["services"][h]["volumes"][0]["source"] = src
+        bad(doc, plan_v, "not a host path on Docker Desktop's virtiofs layer")
+    doc = yaml.safe_load(text)  # extension state stays out, translated or not
+    doc["services"][h]["volumes"][0]["source"] = lm.virtiofs_source(str(plan.composition.state_root))
+    bad(doc, plan_v, "never mounts extension state")
+
+
+def test_plan_shows_and_records_the_virtiofs_layer(monkeypatch, home, tmp_path):
+    _mm(monkeypatch, "virtiofs")
+    d = make_session(tmp_path / "s", "enforcer: nono\n")
+    result = CliRunner().invoke(app, ["plan", str(d)])
+    assert result.exit_code == 0, result.output
+    assert "binds: from Docker Desktop's virtiofs layer" in result.output
+    assert yaml.safe_load((d / ".glove" / "effective.yml").read_text())["resolved"]["bind_layer"] == "virtiofs"
+    assert f"/run/host_virtiofs{os.path.realpath(d / 'work')}" in (d / ".glove" / "compose.yml").read_text()
+    _mm(monkeypatch, "native")  # Docker Desktop fixed: the next render drops the record
+    assert CliRunner().invoke(app, ["plan", str(d)]).exit_code == 0
+    assert "bind_layer" not in yaml.safe_load((d / ".glove" / "effective.yml").read_text())["resolved"]
+
+
+@pytest.mark.parametrize("cmd", ["check", "policy"])
+def test_check_and_policy_plan_with_the_sessions_layer(monkeypatch, home, tmp_path, cmd):
+    _mm(monkeypatch, "broken")
+    d = make_session(tmp_path / "s", "enforcer: nono\n")
+    result = CliRunner().invoke(app, [cmd, str(d), *(["--no-container"] if cmd == "check" else [])])
+    assert "Landlock can't open files on a docker bind mount" in result.output
+
+
+def test_docker_desktop_mounts_config(monkeypatch, home, tmp_path):
+    probes = _mm(monkeypatch, "virtiofs")
+    home.mkdir()
+    (home / "config.yml").write_text("docker_desktop_mounts: native\n")
+    d = make_session(tmp_path / "s", "enforcer: nono\n")
+    assert CliRunner().invoke(app, ["plan", str(d)]).exit_code == 0 and probes
+    assert "host_virtiofs" not in (d / ".glove" / "compose.yml").read_text()
+    (home / "config.yml").write_text("docker_desktop_mounts: fast\n")
+    result = CliRunner().invoke(app, ["plan", str(d)])
+    assert result.exit_code != 0 and "must be one of auto, native, virtiofs" in result.output

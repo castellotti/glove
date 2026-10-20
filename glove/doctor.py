@@ -118,7 +118,7 @@ def egress_host_checks(comp: Composition, a) -> list[Check]:
 def landlock_mounts_check(rt) -> Check:
     """Whether Landlock (nono) can open files on a bind mount, probed afresh."""
     mm = rt.landlock_mounts(refresh=True)
-    note = {"virtiofs": "; the harness's binds need Docker Desktop's virtiofs layer (its fakeowner layer "
+    note = {"virtiofs": "; the harness's binds come from Docker Desktop's virtiofs layer (its fakeowner layer "
                         "breaks Landlock)",
             "broken": "; a session whose enforcer runs nono is refused (README: Docker Desktop shared folders)"}
     return Check("landlock on a bind mount", {"broken": "fail", "unknown": "warn"}.get(mm.mode, "ok"),

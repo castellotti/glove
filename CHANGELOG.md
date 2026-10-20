@@ -174,6 +174,13 @@ All notable changes to glove are documented here.
   `broken`), and `glove up`/`plan` refuse a nono session whose mode is
   `broken`. `throwaway_argv` gains `as_host` (the host user, keep-id on
   rootless Podman) and `binds` (`--mount`, which refuses a missing source).
+  In `virtiofs` mode a nono session's harness binds every host path from
+  `/run/host_virtiofs/<realpath>` (sidecars keep the normal path), with
+  `safe.directory '*'` in its git config: on the raw layer a new directory can
+  read as `0:0`. `glove plan` shows it, `effective.yml` records `bind_layer`,
+  `validate_project` allows the layer only there (never a share's root), and
+  `allow_root` is refused. `docker_desktop_mounts: auto|native|virtiofs` in
+  `~/.glove/config.yml` overrides the choice.
 
 ### Added
 

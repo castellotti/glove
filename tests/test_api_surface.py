@@ -63,7 +63,8 @@ COMMANDS = {
     "autodetect_provider": "() -> 'str'",
     "build_session_plan": "(cfg: 'Config', *, home_dir: 'str', cwd: 'str | None' = None, uid: 'int | None' = None, "
                           "gid: 'int | None' = None, resume: 'bool' = False, session_id: 'str | None' = None, "
-                          "state_dir: 'str | None' = None, session_dir: 'str | None' = None) -> 'SessionPlan'",
+                          "state_dir: 'str | None' = None, session_dir: 'str | None' = None, "
+                          "bind_layer: 'str' = 'native') -> 'SessionPlan'",
     "build_forwarder": "(provider: 'str', *, force: 'bool' = False) -> 'None'",
     "build_harness": "(provider: 'str', profile: 'HarnessProfile', *, apt_packages: 'list[str] | None' = None, "
                      "pip_packages: 'list[str] | None' = None, enforcer: 'str' = 'nono', "
@@ -116,6 +117,7 @@ COMMANDS = {
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
     "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
+    "session_bind_layer": "(cfg) -> 'str'",
     "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
     "stop": "(sd: 'SessionDir', sid: 'str', provider: 'str | None', *, wipe: 'bool', mark: 'bool' = True) -> 'None'",
