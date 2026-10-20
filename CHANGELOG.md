@@ -40,7 +40,7 @@ All notable changes to glove are documented here.
   `materialize_session`, `placeholders_left`, `probe_direct`,
   `probe_http`, `quarantine_supported`, `read_effective`, `remove_rows`,
   `remove_state`, `render_home`, `run_doctor`, `run_teardown`, `secret_env`,
-  `secret_exists`, `secret_refs`, `template_drift`, `with_headers`,
+  `secret_refs`, `template_drift`, `with_headers`,
   `worst_status`, `write_effective`. `commands/build/` is no longer skipped by
   git and pytest as a build directory.
 

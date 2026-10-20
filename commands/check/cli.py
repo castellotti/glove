@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 import yaml
 
-from glove.api import ConfigError
+from glove.api import ConfigError, secret_exists
 from glove.api.commands import (
     DIR_ARG,
     PLACEHOLDER,
@@ -23,7 +23,6 @@ from glove.api.commands import (
     print_checks,
     probe_direct,
     run_doctor,
-    secret_exists,
     secret_refs,
     template_drift,
 )

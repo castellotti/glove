@@ -2,7 +2,6 @@
 besides `glove.api`: the session machinery and the core names commands use."""
 
 from .. import __version__ as VERSION
-from ..config import secret_exists
 from ..doctor import extension_checks, run_doctor, worst_status
 from ..enforcers import OPTION_SECTIONS, get_enforcer
 from ..enforcers.base import default_enforcer
@@ -74,5 +73,5 @@ __all__ = ["DIR_ARG", "ID_RE", "IKNOW", "OPTION_SECTIONS", "PLACEHOLDER", "SCHEM
            "materialize_plan", "materialize_session", "now", "one_resume", "open_session", "placeholders_left",
            "print_checks", "print_extensions", "probe_direct", "probe_http", "project_name", "quarantine_supported",
            "read_effective", "remove_rows", "remove_state", "render_home", "row_state", "run_doctor", "run_teardown",
-           "secret_env", "secret_exists", "secret_refs", "stop", "sync_registry", "template_drift", "with_headers",
+           "secret_env", "secret_refs", "stop", "sync_registry", "template_drift", "with_headers",
            "worst_status", "write_effective"]

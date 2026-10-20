@@ -117,7 +117,6 @@ COMMANDS = {
                   "-> 'list[Check]'",
     "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
     "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
-    "secret_exists": "(value: 'str') -> 'tuple[bool, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",
     "stop": "(sd: 'SessionDir', sid: 'str', provider: 'str | None', *, wipe: 'bool', mark: 'bool' = True) -> 'None'",
     "sync_registry": "(sd: 'SessionDir', sid: 'str', raw: 'dict', *, check_runtime: 'bool' = False) "
