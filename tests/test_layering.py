@@ -53,9 +53,10 @@ def test_contract_catches_a_core_to_extension_import(tmp_path):
     assert "BROKEN" in r.stdout
 
 
-# --- Extension contracts. An AST scan of every non-test module under extensions/ and harnesses/:
-# from core they import only `glove.api`; an extension imports another only if it requires it (any
-# form, `when:` ignored); a harness adapter imports no extension.
+# --- Extension contracts. An AST scan of every non-test module under extensions/, harnesses/ and
+# commands/: from core they import only `glove.api` (and its submodules); an extension imports another
+# only if it requires it (any form, `when:` ignored); a harness adapter or a command imports no
+# extension, and a command no other command.
 
 
 def _imports(path: Path, root: Path) -> list[str]:
@@ -97,7 +98,7 @@ def contract_violations(root: Path = REPO) -> set[str]:
     """`<file> -> <module>` for each import that breaks a contract."""
     reqs = _requires(root)
     out = set()
-    for top in ("extensions", "harnesses"):
+    for top in ("extensions", "harnesses", "commands"):
         for path in (root / top).rglob("*.py"):
             where = path.relative_to(root)
             if "tests" in where.parts:
@@ -107,8 +108,9 @@ def contract_violations(root: Path = REPO) -> set[str]:
                 own = where.parts[1] if len(where.parts) > 2 else ""  # extensions/<own>/...
                 if (
                     (first == "glove" and second != "api")
-                    or (first == "extensions" and top == "harnesses")
+                    or (first == "extensions" and top != "extensions")
                     or (first == "extensions" and own and second not in {own, *reqs.get(own, ())})
+                    or (first == "commands" and (top != "commands" or second != own))
                 ):
                     out.add(f"{where} -> {mod}")
     return out
@@ -137,11 +139,17 @@ def test_contract_catches_private_core_and_adapter_imports(tmp_path):
         "extensions/__init__.py": "from extensions.a import hooks\n",
         "extensions/b/extension.yml": "# nothing yet\n",
         "harnesses/h/adapter.py": "from glove import naming\nfrom extensions.a import hooks\n",
+        "commands/c/cli.py": "from glove.api.commands import x\nfrom glove import cli\nfrom extensions.a import h\n"
+                             "from commands.d import y\nfrom . import helpers\n",
+        "commands/d/cli.py": "from glove.api import ConfigError\n",
     })
     assert contract_violations(root) == {
         "extensions/a/hooks.py -> glove.session",
         "harnesses/h/adapter.py -> glove.naming",
         "harnesses/h/adapter.py -> extensions.a",
+        "commands/c/cli.py -> glove.cli",
+        "commands/c/cli.py -> extensions.a",
+        "commands/c/cli.py -> commands.d",
     }
 
 

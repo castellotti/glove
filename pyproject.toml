@@ -37,7 +37,7 @@ artifacts = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "extensions", "harnesses"]
+testpaths = ["tests", "extensions", "harnesses", "commands"]
 pythonpath = [".", "tests"]
 # importlib: plugin test files share basenames (extensions|harnesses/*/tests/test_*.py)
 addopts = "--import-mode=importlib"
@@ -57,10 +57,10 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
 ignore = ["B008"]
 
 [tool.importlinter]
-root_packages = ["glove", "extensions"]
+root_packages = ["glove", "extensions", "commands"]
 
 [[tool.importlinter.contracts]]
 name = "Core does not import extensions"
 type = "forbidden"
 source_modules = ["glove"]
-forbidden_modules = ["extensions"]
+forbidden_modules = ["extensions", "commands"]

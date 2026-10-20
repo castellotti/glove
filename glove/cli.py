@@ -985,6 +985,25 @@ def _mount_extension_clis() -> None:
             app.add_typer(sub, name=name, help=m.summary)
 
 
+# --- commands (`commands/<name>/cli.py` → `glove <name>`) -------------------------------
+
+COMMANDS_DIR = Path(__file__).resolve().parent.parent / "commands"
+
+
+def _mount_commands() -> None:
+    """Mount each in-tree command: its `cli.py`'s `command` (a function) as
+    `glove <name>`, or its `app` (a Typer) as the group `glove <name> …`.
+    Commands import only glove.api(.commands); core loads them by path."""
+    from .extensions import load_module
+
+    for d in sorted(p for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file()):
+        m = load_module(d / "cli.py", d.name, ns="glove_cmd")
+        if hasattr(m, "command"):
+            app.command(d.name)(m.command)
+        else:
+            app.add_typer(m.app, name=d.name)
+
+
 @app.command("ext")
 def ext_cmd() -> None:
     """Every extension glove can load, with its origin and CLI."""
@@ -1007,6 +1026,7 @@ def version() -> None:
     console.print(__version__)
 
 
+_mount_commands()
 _mount_extension_clis()
 
 

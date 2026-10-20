@@ -1,5 +1,5 @@
-"""The extension API's names and signatures (`glove.api`, `glove.api.harness`).
-A change to either fails here until this snapshot changes in the same commit:
+"""The extension API's names and signatures (`glove.api`, `glove.api.harness`,
+`glove.api.commands`). A change to any fails here until this snapshot changes in the same commit:
 an out-of-tree extension depends on them."""
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 
 import glove.api
+import glove.api.commands
 import glove.api.harness
 
 API = {
@@ -45,6 +46,13 @@ API = {
     "ext_session": "(name: 'str', directory: 'Path | None' = None, *, launched: 'bool' = True) -> 'ExtSession'",
     "reload_sidecar": "(s: 'ExtSession', service: 'str', env: 'Mapping[str, str]', *, wait: 'int' = 30) -> 'None'",
 }
+COMMANDS = {
+    "ID_RE": "Pattern",
+    "RegistryError": "class(ValueError)",
+    "SessionDir": "dataclass(root)",
+    "load_registry": "() -> 'list[SessionEntry]'",
+    "project_name": "(session: 'str') -> 'str'",
+}
 HARNESS = {
     "CONTAINER_HOME": "str",
     "INJECTED_KEY": "str",
@@ -71,6 +79,6 @@ def _describe(obj) -> str:
 
 
 def test_the_api_is_what_the_snapshot_says():
-    for module, want in ((glove.api, API), (glove.api.harness, HARNESS)):
+    for module, want in ((glove.api, API), (glove.api.harness, HARNESS), (glove.api.commands, COMMANDS)):
         assert sorted(module.__all__) == sorted(want), module.__name__
         assert {n: _describe(getattr(module, n)) for n in module.__all__} == want, module.__name__
