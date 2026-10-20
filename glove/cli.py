@@ -759,36 +759,7 @@ def downloads_mark_cmd(directory: Path | None = _DIR_ARG) -> None:
         console.print(f"[dim]nothing new to quarantine ({r.already} already marked)[/dim]")
 
 
-# --- keychain / build / doctor / policy ---------------------------------------------------
-
-keychain_app = typer.Typer(add_completion=False,
-                           help="Secrets in the macOS Keychain (referenced as keychain:<service>).")
-app.add_typer(keychain_app, name="keychain")
-
-
-@keychain_app.command("set")
-def keychain_set_cmd(
-    service: str = typer.Argument(..., help="Keychain service name"),
-    stdin: bool = typer.Option(False, "--stdin", help="read the secret from stdin (one line; for scripts)"),
-) -> None:
-    """Store (or replace) a secret, prompting for it — it never appears in argv or a file."""
-    import sys
-
-    from .config import keychain_set
-
-    secret = None
-    if stdin:
-        if sys.stdin.isatty():
-            raise fail("--stdin reads a piped secret; without it, glove prompts (and hides what you type)")
-        secret = sys.stdin.read().removesuffix("\n").removesuffix("\r")
-    try:
-        rc = keychain_set(service, secret)
-    except ConfigError as e:
-        raise fail(str(e)) from e
-    if rc != 0:
-        raise typer.Exit(rc)
-    console.print(f"[green]✓[/green] stored; reference it as [cyan]keychain:{service}[/cyan]")
-
+# --- build / doctor / policy ---------------------------------------------------
 
 @app.command()
 def build(
