@@ -76,6 +76,7 @@ RELAY_POLICY = "/opt/glove/skills/relay_policy.py"  # where the sidecar sees rel
 RELAY_CLIENT = "/opt/glove/bin/glove-relay"  # relay's client, in the harness image
 SERVICE = "skill-"  # a relay's sidecar (and channel): skill-<plugin>
 CHECK_TIMEOUT = 60  # seconds a check may take (a hung one would hold up `glove up`)
+CHECK_POOL = 4  # `glove skills status`: checks run at once (`glove up`: core's verify.EXEC_POOL)
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")

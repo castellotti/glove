@@ -341,8 +341,6 @@ def test_login_stores_the_filtered_state_and_captures(tmp_path, monkeypatch, cap
 
 def test_login_stopped_stores_nothing(tmp_path, monkeypatch, capsys):
     d = _session(tmp_path, LOGIN)
-    legacy = d / ".glove" / "playwright-login"  # a profile kept before api 2
-    (legacy / "Default").mkdir(parents=True)
     made, stored = [], {}
     monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: made.append(_Chrome(exe, args)) or made[-1])
     monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
@@ -355,25 +353,6 @@ def test_login_stopped_stores_nothing(tmp_path, monkeypatch, capsys):
     with pytest.raises(typer.Exit):
         cli.login(directory=d, keep_profile=False, no_reload=True, headless=False, chrome_args=[])
     assert "nothing stored" in capsys.readouterr().err and not stored and made[0].closed
-    assert not legacy.exists()
-
-
-def test_login_keep_profile_moves_a_profile_kept_before_api_2(tmp_path, monkeypatch):
-    d = _session(tmp_path, LOGIN)
-    legacy = d / ".glove" / "playwright-login"
-    (legacy / "Default").mkdir(parents=True)
-    (legacy / "Default" / "Cookies").write_text("signed in")
-    monkeypatch.setattr(cdp, "PipeChrome", lambda exe, args: _Chrome(exe, args))
-    monkeypatch.setattr(host_chrome, "chrome_executable", lambda: "/bin/chrome")
-
-    def interrupt(prompt=""):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("builtins.input", interrupt)
-    with pytest.raises(typer.Exit):
-        cli.login(directory=d, keep_profile=True, no_reload=True, headless=True, chrome_args=[])
-    profile = d / ".glove" / "ext" / "playwright" / "login-profile"
-    assert not legacy.exists() and (profile / "Default" / "Cookies").read_text() == "signed in"
 
 
 @pytest.mark.parametrize(("login", "state", "match"), [

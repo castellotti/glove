@@ -96,6 +96,20 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`glove down` removes the empty mount points glove created** (R18.V1). The
+  binds over a missing path in `/work` (a `protect_ide_files` placeholder's
+  `.envrc`, `.mcp.json`, `.vscode/`, `.idea/`; a harness `protect:` file and
+  the directories pinned above it) make the runtime create an empty file or
+  directory in your tree, which stayed there (read-only on the next run).
+  `glove up` records the ones it will create in `effective.yml` (kept across a
+  run that never came down; `glove plan` records only the pinned dirs it made)
+  and `glove down`/`rm` removes each one still empty; one with content, a
+  symlink, or one reached through a symlinked parent is left alone.
+- **Relay checks run at once** (1s). An extension's consecutive `exec-ok`
+  verify checks run in a bounded pool (4), each within its own timeout, so K hung checks at
+  `glove up` cost one timeout, not K; results still report in order and a
+  failure still stops the launch. `glove skills status` does the same.
+
 - **`glove playwright solve`** (`playwright: {challenge_capture: {to:
   session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
   - It takes control of the noVNC view as `view --control` does, and records
@@ -177,6 +191,10 @@ All notable changes to glove are documented here.
   git and pytest as a build directory.
 
 ### Changed
+
+- **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
+  `.glove/playwright-login` (from before round 15) is neither moved under
+  `--keep-profile` nor deleted; remove it by hand if one is left.
 
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:

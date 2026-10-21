@@ -110,7 +110,7 @@ def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
         if cfg.runtime not in ("docker", "podman"):
             raise ConfigError(f"runtime {cfg.runtime!r} is not implemented yet; use docker or podman")
         plan, _, _ = materialize_plan(sd, sid, cfg, resume=resume, session=session, home=False,
-                                      overrides=frozenset(iknow))
+                                      overrides=frozenset(iknow), launch=True)
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:
         raise fail(str(e)) from e
     return sd, sid, cfg, plan

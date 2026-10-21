@@ -139,7 +139,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
 tools: { allow_commands: [cp, mv, rm] }   # nono's tool policy (nono, nono+srt only): allow_commands, deny_commands; unknown keys are refused
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
-protect_ide_files: false    # host-trusted files present (.git/hooks, .claude/, .vscode, …) are always ro; this also creates empty .vscode/.idea/.envrc/.mcp.json placeholders when missing
+protect_ide_files: false    # host-trusted files present (.git/hooks, .claude/, .vscode, …) are always ro; this also creates empty .vscode/.idea/.envrc/.mcp.json placeholders when missing (glove down removes them if still empty)
 # git_config: { safe.directory: "*" }      # added to git's config in the harness (see "git in /work")
 # allow_root: true          # the harness as uid 0; caps stay dropped and no-new-privileges holds, so no sudo
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)

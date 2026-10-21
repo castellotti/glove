@@ -96,7 +96,7 @@ COMMANDS = {
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
     "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
     "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
-                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset(), launch: 'bool' = False)",
     "now": "() -> 'str'",
     "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",

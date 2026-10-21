@@ -1,5 +1,6 @@
 """`glove skills refresh`: what is stored is shown, Enter keeps it, one secret
-can be named alone, and a captured one goes to `glove playwright login`."""
+can be named alone, and a captured one goes to `glove playwright login`; and
+`glove skills status`."""
 
 from __future__ import annotations
 
@@ -137,3 +138,33 @@ def test_without_a_terminal_typed_secrets_are_skipped(session, monkeypatch, caps
     for name in ("t-wiki", "t-xoxd"):  # named: an error, not a skip
         with pytest.raises(typer.Exit):
             _run(d, name)
+
+
+def test_status_runs_the_checks_at_once_and_reports_them_in_order(session, monkeypatch, capsys):
+    import threading
+    import time
+
+    d, _ = session
+    doc = yaml.safe_load((d / "glove-session.yml").read_text())
+    checks = [f"scripts/wiki.py c{i}" for i in range(6)]
+    doc["extensions"]["skills"]["plugins"]["demo"]["relay"]["check"] = checks
+    (d / "glove-session.yml").write_text(yaml.safe_dump(doc))
+    monkeypatch.setattr(ExtSession, "running", lambda self, service: True)
+    lock, running, peak = threading.Lock(), [0], [0]
+
+    def check(s, relay, argv):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.1)
+        with lock:
+            running[0] -= 1
+        return 3 if argv[-1] == "c2" else 0
+
+    monkeypatch.setattr(cli, "_check", check)
+    with pytest.raises(typer.Exit):  # c2 failed
+        cli.status(plugin=None, directory=d)
+    assert peak[0] == 4  # CHECK_POOL
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("demo:")]
+    assert [line.split()[2] for line in lines] == [f"c{i}" for i in range(6)]
+    assert "failed (exit 3)" in lines[2] and all("ok" in line for line in lines[:2] + lines[3:])

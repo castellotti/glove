@@ -1054,8 +1054,10 @@ same ones:
 - **With `protect_ide_files: true`:** a *missing* `.vscode/`, `.idea/`,
   `.envrc` or `.mcp.json` gets an empty read-only placeholder too, so the agent
   can't create one. That creates an empty file or directory in your repo, which
-  is why this setting is opt-in. Other missing paths are left alone, so `git
-  init` in a fresh `/work` still works.
+  is why this setting is opt-in; `glove down` removes each one glove created
+  that is still empty (never a symlink, never one with content), as it does a
+  missing `protect:` path's mount point or pinned directory. Other missing
+  paths are left alone, so `git init` in a fresh `/work` still works.
 - Bind sources are resolved with realpath and must stay inside the mount, so a
   symlink can't expose another host path.
 

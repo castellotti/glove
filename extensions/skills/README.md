@@ -151,7 +151,9 @@ which holds the secrets and the only route to the service:
   the session file).
 - **Checks** run at `glove up` after the sidecar is up, as `exec-ok` verify
   checks: a failure is a warning (the session starts) unless `required: true`.
-  Each is stopped after 60 seconds, so a hung service can't hold up the launch.
+  Each is stopped after 60 seconds, and they run at once (up to 4, at `glove
+  up` and in `glove skills status`), so hung services hold up the launch for
+  one timeout, not one each.
 
 ### When a credential expires
 

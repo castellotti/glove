@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -401,6 +402,52 @@ def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points:
             rel = posixpath.relpath(target, CONTAINER_HOME)
             check_path(home_dir, rel, "dir")
             os.makedirs(os.path.join(home_dir, rel), exist_ok=True)
+
+
+def missing_bind_targets(mounts: list[Mount], protect: tuple[Protect, ...]) -> list[str]:
+    """The host paths in a rw mount (the user's tree) that the binds of
+    `protect` will create, i.e. that do not exist yet: a pinned dir, an
+    "own" file, a placeholder's mount point. `glove down` removes each one
+    still empty (`remove_empty`). One nested in a placeholder dir has its
+    mount point in glove's state, not here."""
+    holders = {p.container_path for p in protect if p.host_path is None and p.kind == "dir"}
+    out = []
+    for p in protect:
+        m = max((m for m in mounts if _inside(m.container_path, p.container_path)),
+                key=lambda m: len(m.container_path), default=None)
+        if m is None or m.mode != "rw" or posixpath.dirname(p.container_path) in holders:
+            continue
+        host = os.path.join(m.host_path, posixpath.relpath(p.container_path, m.container_path))
+        if not os.path.lexists(host):
+            out.append(host)
+    return out
+
+
+def remove_empty(paths: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Remove each path that is still an empty regular file or an empty
+    directory (never a symlink, never one with content, never through a
+    symlinked parent), deepest first so a pinned dir goes after the
+    placeholder in it: (removed, failed with why)."""
+    removed, failed = [], []
+    for path in sorted(set(paths), key=lambda p: p.count("/"), reverse=True):
+        if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+            failed.append(f"{path}: a symlink on the way")
+            continue
+        try:
+            st = os.lstat(path)
+            if stat.S_ISREG(st.st_mode) and st.st_size == 0:
+                os.unlink(path)
+            elif stat.S_ISDIR(st.st_mode) and not os.listdir(path):
+                os.rmdir(path)
+            else:
+                continue
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            failed.append(f"{path}: {e.strerror or e}")
+            continue
+        removed.append(path)
+    return removed, failed
 
 
 def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:

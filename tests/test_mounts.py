@@ -407,3 +407,23 @@ def test_protected_home_path_of_the_wrong_kind_is_refused(tmp_path, plant):
         (tmp_path / "home" / ".agents").symlink_to(tmp_path)
     with pytest.raises(MountError, match="glove protects it"):
         protected_home(_home(tmp_path), CONFIG_HOME, HOME_PROTECTED)
+
+
+def test_remove_empty_removes_only_empty_files_and_dirs_never_a_symlink_or_content(tmp_path):
+    from glove.mounts import remove_empty
+
+    (tmp_path / "pin" / "hole").mkdir(parents=True)
+    (tmp_path / "pin" / "f").touch()  # pin/ is empty once its children go: deepest first
+    (tmp_path / "kept").write_text("mine")
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "x").write_text("x")
+    (tmp_path / "target").touch()
+    (tmp_path / "link").symlink_to(tmp_path / "target")
+    (tmp_path / "elsewhere" / "empty").mkdir(parents=True)
+    (tmp_path / "swapped").symlink_to(tmp_path / "elsewhere")  # a pinned dir swapped for a link
+    paths = [str(tmp_path / n) for n in ("pin", "pin/hole", "pin/f", "kept", "full", "link", "gone", "swapped/empty")]
+    removed, failed = remove_empty(paths)
+    assert sorted(os.path.relpath(p, tmp_path) for p in removed) == ["pin", "pin/f", "pin/hole"]
+    assert failed == [f"{tmp_path}/swapped/empty: a symlink on the way"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["elsewhere", "full", "kept", "link", "swapped", "target"]
+    assert (tmp_path / "elsewhere" / "empty").is_dir()
