@@ -122,3 +122,40 @@ def test_a_failed_render_leaves_no_pinned_dir_behind(home, tmp_path, monkeypatch
     monkeypatch.setattr(DockerRuntime, "render", broken)
     assert runner.invoke(app, ["plan", str(d)]).exit_code != 0
     assert not (d / "work" / ".pi").exists()
+
+
+def test_down_loads_only_the_extensions_whose_teardown_the_launch_recorded(home, tmp_path, monkeypatch):
+    import yaml
+
+    d = make_session(tmp_path / "s", "  direct: {}\n  playwright: {}\n")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    eff = d / ".glove" / "effective.yml"
+    assert yaml.safe_load(eff.read_text())["resolved"]["teardown"] == ["playwright"]
+    seen = []
+    monkeypatch.setattr("glove.sessionops.run_teardown",
+                        lambda sd, sid, rt, given, only: seen.append((sorted(given), only)) or [])
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: None)
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    doc = yaml.safe_load(eff.read_text())
+    del doc["resolved"]["teardown"]  # an older glove's record: every extension's hooks, as before
+    eff.write_text(yaml.safe_dump(doc))
+    assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    given = ["direct", "llm", "playwright"]
+    assert seen == [(given, ["playwright"]), (given, None)]
+
+
+def test_a_malformed_teardown_record_loads_every_extensions_hooks(home, tmp_path, monkeypatch):
+    import yaml
+
+    d = make_session(tmp_path / "s")
+    assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
+    eff = d / ".glove" / "effective.yml"
+    seen = []
+    monkeypatch.setattr("glove.sessionops.run_teardown", lambda sd, sid, rt, given, only: seen.append(only) or [])
+    monkeypatch.setattr("glove.session.teardown", lambda sid, **k: seen.append("down"))
+    for bad in (5, "playwright"):
+        doc = yaml.safe_load(eff.read_text())
+        doc["resolved"]["teardown"] = bad
+        eff.write_text(yaml.safe_dump(doc))
+        assert runner.invoke(app, ["down", str(d)]).exit_code == 0
+    assert seen == [None, "down", None, "down"]

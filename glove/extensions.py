@@ -43,7 +43,7 @@ from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from .cafile import CORPORATE_CA, TRUST_DIR, resolve_ca_file
-from .config import git_config_pairs, is_secret_ref
+from .config import git_config_pairs, is_secret_ref, load_yaml
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
 from .hooks import HookContext, hooks_of, validate_result
@@ -51,6 +51,7 @@ from .image import ENV_VAR as _ENV_VAR
 from .manifest import KEYS, ExtensionError, check_manifest, check_slot_exports, merge_names
 from .mounts import WORK_TARGET, check_path, host_path
 from .naming import project_name, scoped
+from .registry import glove_home
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
 from .verify import KINDS as VERIFY_KINDS
@@ -133,7 +134,7 @@ class Manifest:
 def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> Manifest:
     f = directory / MANIFEST
     try:
-        raw = yaml.safe_load(f.read_text()) or {}
+        raw = load_yaml(f.read_text()) or {}
     except (OSError, yaml.YAMLError) as e:
         raise ExtensionError(f"{f}: cannot read manifest: {e}") from e
     if not isinstance(raw, dict):
@@ -220,11 +221,18 @@ def _safe(d: Path, what: str, *, walk: bool) -> bool:
 
 
 def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
-    """Every loadable manifest: in-tree first, then `extension_paths`."""
+    """Every loadable manifest: in-tree first, then `extension_paths`. Read once
+    per process (and glove home): startup lists the CLIs, then a command plans;
+    the manifests are shared, so never changed."""
+    return dict(_discover(in_tree or IN_TREE_DIR, glove_home()))
+
+
+@functools.cache
+def _discover(in_tree: Path, home: Path) -> dict[str, Manifest]:  # `home`: load_user_config's
     user = load_user_config()
     trusted = set(user.trusted_extensions)
     found: dict[str, Manifest] = {}
-    for d in _candidate_dirs(in_tree or IN_TREE_DIR):
+    for d in _candidate_dirs(in_tree):
         m = _load_manifest(d, out_of_tree=False, trusted=trusted)
         found[m.name] = m
     for root in user.extension_paths:
@@ -561,6 +569,7 @@ class Active:
     # what its `contribute` hook returned (plan time), for the keys core reads
     # beside the manifest's (`spec`)
     contributed: dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict, repr=False, compare=False)  # image_tag's, by image name
 
     @property
     def name(self) -> str:
@@ -634,6 +643,10 @@ class Composition:
 
     def by_name(self, name: str) -> Active | None:
         return next((a for a in self.active if a.name == name), None)
+
+    def hooked(self, hook: str) -> list[str]:
+        """The active extensions that define `hook`."""
+        return [a.name for a in self.active if hook in a.hooks]
 
     @property
     def channel_paths(self) -> list[str]:
@@ -774,12 +787,15 @@ def required_libs(comp: Composition, a: Active) -> list[Active]:
 
 
 def image_tag(a: Active, name: str) -> str:
-    """Local tag for an extension-built image: content-addressed by its context."""
-    spec = (a.manifest.raw.get("images") or {}).get(name) or {}
-    from .image import content_hash
+    """Local tag for an extension-built image: content-addressed by its context,
+    hashed once per selection (every hook context names it)."""
+    if name not in a.tags:
+        from .image import content_hash
 
-    ctx_dir = a.manifest.path / str(spec.get("build", name))
-    return f"glove/ext-{a.name}-{name}:{content_hash('', [(name, ctx_dir)])}"
+        spec = (a.manifest.raw.get("images") or {}).get(name) or {}
+        ctx_dir = a.manifest.path / str(spec.get("build", name))
+        a.tags[name] = f"glove/ext-{a.name}-{name}:{content_hash('', [(name, ctx_dir)])}"
+    return a.tags[name]
 
 
 def select(
@@ -1383,7 +1399,7 @@ def compose(
         if frag:
             path = a.manifest.path / frag
             text = render_value(path.read_text(), ctx, f"extension {a.name!r} {frag}")
-            doc = yaml.safe_load(text) or {}
+            doc = load_yaml(text) or {}
             if not isinstance(doc, dict):
                 raise ExtensionError(f"extension {a.name!r}: {frag} must render to a mapping")
             # Core networks a fragment joins exist for the session (who may

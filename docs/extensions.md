@@ -154,7 +154,9 @@ is optional.
   last `glove up` used, the session id, `state_dir` and the host paths its
   manifest declares), with no plan behind it, and possibly when `launch_env`
   never ran or only partly ran: stop only what is running. A failure is a
-  warning; the containers still stop.
+  warning; the containers still stop. `glove plan`/`up` record which
+  extensions define it (`effective.yml` `resolved.teardown`): `down` loads
+  only their hooks.
 
 - A forwarder's `service` may set only `image`, `command`, `entrypoint`,
   `environment`, `volumes`, `tmpfs`, `depends_on`, `healthcheck`, `init`,

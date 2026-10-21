@@ -72,7 +72,8 @@ def command(
                     # missing key fails before any container starts.
                     secrets = secret_env(plan)
                 except BaseException:  # Ctrl-C and a hook's bug too
-                    for w in run_teardown(sd, sid, cfg.provider, cfg.extensions):  # what a launch_env started
+                    for w in run_teardown(sd, sid, cfg.provider, cfg.extensions,  # what a launch_env started
+                                          only=plan.composition.hooked("teardown")):
                         err.print(f"[yellow]warn:[/yellow] {w}")
                     raise
             except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError,

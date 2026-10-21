@@ -192,6 +192,24 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Faster planning** (R19.F; `glove plan` with nine extensions: 416 → 285 ms
+  per run, fresh processes, median of 9):
+  - glove parses YAML with libyaml when PyYAML has it (manifests, fragments,
+    the session file and the rendered compose file, on every plan);
+  - an extension's image tag hashes its build context once per plan, not in
+    every hook context (88 hashes → 12);
+  - the extensions are discovered once per run (startup and the command
+    each read every manifest before).
+- **`glove down` loads only the extensions that stop something** (R16.S3):
+  `glove plan`/`up` record in `effective.yml` (`resolved.teardown`) which
+  extensions define a `teardown` hook, and `glove down`/`rm` import only
+  those (none at all for a session without one; a record from an older glove
+  loads every hooked extension, as before); a failed `glove up` names them
+  from its plan. Playwright's teardown stops its host services by name,
+  without probing for Chrome or the ports, and no longer looks for a pid file
+  in core's pre-round-16 `.glove/host-logs/` (R16.S4): a host-mode browser
+  started before round 16 (no tmux) is stopped by hand.
+
 - **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
   `.glove/playwright-login` (from before round 15) is neither moved under
   `--keep-profile` nor deleted; remove it by hand if one is left.

@@ -27,6 +27,18 @@ class ConfigError(ValueError):
     """Raised for malformed or contradictory configuration."""
 
 
+# libyaml's parser when PyYAML has it: a plan parses every manifest and fragment
+_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def load_yaml(text: str) -> Any:
+    """`yaml.safe_load`, several times faster with libyaml; an error is a `yaml.YAMLError`."""
+    try:
+        return yaml.load(text, Loader=_LOADER)
+    except UnicodeError as e:  # libyaml's, for text it cannot encode (a lone surrogate)
+        raise yaml.YAMLError(str(e)) from e
+
+
 @dataclass
 class AddDir:
     path: str
@@ -265,7 +277,7 @@ def keychain_set(service: str, secret: str | None = None) -> int:
 
 def _load_mapping(path: Path) -> dict[str, Any]:
     text = path.read_text()
-    data = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+    data = json.loads(text) if path.suffix == ".json" else load_yaml(text)
     if data is None:
         return {}
     if not isinstance(data, dict):

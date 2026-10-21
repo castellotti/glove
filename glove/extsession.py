@@ -6,16 +6,15 @@ from __future__ import annotations
 
 import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import yaml
-
 from . import sessiondir as sdm
+from .config import ConfigError, load_yaml
 from .extensions import EXPORT_ROOTS, Manifest, declares_host_paths, discover, load_module, validate_settings
 from .hooks import HookContext, hooks_of, validate_result
 from .manifest import ExtensionError
@@ -52,7 +51,7 @@ class ExtSession:
         """The service as the last `glove up` rendered it ({} if it didn't)."""
         if not self.compose_file.is_file():
             return {}
-        doc = yaml.safe_load(self.compose_file.read_text()) or {}
+        doc = load_yaml(self.compose_file.read_text()) or {}
         return dict((doc.get("services") or {}).get(self.container(service)) or {})
 
     def export_dir(self, root: str) -> Path:
@@ -100,15 +99,20 @@ def _session(sd: sdm.SessionDir, sid: str | None, runtime: str, m: Manifest, raw
                       compose_file=sd.compose, settings=validate_settings(m, raw), manifest=m)
 
 
-def run_teardown(sd: sdm.SessionDir, sid: str, runtime: str, given: Mapping[str, Any]) -> list[str]:
+def run_teardown(sd: sdm.SessionDir, sid: str, runtime: str, given: Mapping[str, Any], *,
+                 only: Collection[str] | None = None) -> list[str]:
     """Run the `teardown` hook of each extension the last launch enabled (`given`:
-    its settings then), so what it started on the host stops; a warning per failure."""
+    its settings then), so what it started on the host stops; a warning per failure.
+    `only`: the ones that define it (as the launch recorded): no other's code loads."""
+    todo = {n: raw for n, raw in given.items() if only is None or n in only}
+    if not todo:
+        return []
     try:
         found = discover()
-    except ExtensionError as e:  # `glove down` goes on: its containers still stop
+    except ConfigError as e:  # a manifest or config.yml: `glove down` goes on, its containers still stop
         return [f"teardown hooks skipped: {e}"]
     warnings = []
-    for name, raw in given.items():
+    for name, raw in todo.items():
         if (m := found.get(name)) is None:  # gone, or skipped as writable by others: what it started stays
             warnings.append(f"extension {name!r}: not found, so its teardown hook did not run")
             continue

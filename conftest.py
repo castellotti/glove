@@ -57,6 +57,14 @@ def _wide_console(monkeypatch):
         monkeypatch.setattr(c, "width", 400)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_discovery():
+    """`discover()` reads the extension dirs once per process: tests write theirs."""
+    from glove.extensions import _discover
+
+    _discover.cache_clear()
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     """A fresh GLOVE_HOME the test can inspect."""

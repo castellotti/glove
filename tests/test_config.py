@@ -255,3 +255,14 @@ def test_host_services_are_no_longer_a_session_key(tmp_path):
     eff.write_text("config: {harness: pi, toolchains: [], host_services: [{name: t, command: sleep 1}]}\n"
                    "resolved: {}\n")
     assert sdm.read_effective(eff)[0].harness == "pi"
+
+
+def test_load_yaml_errors_are_yaml_errors():
+    import yaml
+
+    from glove.config import load_yaml
+
+    assert load_yaml("a: [1, 2]\n") == {"a": [1, 2]}
+    for bad in ("a: [1\n", "a: \ud800\n"):  # a lone surrogate: libyaml's is a UnicodeError
+        with pytest.raises(yaml.YAMLError):
+            load_yaml(bad)

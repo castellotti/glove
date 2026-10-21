@@ -116,7 +116,8 @@ COMMANDS = {
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
-    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
+    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]', *, "
+                    "only: 'Collection[str] | None' = None) -> 'list[str]'",
     "session_bind_layer": "(cfg) -> 'str'",
     "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",

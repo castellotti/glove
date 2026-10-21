@@ -17,7 +17,7 @@ from . import registry as reg
 from . import session as _session
 from . import sessiondir as sdm
 from .cafile import read_ca
-from .config import ConfigError
+from .config import ConfigError, load_yaml
 from .doctor import worst_status
 from .extensions import materialize
 from .extsession import run_teardown
@@ -75,7 +75,7 @@ def remove_created(sd: SessionDir) -> None:
     content is the user's now. Either way the record is cleared (read raw:
     a config this glove no longer accepts still has one)."""
     try:
-        doc = yaml.safe_load(sd.effective.read_text())
+        doc = load_yaml(sd.effective.read_text())
     except (OSError, yaml.YAMLError):
         return
     resolved = doc.get("resolved") if isinstance(doc, dict) else None
@@ -310,6 +310,8 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
         resolved["extensions"] = ext_resolved
     # the dirs sidecars write (`glove down` quarantines them without re-planning)
     resolved["outputs"] = [o.name for o in plan.composition.outputs if not o.input]
+    # the extensions with a `teardown` hook: `glove down` loads only their code
+    resolved["teardown"] = plan.composition.hooked("teardown")
     if plan.bind_layer != "native":  # the harness's binds come from Docker Desktop's virtiofs layer
         resolved["bind_layer"] = plan.bind_layer
     sdm.write_effective(sd.effective, cfg, resolved)
@@ -362,9 +364,11 @@ def conversations(profile, home_dir: Path, sid: str):
 
 
 def stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
-    cfg, _ = sdm.read_effective(sd.effective)
+    cfg, resolved = sdm.read_effective(sd.effective)
     provider = provider or sdm.session_provider(sd, cfg)
-    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
+    hooked = resolved.get("teardown")  # none (an older glove's record): every extension's hooks
+    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {},
+                          only=hooked if isinstance(hooked, list) else None):
         err.print(f"[yellow]warn:[/yellow] {w}")
     _session.teardown(sid, provider=provider, wipe=wipe)
     remove_created(sd)

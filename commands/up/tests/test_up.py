@@ -159,11 +159,12 @@ def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_
     monkeypatch.setattr(up, "clear_stale_harness", lambda *a: None)
     monkeypatch.setattr(up, "extension_checks", lambda *a, **k: [])
     monkeypatch.setattr(up, "secret_env", missing)
-    monkeypatch.setattr(up, "run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
+    monkeypatch.setattr(up, "run_teardown",
+                        lambda sd, sid, rt, given, only: events.append((set(given), only)) or ["w"])
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 1 and said in result.output and "warn: w" in result.output
     assert "Traceback" not in result.output
-    assert events == [{"llm"}]  # torn down, never launched
+    assert events == [({"llm"}, [])]  # torn down (no extension defines it: none loads), never launched
 
 
 def _seed(dir_, name):

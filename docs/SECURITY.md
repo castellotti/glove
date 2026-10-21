@@ -181,7 +181,7 @@ Every capability (the model, search, the browser, …) is an extension in
   and `glove ext` list CLIs from the manifests (YAML) alone; `glove <name> …`
   imports that one `cli.py`, and refuses an untrusted out-of-tree one with how
   to trust it. Hooks (`hooks.py`) load only for the extensions a session
-  selects (plan, check, up, and `down`'s teardown for the last launch's set),
+  selects (plan, check, up, and `down`'s teardown for those of the last launch's set that define it),
   and `call_hook` refuses any other. An extension's CLI acting on a session
   refuses one that doesn't select it (`ext_session`).
 - **`extension_paths` hygiene.** As ssh treats `~/.ssh`, an entry is skipped

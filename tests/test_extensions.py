@@ -13,7 +13,7 @@ import yaml
 from helpers import PEM, STUB_LLM, make_cfg, render
 
 from glove.config import ConfigError
-from glove.extensions import IN_TREE_DIR, ExtensionError, compose, discover, select, when_matches
+from glove.extensions import IN_TREE_DIR, ExtensionError, _discover, compose, discover, select, when_matches
 from glove.harness import base_image
 
 DIGEST = "alpine@sha256:" + "0" * 64
@@ -26,6 +26,7 @@ def _ext(root: Path, name: str, manifest: str, files: dict[str, str] | None = No
     for rel, text in (files or {}).items():
         (d / rel).parent.mkdir(parents=True, exist_ok=True)
         (d / rel).write_text(textwrap.dedent(text))
+    _discover.cache_clear()  # read once per process: a test adds extensions as it goes
     return d
 
 
@@ -246,6 +247,7 @@ def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     with pytest.raises(ExtensionError, match="out-of-tree and not in `trusted_extensions`"):
         _render_with(tmp_path, {"vpnish": {}})
     (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\ntrusted_extensions: [vpnish]\n")
+    _discover.cache_clear()
     assert discover()["vpnish"].taint == "out-of-tree (trusted)"
     _, doc = _render_with(tmp_path / "t2", {"vpnish": {}})
     assert doc["services"]["glove-s-worker"]["cap_add"] == ["NET_ADMIN"]
@@ -271,6 +273,7 @@ def test_a_writable_extension_paths_dir_is_skipped_with_a_warning(tmp_path, ghom
         target.chmod(mode)
         try:
             ext._warn.cache_clear()
+            ext._discover.cache_clear()
             assert ("sharedish" in discover()) is (why is None)
             discover()  # warned once per process
             warned = capsys.readouterr().err
@@ -1019,3 +1022,33 @@ def test_an_output_whose_when_fails_is_not_rendered(tmp_path, ghome):
 def test_output_and_input_rules(tmp_path, ghome, kw, why):
     with pytest.raises(ExtensionError, match=why):
         _outish(tmp_path, ghome, **kw)
+
+
+def test_discover_reads_the_extensions_once_per_process_and_glove_home(tmp_path, monkeypatch):
+    from glove import extensions as ext
+
+    reads = []
+    real = ext._load_manifest
+    monkeypatch.setattr(ext, "_load_manifest", lambda *a, **k: reads.append(1) or real(*a, **k))
+    first = discover()
+    n = len(reads)
+    assert n and discover() == first and len(reads) == n
+    discover()["gate"] = None  # a copy: the next caller's is whole
+    assert discover() == first
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "other"))  # another config.yml: read again
+    discover()
+    assert len(reads) == 2 * n
+
+
+def test_image_tag_hashes_an_image_context_once_per_selection(monkeypatch):
+    from glove import image
+    from glove.extensions import Active, image_tag
+
+    m = discover()["gate"]
+    calls = []
+    real = image.content_hash
+    monkeypatch.setattr(image, "content_hash", lambda *a: calls.append(a) or real(*a))
+    a = Active(m, {})
+    tags = {image_tag(a, "netgate") for _ in range(3)}
+    assert len(tags) == 1 and len(calls) == 1
+    assert image_tag(Active(m, {}), "netgate") in tags and len(calls) == 2  # a new selection hashes again

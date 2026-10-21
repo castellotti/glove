@@ -36,7 +36,7 @@ from typing import Any
 
 import yaml
 
-from .config import Config, ConfigError, _coerce
+from .config import Config, ConfigError, _coerce, load_yaml
 from .enforcers.base import default_enforcer
 from .exports import ensure_dir
 from .mounts import host_path, overlaps
@@ -179,7 +179,7 @@ def ensure_state(sd: SessionDir) -> str:
 
 def load_file(sd: SessionDir) -> dict[str, Any]:
     try:
-        raw = yaml.safe_load(sd.file.read_text())
+        raw = load_yaml(sd.file.read_text())
     except (OSError, yaml.YAMLError) as e:
         raise SessionError(f"{sd.file}: {e}") from e
     if not isinstance(raw, dict):
@@ -291,8 +291,9 @@ def write_effective(path: Path, cfg: Config, resolved: dict[str, Any] | None = N
 
 def read_effective(path: Path) -> tuple[Config | None, dict[str, Any]]:
     try:
-        doc = yaml.safe_load(path.read_text()) or {}
-        return _coerce(doc.get("config") or {}), doc.get("resolved") or {}
+        doc = load_yaml(path.read_text()) or {}
+        resolved = doc.get("resolved")
+        return _coerce(doc.get("config") or {}), resolved if isinstance(resolved, dict) else {}
     except (OSError, yaml.YAMLError, ConfigError, TypeError, AttributeError):
         return None, {}
 
@@ -371,7 +372,7 @@ def materialize(spec: str, dest: Path) -> tuple[SessionDir, str]:
         text = f.read_text()
         local = _template_local(tdir, spec)
         try:
-            raw = yaml.safe_load(text)
+            raw = load_yaml(text)
         except yaml.YAMLError as e:
             raise SessionError(f"template {spec}: {e}") from e
         if not isinstance(raw, dict) or raw.get("glove") != SCHEMA_VERSION:
@@ -402,7 +403,7 @@ def template_drift(sd: SessionDir) -> tuple[str, str] | None:
     """(source, unified diff session-file ← current template) when the template
     changed since ``glove new``; None when unchanged or unknown."""
     try:
-        rec = yaml.safe_load(sd.template_record.read_text()) or {}
+        rec = load_yaml(sd.template_record.read_text()) or {}
         text, _ = read_template(str(rec["source"]))
     except (OSError, yaml.YAMLError, KeyError, TypeError, SessionError):
         return None

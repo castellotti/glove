@@ -15,11 +15,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
 from rich.console import Console
 
 from .cafile import TRUST_DIR, trust_script
-from .config import Config, ConfigError
+from .config import Config, ConfigError, load_yaml
 from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, base_contexts, effective_image
 from .naming import project_name, scoped
@@ -221,7 +220,7 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
     from .verify import VerifyError, run_verify, sidecar_exec
 
     base = _compose_base(provider, plan.project, compose_file)
-    doc = yaml.safe_load(compose_file.read_text()) or {}
+    doc = load_yaml(compose_file.read_text()) or {}
     services = doc.get("services") or {}
     sidecars = [n for n in services if n != plan.harness_service]
     if not sidecars:
