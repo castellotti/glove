@@ -349,6 +349,12 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Live drivers** (round 18 verification). `test_llm_inject.sh
+  claude-code-oauth` checked the flow join against the `llm-upstream` flows
+  only (a loop reused `recs`), so it always found 0 overlapping; it now passes.
+  `test_ring0_protect.sh` also renders a session with `protect_ide_files` off:
+  the host-trusted files already there stay read-only, and a missing `.envrc` or
+  `.vscode` can be created.
 - **Landlock on Docker Desktop 4.96+'s shared folders.** Docker Desktop now
   serves `/Users` (and its other shares) through a `fakeowner` layer over
   virtiofs, and Landlock never matches a rule for a `fakeowner` file: under the
