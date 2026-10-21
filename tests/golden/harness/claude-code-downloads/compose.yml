@@ -9,7 +9,7 @@ services:
     container_name: glove-s-harness
     image: glove/claude-code:0.2.0-bc85a2338a-srt-46f57ff955
     working_dir: /work
-    command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/claude"]
+    command: ["/bin/sh", "-c", "for f in /run/glove/llm-ca/ca.pem; do i=0; until grep -qF \u0027BEGIN CERTIFICATE\u0027 \"$$f\" 2\u003e/dev/null || [ $$i -ge 30 ]; do i=$$((i+1)); sleep 1; done; done; for f in /run/glove/llm-ca/ca.pem; do grep -qF \u0027BEGIN CERTIFICATE\u0027 \"$$f\" 2\u003e/dev/null || { echo \"glove: the trusted CA $$f is missing\" \u003e\u00262; exit 90; }; done; grep -qF \u0027BEGIN CERTIFICATE\u0027 /etc/ssl/certs/ca-certificates.crt || { echo \"glove: no CA roots at /etc/ssl/certs/ca-certificates.crt\" \u003e\u00262; exit 90; }; for f in /run/glove/llm-ca/ca.pem; do cat \"$$f\"; echo; done \u003e /etc/glove/ca/extra.pem \u0026\u0026 cat /etc/ssl/certs/ca-certificates.crt /etc/glove/ca/extra.pem \u003e /etc/glove/ca/bundle.pem || exit 90; exec \"$$@\"", "glove-trust", "/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/claude"]
     stdin_open: true
     tty: true
     # --- hardening set (PLAN §3.2); `allow_root` only drops the non-root user --
@@ -30,7 +30,11 @@ services:
       DISABLE_AUTOUPDATER: "1"
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
       GIT_CONFIG_PARAMETERS: "\u0027safe.directory\u0027=\u0027/work\u0027"
-      NODE_EXTRA_CA_CERTS: "/run/glove/llm-ca/ca.pem"
+      SSL_CERT_FILE: "/etc/glove/ca/bundle.pem"
+      REQUESTS_CA_BUNDLE: "/etc/glove/ca/bundle.pem"
+      CURL_CA_BUNDLE: "/etc/glove/ca/bundle.pem"
+      GIT_SSL_CAINFO: "/etc/glove/ca/bundle.pem"
+      NODE_EXTRA_CA_CERTS: "/etc/glove/ca/extra.pem"
       CLAUDE_CODE_OAUTH_TOKEN: "glove-injected"
     volumes:
       # the harness home, read-only: its config home is re-bound read-write below
@@ -160,6 +164,16 @@ services:
         target: /home/agent/.config/nono
         tmpfs:
           mode: 01777
+      # writable tmpfs (mode 01777, YAML octal → 1777) — listed after the binds so
+      # a target nested under the home overlays the bind. mode is forced
+      # explicitly: over a mountpoint that already exists on the bind, a bare
+      # tmpfs mounts 755 root:root and the non-root harness can't write it.
+      # Enforcer state (e.g. nono's control socket, which the macOS/Windows bind
+      # mount can't host) lives here; the agent's Landlock policy still denies it.
+      - type: tmpfs
+        target: /etc/glove/ca
+        tmpfs:
+          mode: 01777
     networks:
       - glove-s-net
 
@@ -270,7 +284,10 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:e26a01b977
+    image: glove/ext-webfetch-mcp:0eee081790
+    command:
+    - python3
+    - /opt/glove/webfetch/webfetch_mcp.py
     environment:
       GLOVE_FETCH_ALLOW: ''
       MCP_ALLOWED_HOST: glove-s-webdownload-mcp:8000

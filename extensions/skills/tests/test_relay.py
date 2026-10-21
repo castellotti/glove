@@ -125,11 +125,12 @@ def test_no_work_privilege_without_file_flags_and_observe_labels_its_flows(tmp_p
 def test_the_sidecar_trusts_the_sessions_corporate_ca(tmp_path, plugin):
     ca = tmp_path / "ca.pem"
     ca.write_text(PEM)
-    _, doc = _render(tmp_path, corporate_ca=str(ca))
+    plan, doc = _render(tmp_path, corporate_ca=str(ca))
     svc = doc["services"]["glove-s-skill-demo"]
-    assert {"type": "bind", "source": str(ca), "target": "/etc/glove/corporate-ca.pem", "read_only": True} \
+    assert {"type": "bind", "source": plan.trust_host_dir, "target": "/etc/glove/trust", "read_only": True} \
         in svc["volumes"]
-    assert svc["environment"]["GLOVE_CORPORATE_CA"] == "/etc/glove/corporate-ca.pem"
+    assert svc["environment"]["SSL_CERT_FILE"] == "/etc/glove/ca/bundle.pem"  # relayd passes it on
+    assert svc["entrypoint"][3:] == ["glove-trust"] and svc["command"][0] == "relayd"
 
 
 def test_without_a_relay_nothing_of_it_is_added(tmp_path, plugin):

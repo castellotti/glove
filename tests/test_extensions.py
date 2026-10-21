@@ -385,24 +385,42 @@ def test_sidecars_get_the_hardening_set_and_namespaced_names(tmp_path, tree):
 
 
 @pytest.mark.parametrize("with_ca", [True, False])
-def test_trust_binds_the_ca_read_only_into_the_named_sidecars(tmp_path, tree, with_ca):
+def test_trust_gives_the_named_sidecars_the_sessions_bundle(tmp_path, tree, with_ca):
+    from glove.cafile import CA_DIR, TRUST_DIR, TRUST_ENV
+
     ca = tmp_path / "ca.pem"
     ca.write_text(PEM)
     _egress(tree)
-    _svc_ext(tree, service=f"services:\n  worker: {{image: {DIGEST}, networks: [egress], environment: {{A: b}}}}\n"
+    _svc_ext(tree, service=f"services:\n  worker: {{image: {DIGEST}, networks: [egress], environment: {{A: b}}, "
+                           "command: [run, it]}\n"
                            f"  other: {{image: {DIGEST}, networks: [egress]}}\n",
              extra="trust: [worker]")
-    _, doc = _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}},
-                     **({"corporate_ca": str(ca)} if with_ca else {}))
+    plan, doc = _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}},
+                        **({"corporate_ca": str(ca)} if with_ca else {}))
     worker, other = doc["services"]["glove-s-worker"], doc["services"]["glove-s-other"]
-    assert "volumes" not in other and "GLOVE_CORPORATE_CA" not in (other.get("environment") or {})
+    assert "volumes" not in other and not set(TRUST_ENV) & set(other.get("environment") or {})
     if not with_ca:
-        assert "volumes" not in worker and worker["environment"] == {"A": "b"}
+        assert "volumes" not in worker and worker["environment"] == {"A": "b"} and worker["command"] == ["run", "it"]
         return
-    # never SELinux-relabelled: it is the operator's own file
-    assert worker["volumes"] == [{"type": "bind", "source": str(ca.resolve()),
-                                  "target": "/etc/glove/corporate-ca.pem", "read_only": True}]
-    assert worker["environment"] == {"A": "b", "GLOVE_CORPORATE_CA": "/etc/glove/corporate-ca.pem"}
+    # glove's own copy, read-only (relabelled on SELinux: see the podman test), and the bundle's tmpfs
+    assert worker["volumes"] == [
+        {"type": "bind", "source": plan.trust_host_dir, "target": TRUST_DIR, "read_only": True},
+        {"type": "tmpfs", "target": CA_DIR, "tmpfs": {"mode": 0o1777}}]
+    assert worker["environment"] == {"A": "b", **TRUST_ENV}
+    # core's entrypoint (replacing the image's) builds the bundle, then runs the whole command
+    assert worker["entrypoint"][:2] == ["/bin/sh", "-c"] and worker["entrypoint"][3:] == ["glove-trust"]
+    assert f"{TRUST_DIR}/corporate_ca.pem" in worker["entrypoint"][2] and worker["command"] == ["run", "it"]
+
+
+@pytest.mark.parametrize("service", ["image: {d}, networks: [egress]",
+                                     "image: {d}, networks: [egress], command: [a], entrypoint: [b]"])
+def test_a_trusting_sidecar_needs_its_own_command(tmp_path, tree, service):
+    ca = tmp_path / "ca.pem"
+    ca.write_text(PEM)
+    _egress(tree)
+    _svc_ext(tree, service=f"services:\n  worker: {{{service.format(d=DIGEST)}}}\n", extra="trust: [worker]")
+    with pytest.raises(ExtensionError, match=r"needs a `command` list \(the whole argv\), no `entrypoint`"):
+        _render(tmp_path, tree, {"llm": STUB_LLM, "egress-a": {}, "side": {}}, corporate_ca=str(ca))
 
 
 def test_a_fragment_never_binds_the_ca_itself(tmp_path, tree):

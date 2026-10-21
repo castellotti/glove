@@ -47,7 +47,7 @@ def _launched(tmp_path, ports='{"mcp": 40001, "cdp": 40002}'):
 
 
 def test_host_services_are_pinned_and_per_session(tmp_path):
-    plan = _plan(tmp_path, ca="missing.pem")  # ignored: the host's Chrome has the host's trust store
+    plan = _plan(tmp_path)
     hs = _services(plan)
     assert set(hs) == {"chrome", "mcp"}
     mcp_port, cdp_port = hs["mcp"].port, hs["chrome"].port

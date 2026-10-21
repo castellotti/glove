@@ -63,7 +63,8 @@ The consumer supplies the policy, a Python file that relayd loads by path:
   `settings`; `work`).
 - `prepare(req, env)`: returns the argv to run (with `setup`'s environment),
   or `(argv, env)` for a command with an environment of its own, or raises its
-  `Refused`. With `corporate_ca`, either environment gets the CA bundle.
+  `Refused`. When the sidecar trusts the session's CAs (`trust:`), either
+  environment gets core's CA bundle variables.
 
 `req.file(path)` opens a file argument inside `/work` and returns `/dev/fd/<n>`
 for the child. It checks the file it actually opened, through that file's

@@ -65,7 +65,7 @@ Legend:
 | `requires` | list: extension, slot, or `{extension\|slot, when}` | items | | | a required library with `auto: true` is added; anything else must be selected |
 | `auto` | bool | | | | a library, added when required |
 | `selectable` | bool | | | | `false`: a library only |
-| `settings` | map name → `{type, default, required, …}` | | | | `type`: `string`, `enum` (`values`), `bool`, `int`, `number`, `list`, `map`, `secret`, `path` (`within: session`); `pattern`, `also` (literals accepted besides the type, e.g. `auto`). A `secret` is a `keychain:`/`env:` reference, never a value |
+| `settings` | map name → `{type, default, required, …}` | | | | `type`: `string`, `enum` (`values`), `bool`, `int`, `number`, `list`, `map`, `secret`, `path` (`within: session`), `ca` (a CA PEM its `trust` sidecars trust, checked and copied by core); `pattern`, `also` (literals accepted besides the type, e.g. `auto`). A `secret` is a `keychain:`/`env:` reference, never a value |
 | `host_files` | bool | | | yes | the hooks read files in the session directory that no other key declares (see [the context](#the-context)) |
 | `validate` | list of `{when, error}` or `{when, require, message}` | items | | | cross-setting rules, checked when the session is planned |
 | `exports` | map | | `add` | | values other extensions and templates read; a slot's are typed ([slot exports](#slot-exports)) |
@@ -80,7 +80,7 @@ Legend:
 | `outputs` | map name → `{services, when}` | entries | | yes | `<session>/<name>/`: written by the sidecars, read-only at `/work/<name>` |
 | `inputs` | map name → `{services, when}` | entries | | yes | `<session>/<name>/`: written by the harness, read-only in the sidecars |
 | `mounts` | map name → `{setting, when}` | entries | | | a read-only harness bind of a directory named by a `path` setting with no default |
-| `trust` | list of services | | `cat` | | these sidecars trust the session's CAs |
+| `trust` | list of services | | `cat` | | these sidecars trust the session's CAs (`corporate_ca` and the extension's `ca` settings): core binds their copies read-only and builds one bundle in an entrypoint of its own (replacing the image's), which then runs the service's whole `command` (which it must set; no `entrypoint`) |
 | `verify` | list of checks `{name, kind, service, …}` | items | `cat` | | run at `glove up`; `kind`: `container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exit-confirmed`, `exec-ok` (argv only in its own sidecars) |
 | `harness` | map: `image`, `env`, `git_config`, `brief`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
 | `hooks` | path, relative (`hooks.py`) | | | | [hooks](#hooks) |
@@ -182,7 +182,7 @@ those of the fragment's template context.
 | `assets` | its own directory |
 | `images`, `libs` | image tags: its own, and its libraries' |
 | `mount`, `output`, `input` | as in the fragment, when declared |
-| `session_dir` | the session directory, **only if** the manifest declares a reason: a `path` setting, `mounts`, `outputs`/`inputs`, or `host_files: true` |
+| `session_dir` | the session directory, **only if** the manifest declares a reason: a `path` or `ca` setting, `mounts`, `outputs`/`inputs`, or `host_files: true` |
 | `work_dir` | `work/`, **only if** it declares `outputs`/`inputs`, a `work` privilege, or `host_files: true` (a `work` privilege its `contribute` hook returns counts for the hooks after it) |
 | `export_dirs` | the export roots it owns (in-tree only) |
 | `forwarders`, `grants` | the network plan, for the `forwarder` slot's provider (in-tree or trusted); each forwarder's `endpoint` is what its `forwarder` hook was told (none for a second hop) |

@@ -37,8 +37,9 @@ and refuses every host the policy does not name, whatever argv got through.
 in Python), for a check run inside the sidecar: it goes through the policy like
 any request.
 
-Trust: with `GLOVE_CORPORATE_CA` (glove's `corporate_ca`, bound read-only),
-children read one bundle, the image's roots and that CA (`ca_bundle_env`).
+Trust: when the sidecar trusts the session's CAs (its manifest's `trust:`),
+glove builds their bundle before relayd starts and sets TRUST_ENV; children
+get those variables too, under a command's own environment.
 
 Standard library only.
 """
@@ -179,7 +180,7 @@ class Relay:
         self.channel = channel
         self.policy = policy
         self.env = env
-        self.trust = trust or {}  # ca_bundle_env, under a command's own environment too
+        self.trust = trust or {}  # TRUST_ENV, under a command's own environment too
         self.work = work  # "": a relay without a work root (ssh)
         self.settings = settings
         self.timeout = timeout
@@ -404,19 +405,8 @@ def load_policy(path: str) -> ModuleType:
     return module
 
 
-SYSTEM_ROOTS = "/etc/ssl/certs/ca-certificates.crt"
-# glove's cafile.CA_BUNDLE_ENV: what Python, curl, git and gh (Go) read
-CA_BUNDLE_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO")
-
-
-def ca_bundle_env(extra: str, dest: str = "/tmp/relay-ca-bundle.pem", roots: str = SYSTEM_ROOTS) -> dict[str, str]:
-    """The image's roots, then `extra`, written to `dest` (the sidecar's own
-    tmpfs): those variables, naming it. Trust is only added."""
-    with open(dest, "wb") as out:
-        for path in (roots, extra):
-            with open(path, "rb") as f:
-                out.write(f.read().rstrip(b"\n") + b"\n")
-    return dict.fromkeys(CA_BUNDLE_ENV, dest)
+# glove's cafile.TRUST_ENV: the bundle glove built before relayd started
+TRUST_ENV = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS")
 
 
 def call(channel: str, argv: list[str], cwd: str = "/tmp", timeout: float | None = None) -> int:
@@ -497,7 +487,7 @@ def main(argv: list[str] | None = None) -> None:
     fence = Fence(args.upstream, hosts) if hosts and not per_command else None
     env = policy.setup({"proxy": fence.url if fence else None, "proxies": {c: f.url for c, f in fences.items()},
                         "settings": settings, "work": work})
-    trust = ca_bundle_env(os.environ["GLOVE_CORPORATE_CA"]) if os.environ.get("GLOVE_CORPORATE_CA") else {}
+    trust = {k: os.environ[k] for k in TRUST_ENV if k in os.environ}
     env = {**trust, **env}  # the policy's own setting wins
     Relay(args.channel, policy, env, work=work, settings=settings,
           timeout=args.timeout, max_active=args.max, trust=trust).serve()

@@ -29,6 +29,30 @@ All notable changes to glove are documented here.
   out-of-tree extension that provides it is refused before its hooks load
   (before, it could fill the slot and sit on every endpoint's traffic, only
   hidden the forwarder list and grants).
+- **One way to trust a CA** (round 18 C). `corporate_ca`, `playwright.ca` and
+  `llm`'s `auth: oauth` session CA used to reach the harness and sidecars by
+  four routes (a bundle baked into the derived image, Node's
+  `NODE_EXTRA_CA_CERTS`, and relayd's and webfetch's own bundle steps), and
+  `corporate_ca` with the session CA was refused. Now:
+  - glove checks each host PEM (as before) and copies it into
+    `.glove/trust/`, bound read-only at `/etc/glove/trust/`; on SELinux the
+    copy is relabelled (glove's own file, never the operator's);
+  - a prelude builds one bundle before the harness's sandbox starts, or a
+    trusting sidecar's `command` runs, on a tmpfs at `/etc/glove/ca/` that
+    every enforcer but `none` keeps the agent from writing: the image's roots then every CA
+    (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
+    `GIT_SSL_CAINFO`) and the CAs alone (`NODE_EXTRA_CA_CERTS`); a CA that
+    never appears, or an image with no roots, refuses to start (exit 90);
+  - `corporate_ca` and the `auth: oauth` session CA are trusted together; the
+    launch probe builds the same bundle;
+  - a new CA rebuilds no image (nothing is baked);
+  - extensions: a `type: ca` setting is checked and copied by core and
+    trusted by the extension's `trust:` sidecars, which must set their whole
+    `command` (core's entrypoint replaces the image's); a copy is checked again
+    when it is written, and a non-UTF-8 PEM is refused. `playwright.ca` is one (still checked in host mode, unused
+    there), and the browser sidecar now trusts `corporate_ca` too; webfetch's
+    fetcher names its command. relayd passes the bundle variables on to its
+    commands.
 - **One list of host-trusted paths** (round 18 B). Ring 0 and srt now read
   one table (`glove/mounts.py:HOST_TRUSTED`), so `nono` and `nono+srt` protect
   the same paths. Before, under `nono` alone, `.claude/settings.json`,

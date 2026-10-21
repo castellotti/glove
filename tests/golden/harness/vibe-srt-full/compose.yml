@@ -204,7 +204,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:82ed748ff2
+    image: glove/ext-playwright-pw:b9fbe98314
     init: true
     command:
     - glove-pw-start
@@ -354,7 +354,10 @@ services:
     mem_limit: 512m
   glove-s-fetcher:
     container_name: glove-s-fetcher
-    image: glove/ext-webfetch-mcp:e26a01b977
+    image: glove/ext-webfetch-mcp:0eee081790
+    command:
+    - python3
+    - /opt/glove/webfetch/webfetch_mcp.py
     environment:
       GLOVE_FETCH_PROXY: http://glove-s-webfetch-egress:8888
       GLOVE_FETCH_ALLOW: ''

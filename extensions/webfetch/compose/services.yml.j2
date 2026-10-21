@@ -14,6 +14,7 @@ services:
   # egress network at all. Either network is internal, so it has no other way out.
   fetcher:
     image: "{{ images.mcp }}"
+    command: ["python3", "/opt/glove/webfetch/webfetch_mcp.py"]  # the image's; core runs it after the CA bundle
 {% if hop.interposed %}
     networks: [fetchnet]
 {% else %}

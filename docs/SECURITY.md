@@ -76,6 +76,32 @@ agent gains is the use of the credential within a bound, never its value.
 | `glove playwright login` | a Chrome on the host, outside the gate, while the operator signs in | a fresh profile, deleted after; CDP over a pipe (no port); never wired to the harness; only `login.domains`' and `login.capture`'s values kept, to the Keychain on stdin |
 | a stored browser session (`storage_state`) | the agent browses as the operator on those hosts until the cookies expire (as with `profile: session`) | the values never reach the model: the tools that return cookies, storage or headers, run code, trace or route are refused, so are `uploads: work` and typed `javascript:` URLs ([browser](#browser-playwright)) |
 
+### Trusted CAs: one way (`glove/cafile.py`)
+
+Every CA a session trusts besides the image's public roots goes the same way:
+`corporate_ca`, an extension's `type: ca` setting (`playwright.ca`) and a
+read-only channel's `trust` file (`llm`'s `auth: oauth` session CA, written by
+`llm-auth`).
+
+- **Checked, then copied.** A host PEM must be a regular file with a certificate
+  and no private key, and not the session file or anything in `.glove/`
+  (checked at plan time). glove copies it into `.glove/trust/`, bound
+  read-only; the operator's own file is never bound, so relabelling the copy for
+  SELinux is safe (untested on an SELinux host).
+- **One bundle, built before any sandbox.** A prelude in front of the
+  enforcer's command (the harness) or the service's `command` (a sidecar its
+  manifest's `trust:` names) waits for each CA, then writes the image's roots
+  plus every CA to a tmpfs at `/etc/glove/ca/`. It refuses to start (exit 90)
+  when a CA never appears or the image has no roots, so a session never runs
+  trusting less, or other, than it says. Every enforcer lets the agent read
+  `/etc/glove` and none lets it write there, so neither the agent nor its
+  commands can add a CA to the harness's trust (with `enforcer: none` nothing
+  holds that).
+- **Who trusts what.** The harness: `corporate_ca` and the channels' CAs. A
+  trusting sidecar: `corporate_ca` and its own extension's `ca` settings. Trust
+  is only added; nothing renders a flag or variable that turns verification
+  off.
+
 ## Extensions (what a capability pack may and may not do)
 
 Every capability (the model, search, the browser, …) is an extension in
@@ -244,7 +270,7 @@ only), which holds the key and dials the server through a second forwarder,
     session's harness only: the same access that gives the token.
   - **No auto-restart:** if `llm-auth` dies, the model is unreachable until the
     next `glove up` (a new CA would be untrusted by the running harness).
-  - **`corporate_ca` and a token together are refused** for now.
+  - **With `corporate_ca`** the harness trusts both CAs ([one bundle](#trusted-cas-one-way-glovecafilepy)).
 
 ### Egress (`vpn`, `tor`, `direct`, `corporate`)
 

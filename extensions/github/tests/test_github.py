@@ -333,24 +333,25 @@ def test_the_relay_sidecar(tmp_path, observe):
 
 
 def test_the_sidecar_trusts_the_sessions_corporate_ca_read_only(tmp_path):
-    from glove.cafile import CORPORATE_CA_PATH
+    from glove.cafile import TRUST_DIR, TRUST_ENV
 
-    _, doc = _render(tmp_path)
+    plan, doc = _render(tmp_path)
     svc = doc["services"]["glove-s-gh"]
-    assert "GLOVE_CORPORATE_CA" not in svc["environment"]
-    assert CORPORATE_CA_PATH not in {v["target"] for v in svc["volumes"]}
+    assert not set(TRUST_ENV) & set(svc["environment"]) and svc["command"][0] == "relayd"
+    assert TRUST_DIR not in {v["target"] for v in svc["volumes"]}
     ca = tmp_path / "ca.pem"
     ca.write_text(PEM)
-    _, doc = _render(tmp_path, corporate_ca=str(ca))
+    plan, doc = _render(tmp_path, corporate_ca=str(ca))
     svc = doc["services"]["glove-s-gh"]
-    assert svc["environment"]["GLOVE_CORPORATE_CA"] == CORPORATE_CA_PATH  # relayd: ca_bundle_env
-    assert {v["target"]: v for v in svc["volumes"]}[CORPORATE_CA_PATH] == {
-        "type": "bind", "source": str(ca.resolve()), "target": CORPORATE_CA_PATH, "read_only": True}
+    assert {k: svc["environment"][k] for k in TRUST_ENV} == TRUST_ENV  # relayd passes them to gh and git
+    assert {v["target"]: v for v in svc["volumes"]}[TRUST_DIR] == {
+        "type": "bind", "source": plan.trust_host_dir, "target": TRUST_DIR, "read_only": True}
+    assert svc["entrypoint"][3:] == ["glove-trust"] and svc["command"][0] == "relayd"  # the bundle first
 
 
-def test_on_selinux_the_ca_bind_is_never_relabelled(tmp_path, monkeypatch):
-    # `z` would relabel the operator's own file (maybe a system trust anchor)
-    from glove.cafile import CORPORATE_CA_PATH
+def test_on_selinux_the_cas_copy_is_relabelled(tmp_path, monkeypatch):
+    # TODO 1f: glove's own copy in .glove/trust/, never the operator's file, so `z` is safe
+    from glove.cafile import TRUST_DIR
     from glove.plan import build_session_plan
     from glove.runtimes.podman import PodmanRuntime
 
@@ -363,10 +364,10 @@ def test_on_selinux_the_ca_bind_is_never_relabelled(tmp_path, monkeypatch):
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "home"), state_dir=str(tmp_path / "ext"))
     rt = PodmanRuntime()
     rt._rootless = True
-    vols = {v["target"]: v for v in yaml.safe_load(rt.render(plan, tmp_path).compose_yaml)
-            ["services"]["glove-s-gh"]["volumes"]}
-    assert vols["/opt/glove/github/relay_policy.py"]["bind"] == {"selinux": "z"}
-    assert "bind" not in vols[CORPORATE_CA_PATH]
+    services = yaml.safe_load(rt.render(plan, tmp_path).compose_yaml)["services"]
+    for name in ("glove-s-gh", "glove-s-harness"):
+        vols = {v["target"]: v for v in services[name]["volumes"]}
+        assert vols[TRUST_DIR]["bind"] == {"selinux": "z"} and vols[TRUST_DIR]["source"] == plan.trust_host_dir
 
 
 @pytest.mark.parametrize("harness", ["claude-code", "pi", "vibe"])

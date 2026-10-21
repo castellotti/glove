@@ -26,12 +26,6 @@ services:
 {% if settings.uploads == "work" %}
       PW_UPLOADS: "{{ input['browser-uploads'].path }}"    # its cwd: a root browser_file_upload reads
 {% endif %}
-{% if settings.ca %}
-      # trust a private CA in addition to the public roots: Node (the MCP)
-      # here, Chromium via an NSS import of the same file in glove-pw-start;
-      # never a bypass
-      NODE_EXTRA_CA_CERTS: /etc/glove/playwright/corporate-ca.pem
-{% endif %}
 {% if settings.storage_state %}
       # the signed-in session, gzip+base64 from the Keychain at `compose up`
       # (launch_env); glove-pw-start writes it to its tmpfs and unsets this
@@ -51,10 +45,6 @@ services:
       # reads managed policies (checked live by test_playwright_login.sh)
       - { type: bind, source: "{{ state }}/chromium-policy.json",
           target: /etc/opt/chrome_for_testing/policies/managed/glove.json, read_only: true }
-{% if settings.ca %}
-      - { type: bind, source: "{{ state }}/corporate-ca.pem", target: /etc/glove/playwright/corporate-ca.pem,
-          read_only: true }
-{% endif %}
 {% if settings.profile == "session" %}
       - { type: bind, source: "{{ state }}/profile", target: /data/profile }
 {% endif %}

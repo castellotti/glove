@@ -119,13 +119,13 @@ def quarantine_attr(p) -> str | None:
 darwin = pytest.mark.skipif(sys.platform != "darwin", reason="the quarantine attribute is macOS-only")
 
 
-def plan_pw(tmp_path, **settings):
+def plan_pw(tmp_path, corporate_ca=None, **settings):
     """A pi session with `direct` and `playwright: settings`, planned."""
     from glove.plan import build_session_plan
 
     work = tmp_path / "work"
     work.mkdir(parents=True, exist_ok=True)
-    cfg = make_cfg(harness="pi", name="s", workdir=str(work), subnet="172.31.4.0/24",
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), subnet="172.31.4.0/24", corporate_ca=corporate_ca,
                    extensions={"direct": {}, "playwright": settings})
     return build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"),
                               session_dir=str(tmp_path))

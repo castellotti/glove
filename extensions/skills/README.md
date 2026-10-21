@@ -131,7 +131,7 @@ which holds the secrets and the only route to the service:
   flows `client: skill-<name>`). A Python script runs on the relay's Python
   (3.12, standard library only: a relayed script that lists dependencies is
   refused), anything else by its own shebang. It trusts `corporate_ca` when the
-  session sets one. It binds `/work` read-write (the `work` privilege) only
+  session sets one (core's CA bundle, passed on to the scripts). It binds `/work` read-write (the `work` privilege) only
   when a command has `out_flags` or `in_flags`.
 - **What runs.** `allow` is matched against the first argument that is not a
   flag; anything else is refused (`-h`/`--help` alone always works), so a

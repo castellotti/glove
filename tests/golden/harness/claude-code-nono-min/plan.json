@@ -1,5 +1,9 @@
 {
   "command": [
+    "/bin/sh",
+    "-c",
+    "for f in /run/glove/llm-ca/ca.pem; do i=0; until grep -qF 'BEGIN CERTIFICATE' \"$f\" 2>/dev/null || [ $i -ge 30 ]; do i=$((i+1)); sleep 1; done; done; for f in /run/glove/llm-ca/ca.pem; do grep -qF 'BEGIN CERTIFICATE' \"$f\" 2>/dev/null || { echo \"glove: the trusted CA $f is missing\" >&2; exit 90; }; done; grep -qF 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt || { echo \"glove: no CA roots at /etc/ssl/certs/ca-certificates.crt\" >&2; exit 90; }; for f in /run/glove/llm-ca/ca.pem; do cat \"$f\"; echo; done > /etc/glove/ca/extra.pem && cat /etc/ssl/certs/ca-certificates.crt /etc/glove/ca/extra.pem > /etc/glove/ca/bundle.pem || exit 90; exec \"$@\"",
+    "glove-trust",
     "nono",
     "run",
     "-s",
@@ -16,9 +20,13 @@
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_OAUTH_TOKEN": "glove-injected",
     "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+    "CURL_CA_BUNDLE": "/etc/glove/ca/bundle.pem",
     "DISABLE_AUTOUPDATER": "1",
     "GIT_CONFIG_PARAMETERS": "'safe.directory'='/work'",
-    "NODE_EXTRA_CA_CERTS": "/run/glove/llm-ca/ca.pem"
+    "GIT_SSL_CAINFO": "/etc/glove/ca/bundle.pem",
+    "NODE_EXTRA_CA_CERTS": "/etc/glove/ca/extra.pem",
+    "REQUESTS_CA_BUNDLE": "/etc/glove/ca/bundle.pem",
+    "SSL_CERT_FILE": "/etc/glove/ca/bundle.pem"
   },
   "image": "glove/claude-code:0.2.0-bc85a2338a",
   "transcripts": [

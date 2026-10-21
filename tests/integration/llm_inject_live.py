@@ -18,10 +18,11 @@ stub log), a stand-in for the provider itself (`stand_in`). Started the way
      the key).
 With `auth: oauth` also:
   6. llm-auth serves TLS by the provider's name, verified with the session CA
-     (the harness's NODE_EXTRA_CA_CERTS, in the read-only `llm-ca` channel): an
-     account path and WebFetch's domain preflight are allowed, another account
-     path is a 403; no key file is left in llm-auth; a tool command can't
-     write the channel;
+     (in the read-only `llm-ca` channel, built into the harness's CA bundle at
+     start with corporate_ca's copy when the session sets one): the bundle
+     holds every CA, an account path and WebFetch's domain preflight are
+     allowed, another account path is a 403; no key file is left in llm-auth;
+     a tool command can write neither the channel nor the bundle;
   7. the TUI draws within TUI_START seconds; the session has observe on, and
      both hops of a model call are flows to the provider's name (their SNI).
 test_observe.sh checks the two flows each model call makes (`llm`, client
@@ -47,6 +48,7 @@ KEY = os.environ["GLOVE_TEST_LLM_KEY"]
 STUBS = Path(__file__).parent / "stubs"
 STAND_IN = "api-stub"
 WRITE_CA = "touch /run/glove/llm-ca/x; echo RC=$?"
+WRITE_BUNDLE = "touch /etc/glove/ca/x; echo RC=$?; echo >> /etc/glove/ca/bundle.pem; echo RC=$?"
 TUI_START = 5.0  # seconds (measured 0.7 s; through a base URL Claude Code took 18.6 s, round 3)
 
 
@@ -112,18 +114,22 @@ def main(directory: str, stub_log: str | None) -> int:
               plan.environment.get(plan.model.api_key_env) == INJECTED_KEY, str(plan.model.api_key_env))
         check("nothing passes the key into the harness", KEY not in plan.environment.values())
         if oauth:
-            check("the harness keeps the provider's name and trusts the session CA",
-                  root == "https://api.anthropic.com"
-                  and plan.environment.get("NODE_EXTRA_CA_CERTS") == "/run/glove/llm-ca/ca.pem",
-                  f"{root} {plan.environment.get('NODE_EXTRA_CA_CERTS')}")
+            want = [*(["/etc/glove/trust/corporate_ca.pem"] if plan.trust_host_dir else []), "/run/glove/llm-ca/ca.pem"]
+            check("the harness keeps the provider's name and trusts the session CA (and corporate_ca's)",
+                  root == "https://api.anthropic.com" and plan.trusted_cas == want
+                  and plan.environment.get("CURL_CA_BUNDLE") == "/etc/glove/ca/bundle.pem",
+                  f"{root} {plan.trusted_cas}")
 
         print("== where the key is")
         hits = files_holding([s.sd.root, Path(os.environ["GLOVE_HOME"])], KEY.encode())
         check("no file under the session dir or GLOVE_HOME holds it", not hits, ", ".join(hits[:5]))
-        # a harness container, as `glove up` runs one, kept alive to inspect and probe from
+        # a harness container, as `glove up` runs one, kept alive to inspect and probe
+        # from: its CA bundle built by the plan's own prelude (glove/cafile.py)
         probe = f"{prefix}-injectprobe"
-        run = subprocess.Popen([*s.base, "run", "--rm", "-T", "--name", probe, "--entrypoint", "sleep",
-                                plan.harness_service, "120"], env=s.env, stdin=subprocess.DEVNULL,
+        entry, args = ("/bin/sh", ["-c", plan.command[2], "glove-trust", "sleep", "120"]) if plan.trusted_cas \
+            else ("sleep", ["120"])
+        run = subprocess.Popen([*s.base, "run", "--rm", "-T", "--name", probe, "--entrypoint", entry,
+                                plan.harness_service, *args], env=s.env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         def in_probe(script: str) -> str:
@@ -132,10 +138,10 @@ def main(directory: str, stub_log: str | None) -> int:
 
         def status(method: str, path: str) -> str:
             """The HTTP status of `path` from the harness, the way it calls
-            its model (the placeholder; its CA, if any, verifying the name)."""
+            its model (the placeholder; its CA bundle, if any, verifying the
+            name: curl reads CURL_CA_BUNDLE)."""
             return in_probe(
                 f"curl -sS -m 20 -o /dev/null -w '%{{http_code}}' -X {method} "
-                "${NODE_EXTRA_CA_CERTS:+--cacert \"$NODE_EXTRA_CA_CERTS\"} "
                 f"-H 'Authorization: Bearer {INJECTED_KEY}' '{root}{path}'")
 
         try:
@@ -160,6 +166,10 @@ def main(directory: str, stub_log: str | None) -> int:
             out = status("GET", "/v1/files")
             check("a path off the allowlist is a 403", out == "403", out[-200:])
             if oauth:
+                out = in_probe("grep -c 'BEGIN CERTIFICATE' /etc/glove/ca/extra.pem; "
+                               "[ $(grep -c 'BEGIN CERTIFICATE' /etc/glove/ca/bundle.pem) -gt 100 ] && echo ROOTS")
+                check(f"the bundle holds the image's roots and the {len(plan.trusted_cas)} CA(s)",
+                      out.split() == [str(len(plan.trusted_cas)), "ROOTS"], out[-200:])
                 out = status("GET", "/api/oauth/profile")
                 check("by the provider's name, verified with the session CA: an account path answers",
                       out == "200", out[-200:])
@@ -179,6 +189,9 @@ def main(directory: str, stub_log: str | None) -> int:
         if oauth:
             out = s.sh(WRITE_CA)
             check("a tool command can't write the llm-ca channel", refused(out), out[-200:])
+            out = s.sh(WRITE_BUNDLE)
+            check("a tool command can't write the CA bundle", out.count("RC=") == 2 and "RC=0" not in out,
+                  out[-200:])
 
         print("== llm-auth")
         a = by_name.get(auth, {})

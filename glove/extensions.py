@@ -42,6 +42,7 @@ import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
+from .cafile import CORPORATE_CA, TRUST_DIR, resolve_ca_file
 from .config import git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
@@ -70,7 +71,8 @@ REQUIRED_SLOTS = frozenset({"inference"})
 # only while `filter` is active.
 EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 
-SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
+# `ca`: a host PEM the extension's `trust:` sidecars trust (glove/cafile.py)
+SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path", "ca"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")  # one path component, never `..`
 
@@ -283,7 +285,7 @@ def _coerce_setting(ext: str, key: str, spec: dict, value: Any) -> Any:
         raise ExtensionError(f"{where} is still {PLACEHOLDER!r} — set it in your session file")
     if value in (spec.get("also") or []):  # a literal accepted besides the type, e.g. `auto`
         return value
-    if t in ("string", "path"):
+    if t in ("string", "path", "ca"):
         if not isinstance(value, str):
             raise ExtensionError(f"{where} must be a string, got {value!r}")
         pattern = spec.get("pattern")
@@ -499,7 +501,7 @@ class Channel:
     a Unix socket) and the sidecar answers them. A `read_only` channel is
     written by its sidecars only: the harness and its commands just read it.
     `trust` names a file in it holding a CA the harness trusts (e.g. llm-auth's
-    session CA; core wires the trust, see `Composition.trusted_cas`)."""
+    session CA; core wires the trust, see `Composition.trusted_cas`; glove/cafile.py)."""
 
     name: str
     extension: str
@@ -614,9 +616,10 @@ class Composition:
     # The harness's /work on the host: a trusted extension's sidecar binds all
     # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
-    # The session's validated `corporate_ca` PEM on the host (symlinks
-    # resolved): core binds it into the sidecars a manifest's `trust:` names.
-    corporate_ca: Path | None = None
+    # The validated CAs on the host (symlinks resolved) by their copy's name in
+    # .glove/trust/ (glove/cafile.py): corporate_ca's, and each `type: ca`
+    # setting's as `<ext>.<key>.pem`.
+    trust: dict[str, Path] = field(default_factory=dict)
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
     enforcer: str = ""  # the session's (hooks only), and its normalized options
@@ -643,10 +646,13 @@ class Composition:
         """The read-only channels' directories: readable under every enforcer."""
         return [c.path for c in self.channels if c.read_only]
 
-    @property
-    def trusted_cas(self) -> list[str]:
-        """CA certificates the harness trusts, published in read-only channels."""
-        return [f"{c.path}/{c.trust}" for c in self.channels if c.trust]
+    def trusted_cas(self, ext: str | None = None) -> list[str]:
+        """The CA files the harness (`ext` None) or `ext`'s trusting sidecars
+        trust: corporate_ca's copy, then the read-only channels' `trust` files
+        (the harness) or the extension's own `type: ca` settings."""
+        own = ([f"{c.path}/{c.trust}" for c in self.channels if c.trust] if ext is None
+               else [f"{TRUST_DIR}/{n}" for n in self.trust if n.startswith(f"{ext}.")])
+        return [*([f"{TRUST_DIR}/{CORPORATE_CA}"] if CORPORATE_CA in self.trust else []), *own]
 
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
@@ -1246,7 +1252,7 @@ def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | N
         privileges = raw.get("privileges") if privileges is None else privileges
         return any(isinstance(p, dict) and p.get("work") for v in (privileges or {}).values()
                    for p in (v if isinstance(v, list) else [v]))
-    return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") == "path"
+    return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") in ("path", "ca")
                                           for x in (raw.get("settings") or {}).values())
 
 
@@ -1304,7 +1310,7 @@ def compose(
     subnet: str | None = None,
     export_dirs: dict[str, Path] | None = None,
     work_dir: Path | None = None,
-    corporate_ca: Path | None = None,
+    trust: dict[str, Path] | None = None,
     enforcer: str = "",
     enforcer_options: dict[str, dict] | None = None,
 ) -> Composition:
@@ -1313,7 +1319,7 @@ def compose(
 
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, work_dir=work_dir, corporate_ca=corporate_ca, subnet=subnet,
+                       session_dir=session_dir, work_dir=work_dir, trust=dict(trust or {}), subnet=subnet,
                        export_dirs=dict(export_dirs or {}), enforcer=enforcer,
                        # read-only all the way down: a hook never widens what plan.py renders
                        enforcer_options={k: MappingProxyType(v) for k, v in (
@@ -1331,6 +1337,9 @@ def compose(
         a.spec("privileges", ctx)  # no name set twice
         if not all(isinstance(x, str) for x in a.spec("trust")):
             raise ExtensionError(f"{where}: `trust` lists its services")
+        for key, spec in (a.manifest.raw.get("settings") or {}).items():
+            if spec["type"] == "ca" and a.settings.get(key):  # checked here, so `glove check` fails early
+                comp.trust[f"{a.name}.{key}.pem"] = resolve_ca_file(f"{a.name}.{key}", a.settings[key], session_dir)
         a.set_exports(merge_names(f"{where} exports",
                                   render_value(a.manifest.raw.get("exports") or {}, ctx, f"{where} exports"),
                                   contributed.get("exports")))
