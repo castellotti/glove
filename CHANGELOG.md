@@ -209,6 +209,14 @@ All notable changes to glove are documented here.
   without probing for Chrome or the ports, and no longer looks for a pid file
   in core's pre-round-16 `.glove/host-logs/` (R16.S4): a host-mode browser
   started before round 16 (no tmux) is stopped by hand.
+- **One uv and one CPython per image** (1k): `skills` and `toolchains`
+  (python) each downloaded uv and installed CPython into a directory of their
+  own; both now use one copy in `/opt/glove/uv` (`glove.api.uv_python_steps`
+  and `UV_HOME`, replacing `uv_steps`), and the second extension's layer finds
+  it in place (a no-op instead of a ~30 MB download). The skills wheelhouse
+  is its own layer after it, so a dependency change no longer reinstalls the
+  Python. `glove plan` refuses a baked PEP 723 script whose `requires-python`
+  no release of `skills.python` satisfies (it used to fail when it ran).
 
 - **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
   `.glove/playwright-login` (from before round 15) is neither moved under

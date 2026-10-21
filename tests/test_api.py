@@ -358,3 +358,16 @@ def test_the_authors_guide_names_every_key_hook_export_and_api_name():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "extensions.md").read_text()
     names = {*KEYS, *HOOKS, *SLOT_EXPORTS, *(k for ks in SLOT_EXPORTS.values() for k in ks), *glove.api.__all__}
     assert not sorted(n for n in names if f"`{n}`" not in doc and f"`{n}(" not in doc)
+
+
+@pytest.mark.parametrize("python", ["3.12", "3.12.4"])
+def test_uv_python_steps_installs_once_into_uv_home(python):
+    steps = glove.api.uv_python_steps(python)
+    assert steps[0].startswith(f"if [ ! -x {glove.api.UV_HOME}/bin/uv ]; then")
+    assert steps[-1].endswith(f"{glove.api.UV_HOME}/python{python})")
+
+
+@pytest.mark.parametrize("python", ["3", "3.12; curl x|sh", "3.12 ", "py3.12"])
+def test_uv_python_steps_refuses_anything_but_a_version(python):
+    with pytest.raises(ValueError, match=r"X\.Y or X\.Y\.Z"):
+        glove.api.uv_python_steps(python)

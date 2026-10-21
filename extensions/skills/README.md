@@ -58,7 +58,9 @@ and runs) or glove's state.
 The scripts are usually `#!/usr/bin/env -S uv run --script` with inline
 dependencies. A shell command has no network, so everything is baked:
 
-- uv (pinned, checksum-verified) and a Python (`python:`, installed by uv);
+- uv (pinned, checksum-verified) and a Python (`python:`, installed by uv),
+  in `/opt/glove/uv`: one copy shared with `toolchains`. `glove plan` refuses
+  a script whose `requires-python` no release of `python:` satisfies;
 - a wheelhouse of every script's dependencies (its inline list resolved by
   `uv pip compile --generate-hashes`; wheels only: a dependency with no wheel
   for the image fails the build). This layer depends only on the Python and

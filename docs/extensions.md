@@ -248,7 +248,7 @@ signatures, so a change is deliberate.
 | secrets (values stay in memory) | `resolve_secret`, `is_secret_ref`, `keychain_service`, `keychain_set`, `secret_exists` (an item is there; nothing read), `is_secret_env_name` |
 | host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `exposes_private` (a path the harness must never see, e.g. `.glove/`), `resolve_ca_file` |
 | naming | `scoped(session_id, name)` (`glove-<id>-<name>`, a container, network or volume of the session), `HOST_GLOB` |
-| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_steps` |
+| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_python_steps` (uv and a CPython in the shared `UV_HOME`: installed once, whichever extensions ask) |
 | the session's enforcer | `tools_run_browsers(enforcer, options)` (can Chromium start in a shell command?) |
 | rendering, with core's checks | `render_value`, `active_items`, `tool_names`, `mcp_server` |
 | an extension's CLI | `ext_session`, `ExtSession`, `reload_sidecar` |

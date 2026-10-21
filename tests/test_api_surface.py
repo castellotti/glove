@@ -32,11 +32,12 @@ API = {
     "HOST_GLOB": "Pattern",
     "scoped": "(session: 'str', name: 'str') -> 'str'",
     "STAGE_IGNORE": "tuple",
+    "UV_HOME": "str",
     "apt_bootstrap": "(probe: 'str', pkgs) -> 'str'",
     "fetch_steps": "(arch: 'dict[str, str]', name: 'str', url: 'str', verify: 'str', dest: 'str', "
                    "member: 'str' = '') -> 'list[str]'",
     "run_body": "(prefix: 'str', *steps: 'str') -> 'str'",
-    "uv_steps": "(prefix: 'str') -> 'list[str]'",
+    "uv_python_steps": "(python: 'str') -> 'list[str]'",
     "tools_run_browsers": "(enforcer: 'str', options: 'dict[str, dict[str, Any]]') -> 'bool'",
     "active_items": "(items: 'list | None', ctx: 'dict[str, Any]') -> 'list'",
     "mcp_server": "(where: 'str', item: 'Any') -> 'dict[str, Any]'",

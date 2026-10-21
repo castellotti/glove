@@ -15,6 +15,7 @@ from helpers import PEM, make_cfg
 from glove.config import AddDir, ConfigError
 from glove.extensions import ExtensionError, materialize
 from glove.harnessconfig import render_home
+from glove.image import UV_HOME, run_body, uv_python_steps
 from glove.plan import build_session_plan
 
 HELLO = ('#!/usr/bin/env -S uv run --script\n# /// script\n# requires-python = ">=3.11"\n'
@@ -317,3 +318,47 @@ def test_three_skills_of_one_name_all_get_a_link(tmp_path):
     links = _plan_of(tmp_path, _cfg(tmp_path, "claude-code", plugins)).composition.skill_links()
     assert links == [("setup", "/opt/glove/plugins/a/setup"), ("skills-setup", "/opt/glove/plugins/b/setup"),
                      ("skills-setup-2", "/opt/glove/plugins/c/setup")]
+
+
+def test_skills_and_toolchains_share_one_uv_and_python(tmp_path, plugin):
+    (tmp_path / "work").mkdir()
+    cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path / "work"), extensions={
+        "skills": {"plugins": {"demo": {"path": "skills/demo-repo/demo"}}},
+        "toolchains": {"blocks": [{"lang": "python", "version": "3.12"}]}})
+    df = _plan_of(tmp_path, cfg).derived_dockerfile
+    shared = run_body(UV_HOME, *uv_python_steps("3.12"))
+    # the same layer twice: the second finds uv and the Python in place
+    assert df.count(shared) == 2 and df.index(shared) < df.index("pip compile")
+    assert f"if [ ! -x {UV_HOME}/bin/uv ]; then" in shared
+    assert f"&& ([ -e {UV_HOME}/python3.12 ] || ln -s" in shared  # grouped: an earlier failure still fails
+    assert f'ln -s "$(readlink -f {UV_HOME}/python3.12)" /opt/glove/plugins/.uv/python3' in df
+    assert f"venv --seed --python {UV_HOME}/python3.12 /opt/glove/toolchains/python/venv" in df
+    assert not re.search(r"/opt/glove/(plugins/\.uv|toolchains/python)/(bin|python|runtime)\b", df)
+
+
+@pytest.mark.parametrize(("requires", "python", "ok"), [
+    (">=3.13", "3.12", False), ("<3.12", "3.12", False), (">=3.12.1", "3.12", True),
+    ("~=3.12.0", "3.12", True), (">=3.11,!=3.13.*", "3.13", False), (">=3.11,!=3.13.*", "3.14", True)])
+def test_a_scripts_requires_python_must_admit_the_python(tmp_path, plugin, requires, python, ok):
+    (plugin / "scripts" / "hello.py").write_text(HELLO.replace(">=3.11", requires))
+    cfg = _cfg(tmp_path, "pi", {"demo": {"path": "skills/demo-repo/demo"}})
+    cfg.extensions["skills"]["python"] = python
+    if ok:
+        assert f"python install --no-bin {python}" in _plan_of(tmp_path, cfg).derived_dockerfile
+    else:
+        with pytest.raises(ExtensionError, match=rf"/opt/glove/plugins/demo/scripts/hello.py cannot run on "
+                                                 rf"Python {python} \(its `requires-python`\)"):
+            _plan_of(tmp_path, cfg)
+
+
+def test_requires_python_binds_only_the_scripts_that_run_on_the_python(tmp_path, plugin):
+    (plugin / "scripts" / "hello.py").write_text(HELLO.replace("-S uv run --script", "python3").replace(
+        ">=3.11", ">=3.13"))  # the image's own python3, not `skills.python`
+    assert "python install --no-bin 3.12" in _plan(tmp_path).derived_dockerfile
+
+
+@pytest.mark.parametrize("requires", ['"3.12"', '">= three"', "3", '[">=3.11"]'])
+def test_a_bad_requires_python_is_refused(tmp_path, plugin, requires):
+    (plugin / "scripts" / "hello.py").write_text(HELLO.replace('">=3.11"', requires))
+    with pytest.raises(ExtensionError, match=r"hello.py: `requires-python` is a version specifier"):
+        _plan(tmp_path)

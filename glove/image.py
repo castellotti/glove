@@ -77,14 +77,23 @@ UV_SHA256 = {
     "x86_64": "b9980552309f09c15172b8be828555e375097f16deb459795ce7bfd200380f0b",
     "aarch64": "6f66a14e8239871fb477f9746c941fedfa77e8fe28a8bc7c07e1dc7f53a66712",
 }
+UV_HOME = "/opt/glove/uv"  # uv and the CPythons it installs: one copy, however many extensions use them
 
 
-def uv_steps(prefix: str) -> list[str]:
-    """Build steps: the pinned uv (checksum-verified) into `<prefix>/bin`."""
-    return fetch_steps({d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
-                       "uv-$t-unknown-linux-gnu.tar.gz",
-                       f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
-                       'echo "$s  $f" | sha256sum -c -', f"{prefix}/bin", member="uv-$t-unknown-linux-gnu/uv")
+def uv_python_steps(python: str) -> list[str]:
+    """Build steps (`run_body(UV_HOME, …)`): the pinned uv (verified) unless a layer put it there, then
+    CPython `python` (X.Y[.Z], a no-op once installed), linked once at `UV_HOME/python<python>`."""
+    if not re.fullmatch(r"\d+\.\d+(\.\d+)?", python):
+        raise ValueError(f"a Python version is X.Y or X.Y.Z, got {python!r}")
+    uv = f"{UV_HOME}/bin/uv"
+    fetch = fetch_steps({d: f"t={t}; s={UV_SHA256[t]}" for d, t in (("amd64", "x86_64"), ("arm64", "aarch64"))},
+                        "uv-$t-unknown-linux-gnu.tar.gz",
+                        f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}",
+                        'echo "$s  $f" | sha256sum -c -', f"{UV_HOME}/bin", member="uv-$t-unknown-linux-gnu/uv")
+    return [f"if [ ! -x {uv} ]; then {apt_bootstrap('curl', ('ca-certificates', 'curl'))} && {' && '.join(fetch)}; fi",
+            f"export UV_PYTHON_INSTALL_DIR={UV_HOME}/python UV_PYTHON_PREFERENCE=only-managed UV_NO_CACHE=1",
+            f"{uv} python install --no-bin {python}",
+            f'([ -e {UV_HOME}/python{python} ] || ln -s "$({uv} python find {python})" {UV_HOME}/python{python})']
 
 
 def staged_name(ext: str, src: Path) -> str:

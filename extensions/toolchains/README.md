@@ -19,7 +19,7 @@ extensions:
         packages: ["tsx@4.19.2"]    # optional global tools
         browsers: [chromium]        # optional Playwright engines (chromium | firefox | webkit)
       - lang: python
-        version: "3.12"             # required, X.Y or X.Y.Z (uv-managed CPython; uv is pinned by glove)
+        version: "3.12"             # required, X.Y or X.Y.Z (uv-managed CPython in /opt/glove/uv, shared with skills; uv is pinned by glove)
         manager: uv                 # uv (default) | pip
         project: projects/tool
         install: sync               # uv: sync (default, `uv sync --locked --no-install-project`) | requirements; pip: requirements
