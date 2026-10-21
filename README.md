@@ -139,7 +139,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
 tools: { allow_commands: [cp, mv, rm] }   # nono's tool policy (nono, nono+srt only): allow_commands, deny_commands; unknown keys are refused
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
-protect_ide_files: false    # also ro-bind .vscode/.envrc/.mcp.json (creates empty ones if missing)
+protect_ide_files: false    # host-trusted files present (.git/hooks, .claude/, .vscode, …) are always ro; this also creates empty .vscode/.idea/.envrc/.mcp.json placeholders when missing
 # git_config: { safe.directory: "*" }      # added to git's config in the harness (see "git in /work")
 # allow_root: true          # the harness as uid 0; caps stay dropped and no-new-privileges holds, so no sudo
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
@@ -157,22 +157,23 @@ bundle (relative to the session directory; `local/` is a good home). glove check
 at plan time (`glove check`) that it is a regular file with at least one
 `-----BEGIN CERTIFICATE-----` block and **no private key** (a combined
 cert-and-key PEM is refused, since the agent can read whatever is bound), and not
-the session file or anything in `.glove/`. It then binds the file read-only at `/etc/glove/corporate-ca.pem` and
-sets `NODE_EXTRA_CA_CERTS` to that path (an explicit `env:` entry wins). Node adds
-these certificates to its built-in roots, so the public roots stay trusted and
-**TLS verification is never turned off**. The PEM is a public certificate, not a
-secret, so it never goes through the Keychain. Every enforcer can already read
-`/etc/glove`, so no policy changes. That covers Node (Pi, Claude Code).
-For everything else (curl, git, gh, Python `requests`/`urllib`,
-Vibe's client), glove bakes `/etc/glove/ca-bundle.pem` into the session's derived
-image: the image's own roots, then the CA. It sets `SSL_CERT_FILE`,
-`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` to that path, each only
-if `env:` doesn't set it. Changing the PEM rebuilds the image on the next `up`.
-The `github` relay and `webfetch`'s fetcher trust the CA too: core binds the same
-file read-only into them (`trust:` in their manifests), and they build
-the same kind of bundle in their own `/tmp`. The browser
-sidecar is configured separately: set `playwright: {ca: …}` as well (see Browser
-below). Unset, nothing renders differently.
+the session file or anything in `.glove/`. Every CA a session trusts goes the
+same way: glove copies it into `.glove/trust/` (bound read-only at
+`/etc/glove/trust/`), and before the harness's sandbox starts, a short prelude
+builds one bundle on a tmpfs at `/etc/glove/ca/`: `bundle.pem` (the image's own
+roots, then every CA) and `extra.pem` (the CAs alone). `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` name `bundle.pem`
+(curl, git, gh, Python `requests`/`urllib`, Vibe's client), and
+`NODE_EXTRA_CA_CERTS` names `extra.pem` (Node adds them to its built-in roots:
+Pi, Claude Code); an explicit `env:` entry wins. The public roots stay trusted
+and **TLS verification is never turned off**. Every enforcer can read
+`/etc/glove` and none lets the agent write there (`enforcer: none` aside), so the bundle is glove's
+alone. The PEM is a public certificate, not a secret, so it never goes through
+the Keychain, and a changed PEM rebuilds no image. `corporate_ca` and `llm`'s
+`auth: oauth` session CA are trusted together. The `github` relay, `webfetch`'s
+fetcher and the browser sidecar trust it too (`trust:` in their manifests): core
+gives them the same bundle. The browser can also trust a CA of its own,
+`playwright: {ca: …}` (see Browser below). Unset, nothing renders differently.
 
 **Language toolchains (the `toolchains` extension, off by default).** Pinned
 Node/Python runtimes, a project's lockfile-strict dependencies and Playwright's
@@ -380,9 +381,10 @@ Pi also skips the project's `.pi/` and `.agents/skills` (rendered
 `harness_config.settings.defaultProjectTrust` to relax it). Its `AGENTS.md`
 and Vibe's still load: they are prompts, like any file the agent reads.
 
-Pi's session dir is pinned to its default (`PI_CODING_AGENT_SESSION_DIR`), so
-a repo's `.pi/settings.json` can't move where sessions are written (see
-[SECURITY.md](docs/SECURITY.md)).
+Pi's session dir is pinned to its default (`PI_CODING_AGENT_SESSION_DIR`), and
+Pi only ever sees an empty `.pi/settings.json` (glove binds one over the repo's,
+creating `.pi/` when missing), so a repo's settings can't move where sessions
+are written or change anything else (see [SECURITY.md](docs/SECURITY.md)).
 
 **Vibe: the repo's skills, opt-in.** With
 
@@ -563,9 +565,10 @@ and an extension's CLI).
   than its own session state, its outputs and inputs (below), and all of
   `work/` only with the `work` privilege (`github`'s sidecar, which pushes the
   agent's checkout); never a path inside `work/`. The services a manifest's
-  `trust:` names get the session's `corporate_ca` from core, bound
-  read-only at `/etc/glove/corporate-ca.pem` and never SELinux-relabelled, with
-  `GLOVE_CORPORATE_CA` naming it; the image builds its own bundle from it. A
+  `trust:` names get the session's CA bundle from core, as the harness does:
+  `corporate_ca` and the extension's own `type: ca` settings, copied into
+  `.glove/trust/` (bound read-only; on SELinux relabelled, since it is glove's
+  own copy), and built by core's entrypoint before the service's whole `command` (which it must set) runs. A
   read-only sidecar cannot take an environment-sourced compose secret (Docker
   refuses), so it gets one as `llm-auth` gets the LLM key: a `launch_env` hook
   fills an `environment:` key declared without a value, at `compose up`.
@@ -677,6 +680,9 @@ and an extension's CLI).
 - **Out-of-tree** extensions load from `extension_paths:` in
   `~/.glove/config.yml`, are labelled *out-of-tree*, and cannot take privilege
   exceptions (or reach host ports) unless listed in `trusted_extensions:`.
+  An untrusted one's CLI never runs, and an `extension_paths` directory others
+  can write is skipped. An extension's code runs only when a session selects
+  it or you invoke its CLI (`glove <name> …`).
 
 `llm` is the inference engine, picked like a gluetun VPN provider: `provider:`
 names a catalog entry (`extensions/llm/providers/*.yml`). `location:` routes it:
@@ -1054,10 +1060,9 @@ runs, view-only unless `allow_control: true` (enforced by the VNC server).
 gets only the `tools` allowlist: Pi registers just those, Vibe hides every
 other `playwright_*` tool (`browser_run_code_unsafe` included), and Claude Code
 gets allow rules for them and a managed deny rule for every other tool the
-pinned MCP has. A private CA
-for the sidecar is `playwright: {ca: <pem>}`. It is set separately from
-`corporate_ca`, so set both when the browser is used. The sidecar's Node trusts it
-through `NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
+pinned MCP has. The sidecar trusts the session's `corporate_ca`, and a private CA
+for it alone is `playwright: {ca: <pem>}`. Its Node trusts them through
+`NODE_EXTRA_CA_CERTS` and Chromium through an NSS import. With
 `downloads: work` what the browser saves lands in `<session>/browser-output/`
 (read-only at `/work/browser-output/`); with `uploads: work` it uploads from
 `/work/browser-uploads/` (read-only in the sidecar). For single sign-on,

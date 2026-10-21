@@ -29,7 +29,7 @@ extensions:
     # downloads: session       # work: what the browser saves lands in <session>/browser-output/ (/work/browser-output, read-only)
     # uploads: none            # work: browser_file_upload may send files from /work/browser-uploads/ (<session>/browser-uploads/)
     # resources: {memory: 2g, cpus: 2, pids: 2048}
-    # ca: local/corporate-ca.pem   # a private CA's PEM the sidecar trusts too (no default)
+    # ca: local/browser-ca.pem   # a private CA's PEM the sidecar trusts too (no default)
     # storage_state: keychain:<service>   # a signed-in session the browser starts with (below)
     # login: {start_url, domains, capture}  # what `glove playwright login` stores (below)
     # novnc only:
@@ -113,19 +113,19 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
 - **Chromium phones home** even with Playwright's switches: in live runs the
   flows showed `accounts.google.com`, `clients2.google.com`,
   `update.googleapis.com` and `www.google.com`. With `filter`, block them.
-- **A private CA** (`ca: <pem>`, unset by default) is for sites behind a
-  TLS-intercepting proxy. The path is relative to the session directory and is
-  checked at plan time with the same rules as `corporate_ca`: a regular file
-  with a PEM certificate and no private key, not the session file or anything
-  in `.glove/`. glove
-  copies it into `.glove/ext/playwright/corporate-ca.pem` and binds it read-only
-  at `/etc/glove/playwright/corporate-ca.pem`. The MCP's Node trusts it through
-  `NODE_EXTRA_CA_CERTS`. Before Chromium starts, `glove-pw-start` imports every
-  certificate in the bundle into the NSS db on the sidecar's tmpfs home
-  (`certutil … -t "C,,"`). Trust is only added: glove never passes a flag that
-  skips certificate checks. This setting is separate from the session's
-  `corporate_ca` (which covers the harness), so set both. Host mode ignores it,
-  because your Chrome already uses your Mac's trust store.
+- **A private CA.** The sidecar trusts the session's `corporate_ca`, and `ca:
+  <pem>` (unset by default) adds one for the browser alone, for sites behind a
+  TLS-intercepting proxy. It is a core `type: ca` setting: relative to the
+  session directory and checked at plan time with the same rules as
+  `corporate_ca` (a regular file with a PEM certificate and no private key, not
+  the session file or anything in `.glove/`), then copied into `.glove/trust/`.
+  Core builds the sidecar's CA bundle before `glove-pw-start` runs (`trust:
+  [pw]`); the MCP's Node trusts the CAs through `NODE_EXTRA_CA_CERTS`, and
+  before Chromium starts `glove-pw-start` imports each of them into the NSS db
+  on the sidecar's tmpfs home (`certutil … -t "C,,"`). Trust is only added:
+  glove never passes a flag that skips certificate checks. The harness never
+  trusts `ca`. Host mode doesn't use it (your Chrome already uses your Mac's
+  trust store), though it is still checked.
 - The MCP always offers `browser_run_code_unsafe` (arbitrary code in the MCP
   process). glove never passes it on: Pi offers only `tools` (each server is
   `hidden` but for them) and its enforcer extension refuses any other, Vibe gets a `disabled_tools` rule that hides every other `playwright_*`

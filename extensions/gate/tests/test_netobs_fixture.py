@@ -7,6 +7,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from extensions.gate.netgate import guard
 from extensions.gate.tests.contract import CONTRACT
 from extensions.gate.tests.test_netgate_invariants import _shape, assert_flow_shape
 
@@ -56,7 +57,7 @@ def test_fixture_covers_every_state_a_ui_must_render():
     reasons = {r["close_reason"] for r in closes}
     assert {"eof", "blocked", "upstream_unreachable", "gate_shutdown"} <= reasons
     assert {r["rule"] for r in closes if r["rule"]} == {
-        "builtin:ssrf-guard", "builtin:malformed-request", "r_01M3FIXTUREADSBLOCK00000000"}
+        guard.GUARD_RULE, guard.MALFORMED_RULE, "r_01M3FIXTUREADSBLOCK00000000"}
     assert {r["scope"] for r in closes} == {"local", "tunnelled"}
     assert {r["proto"] for r in closes} == {"tcp", "http-connect", "http"}
     assert any(r["dest"]["host"] is None for r in closes)  # the "render as the service endpoint" case

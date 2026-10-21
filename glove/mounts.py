@@ -206,11 +206,18 @@ def compute_mounts(
     return MountPlan(mounts=mounts, working_dir=working_dir)
 
 
-# Always protected when present at the root of a rw mount.
-GIT_PROTECTED = (".git/hooks", ".git/config")
-# Protected only with `protect_ide_files: true` (a missing one gets a
-# placeholder, which creates an empty file/dir on the host — hence opt-in).
-IDE_PROTECTED = {".vscode": "dir", ".envrc": "file", ".mcp.json": "file"}
+# Trusted by the host (git, IDEs, direnv, agent CLIs) when the user opens a rw
+# mount, relative to its root: (path, kind, placeholder). Ring 0 binds each one
+# present read-only, and srt denies writing it (`enforcers/nono_srt.py`). A
+# missing one with `placeholder` is bound over an empty one only with
+# `protect_ide_files: true` (that creates an empty file/dir on the host — hence
+# opt-in); the others are left alone, so a fresh /work keeps `git init` working.
+HOST_TRUSTED = (
+    (".git/hooks", "dir", False), (".git/config", "file", False), (".gitmodules", "file", False),
+    *((f".claude/{f}", "file", False) for f in ("settings.json", "settings.local.json")),
+    *((f".claude/{d}", "dir", False) for d in ("commands", "agents", "hooks", "skills")),
+    (".vscode", "dir", True), (".idea", "dir", True), (".envrc", "file", True), (".mcp.json", "file", True),
+)
 _HOOKS_PATH = re.compile(r"^\s*hookspath\s*=\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -238,15 +245,6 @@ def protected_paths(
 ) -> tuple[Protect, ...]:
     """Ring-0 read-only binds for every rw mount (§6.3 of the v3 plan).
 
-    Covers `.git/hooks` and `.git/config` at the mount root and, when
-    `core.hooksPath` points inside the mount, that directory too. `.git` itself
-    is re-bound read-write first, so it is a mount point: renaming or removing
-    it fails (EBUSY) — otherwise `mv .git x && git init` would replace the
-    protected hooks wholesale. Sources are realpath'd and must stay inside the
-    mount: a symlink can never turn this into a bind of some other host path.
-    Residual gap (documented): a path created later (e.g. `git init` in a
-    directory with no repo yet) or a nested repo/submodule is not covered.
-
     `files` (container path, source; the harness profile's working-dir
     `protect:` entries, a trailing `/` marking a directory) are always
     protected: with source "auto" the mount's own copy, or a placeholder when
@@ -254,33 +252,46 @@ def protected_paths(
     mount's own copy). Each directory between one and the mount root is pinned
     read-write (a missing one is created at launch), so `mv .claude x` cannot
     swap in a fresh copy. Shallower paths go first, so a path inside a masked
-    directory binds inside its placeholder (no pin over it)."""
+    directory binds inside its placeholder (no pin over it).
+
+    Then, at each rw mount's root, the HOST_TRUSTED paths present (and, when
+    `core.hooksPath` points inside the mount, that directory), their
+    directories pinned the same way: `.git` is a mount point, so `mv .git x &&
+    git init` fails (EBUSY) instead of replacing the protected hooks
+    wholesale. One already inside a read-only bind (a harness's masked
+    directory) is covered. Sources are realpath'd and must stay inside the
+    mount: a symlink can never turn this into a bind of some other host path.
+    Residual gap (documented): a path created later (e.g. `git init` in a
+    directory with no repo yet) or a nested repo/submodule is not covered."""
     out: dict[str, Protect] = {}
     add = partial(_add, out)
-    for m in mounts:
-        if m.mode != "rw":
-            continue
-        git = os.path.join(m.host_path, ".git")
-        if os.path.isdir(git) and not os.path.islink(git):
-            add(m, os.path.realpath(git), ".git", "dir", read_only=False)  # pin: no rename
-        for rel in GIT_PROTECTED:
-            real = os.path.realpath(os.path.join(m.host_path, rel))
-            if os.path.lexists(os.path.join(m.host_path, rel)) and os.path.exists(real) and _inside(m.host_path, real):
-                add(m, real, os.path.relpath(real, m.host_path), "dir" if os.path.isdir(real) else "file")
-        hooks = _hooks_path(os.path.join(m.host_path, ".git", "config"), m.host_path)
-        if hooks and os.path.isdir(hooks) and _inside(m.host_path, hooks):
-            add(m, hooks, os.path.relpath(hooks, m.host_path), "dir")
-        if protect_ide_files:
-            for rel, kind in IDE_PROTECTED.items():
-                path = os.path.join(m.host_path, rel)
-                real = os.path.realpath(path)
-                if not os.path.lexists(path):
-                    add(m, None, rel, kind)  # placeholder
-                elif os.path.exists(real) and _inside(m.host_path, real):
-                    add(m, real, os.path.relpath(real, m.host_path), kind)
     for path, source in sorted(files, key=lambda f: f[0].rstrip("/").count("/")):
         _protect_path(mounts, path, add, source=source)
-    return tuple(out.values())
+
+    def trust(m: Mount, rel: str, kind: str, host: str | None) -> None:
+        parts = rel.split("/")
+        if any(getattr(out.get(os.path.normpath(os.path.join(m.container_path, *parts[:i]))), "read_only", False)
+               for i in range(1, len(parts) + 1)):
+            return  # covered
+        for i in range(1, len(parts)):
+            add(m, os.path.join(m.host_path, *parts[:i]), "/".join(parts[:i]), "dir", read_only=False)  # pin
+        add(m, host, rel, kind)
+
+    for m in (m for m in mounts if m.mode == "rw"):
+        for rel, kind, placeholder in HOST_TRUSTED:
+            path = os.path.join(m.host_path, rel)
+            real = os.path.realpath(path)
+            if not os.path.lexists(path):
+                if placeholder and protect_ide_files:
+                    trust(m, rel, kind, None)
+            elif os.path.exists(real) and _inside(m.host_path, real):
+                trust(m, os.path.relpath(real, m.host_path), "dir" if os.path.isdir(real) else "file", real)
+        hooks = _hooks_path(os.path.join(m.host_path, ".git", "config"), m.host_path)
+        if hooks and os.path.isdir(hooks) and _inside(m.host_path, hooks):
+            trust(m, os.path.relpath(hooks, m.host_path), "dir", hooks)
+    ro = [p.container_path for p in out.values() if p.read_only]  # no pin reopens a read-only bind
+    keep = (p for p in out.values() if p.read_only or not any(_inside(r, p.container_path) for r in ro))
+    return tuple(sorted(keep, key=lambda p: p.container_path.count("/")))  # parents first
 
 
 def protected_home(home: Mount, config_home: str, paths: Sequence[str]) -> tuple[Protect, ...]:
@@ -323,7 +334,8 @@ def check_path(root: str, rel: str, kind: str) -> None:
 
 def _add(out: dict[str, Protect], root: Mount, host: str | None, rel: str, kind: str, read_only: bool = True) -> None:
     cpath = os.path.normpath(os.path.join(root.container_path, rel))
-    out.setdefault(cpath, Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only))
+    if cpath not in out or (read_only and not out[cpath].read_only):  # read-only wins over a pin
+        out[cpath] = Protect(container_path=cpath, host_path=host, kind=kind, read_only=read_only)
 
 
 def _protect_path(mounts: list[Mount], path: str, add, *, source: str = "auto") -> None:
@@ -375,15 +387,15 @@ def _resolve_working_dir(
 def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points: Sequence[str] = ()) -> None:
     """Create the bind sources that do not exist yet: the dirs pinned over a
     trusted file, the config home and its protected files and dirs (empty);
-    and the `mount_points` (container paths, e.g. tmpfs targets) under the
-    read-only home, where the runtime cannot create one."""
+    a placeholder's mount point in a read-only dir bind (`core.hooksPath` of
+    `.claude`); and the `mount_points` (container paths, e.g. tmpfs targets)
+    under the read-only home, where the runtime cannot create one."""
+    ro = [p for p in protect if p.read_only and p.host_path and p.kind == "dir"]
     for p in protect:
-        if p.host_path and not os.path.lexists(p.host_path):
-            if p.kind == "dir":
-                os.makedirs(p.host_path)
-            else:
-                os.makedirs(os.path.dirname(p.host_path), exist_ok=True)
-                Path(p.host_path).touch()
+        host = p.host_path or next((os.path.join(d.host_path, posixpath.relpath(p.container_path, d.container_path))
+                                    for d in ro if _inside(d.container_path, p.container_path)), None)
+        if host and not os.path.lexists(host):
+            _make_empty(Path(host), p.kind)
     for target in mount_points:
         if _inside(CONTAINER_HOME, target):
             rel = posixpath.relpath(target, CONTAINER_HOME)

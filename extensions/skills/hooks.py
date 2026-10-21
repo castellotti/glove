@@ -182,6 +182,20 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     return out
 
 
+@hook
+def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
+    """A stdio server runs under the tool wrapper, and `enforcer: none` has
+    none: glove-tool refuses to start it (exit 126). (Every other in-tree
+    enforcer renders a wrapper.)"""
+    if ctx.enforcer != "none":
+        return []
+    return [(f"skills mcp {name}/{item['name']}", "warn",
+             f"skills.plugins.{name}: a stdio server will not start under enforcer: none (glove-tool runs it under "
+             f"the tool wrapper, and there is none); pick an enforcer, or use an http server")
+            for name, raw in (ctx.settings.get("plugins") or {}).items()
+            for item in _plugin(ctx, name, raw)["mcp"] if item["transport"] == "stdio"]
+
+
 def _relay_contrib(relays: list[Relay]) -> dict[str, Any]:
     """Per relay: its channel, its hop to the egress proxy, its checks, and
     what its services fragment renders (`vars.relays`)."""

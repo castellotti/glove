@@ -97,8 +97,9 @@ harness ─https://api.anthropic.com─▶ llm (forwarder, alias api.anthropic.c
   if it dies, the model is unreachable until the next `glove up`).
 - It publishes `ca.pem` in the `llm-ca` channel, which only `llm-auth` writes
   and the harness reads (`read_only`, mounted at `/run/glove/llm-ca`). Core
-  sets the harness's `NODE_EXTRA_CA_CERTS` to it: Node adds it to its roots,
-  verification stays on. glove's launch probe trusts the same file. The
+  adds it to the harness's CA bundle (with `corporate_ca`, when set), built
+  as the harness starts: Node adds it to its roots, verification stays on.
+  glove's launch probe trusts the same bundle. The
   healthcheck is a handshake verified by name, so "healthy" also means "the
   CA is published".
 - The allowlist adds the catalog's `oauth.paths` (GET only; the list and when
@@ -107,8 +108,6 @@ harness ─https://api.anthropic.com─▶ llm (forwarder, alias api.anthropic.c
   transcript sharing and account writes are a 403. `llm-auth` adds the token
   to each, including the two Claude Code sends without one (`HEAD /api/hello`,
   the preflight).
-- `corporate_ca` also sets `NODE_EXTRA_CA_CERTS`; the two together are refused
-  at plan time for now.
 
 **Without a key** (a local server), `glove-<id>-llm` dials the table's target
 itself. For `internet` the provider hostname is then an alias of the

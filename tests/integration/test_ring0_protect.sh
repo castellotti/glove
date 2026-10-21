@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Ring-0 read-only binds (v3 plan §6.3): the agent cannot plant git hooks or
-# rewrite .git/config (both later run/trusted on the HOST), and with
+# rewrite .git/config (both later run/trusted on the HOST), nor any other
+# host-trusted file already there (.gitmodules, .claude/*, .idea), and with
 # `protect_ide_files: true` cannot create .envrc/.mcp.json/.vscode.
 #
 # Renders a real session with `glove pi --dry-run` and runs the rendered
@@ -23,8 +24,15 @@ PASS=0 FAIL=0
 ok()  { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-git -C "$WORKDIR" init -q && git -C "$WORKDIR" config user.email t@example.com && git -C "$WORKDIR" config user.name t
-echo hi > "$WORKDIR/README" && git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -qm init
+# a git repo with host-trusted files already there: protected whatever protect_ide_files says
+# (mounts.HOST_TRUSTED; a second session renders without the option)
+plant() {
+  git -C "$1" init -q && git -C "$1" config user.email t@example.com && git -C "$1" config user.name t
+  echo hi > "$1/README" && git -C "$1" add README && git -C "$1" commit -qm init
+  mkdir -p "$1/.claude/hooks" "$1/.idea"
+  echo '{}' > "$1/.claude/settings.json"; : > "$1/.gitmodules"; echo 'echo hi' > "$1/.claude/hooks/x.sh"
+}
+plant "$WORKDIR"
 
 echo "== rendering (glove plan, protect_ide_files: true) =="
 new_session "$S" pi 'protect_ide_files: true\n'
@@ -51,7 +59,15 @@ for who in harness tool; do
   denied "$out" && ok "$who: write .envrc denied" || bad "$who: wrote .envrc: $out"
   out="$(run "$pre 'echo x > /work/.vscode/tasks.json; echo rc=\$?'")"
   denied "$out" && ok "$who: write .vscode/tasks.json denied" || bad "$who: wrote .vscode: $out"
+  for f in .gitmodules .claude/settings.json .claude/hooks/x.sh .idea/workspace.xml; do
+    out="$(run "$pre 'echo x >> /work/$f; echo rc=\$?'")"
+    denied "$out" && ok "$who: write $f denied" || bad "$who: wrote $f: $out"
+  done
+  out="$(run "$pre 'cd /work && mv .claude .claude-moved; echo rc=\$?'")"
+  echo "$out" | grep -q 'rc=[^0]' && ok "$who: mv .claude denied" || bad "$who: renamed .claude away: $out"
 done
+[ "$(cat "$WORKDIR/.claude/hooks/x.sh")" = 'echo hi' ] && [ ! -s "$WORKDIR/.gitmodules" ] \
+  && ok "host: .claude/hooks and .gitmodules unchanged" || bad "host: a host-trusted file changed"
 [ ! -e "$WORKDIR/.git/hooks/pre-commit" ] && ok "host: no pre-commit hook exists" || bad "host: pre-commit planted"
 
 echo "== normal git work still functions =="
@@ -66,6 +82,26 @@ for who in harness tool; do
     || bad "$who: renamed .git away: $out"
 done
 [ -d "$WORKDIR/.git" ] && [ ! -e "$WORKDIR/.git-moved" ] && ok "host: .git intact" || bad "host: .git moved"
+
+echo "== a second session (protect_ide_files off): what is there stays read-only =="
+"$RT" compose -f "$COMPOSE" down -v >/dev/null 2>&1
+# its own dir: the runtime left the first one's placeholder mount points in its /work, and with
+# no mount-watch (compose run --no-deps) a host-side delete stays hidden on Docker Desktop's virtiofs
+S="$TMPROOT/s-off"; WORKDIR="$S/work"; mkdir -p "$WORKDIR"; plant "$WORKDIR"
+new_session "$S" pi ''
+ENVID="$S_ID"; COMPOSE="$S_COMPOSE"
+for who in harness tool; do
+  if [ "$who" = tool ]; then pre="$TOOL"; else pre="bash -c"; fi
+  for f in .git/hooks/pre-commit .git/config .gitmodules .claude/settings.json .claude/hooks/x.sh .idea/workspace.xml; do
+    out="$(run "$pre 'echo x >> /work/$f; echo rc=\$?'")"
+    denied "$out" && ok "off, $who: write $f denied" || bad "off, $who: wrote $f: $out"
+  done
+done
+# no placeholders without the option: a missing .envrc/.vscode can be created
+out="$(run "$TOOL 'echo x > /work/.envrc && mkdir -p /work/.vscode && echo x > /work/.vscode/tasks.json && echo created'")"
+echo "$out" | grep -q created && ok "off: a missing .envrc and .vscode can be created" || bad "off: could not create them: $out"
+[ ! -e "$WORKDIR/.git/hooks/pre-commit" ] && [ ! -s "$WORKDIR/.gitmodules" ] \
+  && ok "off, host: no pre-commit hook; .gitmodules unchanged" || bad "off, host: a host-trusted file changed"
 
 "$RT" compose -f "$COMPOSE" down -v >/dev/null 2>&1  # `compose run` created the session networks
 echo

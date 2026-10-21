@@ -40,7 +40,7 @@ from dataclasses import dataclass, field, replace
 
 from . import ANNOUNCE_EVERY, SCHEMA_VERSION, guard, httpproxy, sni
 from .exitid import FileExit, UrlExit
-from .policy import PolicyWatcher
+from .policy import RULE_ID, PolicyWatcher
 from .records import flow_record, gate_record, ulid
 from .resolver import InTunnel
 from .resolver import from_url as resolver_from_url
@@ -133,6 +133,16 @@ class ForwardSpec:
         if is_local:
             return "local"
         return "tunnelled" if self.route_kind in ("vpn", "tor") else "direct"
+
+    def classify_proxy_dest(self, flow: _Flow, host: str, port: int) -> str | None:
+        """Record a proxy destination on ``flow`` as the gate sees it before any
+        in-tunnel lookup (host, port, dest.ip, resolution, scope); the SSRF
+        guard's refusal reason, or None. The observe fixtures build flows with it."""
+        flow.host, flow.port = host, port
+        flow.ip, flow.resolution = self.display_ip(host)
+        why, is_local = guard.check_with(host, self.exceptions)
+        flow.scope = self.flow_scope(is_local)
+        return why
 
 
 class EventSink:
@@ -430,7 +440,11 @@ class Forwarder:
 
     @staticmethod
     def _block(flow: _Flow, rule: str | None) -> None:
-        flow.verdict, flow.rule = "block", rule
+        # A record's rule is the default policy (None), one of guard's built-ins
+        # or a valid rules.json id, never anything else: a bad one still blocks
+        # (1y), and a non-string can't raise here and kill the policy watcher.
+        ok = rule is None or (isinstance(rule, str) and (rule in guard.BUILTIN_RULES or RULE_ID.fullmatch(rule)))
+        flow.verdict, flow.rule = "block", rule if ok else guard.INTERNAL_ERROR_RULE
 
     async def _watch_policy(self) -> None:
         """Reload on change; a rule with `terminate: true` also cuts established
@@ -616,12 +630,9 @@ class Forwarder:
             return None
 
         flow.proto = req.proto
-        flow.host, flow.port = req.host, req.port
+        why = self.spec.classify_proxy_dest(flow, req.host, req.port)
         if self.spec.record == "full":
             flow.request = httpproxy.request_summary(head, req, headers=self.spec.record_headers)
-        flow.ip, flow.resolution = self.spec.display_ip(req.host)
-        why, is_local = guard.check_with(req.host, self.spec.exceptions)
-        flow.scope = self.spec.flow_scope(is_local)
         if why is not None:
             await self._refuse(flow, writer, 403, "Forbidden", guard.GUARD_RULE, why)
             return None

@@ -76,6 +76,32 @@ agent gains is the use of the credential within a bound, never its value.
 | `glove playwright login` | a Chrome on the host, outside the gate, while the operator signs in | a fresh profile, deleted after; CDP over a pipe (no port); never wired to the harness; only `login.domains`' and `login.capture`'s values kept, to the Keychain on stdin |
 | a stored browser session (`storage_state`) | the agent browses as the operator on those hosts until the cookies expire (as with `profile: session`) | the values never reach the model: the tools that return cookies, storage or headers, run code, trace or route are refused, so are `uploads: work` and typed `javascript:` URLs ([browser](#browser-playwright)) |
 
+### Trusted CAs: one way (`glove/cafile.py`)
+
+Every CA a session trusts besides the image's public roots goes the same way:
+`corporate_ca`, an extension's `type: ca` setting (`playwright.ca`) and a
+read-only channel's `trust` file (`llm`'s `auth: oauth` session CA, written by
+`llm-auth`).
+
+- **Checked, then copied.** A host PEM must be a regular file with a certificate
+  and no private key, and not the session file or anything in `.glove/`
+  (checked at plan time). glove copies it into `.glove/trust/`, bound
+  read-only; the operator's own file is never bound, so relabelling the copy for
+  SELinux is safe (untested on an SELinux host).
+- **One bundle, built before any sandbox.** A prelude in front of the
+  enforcer's command (the harness) or the service's `command` (a sidecar its
+  manifest's `trust:` names) waits for each CA, then writes the image's roots
+  plus every CA to a tmpfs at `/etc/glove/ca/`. It refuses to start (exit 90)
+  when a CA never appears or the image has no roots, so a session never runs
+  trusting less, or other, than it says. Every enforcer lets the agent read
+  `/etc/glove` and none lets it write there, so neither the agent nor its
+  commands can add a CA to the harness's trust (with `enforcer: none` nothing
+  holds that).
+- **Who trusts what.** The harness: `corporate_ca` and the channels' CAs. A
+  trusting sidecar: `corporate_ca` and its own extension's `ca` settings. Trust
+  is only added; nothing renders a flag or variable that turns verification
+  off.
+
 ## Extensions (what a capability pack may and may not do)
 
 Every capability (the model, search, the browser, …) is an extension in
@@ -150,6 +176,23 @@ Every capability (the model, search, the browser, …) is an extension in
   privilege exceptions or host ports unless trusted. A session file can't run
   host commands (`host_services:` is gone); an extension's hooks are host
   Python with your rights, which only the extension's trust contains.
+- **An extension's code runs only when a session selects it or you invoke its
+  CLI; an untrusted out-of-tree extension's CLI never runs.** `glove --help`
+  and `glove ext` list CLIs from the manifests (YAML) alone; `glove <name> …`
+  imports that one `cli.py`, and refuses an untrusted out-of-tree one with how
+  to trust it. Hooks (`hooks.py`) load only for the extensions a session
+  selects (plan, check, up, and `down`'s teardown for the last launch's set),
+  and `call_hook` refuses any other. An extension's CLI acting on a session
+  refuses one that doesn't select it (`ext_session`).
+- **`extension_paths` hygiene.** As ssh treats `~/.ssh`, an entry is skipped
+  with a warning when another user could plant code glove runs: the entry or
+  one of its ancestors (unless sticky, like `/tmp`), or anything in an
+  extension's directory (all of it, symlinks followed), is owned by someone
+  other than you or root, or writable by other users. Group-write counts as
+  other users unless the group is your private one (named after you, no other
+  members), as OpenSSH allows. A manifest's `cli` and `hooks` must name files
+  in the extension's own directory. Not covered: macOS ACLs (`ls -le`), and
+  `sudo glove` (root skips your extensions as another user's).
 - `glove/` never imports `extensions/` (`uv run lint-imports`).
 - **Export roots** are the only session data outside the session directory, and
   core owns them: `~/.glove/observe/<id>/` exists only for the in-tree
@@ -159,7 +202,9 @@ Every capability (the model, search, the browser, …) is an extension in
 - **The forwarder slot.** An extension filling `forwarder` (observe) may replace
   the socat forwarders, but only with services core names, networks and
   hardens: its hook cannot choose networks, aliases outside the endpoint's own
-  name, security keys or privileges.
+  name, security keys or privileges. Filling the slot is itself a privilege
+  (its service sits on every endpoint's traffic): an untrusted out-of-tree
+  provider is refused before its hooks load.
 - **Names rendered into compose.** An extension's harness env keys (from its
   manifest or a `contribute` hook) must match `^[A-Z][A-Z0-9_]*$` and may not
   overwrite another extension's; endpoint and forwarder aliases must be
@@ -225,7 +270,7 @@ only), which holds the key and dials the server through a second forwarder,
     session's harness only: the same access that gives the token.
   - **No auto-restart:** if `llm-auth` dies, the model is unreachable until the
     next `glove up` (a new CA would be untrusted by the running harness).
-  - **`corporate_ca` and a token together are refused** for now.
+  - **With `corporate_ca`** the harness trusts both CAs ([one bundle](#trusted-cas-one-way-glovecafilepy)).
 
 ### Egress (`vpn`, `tor`, `direct`, `corporate`)
 
@@ -452,8 +497,8 @@ does not vet it.
   (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
   not even the forwarders the harness process reaches (glove's own stdio MCP
   servers on Claude Code run under the harness sandbox instead). With no
-  wrapper it refuses to start. Each server's tools must be listed; the
-  inventory fails closed.
+  wrapper it refuses to start (`glove check` warns under `enforcer: none`).
+  Each server's tools must be listed; the inventory fails closed.
 - **Not loaded:** plugin hooks, commands, agents, output styles; Claude Code
   still refuses plugins as such (the skills come in through `--add-dir`).
 
@@ -876,6 +921,15 @@ wrapper and the planted hook ran in the harness.
   them). `PI_CODING_AGENT_SESSION_DIR` is set to Pi's default for `/work`
   (`~/.pi/agent/sessions/--work--`), and the variable wins over the setting;
   `test_config_protect.sh pi` plants one and checks no session lands there.
+- **Pi never sees the project's `.pi/settings.json`.** Some Pi 1.x code paths
+  (its resource loader and session services) load it as trusted whatever
+  `defaultProjectTrust` says. Pi's `protect:` has `{path: .pi/settings.json,
+  source: empty}`: the harness gets an empty file (Pi reads it as `{}`, checked
+  in Pi 1.1.0), `.pi/` is pinned, and a `.pi/` with an empty `settings.json`
+  appears in the working dir when missing. A `.pi` or `.pi/settings.json` that
+  is a symlink (or `.pi` a file) refuses the session, as any `protect:` path
+  does. `test_config_protect.sh pi` checks that the file reads empty though
+  the host's is planted.
 - **Gaps:** context files (`AGENTS.md`) are prompts, re-rendered at each start.
   An older session home: see "The harness home" above (its `auth.json` is
   overwritten with `{}` at launch, so credentials it held are gone).
@@ -922,8 +976,8 @@ Landlock cannot grant).
 |---|---|---|
 | Harness process network | ring 0: the session's forwarders on an internal network | same (srt adds no network namespace, below) |
 | Tool command network | none (Landlock) | none (Landlock) |
-| `/work/.git/hooks`, `.git/config` | ring-0 ro binds where they exist (below) | also denied by srt |
-| `.vscode`, `.idea`, `.envrc`, `.mcp.json`, `.claude/*`, shell rc files in `/work` | only with `protect_ide_files` | denied where they exist at launch |
+| Host-trusted files in `/work` (`.git/hooks`, `.git/config`, `.gitmodules`, `.claude/*`, `.vscode`, `.idea`, `.envrc`, `.mcp.json`) | ring-0 ro binds where they exist (below) | same, and also denied by srt (one list, `mounts.HOST_TRUSTED`) |
+| Shell rc and srt's other dangerous files in `/work` | writable | denied where they exist at launch |
 | `.env` / `.env.*` in `/work` | readable | hidden from harness and tools (present at launch) |
 | Namespaces / mounts / AF_UNIX / io_uring | default seccomp: no userns | relaxed profile for srt; glove's filter denies all of these to everything below srt |
 | PID namespace around the harness and its commands | no | yes (srt's `apply-seccomp`) |
@@ -973,28 +1027,45 @@ Landlock cannot grant).
 
 `/work` is writable, and some files in it are later *executed or trusted by the
 host*: git runs `.git/hooks/*` and honours `.git/config` (`core.hooksPath`,
-`core.fsmonitor`, filter drivers …) the next time you run git on your Mac, and
-IDEs and direnv act on `.vscode/`, `.envrc` and `.mcp.json`. An agent that
-plants one gets code execution **outside** the sandbox. Landlock cannot express
-"writable directory except these children", so glove adds nested read-only
-binds after each rw mount (`glove/mounts.py:protected_paths`):
+`core.fsmonitor`, filter drivers …) and `.gitmodules` the next time you run git
+on your Mac; Claude Code loads the project's `.claude/` settings, commands,
+agents, skills and the hook scripts they name; and IDEs and direnv act on
+`.vscode/`, `.idea/`, `.envrc` and `.mcp.json`. An agent that plants one gets
+code execution **outside** the sandbox. Landlock cannot express "writable
+directory except these children", so glove adds nested read-only binds after
+each rw mount (`glove/mounts.py:protected_paths`). One table
+(`glove/mounts.py:HOST_TRUSTED`) lists these paths; `nono+srt` also denies
+them to srt (`glove/enforcers/nono_srt.py`), so every enforcer protects the
+same ones:
 
-- **Always, at the root of every rw mount that is a git repo:** `.git/hooks`
-  and `.git/config` are read-only, and so is an in-tree `core.hooksPath`
-  directory. `.git` itself is re-bound (read-write) so that it is a mount
-  point. Renaming or deleting it fails with `EBUSY`, which stops the agent from
-  swapping in a fresh `.git` with its own hooks. Commits, branches and fetches
-  still work.
-- **With `protect_ide_files: true`:** `.vscode/`, `.envrc` and `.mcp.json` are
-  read-only. When one is missing, glove binds an empty placeholder over it,
-  which creates an empty file or directory in your repo. That side effect is
-  why this setting is opt-in.
+- **Always, at the root of every rw mount, where they exist:** `.git/hooks`,
+  `.git/config`, `.gitmodules`, `.claude/settings.json`,
+  `.claude/settings.local.json`, `.claude/commands`, `.claude/agents`,
+  `.claude/hooks`, `.claude/skills`, `.vscode`, `.idea`, `.envrc` and
+  `.mcp.json` are read-only, and so is an in-tree `core.hooksPath` directory.
+  The directories they sit in (`.git`, `.claude`) are re-bound (read-write)
+  so that each is a mount point. Renaming or deleting one fails with `EBUSY`,
+  which stops the agent from swapping in a fresh `.git` with its own hooks.
+  Commits, branches and fetches still work. A path inside a directory the
+  harness masks (its `protect:` placeholder) is already covered. A
+  `core.hooksPath` naming `.claude` or `.git` itself makes that whole
+  directory read-only (with `.git`, the agent's git can no longer commit).
+  srt denies the same read-only binds (those of files `/work` holds).
+- **With `protect_ide_files: true`:** a *missing* `.vscode/`, `.idea/`,
+  `.envrc` or `.mcp.json` gets an empty read-only placeholder too, so the agent
+  can't create one. That creates an empty file or directory in your repo, which
+  is why this setting is opt-in. Other missing paths are left alone, so `git
+  init` in a fresh `/work` still works.
 - Bind sources are resolved with realpath and must stay inside the mount, so a
   symlink can't expose another host path.
 
 **Residual gaps:** paths that don't exist at start (for example `git init`
-run inside a directory with no repo yet), nested repositories and submodules
-(`.git/modules/*`), and `.git` files (worktrees) are not covered.
+run inside a directory with no repo yet, or a `.git/hooks` missing from an
+existing repo), nested repositories and submodules (`.git/modules/*`), and
+`.git` files (worktrees) are not covered. A symlink on the way (`.claude ->
+cfg`, or a symlinked `.claude/settings.json`) is followed: its target inside
+the mount is protected and pinned, but the link itself is an ordinary entry
+the agent can replace with a directory of its own.
 `tests/integration/test_ring0_protect.sh` checks this live.
 
 ## Network observability (the netgate): observe reads, filter writes
@@ -1075,7 +1146,12 @@ reporting `rules`).
   compromised writer can at worst change which destinations are allowed. The
   built-in SSRF guard runs before the rules, so no rule can allow an internal
   destination; only the operator's `corporate` allowlist (session file,
-  command line) widens it.
+  command line) widens it. A blocked flow's `rule` is always `null` (the
+  default policy), one of the gate's own `builtin:` refusals or a validated
+  `r_…` id: the gate
+  checks it again when it blocks, and records anything else as
+  `builtin:internal-error`, still a block, so a reader of `flows.ndjson` never
+  sees an unchecked id.
 - **No host DNS.** Nothing on the host resolves a destination. An observe gate
   resolves only its configured target or upstream (as socat did) and glove's
   own ingress alias; the corporate egress gate, by design, resolves destinations

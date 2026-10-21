@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from glove.api import HookContext, hook, resolve_ca_file, scoped
+from glove.api import HookContext, hook, scoped
 
 from . import capture
 from .host import chrome
@@ -35,8 +35,6 @@ PLAYWRIGHT_MCP = f"playwright-core@{PLAYWRIGHT_VERSION}"
 PORTS_FILE = "host-ports.json"
 # A second layer under the network one: no UDP (WebRTC) around the proxy.
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
-# `ca`: staged into this extension's state, bound read-only into the sidecar.
-CA_FILE = "corporate-ca.pem"
 # Where Chromium stages a download (`<state>/downloading`, on disk) before the
 # MCP copies it into the output dir: Playwright's default is under /tmp, a
 # tmpfs that counts against the sidecar's memory.
@@ -130,16 +128,6 @@ def host_ports(ctx: HookContext) -> dict[str, int]:
     return {"mcp": int(mcp), "cdp": int(cdp)}
 
 
-def corporate_ca(ctx: HookContext) -> Path | None:
-    """The `ca` setting as a validated host path (sidecar modes only: host mode
-    runs the host's Chrome, which already has the host's trust store). The same
-    checks as the harness's `corporate_ca` (glove/cafile.py)."""
-    s = ctx.settings
-    if not s.get("ca") or s["mode"] == "host":
-        return None
-    return resolve_ca_file("playwright.ca", s["ca"], ctx.session_dir)
-
-
 @hook
 def contribute(ctx: HookContext) -> dict[str, Any]:
     s = ctx.settings
@@ -147,7 +135,6 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     check_storage_state(s)
     capture.spec(s)
     if s["mode"] != "host":
-        corporate_ca(ctx)
         if not s.get("storage_state") or login is None:
             return {}
         # the signed-in hosts, for `glove check` against a filtering egress
@@ -218,10 +205,6 @@ def materialize(ctx: HookContext) -> None:
         return
     (state / "mcp.json").write_text(json.dumps(mcp_config(s), indent=1) + "\n")
     (state / "chromium-policy.json").write_text(json.dumps(chromium_policy(s)) + "\n")
-    ca = corporate_ca(ctx)
-    if ca is not None:  # the fragment may bind only from this state dir
-        shutil.copyfile(ca, state / CA_FILE)
-        (state / CA_FILE).chmod(0o644)
     if s["profile"] == "session":
         (state / "profile").mkdir(mode=0o700, exist_ok=True)
     # emptied by the sidecar as it starts (glove-pw-start), never here: a

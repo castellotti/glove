@@ -4,6 +4,96 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Only selected (and trusted) extension code runs** (round 18 A). Every
+  `glove` run used to import every discoverable extension's `cli.py`,
+  untrusted out-of-tree ones included. Now:
+  - `glove --help` lists extension CLIs from their manifests alone, and
+    `glove <name> …` imports only that `cli.py`;
+  - an untrusted out-of-tree extension's CLI never loads: `glove <name>` says
+    to list it under `trusted_extensions`;
+  - hooks load only for the extensions a session selects (unchanged, now
+    tested), and `glove ls`/`version`/`ext`/`--help` import no extension
+    module;
+  - an `extension_paths` entry another user could write (it, a non-sticky
+    ancestor, or anything in an extension's directory; group-write counts
+    unless the group is your private one) is skipped with a warning, and a
+    manifest's `cli`/`hooks` must name files in the extension's directory;
+  - `glove <typo>` suggests extension CLIs too, and names a discovery error
+    (e.g. a malformed `config.yml`) when an extension CLI is missing; `glove
+    ext` marks an untrusted CLI refused; `glove down` warns when an
+    extension the session used is gone, so its teardown hook did not run;
+  - `docs/SECURITY.md` states the guarantee.
+- **Providing the `forwarder` slot is a privilege** (R15.F): an untrusted
+  out-of-tree extension that provides it is refused before its hooks load
+  (before, it could fill the slot and sit on every endpoint's traffic, only
+  hidden the forwarder list and grants).
+- **One way to trust a CA** (round 18 C). `corporate_ca`, `playwright.ca` and
+  `llm`'s `auth: oauth` session CA used to reach the harness and sidecars by
+  four routes (a bundle baked into the derived image, Node's
+  `NODE_EXTRA_CA_CERTS`, and relayd's and webfetch's own bundle steps), and
+  `corporate_ca` with the session CA was refused. Now:
+  - glove checks each host PEM (as before) and copies it into
+    `.glove/trust/`, bound read-only at `/etc/glove/trust/`; on SELinux the
+    copy is relabelled (glove's own file, never the operator's);
+  - a prelude builds one bundle before the harness's sandbox starts, or a
+    trusting sidecar's `command` runs, on a tmpfs at `/etc/glove/ca/` that
+    every enforcer but `none` keeps the agent from writing: the image's roots then every CA
+    (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
+    `GIT_SSL_CAINFO`) and the CAs alone (`NODE_EXTRA_CA_CERTS`); a CA that
+    never appears, or an image with no roots, refuses to start (exit 90);
+  - `corporate_ca` and the `auth: oauth` session CA are trusted together; the
+    launch probe builds the same bundle;
+  - a new CA rebuilds no image (nothing is baked);
+  - extensions: a `type: ca` setting is checked and copied by core and
+    trusted by the extension's `trust:` sidecars, which must set their whole
+    `command` (core's entrypoint replaces the image's); a copy is checked again
+    when it is written, and a non-UTF-8 PEM is refused. `playwright.ca` is one (still checked in host mode, unused
+    there), and the browser sidecar now trusts `corporate_ca` too; webfetch's
+    fetcher names its command. relayd passes the bundle variables on to its
+    commands.
+- **One list of host-trusted paths** (round 18 B). Ring 0 and srt now read
+  one table (`glove/mounts.py:HOST_TRUSTED`), so `nono` and `nono+srt` protect
+  the same paths. Before, under `nono` alone, `.claude/settings.json`,
+  `.gitmodules` and `.idea` in a writable `/work` stayed writable. Now:
+  - every listed path present at a writable mount's root is bound read-only
+    whatever the enforcer: `.git/hooks`, `.git/config`, `.gitmodules`,
+    `.claude/{settings.json,settings.local.json,commands,agents,hooks,skills}`,
+    `.vscode`, `.idea`, `.envrc` and `.mcp.json`, plus an in-tree
+    `core.hooksPath`. Their directories (`.git`, `.claude`) are pinned, so
+    renaming them away fails;
+  - `.claude/hooks` and `.claude/skills` are new to the list: a project's
+    settings run hook scripts from there on the host;
+  - `protect_ide_files: true` now only adds placeholders over a *missing*
+    `.vscode`, `.idea` (new), `.envrc` or `.mcp.json`, the one case that creates
+    a file on the host;
+  - Pi never sees the project's `.pi/settings.json` (TODO 0k). Some Pi 1.x
+    code paths load it as trusted whatever `defaultProjectTrust` says, so the
+    harness gets an empty one, which Pi reads as `{}`. A `.pi/` and an empty
+    `.pi/settings.json` appear in the working dir when missing; a symlinked
+    `.pi` or `.pi/settings.json` now refuses a Pi session;
+  - a `core.hooksPath` of `.claude` or `.git` makes that directory read-only
+    (a read-write pin over it used to leave it writable), and srt's deny list
+    is ring 0's read-only binds of `/work`'s own files, so it never names a
+    path inside a harness's masked directory;
+  - `test_ring0_protect.sh` (26/26, Docker nono+srt and Podman nono) and
+    `test_config_protect.sh pi` (14/14 under nono and nono+srt) check it live.
+- **A gate refusal holds its rule namespace at run time** (round 18 D). A
+  blocked flow's `rule` is `null`, one of netgate's own `builtin:` refusals
+  (`guard.BUILTIN_RULES`) or a valid `r_…` id;
+  netgate checks it again when it blocks, and records anything else as the new
+  `builtin:internal-error` (still a block). The rules validator already
+  refused a bad id, so nothing in a session changes. The observe fixtures now
+  classify a proxy destination with the gate's own
+  `ForwardSpec.classify_proxy_dest` instead of repeating it; the netgate
+  image tag moves once.
+- **`glove check` warns when a plugin's stdio MCP server cannot start**
+  (round 18 E). Under `enforcer: none` there is no tool wrapper, so
+  `glove-tool` refuses to start a `skills` plugin's stdio server (exit 126).
+  This was found only once the session ran; now `glove check` names each
+  such server (an `http` one is fine).
+
 ### Added
 
 - **`glove playwright solve`** (`playwright: {challenge_capture: {to:
@@ -259,6 +349,12 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **Live drivers** (round 18 verification). `test_llm_inject.sh
+  claude-code-oauth` checked the flow join against the `llm-upstream` flows
+  only (a loop reused `recs`), so it always found 0 overlapping; it now passes.
+  `test_ring0_protect.sh` also renders a session with `protect_ide_files` off:
+  the host-trusted files already there stay read-only, and a missing `.envrc` or
+  `.vscode` can be created.
 - **Landlock on Docker Desktop 4.96+'s shared folders.** Docker Desktop now
   serves `/Users` (and its other shares) through a `fakeowner` layer over
   virtiofs, and Landlock never matches a rule for a `fakeowner` file: under the

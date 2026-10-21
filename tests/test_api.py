@@ -226,10 +226,16 @@ def test_only_the_forwarder_provider_sees_the_forwarders_and_grants(tree):
     fwd, llm = hook_context(comp, comp.by_name("fwd")), hook_context(comp, comp.by_name("llm"))
     assert (fwd.forwarders, dict(fwd.grants)) == (({"service": "llm"},), {"filter": False})
     assert (llm.forwarders, dict(llm.grants)) == ((), {})
-    a = comp.by_name("fwd")
-    a.manifest = dataclasses.replace(a.manifest, out_of_tree=True, trusted=False)
-    stranger = hook_context(comp, a)
-    assert (stranger.forwarders, dict(stranger.grants)) == ((), {})
+
+
+def test_an_untrusted_extension_cannot_provide_the_forwarder_slot(tree):
+    # it would sit on every endpoint's traffic: refused before its hooks load
+    _ext(tree, "fwd", "provides: [forwarder]\n", hooks="raise RuntimeError('imported')\n")
+    manifests = {n: dataclasses.replace(m, out_of_tree=True, trusted=False) if n == "fwd" else m
+                 for n, m in discover(tree).items()}
+    with pytest.raises(ExtensionError, match="the forwarder slot is a privilege"):
+        compose({"llm": STUB_LLM, "fwd": {}}, harness="pi", session="s", state_root=Path("/x"),
+                manifests=manifests)
 
 
 # --- slot exports -------------------------------------------------------------------

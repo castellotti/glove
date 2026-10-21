@@ -79,7 +79,7 @@ def test_only_protected_paths_present_at_launch_are_denied(tmp_path):
     (work / ".vscode").mkdir()
     (work / ".envrc").write_text("")
     deny = render_harness_settings(_plan(tmp_path))["filesystem"]["denyWrite"]
-    assert deny == ["/work/.git/hooks", "/work/.git/config", "/work/.vscode", "/work/.envrc"]
+    assert sorted(deny) == ["/work/.envrc", "/work/.git/config", "/work/.git/hooks", "/work/.vscode"]
 
 
 def test_env_hiding_can_be_turned_off(tmp_path):

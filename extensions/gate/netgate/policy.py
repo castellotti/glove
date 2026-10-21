@@ -36,7 +36,7 @@ MAX_RULES = 10_000
 TOP_KEYS = frozenset({"v", "env", "session", "updated_at", "updated_by", "default", "rules"})
 RULE_KEYS = frozenset({"id", "action", "match", "terminate", "note"})
 MATCH_KEYS = frozenset({"host", "ip", "port", "service", "tool", "scope"})
-_ID = re.compile(r"r_[0-9A-Za-z_-]{1,64}")  # always fullmatch'd (`$` would admit a trailing newline)
+RULE_ID = re.compile(r"r_[0-9A-Za-z_-]{1,64}")  # always fullmatch'd (`$` would admit a trailing newline)
 _GLOB = re.compile(r"[a-z0-9*?._-]{1,253}")
 _LABEL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
@@ -127,7 +127,7 @@ def _rule(i: int, raw) -> Rule:
     extra = set(raw) - RULE_KEYS
     if extra:
         raise PolicyError(f"{where}: unknown keys {sorted(extra)} (allowed: {sorted(RULE_KEYS)})")
-    rid = _str(raw.get("id"), f"{where}.id", _ID)
+    rid = _str(raw.get("id"), f"{where}.id", RULE_ID)
     action = raw.get("action")
     if action not in ("allow", "block"):
         raise PolicyError(f"{where}.action: must be allow|block, got {action!r}")

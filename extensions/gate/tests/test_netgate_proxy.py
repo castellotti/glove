@@ -212,6 +212,22 @@ def _proxy_spec(upstream_port: int, route: str = "vpn") -> ForwardSpec:
                        mode="http-proxy", route_kind=route)
 
 
+@pytest.mark.parametrize("host,route,why,ip,resolution,scope", [
+    ("en.wikipedia.org", "vpn", False, None, "unavailable", "tunnelled"),
+    ("en.wikipedia.org", "direct", False, None, "unavailable", "direct"),
+    ("169.254.169.254", "vpn", True, "169.254.169.254", "literal", "local"),
+    ("gluetun", "vpn", True, None, "unavailable", "local"),
+])
+def test_classify_proxy_dest_is_what_a_proxy_flow_records_before_any_lookup(host, route, why, ip, resolution, scope):
+    # 1ad: the one classification the gate and the observe fixtures share
+    from extensions.gate.netgate.forward import _Flow
+
+    spec = _proxy_spec(1, route)
+    flow = _Flow("harness", spec)
+    assert (spec.classify_proxy_dest(flow, host, 443) is not None) == why
+    assert (flow.host, flow.port, flow.ip, flow.resolution, flow.scope) == (host, 443, ip, resolution, scope)
+
+
 class Captured(EventSink):
     """Records the gate would send; gate lifecycle records go to ``gates``."""
 
@@ -292,7 +308,7 @@ def test_ssrf_guard_blocks_before_anything_goes_upstream(target):
     assert heads == []  # the upstream never heard of it
     assert [r["phase"] for r in recs] == ["open", "close"]
     for r in recs:
-        assert r["verdict"] == "block" and r["rule"] == "builtin:ssrf-guard" and r["scope"] == "local"
+        assert r["verdict"] == "block" and r["rule"] == guard.GUARD_RULE and r["scope"] == "local"
     assert recs[-1]["close_reason"] == "blocked"
     assert recs[-1]["bytes"] == {"up": len(req), "down": len(out)}
 
@@ -313,13 +329,13 @@ def test_truncated_request_is_malformed():
         return out, sink.records
 
     out, recs = run(main())
-    assert out.startswith(b"HTTP/1.1 400") and recs[-1]["rule"] == "builtin:malformed-request"
+    assert out.startswith(b"HTTP/1.1 400") and recs[-1]["rule"] == guard.MALFORMED_RULE
 
 
 def test_malformed_request_is_blocked_and_recorded():
     out, recs, heads = _proxy_run(lambda p: _exchange(p, b"GET /not-a-proxy-request HTTP/1.1\r\n\r\n"))
     assert out.startswith(b"HTTP/1.1 400 Bad Request") and heads == []
-    assert recs[-1]["verdict"] == "block" and recs[-1]["rule"] == "builtin:malformed-request"
+    assert recs[-1]["verdict"] == "block" and recs[-1]["rule"] == guard.MALFORMED_RULE
     assert recs[-1]["dest"]["host"] is None and recs[-1]["close_reason"] == "blocked"
     assert {r["scope"] for r in recs} == {"local"}  # nothing left the gate: never "tunnelled"
 

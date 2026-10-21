@@ -22,7 +22,7 @@ images:
   # every harness's web_download
   mcp: { build: image, when: *fetcher }
 services: compose/services.yml.j2
-# the fetcher trusts the session's corporate_ca too (webfetch_mcp: trust_corporate_ca; manifest `trust:`)
+# the fetcher trusts the session's corporate_ca too (core's CA bundle, via SSL_CERT_FILE)
 trust: [fetcher]
 endpoints:
   # Claude Code: the harness reaches the egress proxy only through this

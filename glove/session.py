@@ -18,11 +18,12 @@ from typing import TYPE_CHECKING
 import yaml
 from rich.console import Console
 
+from .cafile import TRUST_DIR, trust_script
 from .config import Config, ConfigError
 from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, base_contexts, effective_image
 from .naming import project_name, scoped
-from .plan import CORPORATE_CA_PATH, FORWARDER_DIR, forwarder_image
+from .plan import FORWARDER_DIR, forwarder_image
 from .runtimes import get_runtime
 
 if TYPE_CHECKING:
@@ -327,23 +328,17 @@ def probe_http(
     request headers (e.g. an API version). A fast failure (a sidecar or
     forwarder still starting) is retried after each of `CONNECT_RETRIES`
     seconds; see `_curl`."""
-    import shlex
-
-    # Trust what the harness trusts: the image's roots plus its extra CAs
-    # (`plan.trusted_cas`: a read-only channel's file, corporate_ca), bound
-    # read-only here too.
-    trust: list[tuple[str, str]] = []
-    prelude = ""
-    if plan.trusted_cas:
-        prelude = (f"cat /etc/ssl/certs/ca-certificates.crt {' '.join(map(shlex.quote, plan.trusted_cas))} "
-                   "> /tmp/ca.pem 2>/dev/null; ")
-        trust = [(c.volume(plan.session), c.path) for c in plan.composition.channels if c.trust]
-        if plan.corporate_ca_host_path:
-            trust.append((plan.corporate_ca_host_path, CORPORATE_CA_PATH))
+    # Trust what the harness trusts (`plan.trusted_cas`: a read-only channel's
+    # file, corporate_ca's copy), bound read-only here too, in the same bundle.
+    prelude = trust_script(plan.trusted_cas, dest="/tmp") if plan.trusted_cas else ""
+    trust = [(c.volume(plan.session), c.path) for c in plan.composition.channels if c.trust]
+    # glove's own copies, relabelled where the runtime labels binds (SELinux)
+    own = [(plan.trust_host_dir, TRUST_DIR)] if plan.trusts_copies else []
     # in the session's user namespace, as the harness it stands in for (rootless
     # Podman's keep-id: what it mounts is owned by the session uid as seen there)
     return _curl(provider, plan.image, url, method=method, body=body, headers=headers, plan=plan,
-                 network=plan.network.internal_network, mounts=trust, prelude=prelude, retries=CONNECT_RETRIES)
+                 network=plan.network.internal_network, mounts=trust, own=own, prelude=prelude,
+                 retries=CONNECT_RETRIES)
 
 
 def with_headers(probe, exports: dict) -> Callable[..., tuple[int, str]]:
@@ -384,18 +379,18 @@ def probe_direct(provider: str, url: str, *, method: str = "GET", body: dict | N
 
 def _curl(
     provider: str, image: str, url: str, *, network: str, method: str = "GET", body: dict | None = None,
-    headers: dict[str, str] | None = None, plan: SessionPlan | None = None, mounts=(), prelude: str = "",
+    headers: dict[str, str] | None = None, plan: SessionPlan | None = None, mounts=(), own=(), prelude: str = "",
     ipv4: bool = False, retries: tuple[int, ...] = (), add_hosts=(),
 ) -> tuple[int, str]:
     """curl `url` in a throwaway, hardened container: (status, body). Status 0:
     no HTTP answer (the text is then curl's own message, or the container's).
     A fast failure (`FAST_FAILURES`) is retried inside the one container after
     each of `retries` seconds; a timeout is not. Values travel as env vars; a
-    `prelude` that builds /tmp/ca.pem makes curl trust it."""
+    `prelude` that builds /tmp/bundle.pem (cafile.trust_script) makes curl trust it."""
     import json as _json
     import shlex
 
-    flags = ("--cacert /tmp/ca.pem " if prelude else "") + ("-4 " if ipv4 else "")
+    flags = ("--cacert /tmp/bundle.pem " if prelude else "") + ("-4 " if ipv4 else "")
     curl = f'curl {flags}-sS -m 20 -o /tmp/b -w "%{{http_code}}" -X "$M" "$U"'
     for k, v in (headers or {}).items():
         curl += " -H " + shlex.quote(f"{k}: {v}")
@@ -408,7 +403,7 @@ def _curl(
               f'case $rc in {fast}) [ "$w" -gt 0 ] && sleep "$w" && continue;; esac; break; done; '
               'echo "$code $rc"; cat /tmp/b 2>/dev/null')
     cmd = get_runtime(provider).throwaway_argv(
-        image, ["-c", script], plan=plan, network=network, env=("M", "U", "B"), mounts=mounts,
+        image, ["-c", script], plan=plan, network=network, env=("M", "U", "B"), mounts=mounts, own=own,
         entrypoint="sh", add_hosts=add_hosts)
     env = {**os.environ, "M": method, "U": url, "B": _json.dumps(body or {})}
     try:

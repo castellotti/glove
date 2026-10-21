@@ -33,9 +33,10 @@ extensions:
   shown in `glove plan` and stored in `.glove/effective.yml`. The default route
   is never included (a full-tunnel VPN would otherwise allow everything).
 - **Private CA.** If corporate hosts sit behind a TLS-intercepting proxy with a
-  private CA, set the session's `corporate_ca: <pem>` (harness) and, with the
-  browser, `playwright: {ca: <pem>}` (sidecar). Both only add trust, never
-  disable verification (see the main README).
+  private CA, set the session's `corporate_ca: <pem>`: the harness and the
+  sidecars that make requests (`github`, `webfetch`, `skills`' relays, the
+  browser) trust it. It only adds trust, never disables verification (see the
+  main README).
 - **Verify** at `glove up`: the gate is up, `https://example.com` is refused
   through it (`http-refused`), and `probe_url` answers (`http-ok`).
 

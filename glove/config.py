@@ -59,8 +59,8 @@ class Config:
     extensions: dict[str, Any] = field(default_factory=dict)
     allow_root: bool = False
     allow_sensitive: bool = False  # permit mounting / or $HOME
-    # Ring-0 ro binds over .vscode/.envrc/.mcp.json in rw mounts; a missing one
-    # gets an empty placeholder (creates it on the host), hence opt-in.
+    # Empty ring-0 placeholders over a missing .vscode/.idea/.envrc/.mcp.json in
+    # rw mounts (creates them on the host), hence opt-in; present ones are always ro.
     protect_ide_files: bool = False
     harness_config: dict[str, Any] = field(default_factory=dict)
     # `harness_config.tools.allow`: tools the session adds to its harness's tool

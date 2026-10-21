@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from .cafile import CORPORATE_CA_PATH
+from .cafile import CA_DIR, TRUST_DIR, TRUST_ENV, trust_argv
 from .extensions import (
     CORE_NETWORKS,
     SECRETS_DIR,
@@ -283,22 +283,25 @@ def _harden_service(comp: Composition, a: Active, short: str, svc: dict, plan: S
         if c.extension == a.name and short in c.services:
             out.setdefault("volumes", []).append({"type": "volume", "source": c.volume(comp.session),
                                                   "target": c.path})
+    relabel = {"bind": {"selinux": extra["bind_selinux"]}} if extra.get("bind_selinux") else {}  # glove's own files
     for o in comp.outputs_of(a.name):
         if short in o.services:
-            bind = {"type": "bind", "source": str(o.host), "target": o.path, **({"read_only": True} if o.input else {})}
-            if extra.get("bind_selinux"):
-                bind["bind"] = {"selinux": extra["bind_selinux"]}
-            out.setdefault("volumes", []).append(bind)
-    if comp.corporate_ca is not None and short in a.spec("trust"):
-        # read-only and never relabelled (SELinux `z` would relabel the
-        # operator's own file, maybe a system trust anchor), as in the harness;
-        # the image builds its bundle from it (GLOVE_CORPORATE_CA)
-        out.setdefault("volumes", []).append({"type": "bind", "source": str(comp.corporate_ca),
-                                              "target": CORPORATE_CA_PATH, "read_only": True})
+            out.setdefault("volumes", []).append({"type": "bind", "source": str(o.host), "target": o.path,
+                                                  **({"read_only": True} if o.input else {}), **relabel})
+    cas = comp.trusted_cas(a.name) if short in a.spec("trust") else []
+    if cas:
+        # as in the harness: the copies read-only (glove's own, so relabelling
+        # is safe), the bundle built on a tmpfs by core's entrypoint (it
+        # replaces the image's), which then runs the whole `command`
         env = out.get("environment") or {}
-        if not isinstance(env, dict):
-            raise ExtensionError(f"{where}: trusts corporate_ca, so its `environment` must be a mapping")
-        out["environment"] = {**env, "GLOVE_CORPORATE_CA": CORPORATE_CA_PATH}
+        if not isinstance(env, dict) or not isinstance(out.get("command"), list) or "entrypoint" in out:
+            raise ExtensionError(f"{where}: trusts the session's CAs, so it needs a `command` list (the whole "
+                                 "argv), no `entrypoint`, and an `environment` mapping")
+        out.setdefault("volumes", []).extend([
+            {"type": "bind", "source": plan.trust_host_dir, "target": TRUST_DIR, "read_only": True, **relabel},
+            {"type": "tmpfs", "target": CA_DIR, "tmpfs": {"mode": 0o1777}}])
+        out["environment"] = {**env, **TRUST_ENV}
+        out["entrypoint"] = trust_argv(cas, [])
     deps = svc.get("depends_on") or []
     if deps:
         items = deps.items() if isinstance(deps, dict) else ((d, None) for d in deps)

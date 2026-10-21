@@ -525,6 +525,7 @@ def test_every_refusal_of_glove_s_own_is_a_builtin_rule():
     # handoff §2: glove's refusals are `builtin:…`, never toggleable; user rules are `r_…`
     rules = {k: v for k, v in vars(guard).items() if k.endswith("_RULE")}
     assert rules and all(v.startswith("builtin:") for v in rules.values())
+    assert set(rules.values()) == guard.BUILTIN_RULES  # what `Forwarder._block` lets through
 
 
 def test_a_lan_only_upstream_at_a_public_address_is_blocked_not_dialled(tmp_path, sockdir):

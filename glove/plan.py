@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .cafile import CA_BUNDLE_ENV, CA_BUNDLE_PATH, CORPORATE_CA_PATH, resolve_ca_file
+from .cafile import CA_DIR, CORPORATE_CA, TRUST_DIR, TRUST_ENV, resolve_ca_file, trust_argv
 from .config import GIT_CONFIG_ENV, Config, ConfigError, git_config_pairs
 from .enforcers.base import TOOLS_FILE, WRITE_ROOTS_FILE, argv_lines, srt_suffix, uses_srt, write_roots
 from .exports import export_dirs, transcripts_wanted
@@ -108,16 +108,21 @@ class SessionPlan:
     model: ModelDescriptor | None = None
     derived_dockerfile: str | None = None  # FROM base + extension layers (None: base only)
     derived_staged: list[tuple[str, Path]] = field(default_factory=list)  # its build-context sources
-    # `corporate_ca`: the validated host PEM, bound read-only at
-    # CORPORATE_CA_PATH (None: unset, nothing rendered).
-    corporate_ca_host_path: str | None = None
-    # Container paths of the extra CAs the harness trusts (corporate_ca's, a
-    # channel's `trust`): its NODE_EXTRA_CA_CERTS, and the launch probe's trust.
+    # .glove/trust/: the validated CAs' copies (written at materialise),
+    # bound read-only at cafile.TRUST_DIR (None: no copies).
+    trust_host_dir: str | None = None
+    # Container paths of the CAs the harness trusts (corporate_ca's copy, a
+    # channel's `trust`): its bundle (cafile.trust_script), and the launch probe's.
     trusted_cas: list[str] = field(default_factory=list)
 
     @property
     def project(self) -> str:
         return project_name(self.session)
+
+    @property
+    def trusts_copies(self) -> bool:
+        """The harness trusts a CA in `trust_host_dir` (not only a sidecar)."""
+        return any(c.startswith(f"{TRUST_DIR}/") for c in self.trusted_cas)
 
     @property
     def harness_command(self) -> list[str]:
@@ -348,14 +353,14 @@ def build_session_plan(
     # and image layers feed the network plan, env and image below.
     sd_path = Path(session_dir) if session_dir else None
     # checked at plan time, so `glove check` fails early; sidecars may trust it too
-    ca = resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path) if cfg.corporate_ca else None
+    trust = {CORPORATE_CA: resolve_ca_file("corporate_ca", cfg.corporate_ca, sd_path)} if cfg.corporate_ca else {}
     comp = compose(
         cfg.extensions, harness=cfg.harness, session=session,
         state_root=Path(state_dir) if state_dir else Path(home_dir).parent / "ext",
         session_dir=sd_path, subnet=cfg.subnet,
         export_dirs=export_dirs(session),
         work_dir=Path(os.path.realpath(os.path.expanduser(cfg.workdir))) if cfg.workdir else None,
-        corporate_ca=ca, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
+        trust=trust, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
     )
 
     mount_plan = compute_mounts(
@@ -402,20 +407,9 @@ def build_session_plan(
         *(("safe.directory", r) for r in session_roots), *comp.git_config,
         *git_config_pairs(cfg.git_config, "git_config"),
     ])
-    corporate_ca = str(comp.corporate_ca) if comp.corporate_ca else None
-    trusted_cas = list(comp.trusted_cas)
-    if corporate_ca:
-        trusted_cas.append(CORPORATE_CA_PATH)
-        for k in CA_BUNDLE_ENV:  # Python, curl, git, gh (Go): the baked bundle
-            environment.setdefault(k, CA_BUNDLE_PATH)
-    if len(trusted_cas) > 1:  # Node takes one extra bundle (TODO: one built at harness start)
-        raise ConfigError(f"the harness would trust {len(trusted_cas)} extra CAs ({', '.join(trusted_cas)}; "
-                          "e.g. corporate_ca and llm `auth: oauth`'s session CA): not supported together yet")
-    if trusted_cas:
-        # Node *adds* these to its built-in roots: trust is widened, never
-        # replaced, and verification is never turned off. Other tools get
-        # corporate_ca's baked bundle (cafile.CA_BUNDLE_ENV), a channel's CA only Node.
-        environment.setdefault("NODE_EXTRA_CA_CERTS", trusted_cas[0])
+    trusted_cas = comp.trusted_cas()
+    for k, v in (TRUST_ENV if trusted_cas else {}).items():  # trust is only added, verification stays on
+        environment.setdefault(k, v)
 
     seccomp_profile, systempaths_unconfined = _seccomp_for(cfg)
     limits = cfg.limits if isinstance(cfg.limits, Limits) else Limits(**dict(cfg.limits or {}))
@@ -468,7 +462,7 @@ def build_session_plan(
         model=harness_model(profile, comp.slot_exports("inference")) if "inference" in comp.slots else None,
         derived_dockerfile=derived_df,
         derived_staged=staged,
-        corporate_ca_host_path=corporate_ca,
+        trust_host_dir=str(Path(home_dir).parent / "trust") if comp.trust else None,
         trusted_cas=trusted_cas,
         adapter=actx,
     )
@@ -500,6 +494,8 @@ def build_session_plan(
     plan.system_files = adapter_call(profile, "system_files", with_plan(actx, plan), default={})
     validate_system_files(plan)  # a bad adapter fails at `plan`, not at `up`
     plan.command = enforcer.wrap_harness(plan, entry)
+    if trusted_cas:  # the bundle, built on CA_DIR's tmpfs before any enforcer starts
+        plan.command = trust_argv(trusted_cas, plan.command)
     plan.enforcer_env = enforcer.compose_env(plan)
 
     # Fold enforcer-requested caps/tmpfs into the hardening spec in one replace.
@@ -507,7 +503,8 @@ def build_session_plan(
     extra_caps = tuple(enforcer.cap_add(plan))
     if extra_caps:
         updates["cap_add"] = extra_caps
-    extra_tmpfs = tuple(t for t in enforcer.extra_tmpfs(plan) if t not in hardening.tmpfs)
+    extra_tmpfs = tuple(t for t in [*enforcer.extra_tmpfs(plan), *([CA_DIR] if trusted_cas else [])]
+                        if t not in hardening.tmpfs)
     if extra_tmpfs:
         updates["tmpfs"] = (*hardening.tmpfs, *extra_tmpfs)
     if updates:

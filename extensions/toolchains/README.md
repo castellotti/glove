@@ -126,8 +126,7 @@ list); a session file that still has it is refused with this pointer.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
 - **Layer order.** Its layers are `stage: late`: after every other extension's
   layers (its `PATH` never affects their build steps) and before the layers that
-  copy host trees (the `skills` extension's plugins), then the `corporate_ca`
-  bundle.
+  copy host trees (the `skills` extension's plugins).
 
 Not selected (or `blocks: []`), nothing toolchain-specific renders: image tags,
 compose env, policies and the context file are unchanged.

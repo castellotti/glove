@@ -23,10 +23,15 @@ an export root). No other host path reaches a template.
 from __future__ import annotations
 
 import copy
+import functools
+import grp
 import importlib.util
 import ipaddress
+import os
+import pwd
 import re
 import secrets as pysecrets
+import stat
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +42,7 @@ import yaml
 from jinja2 import StrictUndefined, TemplateError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
+from .cafile import CORPORATE_CA, TRUST_DIR, resolve_ca_file
 from .config import git_config_pairs, is_secret_ref
 from .exports import ensure_dir
 from .harness import CONTRIBUTIONS, get_profile, known_harnesses
@@ -65,7 +71,8 @@ REQUIRED_SLOTS = frozenset({"inference"})
 # only while `filter` is active.
 EXPORT_ROOTS = {"observe": "observe", "control": "filter"}
 
-SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path"})
+# `ca`: a host PEM the extension's `trust:` sidecars trust (glove/cafile.py)
+SETTING_TYPES = frozenset({"string", "enum", "bool", "int", "number", "list", "map", "secret", "path", "ca"})
 _NAME = re.compile(r"^[a-z][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")  # one path component, never `..`
 
@@ -140,6 +147,9 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
         raise ExtensionError(f"extension {name!r}: unknown slot(s) {bad_slots} (known: {sorted(SLOTS)})")
     for key, spec in (raw.get("settings") or {}).items():
         _check_setting_spec(name, key, spec)
+    for key in ("cli", "hooks"):  # code glove imports: only from the extension's own directory
+        if raw.get(key) and not (directory / raw[key]).resolve().is_relative_to(directory.resolve()):
+            raise ExtensionError(f"{f}: `{key}` must be a file in the extension's directory, got {raw[key]!r}")
     return Manifest(name=name, path=directory.resolve(), raw=raw, out_of_tree=out_of_tree,
                     trusted=(not out_of_tree) or name in trusted)
 
@@ -153,6 +163,62 @@ def _candidate_dirs(root: Path) -> list[Path]:
     return sorted(p for p in root.iterdir() if (p / MANIFEST).is_file())
 
 
+@functools.cache
+def _warn(msg: str) -> None:  # once per process
+    print(f"warn: {msg}", file=sys.stderr)
+
+
+def _private_group(gid: int) -> bool:
+    """A user-private group (named after you, no other members), as OpenSSH accepts."""
+    try:
+        g, me = grp.getgrgid(gid), pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return False
+    return g.gr_name == me and set(g.gr_mem) <= {me}
+
+
+def _foreign(st: os.stat_result, *, ancestor: bool = False) -> str | None:
+    """Why another user could change this file or directory (None: only you or root)."""
+    if st.st_uid not in (0, os.getuid()):
+        return f"owned by uid {st.st_uid}"
+    if (st.st_mode & 0o002 or (st.st_mode & 0o020 and not _private_group(st.st_gid))) and not (
+            ancestor and st.st_mode & stat.S_ISVTX):  # a sticky ancestor (/tmp) keeps its entries yours
+        return "writable by other users"
+    return None
+
+
+def _tree(d: Path):
+    """`d` and everything under it, symlinks followed (each target once)."""
+    seen, todo = set(), [d]
+    while todo:
+        p = todo.pop()
+        st = p.stat()
+        if (st.st_dev, st.st_ino) not in seen:
+            seen.add((st.st_dev, st.st_ino))
+            yield p, st
+            if stat.S_ISDIR(st.st_mode):
+                todo.extend(p.iterdir())
+
+
+def _safe(d: Path, what: str, *, walk: bool) -> bool:
+    """Whether only you (or root) can change what glove would load from `d`, as
+    ssh asks of ~/.ssh; else another local user could plant code glove runs, so
+    it is skipped with a warning. `walk`: an extension's directory, all of it;
+    else an `extension_paths` entry, itself and its ancestors."""
+    if not d.is_dir():
+        return True
+    try:
+        r = d.resolve()
+        found = ((p, _foreign(st)) for p, st in _tree(r)) if walk else (
+            (p, _foreign(p.stat(), ancestor=p != r)) for p in (r, *r.parents))
+        bad = next(((p, f"{why} (`chmod go-w` it, or own it)") for p, why in found if why), None)
+    except OSError as e:
+        bad = (e.filename or d, f"unreadable ({e.strerror})")
+    if bad:
+        _warn(f"{what} {d} is skipped: {bad[0]} is {bad[1]}")
+    return bad is None
+
+
 def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
     """Every loadable manifest: in-tree first, then `extension_paths`."""
     user = load_user_config()
@@ -162,7 +228,10 @@ def discover(in_tree: Path | None = None) -> dict[str, Manifest]:
         m = _load_manifest(d, out_of_tree=False, trusted=trusted)
         found[m.name] = m
     for root in user.extension_paths:
-        for d in _candidate_dirs(Path(root).expanduser()):
+        root = Path(root).expanduser()
+        for d in _candidate_dirs(root) if _safe(root, "the `extension_paths` entry", walk=False) else ():
+            if not _safe(d, "the extension directory", walk=True):
+                continue
             m = _load_manifest(d, out_of_tree=True, trusted=trusted)
             if m.name in found:
                 raise ExtensionError(
@@ -216,7 +285,7 @@ def _coerce_setting(ext: str, key: str, spec: dict, value: Any) -> Any:
         raise ExtensionError(f"{where} is still {PLACEHOLDER!r} — set it in your session file")
     if value in (spec.get("also") or []):  # a literal accepted besides the type, e.g. `auto`
         return value
-    if t in ("string", "path"):
+    if t in ("string", "path", "ca"):
         if not isinstance(value, str):
             raise ExtensionError(f"{where} must be a string, got {value!r}")
         pattern = spec.get("pattern")
@@ -432,7 +501,7 @@ class Channel:
     a Unix socket) and the sidecar answers them. A `read_only` channel is
     written by its sidecars only: the harness and its commands just read it.
     `trust` names a file in it holding a CA the harness trusts (e.g. llm-auth's
-    session CA; core wires the trust, see `Composition.trusted_cas`)."""
+    session CA; core wires the trust, see `Composition.trusted_cas`; glove/cafile.py)."""
 
     name: str
     extension: str
@@ -547,9 +616,10 @@ class Composition:
     # The harness's /work on the host: a trusted extension's sidecar binds all
     # of it with the `work` privilege (github), never a path inside it.
     work_dir: Path | None = None
-    # The session's validated `corporate_ca` PEM on the host (symlinks
-    # resolved): core binds it into the sidecars a manifest's `trust:` names.
-    corporate_ca: Path | None = None
+    # The validated CAs on the host (symlinks resolved) by their copy's name in
+    # .glove/trust/ (glove/cafile.py): corporate_ca's, and each `type: ca`
+    # setting's as `<ext>.<key>.pem`.
+    trust: dict[str, Path] = field(default_factory=dict)
     subnet: str | None = None
     has_forwarder: bool = False  # a `forwarder` provider is selected
     enforcer: str = ""  # the session's (hooks only), and its normalized options
@@ -576,10 +646,13 @@ class Composition:
         """The read-only channels' directories: readable under every enforcer."""
         return [c.path for c in self.channels if c.read_only]
 
-    @property
-    def trusted_cas(self) -> list[str]:
-        """CA certificates the harness trusts, published in read-only channels."""
-        return [f"{c.path}/{c.trust}" for c in self.channels if c.trust]
+    def trusted_cas(self, ext: str | None = None) -> list[str]:
+        """The CA files the harness (`ext` None) or `ext`'s trusting sidecars
+        trust: corporate_ca's copy, then the read-only channels' `trust` files
+        (the harness) or the extension's own `type: ca` settings."""
+        own = ([f"{c.path}/{c.trust}" for c in self.channels if c.trust] if ext is None
+               else [f"{TRUST_DIR}/{n}" for n in self.trust if n.startswith(f"{ext}.")])
+        return [*([f"{TRUST_DIR}/{CORPORATE_CA}"] if CORPORATE_CA in self.trust else []), *own]
 
     def slot_exports(self, slot: str) -> dict[str, Any]:
         a = self.slots.get(slot)
@@ -1179,7 +1252,7 @@ def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | N
         privileges = raw.get("privileges") if privileges is None else privileges
         return any(isinstance(p, dict) and p.get("work") for v in (privileges or {}).values()
                    for p in (v if isinstance(v, list) else [v]))
-    return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") == "path"
+    return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") in ("path", "ca")
                                           for x in (raw.get("settings") or {}).values())
 
 
@@ -1190,7 +1263,7 @@ _SHARED = ("harness", "session", "names", "slot", "endpoint", "own_endpoints", "
 def hook_context(comp: Composition, a: Active) -> HookContext:
     """`a`'s hook context: see `HookContext`."""
     t = base_context(comp, a)
-    forwarder = comp.slots.get("forwarder") is a and a.manifest.trusted
+    forwarder = comp.slots.get("forwarder") is a  # trusted: compose checked
     return HookContext(
         name=a.name, settings=a.settings, renders=t["renders"], trusted=a.manifest.trusted,
         active=[x.name for x in comp.active], state_dir=comp.state_dir(a.name), assets=a.manifest.path,
@@ -1237,7 +1310,7 @@ def compose(
     subnet: str | None = None,
     export_dirs: dict[str, Path] | None = None,
     work_dir: Path | None = None,
-    corporate_ca: Path | None = None,
+    trust: dict[str, Path] | None = None,
     enforcer: str = "",
     enforcer_options: dict[str, dict] | None = None,
 ) -> Composition:
@@ -1246,13 +1319,15 @@ def compose(
 
     active = select(requested, harness=harness, manifests=manifests)
     comp = Composition(session=session, harness=harness, active=active, slots={}, state_root=state_root,
-                       session_dir=session_dir, work_dir=work_dir, corporate_ca=corporate_ca, subnet=subnet,
+                       session_dir=session_dir, work_dir=work_dir, trust=dict(trust or {}), subnet=subnet,
                        export_dirs=dict(export_dirs or {}), enforcer=enforcer,
                        # read-only all the way down: a hook never widens what plan.py renders
                        enforcer_options={k: MappingProxyType(v) for k, v in (
                            normalized_options({}) if enforcer_options is None else enforcer_options).items()},
                        has_forwarder=any("forwarder" in a.manifest.provides for a in active))
     for a in active:
+        if "forwarder" in a.manifest.provides:  # it sits on every endpoint's traffic
+            require_trust(a, f"extension {a.name!r}: the forwarder slot")
         if a.manifest.hooks_path:
             a.hooks = hooks_of(load_module(a.manifest.hooks_path, a.name), a.name)
         # Slot exports are visible to later extensions (topological order).
@@ -1262,6 +1337,9 @@ def compose(
         a.spec("privileges", ctx)  # no name set twice
         if not all(isinstance(x, str) for x in a.spec("trust")):
             raise ExtensionError(f"{where}: `trust` lists its services")
+        for key, spec in (a.manifest.raw.get("settings") or {}).items():
+            if spec["type"] == "ca" and a.settings.get(key):  # checked here, so `glove check` fails early
+                comp.trust[f"{a.name}.{key}.pem"] = resolve_ca_file(f"{a.name}.{key}", a.settings[key], session_dir)
         a.set_exports(merge_names(f"{where} exports",
                                   render_value(a.manifest.raw.get("exports") or {}, ctx, f"{where} exports"),
                                   contributed.get("exports")))

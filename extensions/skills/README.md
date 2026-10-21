@@ -79,7 +79,8 @@ A stdio server runs as `glove-tool -- <command> …`: under the session's tool
 wrapper, the same per-command sandbox a shell command gets (`/work`, `/tmp`, no
 network). It never gets the harness's own sandbox, whose network reaches the
 session's forwarders (the LLM, and the egress proxy when `webfetch` is on).
-Without an enforcer there is no wrapper, and the server does not start. An
+Without an enforcer there is no wrapper, and the server does not start
+(`glove check` warns about each one under `enforcer: none`). An
 `http` server passes through as `transport: http`. Any `${VAR}` other than the
 two plugin variables is refused.
 
@@ -131,7 +132,7 @@ which holds the secrets and the only route to the service:
   flows `client: skill-<name>`). A Python script runs on the relay's Python
   (3.12, standard library only: a relayed script that lists dependencies is
   refused), anything else by its own shebang. It trusts `corporate_ca` when the
-  session sets one. It binds `/work` read-write (the `work` privilege) only
+  session sets one (core's CA bundle, passed on to the scripts). It binds `/work` read-write (the `work` privilege) only
   when a command has `out_flags` or `in_flags`.
 - **What runs.** `allow` is matched against the first argument that is not a
   flag; anything else is refused (`-h`/`--help` alone always works), so a

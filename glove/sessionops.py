@@ -14,6 +14,7 @@ from . import exports, quarantine
 from . import registry as reg
 from . import session as _session
 from . import sessiondir as sdm
+from .cafile import read_ca
 from .config import ConfigError
 from .doctor import worst_status
 from .extensions import materialize
@@ -241,6 +242,10 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     # The adapter's read-only system config (e.g. Claude Code's managed
     # settings), likewise in .glove/ and bound read-only.
     write_system_files(plan, sd.state / "harness")
+    if plan.trust_host_dir:  # the CAs' copies, checked again (glove/cafile.py), bound read-only
+        trust = Path(plan.trust_host_dir)
+        write_in_place(trust, {n: read_ca(n, p) for n, p in plan.composition.trust.items()})
+        trust.chmod(0o755)  # whatever the umask: a sidecar outside the session's user namespace reads it
     # a pinned dir, the config home or a file protected in it, or a tmpfs mount
     # point under the read-only home may not exist yet
     make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)

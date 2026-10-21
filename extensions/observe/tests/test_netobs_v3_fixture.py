@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from extensions.gate.netgate import guard
 from extensions.gate.netgate.__main__ import _parse_upstream
 from extensions.gate.netgate.policy import parse_bytes
 from extensions.observe.netview import read_records
@@ -141,7 +142,7 @@ def test_ssh_shows_an_allowed_host_and_a_lan_only_refusal():
         "ssh-build": (False, "lan", []), "ssh-db": (False, "lan", [])}
     build, db = flows
     assert (build["service"], build["verdict"], build["dest"]["ip"]) == ("ssh-build", "allow", "192.168.1.20")
-    assert (db["service"], db["verdict"], db["rule"]) == ("ssh-db", "block", "builtin:lan-only")
+    assert (db["service"], db["verdict"], db["rule"]) == ("ssh-db", "block", guard.LAN_ONLY_RULE)
     assert db["bytes"] == {"up": 0, "down": 0}  # never dialled
     assert not list((OUT / "ssh").rglob("known_hosts"))  # the session dir's, not ~/.glove's
 

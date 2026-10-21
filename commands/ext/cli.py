@@ -17,5 +17,5 @@ def command() -> None:
     for name, m in sorted(manifests.items()):
         tags = [m.taint, *(["library"] if not m.selectable else []),
                 *([f"provides {','.join(m.provides)}"] if m.provides else []),
-                *([f"cli: glove {name} …"] if m.cli else [])]
+                *([f"cli: glove {name} …" + ("" if m.trusted else " (untrusted: refused)")] if m.cli else [])]
         console.print(f"[cyan]{name}[/cyan] [dim]({'; '.join(tags)})[/dim] — {m.summary}")

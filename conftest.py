@@ -12,6 +12,15 @@ os.environ.pop("FORCE_COLOR", None)
 
 
 @pytest.fixture(autouse=True)
+def _umask_022():
+    """Out-of-tree extension dirs another user could write are skipped: tests
+    create theirs as a 022 umask does, whatever the host's (002 on Ubuntu)."""
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
+@pytest.fixture(autouse=True)
 def _no_runtime_networks(monkeypatch):
     """Subnet allocation asks the container runtime which subnets are taken;
     unit tests must not depend on (or shell out to) the host's Docker."""

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from glove.mounts import (
+    HOST_TRUSTED,
     Mount,
     MountError,
     compute_mounts,
@@ -180,15 +182,72 @@ def test_in_tree_hooks_path_protected(tmp_path):
     assert "/work/.githooks" in paths
 
 
-def test_ide_files_opt_in_with_placeholders(tmp_path):
+def test_ide_file_placeholders_are_opt_in(tmp_path):
     work = _repo(tmp_path)
     (work / ".envrc").write_text("export X=1\n")
     mounts = compute_mounts(str(work)).mounts
-    assert not any(p.container_path.endswith(".envrc") for p in protected_paths(mounts))
+    # present: always protected (as srt denies it), no host file created for the missing ones
+    got = {p.container_path: p for p in protected_paths(mounts)}
+    assert got["/work/.envrc"].host_path == os.path.realpath(work / ".envrc")
+    assert not any(p.host_path is None for p in got.values())
     got = {p.container_path: p for p in protected_paths(mounts, protect_ide_files=True)}
     assert got["/work/.envrc"].host_path == os.path.realpath(work / ".envrc")  # exists → real file
-    assert got["/work/.vscode"].host_path is None and got["/work/.vscode"].kind == "dir"
-    assert got["/work/.mcp.json"].host_path is None and got["/work/.mcp.json"].kind == "file"
+    for rel, kind in ((".vscode", "dir"), (".idea", "dir"), (".mcp.json", "file")):
+        assert got[f"/work/{rel}"].host_path is None and got[f"/work/{rel}"].kind == kind
+
+
+def test_every_host_trusted_path_present_is_protected_with_its_dir_pinned(tmp_path):
+    work = _repo(tmp_path)
+    (work / ".gitmodules").write_text("")
+    for d in ("commands", "agents", "hooks", "skills"):
+        (work / ".claude" / d).mkdir(parents=True)
+    (work / ".claude" / "settings.json").write_text("{}")
+    (work / ".idea").mkdir()
+    got = {p.container_path: p.read_only for p in protected_paths(compute_mounts(str(work)).mounts)}
+    real = os.path.realpath(work)
+    assert got == {"/work/.git": False, "/work/.claude": False,  # pinned: `mv .claude x` fails
+                   **{f"/work/{rel}": True for rel, *_ in HOST_TRUSTED if os.path.lexists(f"{real}/{rel}")}}
+    assert "/work/.claude/settings.local.json" not in got  # missing, no placeholder: nothing created on the host
+
+
+def test_a_host_trusted_path_inside_a_masked_dir_is_covered(tmp_path):
+    # a harness masks .claude/ with its placeholder: the repo's own commands are never bound over it
+    work = tmp_path / "w"
+    (work / ".claude" / "commands").mkdir(parents=True)
+    got = [(p.container_path, p.host_path) for p in protected_paths(compute_mounts(str(work)).mounts,
+                                                                     files=[("/work/.claude/", "empty")])]
+    assert got == [("/work/.claude", None)]
+
+
+def test_srt_denies_ring0s_own_binds_never_inside_a_mask(tmp_path):
+    from glove.enforcers.nono_srt import protected_paths as srt_denied
+
+    work = _repo(tmp_path)
+    (work / ".claude" / "commands").mkdir(parents=True)
+    (work / ".envrc").write_text("")
+    mounts = compute_mounts(str(work)).mounts
+    plan = SimpleNamespace(mounts=mounts, protect=protected_paths(mounts, protect_ide_files=True))
+    assert srt_denied(plan) == ["/work/.envrc", "/work/.git/hooks", "/work/.git/config", "/work/.claude/commands"]
+    # a harness masks .claude/: the repo's commands are not there to deny (bwrap would create them)
+    plan.protect = protected_paths(mounts, files=[("/work/.claude/", "empty")])
+    assert "/work/.claude/commands" not in srt_denied(plan)
+
+
+@pytest.mark.parametrize("hooks", [".claude", ".git"])
+def test_a_hooks_path_on_a_pinned_dir_is_read_only(tmp_path, hooks):
+    # git runs <hooksPath>/pre-commit on the host: the pin over .claude/.git must not leave it writable
+    work = _repo(tmp_path)
+    (work / ".claude" / "commands").mkdir(parents=True)
+    (work / ".git" / "config").write_text(f"[core]\n\thooksPath = {hooks}\n")
+    mounts = compute_mounts(str(work)).mounts
+    protect = protected_paths(mounts, files=TRUSTED)
+    got = {p.container_path: p for p in protect}
+    assert got[f"/work/{hooks}"].read_only and got[f"/work/{hooks}"].host_path
+    ro = [c for c, p in got.items() if p.read_only]
+    assert all(p.read_only for c, p in got.items() if any(c.startswith(r + "/") for r in ro))  # no pin reopens it
+    if hooks == ".claude":  # CC's placeholder for a missing settings.local.json needs its mount point on the host
+        make_bind_sources(protect, str(tmp_path / "home"))
+        assert (work / ".claude" / "settings.local.json").is_file()
 
 
 TRUSTED = [("/work/.claude/settings.json", "auto"), ("/work/.claude/settings.local.json", "auto")]

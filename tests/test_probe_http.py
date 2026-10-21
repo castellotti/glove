@@ -10,6 +10,7 @@ import pytest
 from helpers import make_cfg
 
 from glove import session
+from glove.cafile import trust_script
 from glove.plan import build_session_plan
 
 
@@ -63,14 +64,15 @@ def test_it_trusts_what_the_harness_trusts(plan, monkeypatch):
     assert "--cacert" not in calls[0][-1] and not any(":ro" in a for a in calls[0])  # the image's roots only
     plan.composition.channels += [Channel("c", "e", ("svc",), read_only=True, trust="ca.pem"),
                                   Channel("r", "e", ("svc",), read_only=True), Channel("w", "e", ("svc",))]
-    plan.trusted_cas = plan.composition.trusted_cas
+    plan.trusted_cas = plan.composition.trusted_cas()
     session.probe_http("docker", plan, "https://x/")
     cmd = calls[1]
     assert cmd[cmd.index("glove-s-chan-c:/run/glove/c:ro") - 1] == "-v"
     assert not any("chan-r" in a or "chan-w" in a for a in cmd)  # only a channel holding a CA
     script = cmd[-1]
-    assert script.startswith("cat /etc/ssl/certs/ca-certificates.crt /run/glove/c/ca.pem > /tmp/ca.pem")
-    assert "curl --cacert /tmp/ca.pem -sS " in script
+    # the harness's bundle, built the same way (cafile.trust_script), into the probe's /tmp
+    assert script.startswith(trust_script(["/run/glove/c/ca.pem"], dest="/tmp"))
+    assert "curl --cacert /tmp/bundle.pem -sS " in script
 
 
 def test_on_rootless_podman_it_runs_in_the_sessions_userns(tmp_path, monkeypatch):
@@ -87,6 +89,24 @@ def test_on_rootless_podman_it_runs_in_the_sessions_userns(tmp_path, monkeypatch
     assert calls[0][calls[0].index("--userns") + 1] == "keep-id"
     session.probe_http("docker", plan, "https://x/")
     assert "--userns" not in calls[1]
+
+
+def test_the_probe_relabels_gloves_own_ca_copies_where_binds_are_labelled(tmp_path, monkeypatch):
+    # TODO 1f: on SELinux the probe may run before any sidecar relabelled .glove/trust/
+    from helpers import PEM
+
+    from glove.runtimes import podman
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "ca.pem").write_text(PEM)
+    for runtime, suffix in (("podman", ":ro,z"), ("docker", ":ro")):
+        cfg = make_cfg(harness="pi", workdir=str(tmp_path / "work"), name="s", runtime=runtime, enforcer="nono",
+                       corporate_ca=str(tmp_path / "ca.pem"))
+        plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), uid=501, gid=20)
+        monkeypatch.setattr(podman, "_host_info", lambda cli: {"rootless": "true"})
+        calls = _run(monkeypatch, "200 0\n")
+        session.probe_http(runtime, plan, "https://x/")
+        assert f"{plan.trust_host_dir}:/etc/glove/trust{suffix}" in calls[0]
 
 
 def test_probe_direct_runs_a_hardened_curl_on_the_default_bridge(monkeypatch):

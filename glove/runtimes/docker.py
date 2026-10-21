@@ -158,6 +158,7 @@ class DockerRuntime:
         user: str = "65534:65534", env: Iterable[str] = (), mounts: Iterable[tuple[str, str]] = (),
         entrypoint: str | None = None, seccomp: str | None = None, pids: int = 64, memory: str = "128m",
         add_hosts: Iterable[str] = (), as_host: bool = False, binds: Iterable[tuple[str, str, bool]] = (),
+        own: Iterable[tuple[str, str]] = (),
     ) -> list[str]:
         """`run` of a hardened throwaway container (a probe, a check): removed on
         exit, no capabilities, no-new-privileges, read-only rootfs (a tmpfs
@@ -170,14 +171,17 @@ class DockerRuntime:
         (a probe must not change a host file's SELinux label); `add_hosts`:
         `name:address` entries (e.g. a forwarder's `host.docker.internal:host-gateway`);
         `as_host`: as the host user, without a plan; `binds`: (source, target,
-        writable) as `--mount`, which refuses a missing source (`-v` creates it)."""
-        userns = None
+        writable) as `--mount`, which refuses a missing source (`-v` creates it);
+        `own`: like `mounts`, but glove's own files, relabelled as a sidecar's binds are."""
+        userns, label = None, None
         if plan is not None:
-            user, userns = f"{plan.uid}:{plan.gid}", self.compose_extra(plan)["userns_mode"]
+            extra = self.compose_extra(plan)
+            user, userns, label = f"{plan.uid}:{plan.gid}", extra["userns_mode"], extra["bind_selinux"]
         elif as_host:
             user, userns = f"{os.getuid()}:{os.getgid()}", self.host_userns()
         sec = ["--security-opt", f"seccomp={seccomp}"] if seccomp else self._probe_seccomp_args()
         vols = [x for src, dst in mounts for x in ("-v", f"{src}:{dst}:ro")]
+        vols += [x for src, dst in own for x in ("-v", f"{src}:{dst}:ro{f',{label}' if label else ''}")]
         vols += [x for src, dst, rw in binds
                  for x in ("--mount", f"type=bind,source={src},target={dst}{'' if rw else ',readonly'}")]
         return [
@@ -235,7 +239,8 @@ class DockerRuntime:
                 "apply a validated built-in default — the container would run "
                 "unpinned. Refusing to render."
             )
-        from ..plan import CORPORATE_CA_PATH, home_mount
+        from ..cafile import TRUST_DIR
+        from ..plan import home_mount
 
         ctx = {
             "session": plan.session,
@@ -256,8 +261,8 @@ class DockerRuntime:
             "sidecars": plan.network.socat,
             "transcripts_host_dir": plan.transcripts_host_dir,
             "transcripts_container_dir": plan.transcripts_container_dir,
-            "corporate_ca_host_path": plan.corporate_ca_host_path,
-            "corporate_ca_container_path": CORPORATE_CA_PATH,
+            "trust_host_dir": plan.trust_host_dir if plan.trusts_copies else None,
+            "trust_container_dir": TRUST_DIR,
             "hostgw_network": plan.network.hostgw_network,
             "session_networks": plan.network.session_networks,
             "subnets": plan.network.subnets,

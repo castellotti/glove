@@ -169,7 +169,8 @@ def test_a_subscription_token_goes_to_llm_auth_which_serves_the_providers_name(t
     assert vols["/run/glove/llm-ca"]["read_only"] is True
     assert {"target": "/run/glove/llm-ca", "type": "volume", "source": "glove-s-chan-llm-ca"} in \
         svc["glove-s-llm-auth"]["volumes"]
-    assert plan.trusted_cas == ["/run/glove/llm-ca/ca.pem"] == [plan.environment["NODE_EXTRA_CA_CERTS"]]
+    assert plan.trusted_cas == ["/run/glove/llm-ca/ca.pem"]
+    assert plan.environment["NODE_EXTRA_CA_CERTS"] == "/etc/glove/ca/extra.pem"  # built from them at start
     assert "/run/glove/llm-ca" not in plan.composition.channel_paths  # never writable by the harness
     assert svc["glove-s-llm-auth"]["restart"] == "no"  # a restart's new CA would be untrusted
 
@@ -187,15 +188,20 @@ def test_a_subscription_needs_https(tmp_path):
               auth="oauth")
 
 
-def test_corporate_ca_and_the_session_ca_are_refused_together(tmp_path):
+def test_corporate_ca_and_the_session_ca_are_trusted_together(tmp_path):
+    # TODO 1b: one bundle, built at start, holds both
+    from glove.cafile import TRUST_DIR, TRUST_ENV
+
     pem = tmp_path / "corp.pem"
     pem.write_text("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
     work = tmp_path / "work"
     work.mkdir()
     cfg = make_cfg(harness="claude-code", name="s", workdir=str(work), corporate_ca=str(pem))
     cfg.extensions = _llm(**ANTHROPIC, auth="oauth")
-    with pytest.raises(ConfigError, match="would trust 2 extra CAs"):
-        render(cfg, tmp_path)
+    plan, _ = render(cfg, tmp_path)
+    assert plan.trusted_cas == [f"{TRUST_DIR}/corporate_ca.pem", "/run/glove/llm-ca/ca.pem"]
+    assert all(ca in plan.command[2] for ca in plan.trusted_cas)
+    assert {k: plan.environment[k] for k in TRUST_ENV} == TRUST_ENV
 
 
 def test_internet_with_a_key_goes_through_llm_auth(tmp_path):

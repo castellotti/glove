@@ -3,7 +3,11 @@ teardown machinery the commands drive. Each command's own tests are in `commands
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -134,23 +138,119 @@ def test_the_v2_commands_are_gone():
         assert runner.invoke(app, cmd).exit_code != 0, cmd
 
 
-def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path, monkeypatch):
-    from glove import cli
-    from glove.extensions import discover
+# --- extension CLIs: listed from the manifest, loaded only when invoked (round 18 A) ----------------
 
+_PROBE = """
+import json, sys
+from typer.testing import CliRunner
+from glove.cli import app
+r = CliRunner().invoke(app, sys.argv[1:], env={"COLUMNS": "200"})
+print(r.output)
+print(json.dumps([r.exit_code, sorted(k for k in sys.modules if k.startswith(("glove_ext.", "extensions.")))]))
+"""
+
+
+def _glove(home, *args):
+    """`glove *args` in a fresh interpreter: its exit code, output and the extension modules it imported."""
+    r = subprocess.run([sys.executable, "-c", _PROBE, *args], env={**os.environ, "GLOVE_HOME": str(home)},
+                       cwd=Path(__file__).parents[1], capture_output=True, text=True, check=True)
+    out, _, last = r.stdout.rstrip().rpartition("\n")
+    code, modules = json.loads(last)
+    return code, out + r.stderr, modules
+
+
+def _planting_ext(root, marker, name="planted"):
+    """An out-of-tree extension whose cli.py and hooks.py write `marker` when imported."""
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "extension.yml").write_text(f"api: 2\nname: {name}\nsummary: plants a marker\ncli: cli.py\n"
+                                     "hooks: hooks.py\n")
+    plant = f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+    (d / "cli.py").write_text(plant + "import typer\napp = typer.Typer()\n\n@app.command()\ndef hi():\n"
+                              "    print('hi')\n\n@app.command()\ndef ho():\n    pass\n")
+    (d / "hooks.py").write_text(plant)
+    return d
+
+
+def _config(home, oot, trusted=()):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.yml").write_text(f"extension_paths: [{oot}]\ntrusted_extensions: {list(trusted)}\n")
+
+
+@pytest.mark.parametrize("args", [["--help"], ["ls"], ["version"], ["ext"]])
+def test_glove_imports_no_extension_module_unless_its_cli_runs(tmp_path, args):
+    marker = tmp_path / "marker"
+    _planting_ext(tmp_path / "oot", marker)
+    _config(tmp_path / "gh", tmp_path / "oot", trusted=["planted"])
+    code, out, modules = _glove(tmp_path / "gh", *args)
+    assert code == 0, out
+    assert modules == [] and not marker.exists()
+    if args == ["--help"]:  # listed from the manifest alone
+        assert "planted" in out and "plants a marker" in out and "filter" in out
+
+
+def test_glove_name_help_loads_exactly_that_cli(tmp_path):
+    code, out, modules = _glove(tmp_path / "gh", "filter", "--help")
+    assert code == 0 and "block" in out
+    # filter's CLI imports observe's and the gate library's (in-tree)
+    assert {m.split(".")[1] for m in modules} == {"filter", "observe", "gate"}
+    code, out, modules = _glove(tmp_path / "gh", "playwright", "--help")
+    assert code == 0 and {m.split(".")[1] for m in modules} == {"playwright"}
+
+
+def test_an_untrusted_out_of_tree_cli_never_runs(tmp_path):
+    marker = tmp_path / "marker"
+    _planting_ext(tmp_path / "oot", marker)
+    _config(tmp_path / "gh", tmp_path / "oot")
+    for args in (["--help"], ["ls"], ["ext"], ["planted", "hi"], ["planted", "--help"]):
+        code, out, modules = _glove(tmp_path / "gh", *args)
+        assert not marker.exists() and modules == [], args
+        refused = args[0] == "planted"
+        assert code == refused and ("out-of-tree and not trusted" in out) is refused, args
+        assert "trusted_extensions" in out if refused else True
+    assert "planted" not in _glove(tmp_path / "gh", "--help")[1]  # no CLI to list
+    assert "cli: glove planted … (untrusted: refused)" in _glove(tmp_path / "gh", "ext")[1]
+    _config(tmp_path / "gh", tmp_path / "oot", trusted=["planted"])
+    code, out, _ = _glove(tmp_path / "gh", "planted", "hi")
+    assert code == 0 and "hi" in out and marker.exists()
+
+
+def test_a_broken_config_or_extension_cli_does_not_break_glove(home, tmp_path):
     home.mkdir()
     (home / "config.yml").write_text("no_such_key: 1\n")
-    cli._mount_extension_clis()  # the commands that read config.yml report it
-    (home / "config.yml").unlink()
+    r = runner.invoke(app, ["--help"])  # the commands that read config.yml report it
+    assert r.exit_code == 0 and " up " in r.output
     ext = tmp_path / "exts" / "bad"
     ext.mkdir(parents=True)
     (ext / "extension.yml").write_text("api: 2\nname: bad\nsummary: x\ncli: cli.py\n")
     (ext / "cli.py").write_text("raise RuntimeError('boom')\n")
-    monkeypatch.setattr("glove.extensions.discover", lambda: discover(tmp_path / "exts"))
-    cli._mount_extension_clis()
-    assert "bad" not in {g.name for g in app.registered_groups}
+    (home / "config.yml").write_text(f"extension_paths: [{ext}]\ntrusted_extensions: [bad]\n")
+    assert runner.invoke(app, ["version"]).exit_code == 0
+    r = runner.invoke(app, ["bad", "--help"])
+    assert r.exit_code == 1 and "failed to load: boom" in r.output
+    (ext / "cli.py").write_text("app = 1\n")
+    assert "has no `app`" in runner.invoke(app, ["bad", "x"]).output
+    r = runner.invoke(app, ["bda"], env={"COLUMNS": "300"})  # extension CLIs are suggested too
+    assert r.exit_code == 2 and "Did you mean 'bad'?" in r.output
 
 
+def test_a_discovery_error_is_named_when_an_extension_cli_is_missing(home, tmp_path):
+    shadow = tmp_path / "exts" / "observe"  # an out-of-tree extension reusing an in-tree name
+    shadow.mkdir(parents=True)
+    (shadow / "extension.yml").write_text("api: 2\nname: observe\nsummary: x\n")
+    home.mkdir()
+    (home / "config.yml").write_text(f"extension_paths: [{shadow}]\n")
+    assert runner.invoke(app, ["version"]).exit_code == 0
+    r = runner.invoke(app, ["filter", "--help"], env={"COLUMNS": "400"})
+    assert r.exit_code == 2 and "extension CLIs are unavailable" in r.output and "shadows" in r.output
+
+
+def test_a_core_command_wins_over_an_extension_of_its_name(tmp_path):
+    marker = tmp_path / "marker"
+    _planting_ext(tmp_path / "oot", marker, name="ls")
+    _config(tmp_path / "gh", tmp_path / "oot", trusted=["ls"])
+    code, _, modules = _glove(tmp_path / "gh", "ls")
+    assert code == 0 and modules == [] and not marker.exists()
 
 
 def test_a_broken_or_missing_command_does_not_break_glove(tmp_path, monkeypatch, capsys):

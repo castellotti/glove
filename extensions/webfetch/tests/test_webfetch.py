@@ -128,7 +128,7 @@ def test_core_binds_the_downloads_output_into_the_fetcher_only(tmp_path):
 
 
 def test_the_fetcher_trusts_the_sessions_corporate_ca_read_only(tmp_path):
-    from glove.cafile import CORPORATE_CA_PATH
+    from glove.cafile import CA_DIR, TRUST_DIR, TRUST_ENV
     from glove.runtimes.docker import DockerRuntime
 
     (tmp_path / "work").mkdir()
@@ -139,27 +139,24 @@ def test_the_fetcher_trusts_the_sessions_corporate_ca_read_only(tmp_path):
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"),
                               session_dir=str(tmp_path))
     fetcher = yaml.safe_load(DockerRuntime().render(plan, tmp_path / "st").compose_yaml)["services"]["glove-s-fetcher"]
-    assert fetcher["environment"]["GLOVE_CORPORATE_CA"] == CORPORATE_CA_PATH
-    assert sorted(v["target"] for v in fetcher["volumes"]) == [CORPORATE_CA_PATH, "/run/glove-output/downloads"]
-    assert {"type": "bind", "source": str(ca.resolve()), "target": CORPORATE_CA_PATH,
-            "read_only": True} in fetcher["volumes"]
+    # urllib's default context reads SSL_CERT_FILE: core's bundle, built before the server starts
+    assert fetcher["environment"]["SSL_CERT_FILE"] == TRUST_ENV["SSL_CERT_FILE"]
+    assert sorted(v["target"] for v in fetcher["volumes"]) == [CA_DIR, TRUST_DIR, "/run/glove-output/downloads"]
+    assert {"type": "bind", "source": plan.trust_host_dir, "target": TRUST_DIR, "read_only": True} in fetcher["volumes"]
+    assert fetcher["entrypoint"][3:] == ["glove-trust"]
+    assert fetcher["command"] == ["python3", "/opt/glove/webfetch/webfetch_mcp.py"]
+    assert not hasattr(_server(), "trust_corporate_ca")  # no second bundle step (TODO 1i)
 
 
-def test_trust_corporate_ca_points_ssl_at_roots_then_the_ca(tmp_path, monkeypatch):
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    (tmp_path / "roots.pem").write_bytes(b"ROOTS\n")
-    (tmp_path / "corp.pem").write_bytes(b"CORP")
-    _server().trust_corporate_ca(str(tmp_path / "corp.pem"), dest=str(tmp_path / "b.pem"),
-                                 roots=str(tmp_path / "roots.pem"))
-    assert (tmp_path / "b.pem").read_bytes() == b"ROOTS\nCORP\n"
-    import os
-
-    assert os.environ["SSL_CERT_FILE"] == str(tmp_path / "b.pem")
-    # the relay image's copy of the same step (two images, no shared code)
-    relayd = load_module(Path(__file__).parents[2] / "relay" / "image" / "relayd.py", "relay")
-    relayd.ca_bundle_env(str(tmp_path / "corp.pem"), dest=str(tmp_path / "r.pem"), roots=str(tmp_path / "roots.pem"))
-    assert (tmp_path / "r.pem").read_bytes() == (tmp_path / "b.pem").read_bytes()
-    assert _server().SYSTEM_ROOTS == relayd.SYSTEM_ROOTS
+def test_the_fetchers_command_is_the_images(tmp_path):
+    # core wraps the service's `command` when it trusts a CA, so it must be the image's own
+    df = (Path(__file__).parents[1] / "image" / "Dockerfile").read_text()
+    assert 'CMD ["python3", "/opt/glove/webfetch/webfetch_mcp.py"]' in df
+    (tmp_path / "work").mkdir()
+    _, text = render(make_cfg(name="s", workdir=str(tmp_path / "work"), extensions={"direct": {}, "webfetch": {}}),
+                     tmp_path)
+    fetcher = yaml.safe_load(text)["services"]["glove-s-fetcher"]
+    assert fetcher["command"] == ["python3", "/opt/glove/webfetch/webfetch_mcp.py"]
 
 
 def test_downloads_off_render_no_downloader(tmp_path):

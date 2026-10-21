@@ -60,10 +60,11 @@ require_sandbox() {
   fi
 }
 
-# `playwright: {ca: …}`: Chromium verifies TLS against NSS, not Node's store,
-# so import each certificate of the bound bundle into the user's NSS db ($HOME
+# The session's CAs (corporate_ca, `playwright: {ca: …}`), which glove put
+# in NODE_EXTRA_CA_CERTS for Node (the MCP): Chromium verifies TLS against NSS,
+# not Node's store, so import each certificate into the user's NSS db ($HOME
 # is a tmpfs) as a trusted CA. Trust is only added; verification stays on.
-trust_corporate_ca() {
+trust_session_cas() {
   local ca="${NODE_EXTRA_CA_CERTS:-}" db="$HOME/.pki/nssdb" dir f
   [ -n "$ca" ] && [ -f "$ca" ] || return 0
   mkdir -p "$db"
@@ -74,10 +75,10 @@ trust_corporate_ca() {
   set -- "$dir"/*.pem
   [ -f "$1" ] || set --
   for f; do
-    certutil -d "sql:$db" -A -n "glove-corporate-ca-$(basename "$f" .pem)" -t "C,," -i "$f"
+    certutil -d "sql:$db" -A -n "glove-ca-$(basename "$f" .pem)" -t "C,," -i "$f"
   done
   rm -rf "$dir"
-  echo "glove: trusting $# corporate CA certificate(s) from $ca" >&2
+  echo "glove: trusting $# session CA certificate(s) from $ca" >&2
 }
 
 # `playwright: {storage_state: …}`: the session `glove playwright login`
@@ -107,7 +108,7 @@ prepare() {
   require_sandbox
   find /data/staging -mindepth 1 -delete 2>/dev/null || true
   [ "$PW_PROFILE" != session ] || rm -f /data/profile/Singleton*
-  trust_corporate_ca
+  trust_session_cas
   seed_storage_state
 }
 

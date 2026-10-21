@@ -679,24 +679,10 @@ def status(job_id: str | None = None) -> str:
     return "\n\n".join(describe(j) for j in jobs)
 
 
-SYSTEM_ROOTS = "/etc/ssl/certs/ca-certificates.crt"
-
-
-def trust_corporate_ca(extra: str, dest: str = "/tmp/ca-bundle.pem", roots: str = SYSTEM_ROOTS) -> None:
-    """glove's `corporate_ca` (bound read-only at `extra`): every TLS context
-    from here on trusts the image's roots and it (ssl reads SSL_CERT_FILE)."""
-    with open(dest, "wb") as out:
-        for path in (roots, extra):
-            with open(path, "rb") as f:
-                out.write(f.read().rstrip(b"\n") + b"\n")
-    os.environ["SSL_CERT_FILE"] = dest
-
-
 def main() -> None:
+    # The session's CAs (its manifest's `trust:`): glove builds their bundle
+    # before this starts and sets SSL_CERT_FILE, which every TLS context reads.
     from mcp.server.fastmcp import FastMCP
-
-    if os.environ.get("GLOVE_CORPORATE_CA"):
-        trust_corporate_ca(os.environ["GLOVE_CORPORATE_CA"])
     from mcp.server.transport_security import TransportSecuritySettings
 
     mcp = FastMCP(
