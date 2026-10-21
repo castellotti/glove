@@ -59,6 +59,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from extensions.gate.netgate import guard
+
 REPO = Path(__file__).resolve().parents[4]
 OUT = REPO / "tests" / "fixtures" / "netobs-v3"
 T0 = "2026-10-01T12:00:00.000Z"
@@ -91,7 +93,7 @@ class Scenario:
     # Pi's fetch_url: the harness's MCP hop and the fetcher's egress flow behind it
     flows: tuple[Flow, ...] = (Flow("webfetch-egress", "en.wikipedia.org:443", 512, 40960, .6, .9),
                                Flow("webfetch-mcp", None, 300, 9000, .5, 1),
-                               Flow("webfetch-egress", "169.254.169.254:443", 48, 120, 2, 2, "builtin:ssrf-guard"))
+                               Flow("webfetch-egress", "169.254.169.254:443", 48, 120, 2, 2, guard.GUARD_RULE))
     bash: tuple[tuple[str, str, bool], ...] = ()  # Pi's bash calls: (command, output, is_error)
     files: tuple[tuple[str, str], ...] = ()  # session-dir files `glove plan` checks (not part of ~/.glove)
 
@@ -118,7 +120,7 @@ SCENARIOS = {
     "claude-code": Scenario(OBSERVE, harness="claude-code", llm=(
         '{provider: anthropic-compatible, location: host, endpoint: "127.0.0.1:8080", model: claude-test}'),
         flows=(Flow("proxy", "en.wikipedia.org:443", 512, 40960, .5, 1),
-               Flow("proxy", "169.254.169.254:443", 48, 120, 2, 2, "builtin:ssrf-guard"))),
+               Flow("proxy", "169.254.169.254:443", 48, 120, 2, 2, guard.GUARD_RULE))),
     # the harness's `llm` hop is plain HTTP to llm-auth (dest: the sidecar);
     # `llm-upstream` carries llm-auth's TLS to the provider (dest: its SNI)
     "llm-auth": Scenario(OBSERVE, llm=AUTH_LLM + "}", flows=_model_calls(None, 900, 2400)),
@@ -138,7 +140,7 @@ SCENARIOS = {
         "  ssh:\n    key: keychain:fixture-ssh\n    known_hosts: local/known_hosts\n    hosts:\n"
         '      - {name: build, to: "192.168.1.20:22", user: ci}\n'
         '      - {name: db, to: "db.lan:22", user: ops}\n' + OBSERVE,
-        flows=(Flow("ssh-build", None, 3100, 4200, 1, 4), Flow("ssh-db", None, 0, 0, 5, 5, "builtin:lan-only")),
+        flows=(Flow("ssh-build", None, 3100, 4200, 1, 4), Flow("ssh-db", None, 0, 0, 5, 5, guard.LAN_ONLY_RULE)),
         bash=(("ssh build uptime", " 12:00:00 up 3 days,  2:14,  0 users,  load average: 0.08, 0.03, 0.01\n", False),
               ("ssh db hostname", "Connection closed by 172.20.0.5 port 22\n", True)),
         files=(("local/known_hosts",
@@ -166,7 +168,6 @@ def _net(net: Path, sc: Scenario, control: Path | None) -> None:
     Claude Code's own WebFetch goes through the `proxy` endpoint."""
     from datetime import datetime
 
-    from extensions.gate.netgate import guard
     from extensions.gate.netgate.__main__ import _parse_upstream
     from extensions.gate.netgate.collector import Collector
     from extensions.gate.netgate.forward import Forwarder, ForwardSpec, _Flow
@@ -188,12 +189,11 @@ def _net(net: Path, sc: Scenario, control: Path | None) -> None:
         flow.id, flow.t_open, flow.up, flow.down = f"f_{n}", t0 + f.opened, f.up, f.down
         if spec.mode == "http-proxy":
             flow.proto = "http-connect"
-            flow.host, _, p = f.dest.rpartition(":")
-            flow.port = int(p)
-            flow.scope = spec.flow_scope(guard.check_with(flow.host, spec.exceptions)[1])
+            host, _, p = f.dest.rpartition(":")
+            spec.classify_proxy_dest(flow, host, int(p))
         elif f.dest:
             flow.host = f.dest
-        flow.ip, flow.resolution = spec.display_ip(flow.host)
+            flow.ip, flow.resolution = spec.display_ip(f.dest)
         flow.verdict, flow.rule, flow.close_reason = ("block", f.rule, "blocked") if f.rule else ("allow", None, "eof")
         c.ingest(json.dumps(gate._record(flow, "close", t0 + f.closed)).encode())
     c.write_status("running")
@@ -346,6 +346,5 @@ def generate(out: Path) -> None:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(REPO))
     generate(Path(sys.argv[1]) if len(sys.argv) > 1 else OUT)
     print(f"wrote {sys.argv[1] if len(sys.argv) > 1 else OUT}")

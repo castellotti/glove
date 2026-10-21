@@ -10,6 +10,7 @@ import struct
 
 import pytest
 
+from extensions.gate.netgate import guard
 from extensions.gate.netgate import resolver as res
 from extensions.gate.netgate.collector import Collector
 from extensions.gate.netgate.exitid import FileExit, UrlExit, check_url, parse_echo, parse_ip_file
@@ -266,7 +267,7 @@ def test_rebinding_to_a_private_address_is_refused():
     assert out.startswith(b"HTTP/1.1 403") and b"resolves in-tunnel" in out
     assert heads == []  # refused before the upstream heard of it
     close = [r for r in recs if r.get("phase") == "close"][-1]
-    assert close["rule"] == "builtin:ssrf-guard" and close["scope"] == "local"
+    assert close["rule"] == guard.GUARD_RULE and close["scope"] == "local"
     assert close["dest"]["ip"] == "127.0.0.1" and close["dest"]["resolution"] == "in-tunnel"
 
 

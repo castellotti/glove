@@ -256,7 +256,7 @@ services:
     mem_limit: 512m
   glove-s-netgate:
     container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - collect
     - --net-dir
@@ -326,7 +326,7 @@ services:
     mem_limit: 512m
   glove-s-llm:
     container_name: glove-s-llm
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - forward
     - --service
@@ -385,7 +385,7 @@ services:
       net.ipv4.ip_unprivileged_port_start: 0
   glove-s-llm-upstream:
     container_name: glove-s-llm-upstream
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - forward
     - --service
@@ -439,7 +439,7 @@ services:
       net.ipv4.ip_unprivileged_port_start: 0
   glove-s-proxy:
     container_name: glove-s-proxy
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - forward
     - --service
@@ -493,7 +493,7 @@ services:
     mem_limit: 512m
   glove-s-webdownload-mcp:
     container_name: glove-s-webdownload-mcp
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - forward
     - --service
@@ -549,7 +549,7 @@ services:
     mem_limit: 512m
   glove-s-webdownload-egress:
     container_name: glove-s-webdownload-egress
-    image: glove/ext-gate-netgate:be365e45ce
+    image: glove/ext-gate-netgate:7a756a48ad
     command:
     - forward
     - --service

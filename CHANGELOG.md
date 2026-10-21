@@ -79,6 +79,15 @@ All notable changes to glove are documented here.
     path inside a harness's masked directory;
   - `test_ring0_protect.sh` (26/26, Docker nono+srt and Podman nono) and
     `test_config_protect.sh pi` (14/14 under nono and nono+srt) check it live.
+- **A gate refusal holds its rule namespace at run time** (round 18 D). A
+  blocked flow's `rule` is `null`, one of netgate's own `builtin:` refusals
+  (`guard.BUILTIN_RULES`) or a valid `r_…` id;
+  netgate checks it again when it blocks, and records anything else as the new
+  `builtin:internal-error` (still a block). The rules validator already
+  refused a bad id, so nothing in a session changes. The observe fixtures now
+  classify a proxy destination with the gate's own
+  `ForwardSpec.classify_proxy_dest` instead of repeating it; the netgate
+  image tag moves once.
 
 ### Added
 

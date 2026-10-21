@@ -11,6 +11,7 @@ import warnings
 
 import pytest
 
+from extensions.gate.netgate import guard
 from extensions.gate.netgate.collector import Collector
 from extensions.gate.netgate.forward import Forwarder, ForwardSpec
 from extensions.gate.netgate.policy import PolicyError, PolicyWatcher, RuleSet, validate
@@ -189,7 +190,7 @@ def test_builtin_guard_cannot_be_overridden_by_an_allow_rule(tmp_path):
 
     outs, recs, heads = _proxy(tmp_path, rules, scenario)
     assert all(o.startswith(b"HTTP/1.1 403") for o in outs) and heads == []
-    assert {r["rule"] for r in recs if r["phase"] == "close"} == {"builtin:ssrf-guard"}
+    assert {r["rule"] for r in recs if r["phase"] == "close"} == {guard.GUARD_RULE}
 
 
 def test_malformed_rules_file_keeps_the_previous_set(tmp_path):
@@ -522,4 +523,29 @@ def test_launch_warns_about_an_unreadable_rules_file(tmp_path):
         assert rules_file_problem(tmp_path) == "cannot read rules.json: permission denied"
     finally:
         (tmp_path / "rules.json").chmod(0o600)
+
+
+@pytest.mark.parametrize("rid,want", [(None, None), ("r_ok", "r_ok"), (guard.LAN_ONLY_RULE, guard.LAN_ONLY_RULE),
+                                      ("r_ok\n", guard.INTERNAL_ERROR_RULE), ("ok", guard.INTERNAL_ERROR_RULE),
+                                      ("", guard.INTERNAL_ERROR_RULE), ("builtin:x\n<b>", guard.INTERNAL_ERROR_RULE),
+                                      (42, guard.INTERNAL_ERROR_RULE), (["r_ok"], guard.INTERNAL_ERROR_RULE)])
+def test_a_block_holds_the_rule_namespace_and_a_bad_id_still_blocks(rid, want):
+    # 1y: a record's rule is the default (None), `builtin:…` or a valid `r_…` id
+    from extensions.gate.netgate.forward import _Flow
+
+    spec = ForwardSpec(service="p", listen_port=0, upstream_host="h", upstream_port=1, env=ENV, session=SESSION)
+    flow = _Flow("harness", spec)
+    Forwarder._block(flow, rid)
+    assert (flow.verdict, flow.rule) == ("block", want)
+
+
+def test_a_rule_id_the_validator_never_made_is_refused_as_an_internal_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(RuleSet, "evaluate", lambda self, facts: ("block", "<script>", False))
+
+    async def scenario(fwd, _):
+        return await _exchange(fwd.port, _connect("good.example") + b"x")
+
+    out, recs, heads = _proxy(tmp_path, doc(rule("r_x", host="other.example")), scenario)
+    assert out.startswith(b"HTTP/1.1 403") and b"<script>" not in out and heads == []
+    assert {r["rule"] for r in recs} == {guard.INTERNAL_ERROR_RULE}
 

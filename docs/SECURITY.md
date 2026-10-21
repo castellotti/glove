@@ -1146,7 +1146,12 @@ reporting `rules`).
   compromised writer can at worst change which destinations are allowed. The
   built-in SSRF guard runs before the rules, so no rule can allow an internal
   destination; only the operator's `corporate` allowlist (session file,
-  command line) widens it.
+  command line) widens it. A blocked flow's `rule` is always `null` (the
+  default policy), one of the gate's own `builtin:` refusals or a validated
+  `r_…` id: the gate
+  checks it again when it blocks, and records anything else as
+  `builtin:internal-error`, still a block, so a reader of `flows.ndjson` never
+  sees an unchecked id.
 - **No host DNS.** Nothing on the host resolves a destination. An observe gate
   resolves only its configured target or upstream (as socat did) and glove's
   own ingress alias; the corporate egress gate, by design, resolves destinations

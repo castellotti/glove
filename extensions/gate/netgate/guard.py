@@ -30,6 +30,8 @@ from dataclasses import dataclass
 GUARD_RULE = "builtin:ssrf-guard"
 MALFORMED_RULE = "builtin:malformed-request"
 LAN_ONLY_RULE = "builtin:lan-only"  # a `--lan-only` upstream resolved public (forward.py)
+INTERNAL_ERROR_RULE = "builtin:internal-error"  # a block whose rule id was not one (forward.py `_block`)
+BUILTIN_RULES = frozenset({GUARD_RULE, MALFORMED_RULE, LAN_ONLY_RULE, INTERNAL_ERROR_RULE})
 
 LOCAL_SUFFIXES = (
     ".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa",
