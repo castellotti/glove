@@ -47,11 +47,12 @@ def plugin(tmp_path):
     return root
 
 
-def _cfg(tmp_path, harness, plugins):
+def _cfg(tmp_path, harness, plugins, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     llm = {"llm": ANTHROPIC} if harness == "claude-code" else {}
-    return make_cfg(harness=harness, name="s", workdir=str(work), extensions={**llm, "skills": {"plugins": plugins}})
+    return make_cfg(harness=harness, name="s", workdir=str(work),
+                    extensions={**llm, "skills": {"plugins": plugins}}, **kw)
 
 
 def _plan(tmp_path, harness="pi", **demo):
@@ -185,6 +186,26 @@ def test_mcp_per_harness(tmp_path, plugin):
         assert item["command"] == "/opt/glove/bin/glove-tool" and item["args"][0] == "--"
     with pytest.raises(ExtensionError, match=r"tools maps a server of \['demo'\]"):
         _plan(tmp_path, harness="claude-code", mcp=True, tools={"other": ["x"]})
+
+
+@pytest.mark.parametrize("harness", ["pi", "vibe", "claude-code"])
+def test_a_stdio_server_under_enforcer_none_is_a_check_warning(tmp_path, plugin, harness):
+    from glove.doctor import extension_checks
+
+    (plugin / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        **MCP["mcpServers"], "web": {"type": "http", "url": "http://x.invalid/mcp"}}}))
+    plugins = {"demo": {"path": "skills/demo-repo/demo", "mcp": True, "tools": {"demo": ["q"], "web": ["q"]}}}
+
+    def checks(enforcer):
+        cfg = _cfg(tmp_path, harness, plugins, enforcer=enforcer)
+        plan = _plan_of(tmp_path, cfg)
+        return [c for c in extension_checks(cfg.extensions, harness=harness, comp=plan.composition)
+                if c.name.startswith("skills mcp")]
+
+    [warning] = checks("none")  # the stdio server only: an http one needs no wrapper
+    assert (warning.name, warning.status) == ("skills mcp demo/demo", "warn")
+    assert "will not start under enforcer: none" in warning.detail
+    assert checks("nono") == []
 
 
 def test_an_http_server_passes_through_and_unknown_variables_are_refused(tmp_path, plugin):

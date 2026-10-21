@@ -15,7 +15,7 @@ requires:
   - { slot: egress, when: { "settings.plugins.*.relay": { set: true } } }
 # contribute: check each plugin, bake it, and each relay's channel, privileges,
 # hop and checks; materialize: its data dir, a relayed plugin's copy; launch_env:
-# the relays' secrets, in memory
+# the relays' secrets, in memory; doctor: a stdio MCP server under enforcer: none
 hooks: hooks.py
 # its hooks read the plugins' paths (session dir) and bind /work into a relay
 host_files: true

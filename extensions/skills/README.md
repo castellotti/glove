@@ -79,7 +79,8 @@ A stdio server runs as `glove-tool -- <command> …`: under the session's tool
 wrapper, the same per-command sandbox a shell command gets (`/work`, `/tmp`, no
 network). It never gets the harness's own sandbox, whose network reaches the
 session's forwarders (the LLM, and the egress proxy when `webfetch` is on).
-Without an enforcer there is no wrapper, and the server does not start. An
+Without an enforcer there is no wrapper, and the server does not start
+(`glove check` warns about each one under `enforcer: none`). An
 `http` server passes through as `transport: http`. Any `${VAR}` other than the
 two plugin variables is refused.
 

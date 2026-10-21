@@ -497,8 +497,8 @@ does not vet it.
   (`/etc/glove/enforcer/tool-wrapper.argv`, read-only) around it: no network,
   not even the forwarders the harness process reaches (glove's own stdio MCP
   servers on Claude Code run under the harness sandbox instead). With no
-  wrapper it refuses to start. Each server's tools must be listed; the
-  inventory fails closed.
+  wrapper it refuses to start (`glove check` warns under `enforcer: none`).
+  Each server's tools must be listed; the inventory fails closed.
 - **Not loaded:** plugin hooks, commands, agents, output styles; Claude Code
   still refuses plugins as such (the skills come in through `--add-dir`).
 

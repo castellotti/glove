@@ -88,6 +88,11 @@ All notable changes to glove are documented here.
   classify a proxy destination with the gate's own
   `ForwardSpec.classify_proxy_dest` instead of repeating it; the netgate
   image tag moves once.
+- **`glove check` warns when a plugin's stdio MCP server cannot start**
+  (round 18 E). Under `enforcer: none` there is no tool wrapper, so
+  `glove-tool` refuses to start a `skills` plugin's stdio server (exit 126).
+  This was found only once the session ran; now `glove check` names each
+  such server (an `http` one is fine).
 
 ### Added
 
