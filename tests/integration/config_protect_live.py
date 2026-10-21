@@ -7,8 +7,9 @@ With the project config an agent could plant in /work already there (a Vibe
 hook shadowing glove's, a Pi project extension: each would touch a marker):
   1. in the harness service, every read-only ring-0 bind (`protect:` in
      harness.yml, the /work paths the host trusts) refuses
-     a write, and the config home cannot be renamed away; Vibe's masked
-     project dirs are empty though the host's are not; the home outside the
+     a write, and the config home cannot be renamed away; the masked project
+     paths (Vibe's dirs, Pi's .pi/settings.json) are empty though the host's
+     are not; the home outside the
      config home is read-only (EROFS: a new file or dir at its top level, in
      ~/.config, ~/.agents, ~/.local/bin, above the config home) while the
      config home itself is writable;
@@ -60,7 +61,9 @@ def main(directory: str) -> int:
         plan, h = s.plan, s.cfg.harness
         work, home = s.sd.root / "work", plan.profile.config_home_path
         masked = [e.path.rstrip("/") for e in plan.profile.protect if not e.home and e.source == "empty"]
-        plants = {**PLANTS.get(h, {}), "AGENTS.md": "# project notes\n", **{f"{m}/.glove-probe": "x\n" for m in masked}}
+        dirs = {e.path.rstrip("/") for e in plan.profile.protect if e.source == "empty" and e.path.endswith("/")}
+        plants = {"AGENTS.md": "# project notes\n", **{f"{m}/.glove-probe" if m in dirs else m: "x\n" for m in masked},
+                  **PLANTS.get(h, {})}
         for rel, text in plants.items():
             (work / rel).parent.mkdir(parents=True, exist_ok=True)
             (work / rel).write_text(text)
@@ -70,7 +73,8 @@ def main(directory: str) -> int:
         probe = "".join(f"{': >>' if p.kind == 'file' else 'touch'} {shlex.quote(p.container_path)}"
                         f"{'' if p.kind == 'file' else '/x'} 2>/dev/null; echo \"W{i}=$?\"\n" for i, p in enumerate(ro))
         probe += f"mv {home} {home}.x 2>/dev/null; echo MV=$?\n"
-        probe += "".join(f"echo M{i}=$(ls -A /work/{shlex.quote(m)} | wc -l)\n" for i, m in enumerate(masked))
+        probe += "".join(f"echo M{i}=$({'ls -A' if m in dirs else 'cat'} /work/{shlex.quote(m)} | wc -c)\n"
+                         for i, m in enumerate(masked))
         out = outside(home)
         probe += "".join(f"{{ mkdir -p {shlex.quote(posixpath.dirname(f))} && touch {shlex.quote(f)}; }} 2>&1 "
                          f"| grep -q 'Read-only file system'; echo O{i}=$?\n"

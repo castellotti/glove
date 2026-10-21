@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Ring-0 read-only binds (v3 plan §6.3): the agent cannot plant git hooks or
-# rewrite .git/config (both later run/trusted on the HOST), and with
+# rewrite .git/config (both later run/trusted on the HOST), nor any other
+# host-trusted file already there (.gitmodules, .claude/*, .idea), and with
 # `protect_ide_files: true` cannot create .envrc/.mcp.json/.vscode.
 #
 # Renders a real session with `glove pi --dry-run` and runs the rendered
@@ -25,6 +26,9 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 git -C "$WORKDIR" init -q && git -C "$WORKDIR" config user.email t@example.com && git -C "$WORKDIR" config user.name t
 echo hi > "$WORKDIR/README" && git -C "$WORKDIR" add README && git -C "$WORKDIR" commit -qm init
+# host-trusted files already there: protected whatever protect_ide_files says (mounts.HOST_TRUSTED)
+mkdir -p "$WORKDIR/.claude/hooks" "$WORKDIR/.idea"
+echo '{}' > "$WORKDIR/.claude/settings.json"; : > "$WORKDIR/.gitmodules"; echo 'echo hi' > "$WORKDIR/.claude/hooks/x.sh"
 
 echo "== rendering (glove plan, protect_ide_files: true) =="
 new_session "$S" pi 'protect_ide_files: true\n'
@@ -51,7 +55,15 @@ for who in harness tool; do
   denied "$out" && ok "$who: write .envrc denied" || bad "$who: wrote .envrc: $out"
   out="$(run "$pre 'echo x > /work/.vscode/tasks.json; echo rc=\$?'")"
   denied "$out" && ok "$who: write .vscode/tasks.json denied" || bad "$who: wrote .vscode: $out"
+  for f in .gitmodules .claude/settings.json .claude/hooks/x.sh .idea/workspace.xml; do
+    out="$(run "$pre 'echo x >> /work/$f; echo rc=\$?'")"
+    denied "$out" && ok "$who: write $f denied" || bad "$who: wrote $f: $out"
+  done
+  out="$(run "$pre 'cd /work && mv .claude .claude-moved; echo rc=\$?'")"
+  echo "$out" | grep -q 'rc=[^0]' && ok "$who: mv .claude denied" || bad "$who: renamed .claude away: $out"
 done
+[ "$(cat "$WORKDIR/.claude/hooks/x.sh")" = 'echo hi' ] && [ ! -s "$WORKDIR/.gitmodules" ] \
+  && ok "host: .claude/hooks and .gitmodules unchanged" || bad "host: a host-trusted file changed"
 [ ! -e "$WORKDIR/.git/hooks/pre-commit" ] && ok "host: no pre-commit hook exists" || bad "host: pre-commit planted"
 
 echo "== normal git work still functions =="

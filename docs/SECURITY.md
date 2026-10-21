@@ -895,6 +895,15 @@ wrapper and the planted hook ran in the harness.
   them). `PI_CODING_AGENT_SESSION_DIR` is set to Pi's default for `/work`
   (`~/.pi/agent/sessions/--work--`), and the variable wins over the setting;
   `test_config_protect.sh pi` plants one and checks no session lands there.
+- **Pi never sees the project's `.pi/settings.json`.** Some Pi 1.x code paths
+  (its resource loader and session services) load it as trusted whatever
+  `defaultProjectTrust` says. Pi's `protect:` has `{path: .pi/settings.json,
+  source: empty}`: the harness gets an empty file (Pi reads it as `{}`, checked
+  in Pi 1.1.0), `.pi/` is pinned, and a `.pi/` with an empty `settings.json`
+  appears in the working dir when missing. A `.pi` or `.pi/settings.json` that
+  is a symlink (or `.pi` a file) refuses the session, as any `protect:` path
+  does. `test_config_protect.sh pi` checks that the file reads empty though
+  the host's is planted.
 - **Gaps:** context files (`AGENTS.md`) are prompts, re-rendered at each start.
   An older session home: see "The harness home" above (its `auth.json` is
   overwritten with `{}` at launch, so credentials it held are gone).
@@ -941,8 +950,8 @@ Landlock cannot grant).
 |---|---|---|
 | Harness process network | ring 0: the session's forwarders on an internal network | same (srt adds no network namespace, below) |
 | Tool command network | none (Landlock) | none (Landlock) |
-| `/work/.git/hooks`, `.git/config` | ring-0 ro binds where they exist (below) | also denied by srt |
-| `.vscode`, `.idea`, `.envrc`, `.mcp.json`, `.claude/*`, shell rc files in `/work` | only with `protect_ide_files` | denied where they exist at launch |
+| Host-trusted files in `/work` (`.git/hooks`, `.git/config`, `.gitmodules`, `.claude/*`, `.vscode`, `.idea`, `.envrc`, `.mcp.json`) | ring-0 ro binds where they exist (below) | same, and also denied by srt (one list, `mounts.HOST_TRUSTED`) |
+| Shell rc and srt's other dangerous files in `/work` | writable | denied where they exist at launch |
 | `.env` / `.env.*` in `/work` | readable | hidden from harness and tools (present at launch) |
 | Namespaces / mounts / AF_UNIX / io_uring | default seccomp: no userns | relaxed profile for srt; glove's filter denies all of these to everything below srt |
 | PID namespace around the harness and its commands | no | yes (srt's `apply-seccomp`) |
@@ -992,28 +1001,45 @@ Landlock cannot grant).
 
 `/work` is writable, and some files in it are later *executed or trusted by the
 host*: git runs `.git/hooks/*` and honours `.git/config` (`core.hooksPath`,
-`core.fsmonitor`, filter drivers …) the next time you run git on your Mac, and
-IDEs and direnv act on `.vscode/`, `.envrc` and `.mcp.json`. An agent that
-plants one gets code execution **outside** the sandbox. Landlock cannot express
-"writable directory except these children", so glove adds nested read-only
-binds after each rw mount (`glove/mounts.py:protected_paths`):
+`core.fsmonitor`, filter drivers …) and `.gitmodules` the next time you run git
+on your Mac; Claude Code loads the project's `.claude/` settings, commands,
+agents, skills and the hook scripts they name; and IDEs and direnv act on
+`.vscode/`, `.idea/`, `.envrc` and `.mcp.json`. An agent that plants one gets
+code execution **outside** the sandbox. Landlock cannot express "writable
+directory except these children", so glove adds nested read-only binds after
+each rw mount (`glove/mounts.py:protected_paths`). One table
+(`glove/mounts.py:HOST_TRUSTED`) lists these paths; `nono+srt` also denies
+them to srt (`glove/enforcers/nono_srt.py`), so every enforcer protects the
+same ones:
 
-- **Always, at the root of every rw mount that is a git repo:** `.git/hooks`
-  and `.git/config` are read-only, and so is an in-tree `core.hooksPath`
-  directory. `.git` itself is re-bound (read-write) so that it is a mount
-  point. Renaming or deleting it fails with `EBUSY`, which stops the agent from
-  swapping in a fresh `.git` with its own hooks. Commits, branches and fetches
-  still work.
-- **With `protect_ide_files: true`:** `.vscode/`, `.envrc` and `.mcp.json` are
-  read-only. When one is missing, glove binds an empty placeholder over it,
-  which creates an empty file or directory in your repo. That side effect is
-  why this setting is opt-in.
+- **Always, at the root of every rw mount, where they exist:** `.git/hooks`,
+  `.git/config`, `.gitmodules`, `.claude/settings.json`,
+  `.claude/settings.local.json`, `.claude/commands`, `.claude/agents`,
+  `.claude/hooks`, `.claude/skills`, `.vscode`, `.idea`, `.envrc` and
+  `.mcp.json` are read-only, and so is an in-tree `core.hooksPath` directory.
+  The directories they sit in (`.git`, `.claude`) are re-bound (read-write)
+  so that each is a mount point. Renaming or deleting one fails with `EBUSY`,
+  which stops the agent from swapping in a fresh `.git` with its own hooks.
+  Commits, branches and fetches still work. A path inside a directory the
+  harness masks (its `protect:` placeholder) is already covered. A
+  `core.hooksPath` naming `.claude` or `.git` itself makes that whole
+  directory read-only (with `.git`, the agent's git can no longer commit).
+  srt denies the same read-only binds (those of files `/work` holds).
+- **With `protect_ide_files: true`:** a *missing* `.vscode/`, `.idea/`,
+  `.envrc` or `.mcp.json` gets an empty read-only placeholder too, so the agent
+  can't create one. That creates an empty file or directory in your repo, which
+  is why this setting is opt-in. Other missing paths are left alone, so `git
+  init` in a fresh `/work` still works.
 - Bind sources are resolved with realpath and must stay inside the mount, so a
   symlink can't expose another host path.
 
 **Residual gaps:** paths that don't exist at start (for example `git init`
-run inside a directory with no repo yet), nested repositories and submodules
-(`.git/modules/*`), and `.git` files (worktrees) are not covered.
+run inside a directory with no repo yet, or a `.git/hooks` missing from an
+existing repo), nested repositories and submodules (`.git/modules/*`), and
+`.git` files (worktrees) are not covered. A symlink on the way (`.claude ->
+cfg`, or a symlinked `.claude/settings.json`) is followed: its target inside
+the mount is protected and pinned, but the link itself is an ordinary entry
+the agent can replace with a directory of its own.
 `tests/integration/test_ring0_protect.sh` checks this live.
 
 ## Network observability (the netgate): observe reads, filter writes

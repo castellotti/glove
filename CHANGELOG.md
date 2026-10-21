@@ -29,6 +29,32 @@ All notable changes to glove are documented here.
   out-of-tree extension that provides it is refused before its hooks load
   (before, it could fill the slot and sit on every endpoint's traffic, only
   hidden the forwarder list and grants).
+- **One list of host-trusted paths** (round 18 B). Ring 0 and srt now read
+  one table (`glove/mounts.py:HOST_TRUSTED`), so `nono` and `nono+srt` protect
+  the same paths. Before, under `nono` alone, `.claude/settings.json`,
+  `.gitmodules` and `.idea` in a writable `/work` stayed writable. Now:
+  - every listed path present at a writable mount's root is bound read-only
+    whatever the enforcer: `.git/hooks`, `.git/config`, `.gitmodules`,
+    `.claude/{settings.json,settings.local.json,commands,agents,hooks,skills}`,
+    `.vscode`, `.idea`, `.envrc` and `.mcp.json`, plus an in-tree
+    `core.hooksPath`. Their directories (`.git`, `.claude`) are pinned, so
+    renaming them away fails;
+  - `.claude/hooks` and `.claude/skills` are new to the list: a project's
+    settings run hook scripts from there on the host;
+  - `protect_ide_files: true` now only adds placeholders over a *missing*
+    `.vscode`, `.idea` (new), `.envrc` or `.mcp.json`, the one case that creates
+    a file on the host;
+  - Pi never sees the project's `.pi/settings.json` (TODO 0k). Some Pi 1.x
+    code paths load it as trusted whatever `defaultProjectTrust` says, so the
+    harness gets an empty one, which Pi reads as `{}`. A `.pi/` and an empty
+    `.pi/settings.json` appear in the working dir when missing; a symlinked
+    `.pi` or `.pi/settings.json` now refuses a Pi session;
+  - a `core.hooksPath` of `.claude` or `.git` makes that directory read-only
+    (a read-write pin over it used to leave it writable), and srt's deny list
+    is ring 0's read-only binds of `/work`'s own files, so it never names a
+    path inside a harness's masked directory;
+  - `test_ring0_protect.sh` (26/26, Docker nono+srt and Podman nono) and
+    `test_config_protect.sh pi` (14/14 under nono and nono+srt) check it live.
 
 ### Added
 

@@ -34,7 +34,6 @@ compose provider cannot apply the profile.
 from __future__ import annotations
 
 import json
-import os
 from typing import TYPE_CHECKING
 
 from ..mounts import CONTAINER_HOME
@@ -49,28 +48,17 @@ if TYPE_CHECKING:
 
 HARNESS_SETTINGS = "srt-harness.json"
 
-# Trusted by the host (git, IDEs, direnv, agent CLIs) when the user opens /work:
-# the harness and its tools may not write them. Only those present at launch:
-# denying a missing path makes bwrap create an empty placeholder in the user's
-# work/ on the host (so a fresh /work also keeps `git init` working). srt adds
-# its own list (DANGEROUS_FILES/DIRECTORIES) where they exist in writable paths.
-PROTECTED = (
-    ".git/hooks", ".git/config", ".vscode", ".idea", ".envrc", ".mcp.json", ".gitmodules",
-    ".claude/commands", ".claude/agents", ".claude/settings.json", ".claude/settings.local.json",
-)
 # Read-hidden from the harness and its tools (matches at launch).
 HIDDEN = ("**/.env", "**/.env.*")
 
 
-def _work_host(plan: SessionPlan) -> str | None:
-    return next((m.host_path for m in plan.mounts if m.is_workdir), None)
-
-
 def protected_paths(plan: SessionPlan) -> list[str]:
-    from pathlib import Path
-
-    work, host = workdir(plan), _work_host(plan)
-    return [f"{work}/{p}" for p in PROTECTED if host and os.path.lexists(Path(host) / p)]
+    """Ring 0's read-only binds of /work's own files (`mounts.protected_paths`: the
+    HOST_TRUSTED paths present, the harness's `protect:`), not its placeholders;
+    srt adds its DANGEROUS_FILES where they exist."""
+    work = workdir(plan)
+    return [p.container_path for p in plan.protect if p.read_only and p.host_path
+            and p.container_path.startswith(work + "/")]
 
 
 def render_harness_settings(plan: SessionPlan) -> dict:

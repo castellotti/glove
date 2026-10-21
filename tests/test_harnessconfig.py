@@ -279,6 +279,18 @@ def test_vibe_project_skills_opt_in(tmp_path, opt):
     assert "project_skills" not in tomllib.loads((home / ".vibe" / "config.toml").read_text())
 
 
+def test_pi_never_sees_the_projects_settings(tmp_path):
+    # Pi 1.x loads the project's .pi/settings.json as trusted on some paths
+    # (a `sessionDir`, packages, ...): the harness gets an empty one (read as {}),
+    # the repo's own is never bound, and .pi/ is pinned so it cannot be swapped.
+    (tmp_path / "wd" / ".pi").mkdir(parents=True)
+    (tmp_path / "wd" / ".pi" / "settings.json").write_text('{"sessionDir": "/work/x"}')
+    _, plan, _ = _home("pi", tmp_path)
+    got = {p.container_path: p for p in plan.protect if p.container_path.startswith("/work/")}
+    assert got["/work/.pi/settings.json"].host_path is None and got["/work/.pi/settings.json"].read_only
+    assert got["/work/.pi"].host_path.endswith("/wd/.pi") and not got["/work/.pi"].read_only
+
+
 def test_vibe_project_skills_must_be_a_bool(tmp_path):
     with pytest.raises(ConfigError, match="project_skills must be true or false"):
         _home("vibe", tmp_path, harness_config={"project_skills": "yes"})
