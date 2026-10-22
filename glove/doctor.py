@@ -51,7 +51,7 @@ def _file_sharing_check() -> Check:
     return Check("docker desktop file sharing", "ok", ", ".join(shared))
 
 
-def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
+def _enforcer_checks(enforcer: str, runtime, containers: bool) -> list[Check]:
     # Runtime/enforcer compatibility gate, surfaced BEFORE the enforcer's own
     # probes: a combo the runtime can't render (e.g. podman + srt) fails here up
     # front rather than aborting mid-render on `glove run`.
@@ -61,7 +61,7 @@ def _enforcer_checks(enforcer: str, runtime) -> list[Check]:
     try:
         from .enforcers import get_enforcer
 
-        return get_enforcer(enforcer).doctor(runtime)
+        return get_enforcer(enforcer).doctor(runtime, containers)
     except ValueError as e:
         return [Check(f"enforcer: {enforcer}", "warn", str(e))]
 
@@ -143,7 +143,7 @@ def run_doctor(
         checks.extend(rt.doctor())
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
-    checks.extend(_enforcer_checks(enforcer, rt))
+    checks.extend(_enforcer_checks(enforcer, rt, include_container_probes))
     if include_container_probes and landlock_enforced(enforcer) and rt.caps.implemented:
         checks.append(landlock_mounts_check(rt))
     # Docker Desktop's File sharing list is a docker-only concept; podman shares

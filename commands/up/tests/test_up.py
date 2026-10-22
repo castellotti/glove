@@ -19,10 +19,13 @@ up = command_module("up")
 
 
 @pytest.fixture(autouse=True)
-def _no_preflight(request, monkeypatch):
+def _no_runtime_probes(request, monkeypatch):
     # `up`'s doctor probes the real runtime; test_up_preflight_refuses_a_failing_extension_check covers it
     if "preflight" not in request.node.name:
         monkeypatch.setattr(up, "preflight", lambda *a: None)
+    # and it asks the runtime what is running (test_started_* cover that)
+    if not request.node.name.startswith("test_started_"):
+        monkeypatch.setattr(up, "_started", lambda *a: {})
 
 
 def test_up_refuses_placeholders(home, tmp_path):
@@ -221,7 +224,6 @@ def test_up_notes_glove_updated_while_it_ran(home, tmp_path, monkeypatch):
     d = make_session(tmp_path / "s")
     stamps = iter([1.0, 2.0])
     monkeypatch.setattr(up, "_source_stamp", lambda: next(stamps))
-    monkeypatch.setattr(up, "_started", lambda *a: {})
     monkeypatch.setattr(up, "launch", lambda *a, **k: None)
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 0 and "glove was updated while this session ran" in result.output

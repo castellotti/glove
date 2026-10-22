@@ -1358,8 +1358,9 @@ Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
-uv run ruff check glove harnesses extensions tests   # lint
-uv run pytest -q                           # unit suite (includes the layering check)
+uv run ruff check glove harnesses extensions commands tests   # lint
+uv run pytest -q                           # unit suite (includes the layering check), a worker per CPU;
+                                           # -n0 for one process (e.g. --pdb)
 uv run lint-imports                        # core (glove/) must not import extensions/
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (19 checks)

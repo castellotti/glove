@@ -275,7 +275,7 @@ class _Proxy(BaseHTTPRequestHandler):
 def server(monkeypatch):
     _Proxy.seen.clear()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Proxy)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     m = _server()
     monkeypatch.setattr(m, "PROXY", f"http://127.0.0.1:{httpd.server_address[1]}")
     yield m
@@ -436,7 +436,7 @@ def dl(tmp_path, monkeypatch):
     _Files.seen, _Files.cut = [], set()
     _Files.release = threading.Event()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Files)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     m = _server()
     (tmp_path / "dl").mkdir()
     monkeypatch.setattr(m, "DOWNLOADS", str(tmp_path / "dl"))

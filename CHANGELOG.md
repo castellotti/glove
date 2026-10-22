@@ -233,6 +233,14 @@ All notable changes to glove are documented here.
   closed (in a sidecar, until it stopped), so a 1 GB download took 2 GB of
   the host volume. The sidecar's MCP now deletes it as soon as the copy is
   complete (`image/glove-pw-staged.js`).
+- **The unit suite runs in parallel** (R19.E): `uv run pytest -q` runs a
+  worker per CPU (pytest-xdist; `-n0` for one process): 75 s became 7–9 s on
+  16 CPUs (53 s in one process). The test servers stop at once (no 0.5 s poll
+  per test), and no unit test asks the host's Docker or Podman any more
+  (`docker system df`, `docker images`, `docker ps`, `podman info`, a
+  verify check left running after its test), apart from the three that check
+  a render with `docker compose config`. The github relay tests write gh's
+  config under their own temp dir, not the host's shared `/tmp/relay-home`.
 
 - **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
   `.glove/playwright-login` (from before round 15) is neither moved under
@@ -409,6 +417,10 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **`glove doctor --no-container` and `glove check --no-container` start no
+  container** (R19.E): with an srt enforcer and a local `*-srt-*` image, the
+  bwrap smoke test still ran one; it is now skipped ("container probes
+  skipped").
 - **Live drivers** (round 18 verification). `test_llm_inject.sh
   claude-code-oauth` checked the flow join against the `llm-upstream` flows
   only (a loop reused `recs`), so it always found 0 overlapping; it now passes.

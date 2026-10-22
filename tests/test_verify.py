@@ -233,9 +233,12 @@ def test_consecutive_exec_ok_checks_run_at_once_bounded_and_report_in_order(tmp_
 
 def test_a_failed_exec_ok_check_stops_the_launch_and_cancels_the_rest(tmp_path, monkeypatch):
     import time
+    from concurrent.futures import ThreadPoolExecutor
 
     plan = _plan(tmp_path)
     monkeypatch.setattr(verify, "EXEC_POOL", 1)
+    pool = ThreadPoolExecutor(1)
+    monkeypatch.setattr(verify, "ThreadPoolExecutor", lambda n: pool)
     plan.composition.verify = [("x", {"name": f"c{i}", "kind": "exec-ok", "service": "r", "argv": [str(i)]})
                                for i in range(4)]
     ran: list[str] = []
@@ -249,6 +252,7 @@ def test_a_failed_exec_ok_check_stops_the_launch_and_cancels_the_rest(tmp_path, 
     monkeypatch.setattr(verify.subprocess, "run", fake)
     with pytest.raises(VerifyError, match="c0"):
         run_verify("docker", plan, _quiet)
+    pool.shutdown(wait=True)  # c1, if it started, ends on `fake`, not on the host's docker
     assert ran[0] == "0" and not {"2", "3"} & set(ran)  # still queued: never started
 
 

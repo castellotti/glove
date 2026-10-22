@@ -83,7 +83,7 @@ def test_every_throwaway_site_is_hardened(plan, monkeypatch):
     session.probe_http("docker", plan, "http://x/")
     verify.probe("docker", plan, "egress", "true", {"U": "u"})
     assert DockerRuntime()._landlock_check().status == "ok"
-    assert srt.SrtEnforcer()._bwrap_smoke(DockerRuntime()).status == "ok"
+    assert srt.SrtEnforcer()._bwrap_smoke(DockerRuntime(), containers=True).status == "ok"
     runs = [c for c in calls if c[1] == "run"]
     assert len(runs) == 4 and all(_hardened(c) for c in runs)
     assert [_flag(c, "--network") for c in runs] == ["glove-s-net", "glove-s-egress", "none", "none"]

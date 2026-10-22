@@ -26,7 +26,10 @@ class Tui:
                  cols: int | None = None) -> None:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            os.execvpe(argv[0], argv, env)
+            try:
+                os.execvpe(argv[0], argv, env)
+            finally:
+                os._exit(127)
         self.buf = bytearray()
         self.waited: float | None = None
         if rows and cols:

@@ -17,6 +17,9 @@ sys.path.insert(0, str(INTEGRATION))
 
 from ptyio import Tui  # noqa: E402
 
+# an xdist worker has threads (execnet's); Tui's forked child only execs
+pytestmark = pytest.mark.filterwarnings("ignore:This process .* is multi-threaded, use of forkpty:DeprecationWarning")
+
 
 def _sh(script: str) -> Tui:
     return Tui(["sh", "-c", script], {"PATH": os.environ["PATH"]}, 24, 80)

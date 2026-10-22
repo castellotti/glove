@@ -188,7 +188,11 @@ def test_a_broken_mode_refuses_a_nono_session(monkeypatch, home, tmp_path, enfor
 
 
 def test_doctor_reports_the_mode_for_a_nono_enforcer(monkeypatch):
+    from glove.enforcers.srt import SrtEnforcer
+    from glove.runtimes.base import Check
+
     monkeypatch.setattr(DockerRuntime, "doctor", lambda self: [])
+    monkeypatch.setattr(SrtEnforcer, "_bwrap_smoke", lambda *a, **k: Check("srt bwrap smoke", "skip", "no host image"))
     _mode(monkeypatch, "broken")
     by = {c.name: c for c in run_doctor(enforcer="nono")}
     assert by["landlock on a bind mount"].status == "fail"

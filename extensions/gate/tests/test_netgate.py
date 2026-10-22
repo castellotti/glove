@@ -90,7 +90,10 @@ async def _client(port: int, payload: bytes) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(payload)
     await writer.drain()
-    data = await reader.read()  # until upstream closes
+    try:
+        data = await reader.read()  # until upstream closes
+    except ConnectionResetError:  # a refused or blocked flow closed with `payload` unread: RST, not FIN
+        data = b""
     writer.close()
     return data
 

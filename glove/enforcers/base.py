@@ -163,5 +163,5 @@ class Enforcer(Protocol):
         """Linux capabilities the enforcer requires (scoped)."""
         ...
 
-    def doctor(self, runtime) -> list[Check]:
+    def doctor(self, runtime, containers: bool) -> list[Check]:
         ...

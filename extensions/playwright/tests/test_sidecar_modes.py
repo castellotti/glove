@@ -295,11 +295,9 @@ def test_host_mode_builds_no_sidecar_image(tmp_path, monkeypatch):
     assert any("ext-playwright-pw" in " ".join(c) for c in built)
 
 
-def test_podman_refuses_the_sandbox_profile_it_cannot_apply(tmp_path, monkeypatch):
-    import glove.runtimes.podman as podman_mod
+def test_podman_refuses_the_sandbox_profile_it_cannot_apply(tmp_path):
     from glove.runtimes.podman import PodmanRuntime
 
-    monkeypatch.setattr(podman_mod, "_host_info", lambda cli: {})
     cfg = _cfg(tmp_path)
     plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "ext"))
     with pytest.raises(ExtensionError, match=r'cannot apply .*chromium_sandbox: "off"'):

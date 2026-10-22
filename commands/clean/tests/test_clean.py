@@ -119,6 +119,7 @@ def test_clean_removes_volumes_only_of_provably_gone_sessions(home, tmp_path, mo
     monkeypatch.setattr(cli, "runtimes", lambda only=None: ["docker"])
     monkeypatch.setattr(cli, "stacks", lambda rt: found)
     monkeypatch.setattr(cli, "remove", lambda s, volumes: removed.append((s.sid, volumes)) or [])
+    monkeypatch.setattr(cli, "disk", lambda rt: None)  # not the host's `docker system df`
     args = ["--volumes"] if flag else []
     result = runner.invoke(app, ["--dry-run", *args])
     assert result.exit_code == 0 and not removed

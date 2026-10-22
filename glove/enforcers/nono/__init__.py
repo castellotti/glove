@@ -57,7 +57,7 @@ class NonoEnforcer:
     def image_reference(self) -> str:
         return nono_image_ref()
 
-    def doctor(self, runtime) -> list[Check]:
+    def doctor(self, runtime, containers: bool) -> list[Check]:
         checks = [Check("enforcer: nono", "ok", f"policy backend; binary from {nono_image_ref()}")]
         # If a nono binary is on PATH (rare on the host) we can validate; inside
         # the image the entrypoint runs `nono profile validate`.
