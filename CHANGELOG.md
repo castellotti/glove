@@ -227,6 +227,12 @@ All notable changes to glove are documented here.
   (so ocr's and rag's installs stay ahead of the toolchains). For extension
   authors: no `run` step sees an image `env` any more, its own extension's
   included (`export` what a step needs).
+- **A browser download is on disk once** (0q): Chromium stages a download
+  in `.glove/ext/playwright/downloading/`, and the MCP copies it into the
+  output directory; the staged file used to stay until the browser context
+  closed (in a sidecar, until it stopped), so a 1 GB download took 2 GB of
+  the host volume. The sidecar's MCP now deletes it as soon as the copy is
+  complete (`image/glove-pw-staged.js`).
 
 - **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
   `.glove/playwright-login` (from before round 15) is neither moved under

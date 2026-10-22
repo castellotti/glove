@@ -4,7 +4,10 @@ hardening and settings — the handoff's invariants 1-5 on the rendered project.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -132,7 +135,7 @@ def test_novnc_mode(tmp_path):
     # the page each tool call acts on is raised (image/glove-pw-front.js, copied there by the Dockerfile)
     cfg = json.loads((tmp_path / "p" / "ext" / "playwright" / "mcp.json").read_text())
     assert cfg["browser"]["initPage"] == ["/opt/glove/pw/glove-pw-front.js"]
-    assert "COPY glove-pw-front.js /opt/glove/pw/glove-pw-front.js" in (IMAGE / "Dockerfile").read_text()
+    assert "COPY glove-pw-front.js glove-pw-staged.js /opt/glove/pw/" in (IMAGE / "Dockerfile").read_text()
     assert 'Xvnc :1 -geometry "$PW_VIEWPORT"' in (IMAGE / "glove-pw-start").read_text()
     assert "operator may be watching" in dict(plan.composition.rendered_briefs())["playwright"]
 
@@ -202,11 +205,43 @@ def test_downloads_stage_on_disk_not_in_tmpfs(tmp_path):
     state = tmp_path / "ext" / "playwright"
     cfg = json.loads((state / "mcp.json").read_text())
     assert cfg["browser"]["launchOptions"]["downloadsPath"] == "/data/staging"
+    # glove-pw-staged.js deletes copied downloads from the same dir
+    assert 'process.env.PW_STAGING || "/data/staging"' in (IMAGE / "glove-pw-staged.js").read_text()
     (state / "downloading" / "staged").write_text("x")
     materialize(plan.composition)  # never emptied here: a running sidecar may be using it
     assert (state / "downloading" / "staged").exists()
     # the sidecar clears it as it starts (prepare, in both modes), before the browser
     assert "  find /data/staging -mindepth 1 -delete" in (IMAGE / "glove-pw-start").read_text()
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_a_staged_download_is_deleted_once_copied(tmp_path):
+    """image/glove-pw-staged.js, called as the MCP's saveAs calls it: the staged
+    file goes once its copy is complete; a failed copy, or another source, stays."""
+    staging, out = tmp_path / "staging", tmp_path / "out"
+    staging.mkdir()
+    out.mkdir()
+    for name in ("done", "failed"):
+        (staging / name).write_text(name)
+    (tmp_path / "other").write_text("other")
+    script = """const fs = require("fs"), [s, o, t] = process.argv.slice(1);
+      (async () => {
+        await fs.promises.copyFile(`${s}/done`, `${o}/done`);
+        await fs.promises.copyFile(`${t}/other`, `${o}/other`);
+        await fs.promises.copyFile(`${s}/failed`, `${o}/missing/failed`).catch(() => {});
+      })();"""
+    subprocess.run(["node", "--require", str(IMAGE / "glove-pw-staged.js"), "-e", script, str(staging), str(out),
+                    str(tmp_path)], env={**os.environ, "PW_STAGING": str(staging)}, check=True)
+    assert (out / "done").read_text() == "done" and not (staging / "done").exists()
+    assert (out / "other").exists() and (tmp_path / "other").exists()
+    assert (staging / "failed").exists()
+    # loaded into the MCP only, in both modes, from where the Dockerfile puts it
+    start = (IMAGE / "glove-pw-start").read_text()
+    assert start.count("NODE_OPTIONS=$MCP_NODE_OPTIONS exec playwright-core") == 2
+    assert 'MCP_NODE_OPTIONS="--require /opt/glove/pw/glove-pw-staged.js${NODE_OPTIONS:+ $NODE_OPTIONS}"' in start
+    dockerfile = (IMAGE / "Dockerfile").read_text()
+    assert "COPY glove-pw-front.js glove-pw-staged.js /opt/glove/pw/" in dockerfile
+    assert "RUN grep -q 'promises.copyFile(localPath, params2.path)'" in dockerfile  # still how it saves
 
 
 @pytest.mark.parametrize("sub", ["", "browser-output"])

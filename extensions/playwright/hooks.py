@@ -37,8 +37,8 @@ SERVICES = ("chrome", "mcp")  # host_services', by name: `teardown` stops them w
 # A second layer under the network one: no UDP (WebRTC) around the proxy.
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 # Where Chromium stages a download (`<state>/downloading`, on disk) before the
-# MCP copies it into the output dir: Playwright's default is under /tmp, a
-# tmpfs that counts against the sidecar's memory.
+# MCP copies it into the output dir (and then deletes it: image/glove-pw-staged.js):
+# Playwright's default is under /tmp, a tmpfs that counts against the sidecar's memory.
 STAGING = "/data/staging"
 # novnc: raises the page each tool call acts on (image/glove-pw-front.js)
 FRONT_PAGE = "/opt/glove/pw/glove-pw-front.js"

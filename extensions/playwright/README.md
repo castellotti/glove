@@ -81,8 +81,8 @@ harness ──glove-<id>-net──▶ glove-<id>-browser ──browser-net (inte
   media open in the browser instead (`web_download` saves those). Chromium
   stages a download in `.glove/ext/playwright/downloading/` (on disk, emptied at
   each launch), not in the sidecar's `/tmp` tmpfs, which counts against its
-  memory; the MCP then copies it into the output directory, so a large file is
-  held twice until the browser context closes.
+  memory; the MCP then copies it into the output directory and deletes the
+  staged file, so a large file is on disk twice only while it is copied.
 - **Uploads** (`uploads: work`, off by default): the agent puts a file in
   `/work/browser-uploads/` and passes its path to `browser_file_upload` (add
   that tool to `tools`). It is a core `inputs:` directory,

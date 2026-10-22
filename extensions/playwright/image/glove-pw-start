@@ -95,10 +95,13 @@ seed_storage_state() {
   echo "glove: seeding the browser with a stored session" >&2
 }
 
+# The MCP deletes a staged download once it has copied it (image/glove-pw-staged.js)
+MCP_NODE_OPTIONS="--require /opt/glove/pw/glove-pw-staged.js${NODE_OPTIONS:+ $NODE_OPTIONS}"
+
 # Before the browser starts: the sandbox check, the CA, the stored session, and
-# what a killed sidecar left behind: staged downloads (hooks.py STAGING;
-# Playwright deletes them only when the browser context closes) and Chromium's
-# Singleton* locks in a persistent profile. A lock names `<hostname>-<pid>`, and
+# what a killed sidecar left behind: staged downloads (hooks.py STAGING; one the
+# MCP had not finished copying) and Chromium's Singleton* locks in a persistent
+# profile. A lock names `<hostname>-<pid>`, and
 # each sidecar has a new hostname, so Chromium would refuse the profile as "in
 # use by another computer" ("Browser is already in use for /data/profile"). No
 # Chromium runs yet, and only this sidecar mounts the profile (its container_name
@@ -120,7 +123,7 @@ case "${1:-headless}" in
     prepare
     mapfile -t args < <(mcp_args)
     cd "$PW_UPLOADS"
-    exec playwright-core "${args[@]}" --headless --viewport-size "$PW_VIEWPORT"
+    NODE_OPTIONS=$MCP_NODE_OPTIONS exec playwright-core "${args[@]}" --headless --viewport-size "$PW_VIEWPORT"
     ;;
   novnc)
     prepare
@@ -147,7 +150,7 @@ case "${1:-headless}" in
     for _ in $(seq 50); do [ -S /tmp/.X11-unix/X1 ] && break; sleep 0.1; done
     websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900 &
     mapfile -t args < <(mcp_args)
-    (cd "$PW_UPLOADS" && DISPLAY=:1 exec playwright-core "${args[@]}") &
+    (cd "$PW_UPLOADS" && DISPLAY=:1 NODE_OPTIONS=$MCP_NODE_OPTIONS exec playwright-core "${args[@]}") &
     # any child's death ends the container (compose restarts it)
     wait -n
     exit $?
