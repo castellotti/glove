@@ -34,7 +34,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from glove.api import ConfigError, ExtSession, ext_session, keychain_set, reload_sidecar, resolve_secret
+from extensions.keychain.store import keychain_set
+from glove.api import ConfigError, ExtSession, ext_session, reload_sidecar, resolve_secret
 
 from . import capture
 

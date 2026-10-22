@@ -213,8 +213,8 @@ glove policy [DIR]                           # ring-1 policies + ring-0 hardenin
 glove ls | ps | gc [--yes]                   # registry rows (ok|missing|stale), running, prune
 glove clean [--dry-run] [--yes] [--volumes] [--runtime R]   # stopped stacks of gone sessions
 glove clean 7d [--build-cache]               # + idle sessions' containers/networks, glove images unused for 7d
-glove keychain set <service> [--stdin]       # store a secret, prompting or piped (never in argv; a long
-                                             # one in parts, <service>.part<n>; ASCII only)
+glove keychain set <service> [--stdin]       # (keychain) store a secret, prompting or piped (never in
+                                             # argv): macOS Keychain, or Linux Secret Service
 glove downloads mark [DIR]                   # macOS: quarantine new files the sidecars saved (down does too)
 glove doctor [--runtime R] [--enforcer E] [--json] | build [HARNESS] [--enforcer srt|nono+srt] | version
 glove ext                                    # every loadable extension, origin, CLI
@@ -265,11 +265,11 @@ prompt-injected instructions) will run with the wider reach.
 > `.gitignore` of `*`, so a session inside a git repo never commits it).
 >
 > **The LLM API key is never in a file.** `extensions.llm.api_key` must be a
-> reference: `keychain:<service>` (a macOS Keychain generic password) or
-> `env:<VAR>`; a literal key is refused. glove resolves it in memory when the
-> session launches (never during `glove plan` or `glove check`, which only checks
-> that the Keychain item exists, and asks the server for its models without the
-> key), and the effective config records
+> reference: `keychain:<service>` (an item in the host's credential store,
+> below) or `env:<VAR>`; a literal key is refused. glove resolves it in memory
+> when the session launches (never during `glove plan` or `glove check`, which
+> only checks that the item exists, reading nothing on macOS, and asks the
+> server for its models without the key), and the effective config records
 > only the reference. **The harness never holds an API key:** glove hands it
 > only to the `llm` extension's `llm-auth` sidecar (through `compose`'s
 > environment at launch), which adds it to model requests and refuses anything
@@ -278,7 +278,11 @@ prompt-injected instructions) will run with the wider reach.
 > `ANTHROPIC_API_KEY`) holds the public placeholder `glove-injected`. A Claude
 > Code subscription token (`auth: oauth`, below) is held the same way. Store a
 > key with `glove keychain set <service>` (it prompts; the key is never in
-> argv).
+> argv). `keychain:` is the host's credential store: the macOS Keychain, or on
+> a Linux desktop the Secret Service (`secret-tool`; **untested** on a real
+> Ubuntu desktop, where `glove check` reads the secret to see that it is
+> there); without one (a server, SSH), use `env:<VAR>`
+> ([extensions/keychain/README.md](extensions/keychain/README.md)).
 
 ## Harnesses
 

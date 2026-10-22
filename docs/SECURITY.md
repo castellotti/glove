@@ -130,7 +130,9 @@ Every capability (the model, search, the browser, …) is an extension in
   podman rejects it, so there it must be turned off explicitly, never dropped.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
-  setting is refused. A read-only sidecar cannot take an environment-sourced
+  setting is refused. `keychain:` is the macOS Keychain or, on Linux, a desktop
+  session's Secret Service (`secret-tool`); without one it fails with the
+  tool's reason and a pointer to `env:`, never read from or written to a file. A read-only sidecar cannot take an environment-sourced
   compose secret (Docker refuses), so such a sidecar (`llm-auth`, relayd, the
   ssh relay) gets its secret from a `launch_env` hook, which fills an
   `environment:` key declared without a value, for that `compose up` only (it

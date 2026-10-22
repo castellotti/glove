@@ -4,6 +4,7 @@ summary: A real Chromium for the agent via the Playwright MCP — a headless sid
 provides: [browser]
 requires:
   - { slot: egress, when: { mode: [headless, novnc] } }
+  - { extension: keychain, when: { "settings.login": { set: true } } }   # `glove playwright login` stores
 settings:
   mode:              { type: enum, values: [headless, novnc, host], default: headless }
   tools:             { type: list, pattern: "^browser_[a-z_]+$",

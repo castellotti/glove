@@ -267,6 +267,30 @@ All notable changes to glove are documented here.
     (`uv run python -m tools.seccomp.make_profile`); the profiles it writes
     are unchanged. Dead code removed: `config.load_config`,
     `sessions.find_session`.
+- **Core extraction, phase B: `keychain:` on Linux, and the writer out of core**
+  (round 23):
+  - `keychain:<service>` is the host's credential store: the macOS Keychain
+    (`security`) or, on Linux with a desktop session, the Secret Service
+    (`secret-tool`, package `libsecret-tools`; items `application=glove
+    service=<service>`). Without one (a server, SSH) a `keychain:` reference
+    fails with `secret-tool`'s reason and a pointer to `env:<VAR>`; nothing
+    falls back to a file. The Linux backend is **untested** on a real Ubuntu
+    desktop. A `keychain:` error names the reference again.
+  - `glove keychain set` moved from `commands/` to the new `keychain` library
+    extension, with the code that writes a secret. A long value is stored in
+    parts on both: `secret-tool store` keeps only the first 8 KB of stdin and
+    still exits 0 (found by the Ubuntu container check,
+    `tests/integration/test_keychain_linux.sh`). It no longer prompts without
+    a terminal (`secret-tool` would store what is piped, cut at 8 KB), and a
+    value typed at the prompt clears the parts of a longer one.
+  - As an extension CLI, `glove keychain` is listed from the extension
+    manifests: a malformed `~/.glove/config.yml` hides it (`glove keychain`
+    then says why), as it does every extension CLI. The new `requires:
+    keychain` entries add nothing to a session; they declare the import. `playwright` and `skills` require it
+    when they store one (`login:`, a plugin `relay:`). Reading stays in core.
+  - **Breaking (extension API):** `glove.api.keychain_set` is gone (in-tree
+    extensions import `extensions.keychain.store`); `glove.api.keychain_tool`,
+    `secret_service_attrs`, `KEYCHAIN_PARTS` and `NO_STORE` are new.
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
   [mcp, skills]`): each server `hidden` but for its allowed tools, named

@@ -53,6 +53,7 @@ def _fake_security(monkeypatch, *, secret="sk-from-keychain", rc=0):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, rc, stdout=secret + "\n", stderr="")
 
+    monkeypatch.setattr(config_mod.sys, "platform", "darwin")
     monkeypatch.setattr(config_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(config_mod.subprocess, "run", run)
     return calls
@@ -121,99 +122,48 @@ def test_secret_exists_never_reads_the_secret(monkeypatch):
     assert not secret_exists("sk-literal")[0]
 
 
-def test_keychain_set_prompts_so_the_secret_is_never_in_argv(monkeypatch):
-    from glove.config import ConfigError, keychain_set
-
-    calls = _fake_security(monkeypatch)
-    monkeypatch.setenv("USER", "me")
-    assert keychain_set("my-llm") == 0
-    assert calls == [["security", "add-generic-password", "-U", "-a", "me", "-s", "my-llm", "-w"]]  # -w last
-    with pytest.raises(ConfigError):
-        keychain_set("-s")
-
-
-def test_keychain_set_with_a_secret_feeds_it_to_security_on_stdin_quoted(monkeypatch):
+def _fake_secret_tool(monkeypatch, *, which=("secret-tool",), rc=0, stderr=""):
     import subprocess
 
     from glove import config as config_mod
-    from glove.config import ConfigError, keychain_set
 
     calls = []
-    monkeypatch.setattr(config_mod.shutil, "which", lambda name: "/usr/bin/" + name)
-    monkeypatch.setattr(config_mod.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw.get("input")))
-                        or subprocess.CompletedProcess(cmd, 44 if "delete-generic-password" in cmd else 0))
-    monkeypatch.setenv("USER", "me")
-    assert keychain_set("corp pat", 'a b"c\\d') == 0
-    # never in argv: one `security -i` line, every word quoted (checked against
-    # the real tool by hand: it stores a b"c\d); then no stale parts (below)
-    assert calls == [(["security", "-i"],
-                      '"add-generic-password" "-U" "-a" "me" "-s" "corp pat" "-w" "a b\\"c\\\\d"\n'),
-                     (["security", "delete-generic-password", "-s", "corp pat.part1"], None)]
-    for bad in ("", "two\nlines", "nul\0"):
-        with pytest.raises(ConfigError, match="one non-empty line"):
-            keychain_set("svc", bad)
-    with pytest.raises(ConfigError, match="one non-empty line"):
-        keychain_set("svc\n-x", "s")
+    monkeypatch.setattr(config_mod.sys, "platform", "linux")
+    monkeypatch.setattr(config_mod.shutil, "which", lambda name: "/usr/bin/" + name if name in which else None)
+    monkeypatch.setattr(config_mod.subprocess, "run", lambda cmd, **kw: calls.append(cmd)
+                        or subprocess.CompletedProcess(cmd, rc, stdout="" if rc else "sk-from-secret-service",
+                                                       stderr=stderr))
+    return calls
 
 
-class _FakeKeychain:
-    """`security` over a dict: `-i` add lines, find -w, delete."""
+def test_on_linux_keychain_reads_the_secret_service(monkeypatch):
+    from glove.config import resolve_secret, secret_exists
 
-    def __init__(self, monkeypatch):
-        import shlex
-        import subprocess
-
-        from glove import config as config_mod
-
-        self.items: dict[str, str] = {}
-        self.lines: list[str] = []
-
-        def run(cmd, **kw):
-            rc, out = 0, ""
-            if cmd[1] == "-i":
-                self.lines.append(kw["input"])
-                words = shlex.split(kw["input"])
-                assert len(kw["input"]) < 4096  # what security -i reads of a line
-                self.items[words[words.index("-s") + 1]] = words[-1]
-            elif cmd[1] == "find-generic-password":
-                rc, out = (0, self.items[cmd[3]] + "\n") if cmd[3] in self.items else (44, "")
-            elif cmd[1] == "delete-generic-password":
-                rc = 0 if self.items.pop(cmd[3], None) is not None else 44
-            return subprocess.CompletedProcess(cmd, rc, out, "")
-
-        monkeypatch.setattr(config_mod.shutil, "which", lambda name: "/usr/bin/" + name)
-        monkeypatch.setattr(config_mod.subprocess, "run", run)
+    calls = _fake_secret_tool(monkeypatch)
+    assert resolve_secret("keychain:my-llm") == "sk-from-secret-service"
+    assert secret_exists("keychain:my-llm") == (True, "Secret Service item exists")
+    assert calls == [["secret-tool", "lookup", "application", "glove", "service", "my-llm"]] * 2
+    _fake_secret_tool(monkeypatch, rc=1)  # a missing item: secret-tool fails silently
+    with pytest.raises(ConfigError, match="keychain:my-llm: no Secret Service item for service 'my-llm'"):
+        resolve_secret("keychain:my-llm")
+    assert secret_exists("keychain:my-llm") == (False, "no Secret Service item; create it with "
+                                                       "`glove keychain set my-llm`")
 
 
-def test_a_long_secret_is_stored_in_parts_and_read_back_whole(monkeypatch):
-    import json
+@pytest.mark.parametrize(("which", "stderr", "match"), [
+    ((), "", "libsecret-tools"),
+    # no Secret Service on the bus (a server, SSH): secret-tool's own reason, never "no item"
+    (("secret-tool",), "secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY", "secret-tool: Cannot autolaunch"),
+])
+def test_on_linux_without_a_secret_service_keychain_says_why_and_points_at_env(monkeypatch, which, stderr, match):
+    from glove.config import resolve_secret, secret_exists
 
-    from glove.config import ConfigError, keychain_set, resolve_secret
-
-    kc = _FakeKeychain(monkeypatch)
-    value = json.dumps({"cookies": [{"name": f"c{i}", "value": 'v"\\' * 40} for i in range(200)]})
-    assert keychain_set("state", value) == 0
-    assert kc.items["state"].startswith("glove-parts:") and "state.part2" in kc.items
-    assert all(value not in line for line in kc.lines)  # never one over-long line
-    assert resolve_secret("keychain:state") == value
-    # a torn store (a part replaced) is refused, not handed over spliced
-    kc.items["state.part1"] = "x"
-    with pytest.raises(ConfigError, match="parts"):
-        resolve_secret("keychain:state")
-    # a short value again: the old parts go
-    assert keychain_set("state", "short") == 0
-    assert kc.items == {"state": "short"}
-    assert resolve_secret("keychain:state") == "short"
-
-
-def test_keychain_set_refuses_what_security_would_read_back_differently(monkeypatch):
-    from glove.config import ConfigError, keychain_set
-
-    _FakeKeychain(monkeypatch)
-    with pytest.raises(ConfigError, match="ASCII"):  # `security -w` prints it hex-encoded
-        keychain_set("svc", "héllo")
-    with pytest.raises(ConfigError, match="glove-parts:"):
-        keychain_set("svc", "glove-parts:2:abc")
+    _fake_secret_tool(monkeypatch, which=which, rc=1, stderr=stderr)
+    with pytest.raises(ConfigError, match=match) as e:
+        resolve_secret("keychain:my-llm")
+    assert str(e.value).startswith("keychain:my-llm: ") and "env:<VAR>" in str(e.value)
+    ok, detail = secret_exists("keychain:my-llm")
+    assert not ok and match in detail and "env:<VAR>" in detail  # nothing falls back to a file
 
 
 @pytest.mark.parametrize(("tools", "match"), [

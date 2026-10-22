@@ -1,0 +1,9 @@
+api: 2
+name: keychain
+summary: Store secrets in the OS credential store (macOS Keychain, Linux Secret Service), referenced as keychain:<service>.
+# A library: added automatically by the extensions whose CLIs store secrets
+# (playwright's login, skills' refresh); never selected on its own. It renders
+# nothing. Reading a `keychain:` reference stays in core (every launch does).
+auto: true
+selectable: false
+cli: cli.py                     # glove keychain set
