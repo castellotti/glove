@@ -292,6 +292,10 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   with the operator's `host_check_url`, that service must also see the host and
   the exit as two different IPs). A failure shows the sidecar's last log lines,
   with key and password lines withheld, and stops the session's sidecars.
+  `exit-confirmed` is vpn's and tor's own code (the `exitcheck` library, run by
+  core's `hook` verify kind); core still decides the outcome: a raise, a crash,
+  a missing hook or no result fails it, as does a failing `diagnose` hook's
+  check. The hook runs only the check's own command in its own sidecar.
 - **No lookup service of glove's own.** glove adds no IP-lookup service. vpn
   records the VPN server's endpoint as its exit (read from gluetun's kill-switch
   rules, no network request; the tunnel's entry address, which a provider may

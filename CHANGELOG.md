@@ -291,6 +291,26 @@ All notable changes to glove are documented here.
   - **Breaking (extension API):** `glove.api.keychain_set` is gone (in-tree
     extensions import `extensions.keychain.store`); `glove.api.keychain_tool`,
     `secret_service_attrs`, `KEYCHAIN_PARTS` and `NO_STORE` are new.
+- **Core extraction, phase C: the exit check out of core** (round 23):
+  - vpn's and tor's `exit-confirmed` check (the exit's one IP, and the
+    operator's opt-in `host_check_url` leak check) moved from core to the new
+    `exitcheck` library extension, which both require. It runs through a new
+    generic verify kind, `hook`: core calls the extension's `verify` hook with
+    `VerifyTools` (the egress proxy, a fetch through it from a throwaway probe,
+    the check's own command in its own sidecar, a retry) and still decides:
+    a raise (a bug included), a missing hook or no result fails the check and
+    stops the session's sidecars (fail closed). What the check verifies is
+    unchanged.
+  - **Fixed:** a `diagnose` hook that raised while explaining a failed check
+    escaped as its own error, and `glove up` left the sidecars running; its
+    failure is now part of the check's message. Any failure during verify (a
+    bug, Ctrl-C) now stops the sidecars too, not only a failed check.
+  - A `hook` check's message is shown as its hook wrote it only for a
+    `ConfigError`; any other exception shows just its type (a parse bug could
+    quote what a sidecar printed).
+  - **Breaking (extension API):** the `exit-confirmed` verify kind is gone (use
+    `kind: hook` and a `verify` hook; the `exitcheck` library is in-tree);
+    `glove.api.VerifyTools` and the `verify` hook are new.
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
   [mcp, skills]`): each server `hidden` but for its allowed tools, named

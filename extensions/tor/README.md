@@ -13,7 +13,8 @@ extensions:
   # tor: { exit_nodes: ["{se}", "{ch}"], strict_nodes: false, host_check_url: https://<your echo service> }
 ```
 
-Verify: Tor's SOCKS port must open, then `exit-confirmed`: the Tor Project's
+Verify: Tor's SOCKS port must open, then `exit-confirmed` (the `exitcheck`
+library, through tor's `verify` hook): the Tor Project's
 own check (`https://check.torproject.org/api/ip`), fetched through privoxy, must
 answer `IsTor: true` with one valid IP. With `host_check_url` set (no default),
 that service must also see a different IP from this machine than through Tor.

@@ -719,8 +719,10 @@ So only the tunnel container can reach the internet. If its proxy fails,
 consumers have no other route out (egress fails closed by topology).
 
 Before the harness starts, `glove up` runs each extension's **verify** checks:
-`container-healthy`, `tcp-open`, `http-ok`, `http-refused`,
-`exit-confirmed` and `exec-ok`. `exit-confirmed` requires the egress's own software to report one
+`container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exec-ok`
+and `hook` (the extension's own check, in its `verify` hook: a raise, a crash or
+no result fails it). vpn's and tor's `exit-confirmed` is such a check (the
+`exitcheck` library): it requires the egress's own software to report one
 valid IP for its exit (vpn: the server it tunnels to; tor: the Tor Project's check, `IsTor: true`);
 with the operator's `host_check_url` (no default), that service, asked from the host and through
 the egress, must also see two different IPs;

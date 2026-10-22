@@ -140,7 +140,7 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
     plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
                               session_dir=str(sd.root))
     comp = plan.composition
-    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert [a.name for a in comp.active] == ["exitcheck", "llm", "media", "ocr", "vpn", "search", "webfetch"]
     assert comp.slot_exports("egress")["route"] == "vpn"
 
 
@@ -254,7 +254,7 @@ def test_vibe_search_template_plans_once_filled(tmp_path, monkeypatch):
         .replace("provider: <set-me>", "provider: custom").replace("keychain:<set-me>", "keychain:wg")))
     comp = plan.composition
     assert cfg.harness == "vibe"
-    assert [a.name for a in comp.active] == ["llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert [a.name for a in comp.active] == ["exitcheck", "llm", "media", "ocr", "vpn", "search", "webfetch"]
     assert {"search-mcp", "webfetch-mcp"} <= {e.name for e in comp.endpoints}
 
 

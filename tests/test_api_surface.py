@@ -18,6 +18,7 @@ API = {
                    "own_endpoints, active, state_dir, assets, images, libs, mount, output, input, session_dir, "
                    "work_dir, export_dirs, forwarders, grants, enforcer, enforcer_options)",
     "hook": "(fn: 'Callable') -> 'Callable'",
+    "VerifyTools": "dataclass(proxy, fetch, run, retry)",
     "is_secret_env_name": "(name: 'str') -> 'bool'",
     "is_secret_ref": "(value: 'str') -> 'bool'",
     "keychain_service": "(ref: 'str') -> 'str | None'",

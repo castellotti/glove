@@ -55,7 +55,6 @@ from .registry import glove_home
 from .sessiondir import PLACEHOLDER
 from .userconfig import load_user_config
 from .verify import KINDS as VERIFY_KINDS
-from .verify import item_error as verify_item_error
 
 IN_TREE_DIR = Path(__file__).resolve().parent.parent / "extensions"
 MANIFEST = "extension.yml"
@@ -1416,16 +1415,17 @@ def compose(
 
 
 def _check_verify(a: Active, checks: list[tuple[str, dict]], services: set[str]) -> None:
-    """Each of the extension's checks has its kind's fields, and one that runs a
+    """A `hook` check has the extension's `verify` hook, and a check that runs a
     command (`argv`) runs it in one of the extension's own sidecars (never the
-    harness, never another extension's: it may hold a credential)."""
+    harness, never another extension's: it may hold a credential). The rest of
+    a `hook` check's fields are its extension's to check."""
     for ext, item in checks:
         if ext != a.name:
             continue
         where = f"extension {a.name!r}: verify {item.get('name')!r}"
-        if err := verify_item_error(item):
-            raise ExtensionError(f"{where}: {err}")
-        if item.get("kind") != "exec-ok" and "argv" not in item and item.get("source") != "exec":
+        if item.get("kind") == "hook" and "verify" not in a.hooks:
+            raise ExtensionError(f"{where}: kind hook needs the extension's `verify` hook")
+        if item.get("kind") != "exec-ok" and "argv" not in item:
             continue
         argv = item.get("argv")
         if item.get("service") not in services or not isinstance(argv, list) or not argv or not all(
@@ -1476,6 +1476,7 @@ def resolve_secrets(comp: Composition, provided: dict[str, str] | None = None) -
 #                                    (e.g. the vpn register hook). `secrets` fill the
 #                                    extension's own compose secrets; `env` fills
 #                                    null-valued `environment:` keys of its sidecars;
+#   verify(ctx, check, tools)      → str — run its `kind: hook` verify check (fail closed);
 #   diagnose(ctx, check, run)      → str | None — explain a failed verify check;
 #   doctor(ctx, probe)             → [(name, status, detail)] — `glove doctor`/`check`.
 

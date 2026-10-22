@@ -125,6 +125,7 @@ RESULTS: dict[str, Callable[[Any], str | None]] = {
     "resolve": _resolve,
     "diagnose": lambda out: None if out is None or isinstance(out, str) else "want a hint (a string) or None",
     "doctor": _doctor,
+    "verify": lambda out: None if out is None or isinstance(out, str) else "want a one-line result (a string)",
     "teardown": lambda out: None if out is None else "want None",
 }
 HOOKS = frozenset(RESULTS)

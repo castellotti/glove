@@ -1,0 +1,7 @@
+api: 2
+name: exitcheck
+summary: "Library: the egresses' exit check (verify `exit-confirmed`, through each egress's verify hook)."
+# Renders nothing: vpn and tor require it and import its `verify` hook into their
+# hooks module (core's fail-closed `hook` verify kind).
+auto: true
+selectable: false

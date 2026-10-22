@@ -254,8 +254,8 @@ def start_sidecars(plan: SessionPlan, compose_file: Path, *, provider: str, env:
     console.print("[bold]verifying…[/bold]")
     try:
         run_verify(provider, plan, lambda m: console.print(f"[dim]{m}[/dim]" if "retry" in m else m))
-    except VerifyError as e:
-        if e.service:
+    except BaseException as e:  # a VerifyError, or anything else (a bug, Ctrl-C): fail closed
+        if isinstance(e, VerifyError) and e.service:
             name = scoped(plan.session, e.service)
             logs = subprocess.run([provider, "logs", "--tail", "25", name], capture_output=True, text=True)
             console.print(f"[dim]--- last log lines of {name} (key/password lines withheld):[/dim]")

@@ -25,12 +25,13 @@ from ..manifest import ExtensionError
 from ..mounts import existing_host_path, host_path, overlaps
 from ..naming import HOST_GLOB, scoped
 from ..sessiondir import exposes_private
+from ..verify import VerifyTools
 
 __all__ = [  # noqa: RUF022 (grouped, as in docs/extensions.md)
     # errors
     "ConfigError", "ExtensionError",
     # the hook protocol
-    "HookContext", "hook",
+    "HookContext", "VerifyTools", "hook",
     # secrets: values stay in memory
     "KEYCHAIN_PARTS", "NO_STORE", "is_secret_env_name", "is_secret_ref", "keychain_service", "keychain_tool",
     "resolve_secret", "secret_exists", "secret_service_attrs",

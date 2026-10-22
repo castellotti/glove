@@ -81,7 +81,7 @@ Legend:
 | `inputs` | map name → `{services, when}` | entries | | yes | `<session>/<name>/`: written by the harness, read-only in the sidecars |
 | `mounts` | map name → `{setting, when}` | entries | | | a read-only harness bind of a directory named by a `path` setting with no default |
 | `trust` | list of services | | `cat` | | these sidecars trust the session's CAs (`corporate_ca` and the extension's `ca` settings): core binds their copies read-only and builds one bundle in an entrypoint of its own (replacing the image's), which then runs the service's whole `command` (which it must set; no `entrypoint`) |
-| `verify` | list of checks `{name, kind, service, …}` | items | `cat` | | run at `glove up`; `kind`: `container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exit-confirmed`, `exec-ok` (argv only in its own sidecars) |
+| `verify` | list of checks `{name, kind, service, …}` | items | `cat` | | run at `glove up`; `kind`: `container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exec-ok`, `hook` (its `verify` hook runs it; argv only in its own sidecars) |
 | `harness` | map: `image`, `env`, `git_config`, `brief`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
 | `hooks` | path, relative (`hooks.py`) | | | | [hooks](#hooks) |
 | `cli` | path, relative (`cli.py`) | | | | [an extension's CLI](#an-extensions-cli) |
@@ -155,6 +155,7 @@ is optional.
 | `launch_env` | `(ctx, resolve_secret)` | `up`, before `compose up` | read the Keychain, run host commands, start host processes (stopped by its `teardown`, also when `glove up` then fails before compose starts); values stay in memory | `{secrets: {its secret: value}, env: {VAR: value}}` |
 | `resolve` | `(ctx, exports, probe)` | `up`, once the sidecars are healthy | only through `probe` | `(exports, notes)` |
 | `diagnose` | `(ctx, check, run)` | `up`, after one of its verify checks failed | `run(service, argv)` in its own sidecars | a hint, or `None` |
+| `verify` | `(ctx, check, tools)` | `up`, for each of its `kind: hook` checks | only through `tools` (`VerifyTools`: `proxy`; `fetch(url)` via it from a probe on the check's `network`; `run()`, the check's own `argv` in its own `service`; `retry(fn, what)`, the check's `retries`/`interval`) | a one-line result; a raise (a bug included), `None` or `""` fails the check, and the launch (fail closed) |
 | `doctor` | `(ctx, probe)` | `doctor`, `check` | `probe`, `None` offline | `[(name, status, detail)]`, status `ok`, `info`, `skip`, `warn` or `fail` |
 | `teardown` | `(ctx)` | `down`, `rm`, before the containers stop | stop what its `launch_env` started on the host | `None` |
 
@@ -252,7 +253,7 @@ signatures, so a change is deliberate.
 | group | names |
 |---|---|
 | errors | `ConfigError`, `ExtensionError` (a `ConfigError`; both print as one line) |
-| the hook protocol | `HookContext`, `hook` |
+| the hook protocol | `HookContext`, `VerifyTools` (a `verify` hook's), `hook` |
 | secrets (values stay in memory) | `resolve_secret`, `is_secret_ref`, `keychain_service`, `secret_exists` (an item is there; nothing read on macOS), `is_secret_env_name`; `keychain_tool()` (the host's credential store CLI: `security` or `secret-tool`, else a `ConfigError`), `secret_service_attrs(service)` (an item's `secret-tool` attributes), `KEYCHAIN_PARTS` (the head of a value stored in parts) and `NO_STORE` (the `env:` hint), for the in-tree `keychain` library, whose `store.keychain_set` writes one |
 | host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `exposes_private` (a path the harness must never see, e.g. `.glove/`), `resolve_ca_file` |
 | naming | `scoped(session_id, name)` (`glove-<id>-<name>`, a container, network or volume of the session), `HOST_GLOB` |
