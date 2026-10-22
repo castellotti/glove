@@ -69,6 +69,22 @@ def test_launch_passes_the_llm_key_to_compose_through_the_environment(tmp_path, 
     assert calls[-1][0][-4:] == ["-it", "--name", plan.harness_service, plan.harness_service]
 
 
+def test_launch_makes_the_binds_missing_mount_points_just_before_the_harness(tmp_path, monkeypatch):
+    # Docker Desktop's native layer cannot make one nested in another bind ("outside of rootfs"), and a
+    # refused or failed launch leaves none in the user's tree: after the sidecars and prepare()
+    from glove import session as session_mod
+
+    seen: list = []
+    monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
+    monkeypatch.setattr(session_mod, "start_sidecars", lambda *a, **k: None)
+    monkeypatch.setattr(session_mod.subprocess, "run",
+                        lambda cmd, **k: seen.append((tmp_path / "work" / ".pi" / "settings.json").is_file()))
+    cfg, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
+    session_mod.launch(cfg, plan, tmp_path / "compose.yml", provider="docker", rebuild=False, secrets={},
+                       prepare=lambda: seen.append((tmp_path / "work" / ".pi").exists()))
+    assert seen == [False, True]  # none at prepare(); the harness's `compose run` finds it
+
+
 @pytest.mark.parametrize(("inspect", "removed"), [((1, ""), False), ((0, "false\n"), True), ((0, "true\n"), None)])
 def test_a_stale_harness_is_removed_and_a_running_one_refused(monkeypatch, inspect, removed):
     from glove import session as session_mod

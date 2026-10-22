@@ -15,12 +15,14 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0",
     "tomli-w>=1.0",
+    "packaging>=22",
 ]
 
 [dependency-groups]
 dev = [
     "import-linter>=2.15",
     "pytest>=8.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.16",
 ]
 
@@ -39,8 +41,9 @@ artifacts = [
 [tool.pytest.ini_options]
 testpaths = ["tests", "extensions", "harnesses", "commands"]
 pythonpath = [".", "tests"]
-# importlib: plugin test files share basenames (extensions|harnesses/*/tests/test_*.py)
-addopts = "--import-mode=importlib"
+# importlib: plugin test files share basenames (extensions|harnesses/*/tests/test_*.py);
+# -n auto: one worker per CPU (pytest-xdist; `-n0` to run in one process, e.g. for --pdb)
+addopts = "--import-mode=importlib -n auto"
 # pytest's default minus `build` (commands/build/ is the `glove build` command)
 norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 

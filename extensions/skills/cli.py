@@ -1,8 +1,8 @@
 """`glove skills status|refresh|reload` — the credentials of the plugins' relays.
 
 - `status`: each relay's checks (`relay.check`), run through the relay as the
-  agent's calls are, from inside its sidecar: `ok`, or the exit code (the
-  output is withheld: it may carry identifiers).
+  agent's calls are, from inside its sidecar, at once (`CHECK_POOL`): `ok`, or
+  the exit code (the output is withheld: it may carry identifiers).
 - `refresh <plugin> [<secret>…]`: a new value for the relay's Keychain secrets
   (all, or the ones named: a service, or the env var or file key that uses it),
   from its `refresh:` hook (run here, on the host, with the service name), from
@@ -19,6 +19,7 @@ import getpass
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -85,19 +86,24 @@ def status(plugin: str | None = typer.Argument(None, help="one plugin (default: 
     if not relays:
         console.print("no plugin has a relay")
         return
-    failed = 0
-    for relay in relays:
-        if not s.running(relay.service):
-            console.print(f"[red]✗[/red] {relay.name}: {s.container(relay.service)} is not running (`glove up`)")
-            failed += 1
-            continue
-        if not relay.checks:
-            console.print(f"[dim]·[/dim] {relay.name}: running, no checks (skills.plugins.{relay.name}.relay.check)")
-        for argv, _ in relay.checks:
-            rc = _check(s, relay, argv)
-            mark = "[green]ok[/green]" if rc == 0 else f"[red]failed (exit {rc})[/red]"
-            console.print(f"{relay.name}: {' '.join(argv)} — {mark}")
-            failed += rc != 0
+    # every running relay's checks at once (bounded, as at `glove up`), reported in order
+    with ThreadPoolExecutor(s.hooks.CHECK_POOL) as pool:
+        rcs = {relay.name: [pool.submit(_check, s, relay, argv) for argv, _ in relay.checks]
+               for relay in relays if s.running(relay.service)}
+        failed = 0
+        for relay in relays:
+            if relay.name not in rcs:
+                console.print(f"[red]✗[/red] {relay.name}: {s.container(relay.service)} is not running (`glove up`)")
+                failed += 1
+                continue
+            if not relay.checks:
+                console.print(f"[dim]·[/dim] {relay.name}: running, no checks "
+                              f"(skills.plugins.{relay.name}.relay.check)")
+            for (argv, _), done in zip(relay.checks, rcs[relay.name], strict=True):
+                rc = done.result()
+                mark = "[green]ok[/green]" if rc == 0 else f"[red]failed (exit {rc})[/red]"
+                console.print(f"{relay.name}: {' '.join(argv)} — {mark}")
+                failed += rc != 0
     if failed:
         console.print("[dim]an expired credential: `glove skills refresh <plugin>`[/dim]")
         raise typer.Exit(1)

@@ -19,7 +19,7 @@ extensions:
         packages: ["tsx@4.19.2"]    # optional global tools
         browsers: [chromium]        # optional Playwright engines (chromium | firefox | webkit)
       - lang: python
-        version: "3.12"             # required, X.Y or X.Y.Z (uv-managed CPython; uv is pinned by glove)
+        version: "3.12"             # required, X.Y or X.Y.Z (uv-managed CPython in /opt/glove/uv, shared with skills; uv is pinned by glove)
         manager: uv                 # uv (default) | pip
         project: projects/tool
         install: sync               # uv: sync (default, `uv sync --locked --no-install-project`) | requirements; pip: requirements
@@ -125,8 +125,13 @@ list); a session file that still has it is refused with this pointer.
   the global one from `packages`.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
 - **Layer order.** Its layers are `stage: late`: after every other extension's
-  layers (its `PATH` never affects their build steps) and before the layers that
-  copy host trees (the `skills` extension's plugins).
+  installs (a session edits its toolchains more often than those change), then
+  a project's lockfile layer and those after it, all before the files
+  extensions copy: a glove update that changes one (a shim) downloads no runtime
+  and reinstalls no project, and an install runs the image's own `git`/`ssh`,
+  not the github or ssh shim. Other extensions' host trees (the `skills`
+  extension's plugins) come after. Its `PATH` is set at the end of the image,
+  so no build step sees it.
 
 Not selected (or `blocks: []`), nothing toolchain-specific renders: image tags,
 compose env, policies and the context file are unchanged.

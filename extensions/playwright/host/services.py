@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import time
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +28,6 @@ class Service:
     name: str
     command: str
     port: int  # glove waits for it, and reuses a service already answering on it
-    keep: bool = False  # left running at `glove down`
 
 
 def _port_open(port: int) -> bool:
@@ -77,22 +77,20 @@ def start(services: list[Service], session: str, state_dir: Path) -> None:
             print(f"  ✗ {svc.name}: not ready on :{svc.port} after {READY_TIMEOUT:.0f}s — check {where}")
 
 
-def stop(services: list[Service], session: str, state_dir: Path) -> None:
-    """Stop the services glove started, except the kept ones (a no-op for one not running)."""
+def stop(names: Iterable[str], session: str, state_dir: Path, *, keep: Collection[str] = ()) -> None:
+    """Stop the services glove started, by name, except the kept ones (a no-op for one not running)."""
     have_tmux = shutil.which("tmux") is not None
-    for svc in services:
-        if svc.keep:
-            print(f"  • playwright {svc.name}: keep_browser, left running")
+    for name in names:
+        if name in keep:
+            print(f"  • playwright {name}: keep_browser, left running")
             continue
-        stopped = have_tmux and subprocess.run(["tmux", "kill-session", "-t", _tmux(session, svc.name)],
+        stopped = have_tmux and subprocess.run(["tmux", "kill-session", "-t", _tmux(session, name)],
                                                capture_output=True, check=False).returncode == 0
-        # (the second: a launch before round 16, core's `.glove/host-logs`)
-        old = state_dir.parents[1] / LOGS / f"playwright-{svc.name}.pid"
-        for pidfile in (state_dir / LOGS / f"{svc.name}.pid", old):
-            if pidfile.exists():
-                with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
-                    os.killpg(os.getpgid(int(pidfile.read_text())), 15)
-                    stopped = True
-                pidfile.unlink(missing_ok=True)
+        pidfile = state_dir / LOGS / f"{name}.pid"
+        if pidfile.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError, PermissionError):
+                os.killpg(os.getpgid(int(pidfile.read_text())), 15)
+                stopped = True
+            pidfile.unlink(missing_ok=True)
         if stopped:
-            print(f"  • playwright {svc.name}: stopped")
+            print(f"  • playwright {name}: stopped")

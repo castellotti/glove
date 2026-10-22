@@ -61,7 +61,7 @@ def test_host_services_are_pinned_and_per_session(tmp_path):
     chrome = hs["chrome"]
     assert f"--remote-debugging-port={cdp_port} " in chrome.command
     assert f"--user-data-dir={tmp_path / 'ext' / 'playwright' / 'host-profile'}" in chrome.command
-    assert chrome.keep is False
+    assert tuple(hs) == sys.modules["glove_ext.playwright.hooks"].SERVICES  # what `teardown` stops
     assert "images" not in plan.derived_dockerfile if plan.derived_dockerfile else True
 
 
@@ -78,12 +78,6 @@ def test_ports_are_recorded_and_reused(tmp_path):
 def test_ports_can_be_pinned(tmp_path):
     plan = _plan(tmp_path, port=8931, cdp_port=9222)
     assert _ports(plan) == (8931, 9222)
-
-
-def test_keep_browser_opt_in(tmp_path):
-    plan = _plan(tmp_path, keep_browser=True)
-    hs = _services(plan)
-    assert hs["chrome"].keep is True and hs["mcp"].keep is False
 
 
 @pytest.fixture
@@ -142,23 +136,8 @@ def test_glove_down_stops_them_unless_the_browser_is_kept(tmp_path, tmux, keep, 
     assert ": stopped" not in capsys.readouterr().out  # nothing was running: says nothing
 
 
-def test_glove_down_stops_a_host_service_started_before_round_16(tmp_path, monkeypatch, capsys):
-    hs = sys.modules["glove_ext.playwright.host.services"]
-    sd = _launched(tmp_path)
-    old = sd.state / "host-logs"  # core's, without tmux
-    old.mkdir()
-    (old / "playwright-chrome.pid").write_text("4242")
-    killed = []
-    monkeypatch.setattr(hs.shutil, "which", lambda tool: None)
-    monkeypatch.setattr(hs.os, "getpgid", lambda pid: pid)
-    monkeypatch.setattr(hs.os, "killpg", lambda pgid, sig: killed.append(pgid))
-    run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
-    assert killed == [4242] and not (old / "playwright-chrome.pid").exists()
-    assert "playwright chrome: stopped" in capsys.readouterr().out
-
-
 def test_a_failing_teardown_is_a_warning(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys.modules["glove_ext.playwright.host.services"], "stop", lambda *a: 1 / 0)
+    monkeypatch.setattr(sys.modules["glove_ext.playwright.host.services"], "stop", lambda *a, **k: 1 / 0)
     sd = _launched(tmp_path, "{}")
     warnings = run_teardown(sd, "s-0a0b0c", "docker", {"playwright": {"mode": "host"}})
     assert warnings == ["extension 'playwright': teardown: division by zero"]
@@ -167,7 +146,8 @@ def test_a_failing_teardown_is_a_warning(tmp_path, monkeypatch):
         raise ExtensionError("bad manifest")
 
     monkeypatch.setattr("glove.extsession.discover", broken)
-    assert run_teardown(sd, "s", "docker", {}) == ["teardown hooks skipped: bad manifest"]
+    assert run_teardown(sd, "s", "docker", {"playwright": {}}) == ["teardown hooks skipped: bad manifest"]
+    assert run_teardown(sd, "s", "docker", {"playwright": {}}, only=[]) == []  # none defines it: no discovery
 
 
 def test_glove_plan_and_policy_show_what_runs_on_the_host(tmp_path):

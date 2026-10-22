@@ -91,8 +91,16 @@ Legend:
 - `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`, `env` (image
   `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`; never git's
   `GIT_CONFIG_*`: use `git_config`). Only a hook's
-  layers may `copy_host`. Layers render in extension order, then those with
-  `stage: late` (e.g. the toolchains), then those that `copy_host`.
+  layers may `copy_host`. Layers render least volatile first, each group in
+  extension order: packages (`apt`/`pip`/`npm`, apart from a `copy` in the
+  same layer), the `stage: late` ones (a session's own, e.g. the toolchains),
+  the late ones that `copy_host` (a session's projects), those that `copy`
+  (then the harness's and the skills' copies), the other ones that
+  `copy_host`, and last every `ENV` line (in extension order).
+  So no `run` sees an image `ENV`, its own extension's included: `export` what
+  a step needs; and a late `copy_host` (a project install) sees no other
+  extension's `copy`: what an install needs (a CA, `.npmrc`) is a `run` step. A layer never renders before its extension's previous one,
+  which it may need.
 - `env`: `{VAR: value}` or `{VAR: {value, when}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
@@ -154,7 +162,9 @@ is optional.
   last `glove up` used, the session id, `state_dir` and the host paths its
   manifest declares), with no plan behind it, and possibly when `launch_env`
   never ran or only partly ran: stop only what is running. A failure is a
-  warning; the containers still stop.
+  warning; the containers still stop. `glove plan`/`up` record which
+  extensions define it (`effective.yml` `resolved.teardown`): `down` loads
+  only their hooks.
 
 - A forwarder's `service` may set only `image`, `command`, `entrypoint`,
   `environment`, `volumes`, `tmpfs`, `depends_on`, `healthcheck`, `init`,
@@ -246,7 +256,7 @@ signatures, so a change is deliberate.
 | secrets (values stay in memory) | `resolve_secret`, `is_secret_ref`, `keychain_service`, `keychain_set`, `secret_exists` (an item is there; nothing read), `is_secret_env_name` |
 | host paths (core's own rules) | `host_path`, `existing_host_path`, `overlaps`, `exposes_private` (a path the harness must never see, e.g. `.glove/`), `resolve_ca_file` |
 | naming | `scoped(session_id, name)` (`glove-<id>-<name>`, a container, network or volume of the session), `HOST_GLOB` |
-| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_steps` |
+| image building | `apt_bootstrap`, `STAGE_IGNORE`, `run_body`, `fetch_steps` (a checksum-checked download), `uv_python_steps` (uv and a CPython in the shared `UV_HOME`: installed once, whichever extensions ask) |
 | the session's enforcer | `tools_run_browsers(enforcer, options)` (can Chromium start in a shell command?) |
 | rendering, with core's checks | `render_value`, `active_items`, `tool_names`, `mcp_server` |
 | an extension's CLI | `ext_session`, `ExtSession`, `reload_sidecar` |

@@ -13,7 +13,7 @@ import yaml
 from helpers import PEM, STUB_LLM, make_cfg, render
 
 from glove.config import ConfigError
-from glove.extensions import IN_TREE_DIR, ExtensionError, compose, discover, select, when_matches
+from glove.extensions import IN_TREE_DIR, ExtensionError, _discover, compose, discover, select, when_matches
 from glove.harness import base_image
 
 DIGEST = "alpine@sha256:" + "0" * 64
@@ -26,6 +26,7 @@ def _ext(root: Path, name: str, manifest: str, files: dict[str, str] | None = No
     for rel, text in (files or {}).items():
         (d / rel).parent.mkdir(parents=True, exist_ok=True)
         (d / rel).write_text(textwrap.dedent(text))
+    _discover.cache_clear()  # read once per process: a test adds extensions as it goes
     return d
 
 
@@ -246,6 +247,7 @@ def test_out_of_tree_is_tainted_and_cannot_take_privileges(tmp_path, ghome):
     with pytest.raises(ExtensionError, match="out-of-tree and not in `trusted_extensions`"):
         _render_with(tmp_path, {"vpnish": {}})
     (ghome / "config.yml").write_text(f"extension_paths: [{oot}]\ntrusted_extensions: [vpnish]\n")
+    _discover.cache_clear()
     assert discover()["vpnish"].taint == "out-of-tree (trusted)"
     _, doc = _render_with(tmp_path / "t2", {"vpnish": {}})
     assert doc["services"]["glove-s-worker"]["cap_add"] == ["NET_ADMIN"]
@@ -271,6 +273,7 @@ def test_a_writable_extension_paths_dir_is_skipped_with_a_warning(tmp_path, ghom
         target.chmod(mode)
         try:
             ext._warn.cache_clear()
+            ext._discover.cache_clear()
             assert ("sharedish" in discover()) is (why is None)
             discover()  # warned once per process
             warned = capsys.readouterr().err
@@ -617,6 +620,36 @@ def test_an_image_env_name_is_set_by_one_extension(tree):
 
     with pytest.raises(ValueError, match=r"image env \['PATH'\] is already set by another extension"):
         render_dockerfile("base", get_profile("pi"), comp, None)
+
+
+def test_the_derived_image_puts_the_least_volatile_layers_first(tree, tmp_path):
+    host = tmp_path / "project"
+    host.mkdir()
+    _ext(tree, "a", "api: 2\nname: a\nsummary: x\nharness:\n  image:\n    '*': {apt: [a-pkg], copy: [[f, /opt/a/f]]}\n",
+         {"f": "x"})
+    b = [{"run": ["b-install"]}, {"copy_host": [[str(host), "/opt/b/project"]], "run": ["b-project"]},
+         {"run": ["b-after-project"]}, {"env": {"B": "1"}}]
+    c = [{"run": ["c-late"], "stage": "late"}, {"copy_host": [[str(host), "/opt/c/project"]], "run": ["c-project"],
+                                                 "stage": "late"}, {"env": {"C": "1"}}]
+    for name, out in (("b", b), ("c", c)):
+        hooks = ('from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n'
+                 f'    return {{"harness": {{"image": {out!r}}}}}\n')
+        _ext(tree, name, f"api: 2\nname: {name}\nsummary: x\nhooks: hooks.py\n", {"hooks.py": hooks})
+    comp = compose({"llm": STUB_LLM, "a": {}, "b": {}, "c": {}}, harness="claude-code", session="s",
+                   state_root=Path("/x"), manifests=discover(tree))
+    from glove.harness import get_profile
+    from glove.harnessconfig import adapter_context
+    from glove.image import render_dockerfile
+
+    df, _ = render_dockerfile("base", get_profile("claude-code"), comp, adapter_context(comp))
+    steps = [x.split(" && ")[1] if "apt-get" in x else x for x in df.splitlines()[2:] if not x.startswith("#")]
+    # installs (a's apart from its copy), late installs, a late host tree (a session's project: a shim or glove
+    # update must not reinstall it), an extension's files, a host tree (and what follows it in b), then every ENV
+    # in extension order
+    assert steps == ["apt-get install -y --no-install-recommends a-pkg", "RUN b-install", "RUN c-late",
+                     "COPY c/opt/c/project /opt/c/project", "RUN c-project", "COPY a/f /opt/a/f",
+                     "COPY b/opt/b/project /opt/b/project", "RUN b-project", "RUN b-after-project",
+                     'ENV B="1"', 'ENV C="1"']
 
 
 def test_a_hook_cannot_change_the_enforcer_options(tree):
@@ -1019,3 +1052,33 @@ def test_an_output_whose_when_fails_is_not_rendered(tmp_path, ghome):
 def test_output_and_input_rules(tmp_path, ghome, kw, why):
     with pytest.raises(ExtensionError, match=why):
         _outish(tmp_path, ghome, **kw)
+
+
+def test_discover_reads_the_extensions_once_per_process_and_glove_home(tmp_path, monkeypatch):
+    from glove import extensions as ext
+
+    reads = []
+    real = ext._load_manifest
+    monkeypatch.setattr(ext, "_load_manifest", lambda *a, **k: reads.append(1) or real(*a, **k))
+    first = discover()
+    n = len(reads)
+    assert n and discover() == first and len(reads) == n
+    discover()["gate"] = None  # a copy: the next caller's is whole
+    assert discover() == first
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "other"))  # another config.yml: read again
+    discover()
+    assert len(reads) == 2 * n
+
+
+def test_image_tag_hashes_an_image_context_once_per_selection(monkeypatch):
+    from glove import image
+    from glove.extensions import Active, image_tag
+
+    m = discover()["gate"]
+    calls = []
+    real = image.content_hash
+    monkeypatch.setattr(image, "content_hash", lambda *a: calls.append(a) or real(*a))
+    a = Active(m, {})
+    tags = {image_tag(a, "netgate") for _ in range(3)}
+    assert len(tags) == 1 and len(calls) == 1
+    assert image_tag(Active(m, {}), "netgate") in tags and len(calls) == 2  # a new selection hashes again

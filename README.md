@@ -139,7 +139,7 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
 tools: { allow_commands: [cp, mv, rm] }   # nono's tool policy (nono, nono+srt only): allow_commands, deny_commands; unknown keys are refused
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
-protect_ide_files: false    # host-trusted files present (.git/hooks, .claude/, .vscode, …) are always ro; this also creates empty .vscode/.idea/.envrc/.mcp.json placeholders when missing
+protect_ide_files: false    # host-trusted files present (.git/hooks, .claude/, .vscode, …) are always ro; this also creates empty .vscode/.idea/.envrc/.mcp.json placeholders when missing (glove up makes them as the harness starts; glove down removes them if still empty)
 # git_config: { safe.directory: "*" }      # added to git's config in the harness (see "git in /work")
 # allow_root: true          # the harness as uid 0; caps stay dropped and no-new-privileges holds, so no sudo
 # corporate_ca: local/corporate-ca.pem   # a private CA the harness trusts too (see below)
@@ -651,8 +651,9 @@ and an extension's CLI).
   exist like the others) and `egress_hosts` (the names its sidecars reach, `*.x`
   for subdomains: `glove check` warns when an egress that filters by name, such
   as `corporate`, doesn't admit one). Only its layers may `copy_host` (host paths it checked; the `skills`
-  extension's plugins): core renders those last, after the `stage: late` layers (the toolchains), so an
-  edit to a checkout rebuilds nothing else, and refuses a source an agent can
+  extension's plugins): core renders those after every other layer (only image `ENV` lines follow;
+  a `stage: late` one, a session's toolchain project, comes before the extensions' copied files), so
+  an edit to a checkout rebuilds nothing else, and refuses a source an agent can
   write (a read-write mount, `/work` included, or another session's `work/`)
   or glove's state.
 - **Fragments** (`compose/services.yml.j2`, Jinja) see a restricted context,
@@ -1358,8 +1359,9 @@ Python ≥ 3.11 managed with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uv sync
-uv run ruff check glove harnesses extensions tests   # lint
-uv run pytest -q                           # unit suite (includes the layering check)
+uv run ruff check glove harnesses extensions commands tests   # lint
+uv run pytest -q                           # unit suite (includes the layering check), a worker per CPU;
+                                           # -n0 for one process (e.g. --pdb)
 uv run lint-imports                        # core (glove/) must not import extensions/
 # integration (need Docker; build the images first):
 bash tests/integration/test_pi_nono.sh    # nono / Pi  (19 checks)

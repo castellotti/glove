@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from .config import ConfigError
+from .config import ConfigError, load_yaml
 from .registry import glove_home
 
 KEYS = frozenset({"extension_paths", "trusted_extensions", "runtime", "subnet_pool", "docker_desktop_mounts"})
@@ -33,7 +33,7 @@ def load_user_config() -> UserConfig:
     if not path.is_file():
         return UserConfig()
     try:
-        data = yaml.safe_load(path.read_text()) or {}
+        data = load_yaml(path.read_text()) or {}
     except (OSError, yaml.YAMLError) as e:
         raise ConfigError(f"{path}: {e}") from e
     if not isinstance(data, dict):

@@ -428,12 +428,6 @@ def login(
         raise _fail("no Chrome/Chromium on this machine (`npx playwright install chromium`)")
     state = s.state_dir()
     profile = state / "login-profile"   # never bound into a container
-    # where a kept profile (signed-in cookies) lived before api 2: moved here
-    # under --keep-profile, else never left behind (TODO R19.G: drop)
-    legacy = s.root / ".glove" / "playwright-login"
-    if legacy.is_dir() and keep_profile and not profile.exists():
-        legacy.rename(profile)
-    shutil.rmtree(legacy, ignore_errors=True)
     if profile.exists() and not keep_profile:
         shutil.rmtree(profile)
     profile.mkdir(mode=0o700, exist_ok=True)

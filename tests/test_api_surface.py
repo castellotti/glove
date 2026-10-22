@@ -32,11 +32,12 @@ API = {
     "HOST_GLOB": "Pattern",
     "scoped": "(session: 'str', name: 'str') -> 'str'",
     "STAGE_IGNORE": "tuple",
+    "UV_HOME": "str",
     "apt_bootstrap": "(probe: 'str', pkgs) -> 'str'",
     "fetch_steps": "(arch: 'dict[str, str]', name: 'str', url: 'str', verify: 'str', dest: 'str', "
                    "member: 'str' = '') -> 'list[str]'",
     "run_body": "(prefix: 'str', *steps: 'str') -> 'str'",
-    "uv_steps": "(prefix: 'str') -> 'list[str]'",
+    "uv_python_steps": "(python: 'str') -> 'list[str]'",
     "tools_run_browsers": "(enforcer: 'str', options: 'dict[str, dict[str, Any]]') -> 'bool'",
     "active_items": "(items: 'list | None', ctx: 'dict[str, Any]') -> 'list'",
     "mcp_server": "(where: 'str', item: 'Any') -> 'dict[str, Any]'",
@@ -96,7 +97,7 @@ COMMANDS = {
     "mark_downloads": "(sd: 'SessionDir') -> 'quarantine.Marked | None'",
     "materialize_session": "(spec: 'str', dest: 'Path') -> 'tuple[SessionDir, str]'",
     "materialize_plan": "(sd: 'SessionDir', sid: 'str', cfg, *, resume: 'bool' = False, session: 'str | None' = None, "
-                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset())",
+                        "home: 'bool' = True, overrides: 'frozenset[str]' = frozenset(), launch: 'bool' = False)",
     "now": "() -> 'str'",
     "one_resume": "(resume: 'bool', session: 'str | None') -> 'None'",
     "open_session": "(dir_arg: 'Path | None', *, register: 'bool' = True, check_runtime: 'bool' = False)",
@@ -116,7 +117,8 @@ COMMANDS = {
     "row_state": "(e: 'reg.SessionEntry') -> 'str'",
     "run_doctor": "(*, runtime: 'str' = 'docker', enforcer: 'str' = 'nono', include_container_probes: 'bool' = True) "
                   "-> 'list[Check]'",
-    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]') -> 'list[str]'",
+    "run_teardown": "(sd: 'sdm.SessionDir', sid: 'str', runtime: 'str', given: 'Mapping[str, Any]', *, "
+                    "only: 'Collection[str] | None' = None) -> 'list[str]'",
     "session_bind_layer": "(cfg) -> 'str'",
     "secret_env": "(plan: 'SessionPlan') -> 'dict[str, str]'",
     "secret_refs": "(plan: 'SessionPlan') -> 'list[tuple[str, str]]'",

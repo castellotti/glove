@@ -38,3 +38,17 @@ def test_a_changed_base_is_built_not_reused(tmp_path, monkeypatch):
     [cmd] = built
     assert cmd[cmd.index("-t") + 1] == tag
     assert f"HARNESS_VERSION={profile.version}" in cmd
+
+
+def test_a_forced_rebuild_makes_no_attestation_so_the_images_from_it_stay_cached(monkeypatch):
+    # BuildKit's default provenance attestation gives every build a new digest: a forced base
+    # rebuild then made the srt layer (FROM it) and the derived image miss Docker's cache
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(session, "_image_exists", lambda provider, tag: True)
+    monkeypatch.setattr(session.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    monkeypatch.setenv("GLOVE_PROBE", "kept")
+    session.build_harness("docker", get_profile("pi"), enforcer="nono+srt", force=True)
+    assert [cmd[:2] for cmd, _ in calls] == [["docker", "build"]] * 2  # the base, then its srt layer
+    for _, kw in calls:
+        assert kw["env"]["BUILDX_NO_DEFAULT_ATTESTATIONS"] == "1" and kw["env"]["GLOVE_PROBE"] == "kept"
+        assert kw["check"] is True

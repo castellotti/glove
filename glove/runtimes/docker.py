@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, ClassVar
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ..config import load_yaml
 from ..exports import validate_export_isolation
 from ..hardening import HardeningError, validate_hardening
 from .base import Check, RenderedProject, RunningSession, RuntimeCaps
@@ -285,7 +286,7 @@ class DockerRuntime:
         # included), so a merge bug cannot ship a weaker project.
         from ..compose import validate_project
 
-        validate_project(yaml.safe_load(compose_yaml), plan, plan.composition)
+        validate_project(load_yaml(compose_yaml), plan, plan.composition)
         # Compose interpolates `$` in every value (a `$HOME` in an env value or
         # a path becomes the *host's*); glove never uses interpolation, so every
         # `$` renders literally.

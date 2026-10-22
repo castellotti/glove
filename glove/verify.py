@@ -27,6 +27,10 @@ Kinds:
 `warn: true` makes a failed check a warning: the session starts anyway (e.g. a
 credential that has expired, which the operator can refresh while it runs).
 
+An extension's consecutive `exec-ok` checks run at once (at most `EXEC_POOL`, each within its
+own `timeout`), so K hung checks cost one timeout, not K; their results report
+in list order and a failure stops the launch as before.
+
 Network probes run in a throwaway, hardened container on the named session
 network (never on the host), so the host never resolves or contacts a
 destination for a check. Only `exit-confirmed` with an operator's
@@ -42,6 +46,8 @@ import subprocess
 import time
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from itertools import groupby
 from typing import TYPE_CHECKING, Any
 
 from .config import ConfigError
@@ -55,6 +61,7 @@ PROBE_IMAGE = ("docker.io/curlimages/curl:8.22.0"
                "@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777")
 KINDS = frozenset({"container-healthy", "tcp-open", "http-ok", "http-refused", "exit-confirmed", "exec-ok"})
 EXIT_SOURCES = frozenset({"exec", "url"})
+EXEC_POOL = 4  # `exec-ok` checks run at once
 FETCH = 'curl -fsS -m 20 -x "$X" "$U"'  # a probe's body for `$U`, through the proxy `$X`
 
 
@@ -295,9 +302,18 @@ def run_check(provider: str, plan: SessionPlan, ext: str, item: dict[str, Any],
     return f"{ip} ({via}); {host_url}: host {real} ≠ egress {seen}"
 
 
+def _outcome(provider: str, plan: SessionPlan, ext: str, item: dict[str, Any],
+             say: Callable[[str], None]) -> str | VerifyError:
+    try:
+        return run_check(provider, plan, ext, item, say)
+    except VerifyError as e:
+        return e
+
+
 def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> None:
-    """Every active extension's checks, in extension order. On failure the
-    extension's `diagnose` hook (if any) adds an explanation."""
+    """Every active extension's checks, in extension order (a run of an
+    extension's `exec-ok` ones at once). On failure the extension's
+    `diagnose` hook (if any) adds an explanation."""
     comp = plan.composition
     if not comp.verify:
         return
@@ -306,15 +322,25 @@ def run_verify(provider: str, plan: SessionPlan, say: Callable[[str], None]) -> 
     def run(service: str, argv: list[str]) -> tuple[int, str]:  # for a diagnose hook
         return sidecar_exec(provider, plan.session, service, argv, 60)
 
-    for ext, item in comp.verify:
-        say(f"  verify {ext}/{item.get('name', item.get('kind'))} ({item.get('kind')})…")
-        try:
-            say(f"    ✓ {run_check(provider, plan, ext, item, say)}")
-        except VerifyError as e:
-            a = comp.by_name(ext)
-            if a is not None and (hint := call_hook(comp, a, "diagnose", item, run)):
-                e = VerifyError(f"{e}\n{hint}", service=e.service)
-            if item.get("warn") is True:
-                say(f"    ⚠ {e} (a warning: the session starts anyway)")
-                continue
-            raise e from None
+    pool = ThreadPoolExecutor(EXEC_POOL)
+    try:
+        for (ext, at_once), group in groupby(comp.verify, lambda v: (v[0], v[1].get("kind") == "exec-ok")):
+            batch = [item for _, item in group]
+            started = [pool.submit(_outcome, provider, plan, ext, item, say) for item in batch] if at_once else []
+            for i, item in enumerate(batch):
+                say(f"  verify {ext}/{item.get('name', item.get('kind'))} ({item.get('kind')})…")
+                result = started[i].result() if at_once else _outcome(provider, plan, ext, item, say)
+                if isinstance(result, str):
+                    say(f"    ✓ {result}")
+                    continue
+                e = result
+                a = comp.by_name(ext)
+                if a is not None and (hint := call_hook(comp, a, "diagnose", item, run)):
+                    e = VerifyError(f"{e}\n{hint}", service=e.service)
+                if item.get("warn") is True:
+                    say(f"    ⚠ {e} (a warning: the session starts anyway)")
+                    continue
+                raise e from None
+    finally:
+        # a failure stops the launch: checks not yet started never start
+        pool.shutdown(wait=False, cancel_futures=True)

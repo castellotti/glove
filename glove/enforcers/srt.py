@@ -143,25 +143,25 @@ class SrtEnforcer:
             g.append("srt.nested: strong → systempaths=unconfined exposes masked /proc,/sys to the container")
         return g
 
-    def doctor(self, runtime) -> list[Check]:
+    def doctor(self, runtime, containers: bool) -> list[Check]:
         checks = [
             Check("enforcer: srt", "warn",
                   f"opt-in; wraps tool commands only, harness process is ring-0 only ({SRT_PACKAGE})"),
         ]
         # bwrap smoke test under the relaxed profile.
-        checks.append(self._bwrap_smoke(runtime))
+        checks.append(self._bwrap_smoke(runtime, containers=containers))
         return checks
 
-    def _bwrap_smoke(self, runtime) -> Check:
-        """Run bwrap as uid 1000 under the relaxed profile in a baked -srt image.
-
-        Reproduces weak mode: unprivileged userns + bind /proc. Uses
-        a locally-built `*-srt-<hash>` harness image (which has bubblewrap baked) so the
-        probe never needs network or root to install it; skips if none exists.
+    def _bwrap_smoke(self, runtime, *, containers: bool) -> Check:
+        """Run bwrap as uid 1000 under the relaxed profile in a baked -srt image (skipped
+        without `containers`, i.e. --no-container, or without one). Reproduces weak mode:
+        unprivileged userns + bind /proc; the local `*-srt-<hash>` harness image has bubblewrap
+        baked, so the probe never needs network or root to install it.
         """
         cli = getattr(runtime, "cli", None)  # None: a stub runtime, which runs no container
-        if not cli or not shutil.which(cli):
-            return Check("srt bwrap smoke", "skip", f"{cli or runtime.name} not available")
+        if not containers or not cli or not shutil.which(cli):
+            why = f"{cli or runtime.name} not available" if containers else "container probes skipped"
+            return Check("srt bwrap smoke", "skip", why)
         from .base import srt_suffix
 
         images = subprocess.run(

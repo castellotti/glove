@@ -19,10 +19,13 @@ up = command_module("up")
 
 
 @pytest.fixture(autouse=True)
-def _no_preflight(request, monkeypatch):
+def _no_runtime_probes(request, monkeypatch):
     # `up`'s doctor probes the real runtime; test_up_preflight_refuses_a_failing_extension_check covers it
     if "preflight" not in request.node.name:
         monkeypatch.setattr(up, "preflight", lambda *a: None)
+    # and it asks the runtime what is running (test_started_* cover that)
+    if not request.node.name.startswith("test_started_"):
+        monkeypatch.setattr(up, "_started", lambda *a: {})
 
 
 def test_up_refuses_placeholders(home, tmp_path):
@@ -159,11 +162,12 @@ def test_up_stops_what_a_launch_hook_started_when_a_secret_is_missing(home, tmp_
     monkeypatch.setattr(up, "clear_stale_harness", lambda *a: None)
     monkeypatch.setattr(up, "extension_checks", lambda *a, **k: [])
     monkeypatch.setattr(up, "secret_env", missing)
-    monkeypatch.setattr(up, "run_teardown", lambda sd, sid, rt, given: events.append(set(given)) or ["w"])
+    monkeypatch.setattr(up, "run_teardown",
+                        lambda sd, sid, rt, given, only: events.append((set(given), only)) or ["w"])
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 1 and said in result.output and "warn: w" in result.output
     assert "Traceback" not in result.output
-    assert events == [{"llm"}]  # torn down, never launched
+    assert events == [({"llm"}, [])]  # torn down (no extension defines it: none loads), never launched
 
 
 def _seed(dir_, name):
@@ -220,7 +224,6 @@ def test_up_notes_glove_updated_while_it_ran(home, tmp_path, monkeypatch):
     d = make_session(tmp_path / "s")
     stamps = iter([1.0, 2.0])
     monkeypatch.setattr(up, "_source_stamp", lambda: next(stamps))
-    monkeypatch.setattr(up, "_started", lambda *a: {})
     monkeypatch.setattr(up, "launch", lambda *a, **k: None)
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 0 and "glove was updated while this session ran" in result.output

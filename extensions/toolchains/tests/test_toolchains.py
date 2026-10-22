@@ -16,7 +16,7 @@ from glove.config import ConfigError
 from glove.enforcers.nono.policies import GLOVE_READ
 from glove.harness import base_image
 from glove.harnessconfig import build_environment_context, render_home
-from glove.image import UV_SHA256, UV_VERSION, stage_context
+from glove.image import UV_HOME, UV_SHA256, UV_VERSION, stage_context
 from glove.plan import build_session_plan
 from glove.runtimes.docker import DockerRuntime
 
@@ -227,10 +227,11 @@ def test_python_block_renders_uv_sync_into_a_venv(tmp_path):
     assert f"releases/download/{UV_VERSION}/$f" in df
     assert all(sha in df for sha in UV_SHA256.values())
     assert "python install --no-bin 3.12" in df
-    assert "uv sync --locked --no-install-project --python 3.12" in df
+    assert "uv sync --locked --no-install-project --python /opt/glove/uv/python3.12" in df
+    assert "UV_PYTHON_DOWNLOADS=never" in df  # the shared CPython, never a second download
     assert "UV_PROJECT_ENVIRONMENT=/opt/glove/toolchains/python/venv" in df
     # seeded even for sync, so `pip` on PATH is the venv's
-    assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
+    assert "uv venv --seed --python /opt/glove/uv/python3.12 /opt/glove/toolchains/python/venv" in df
     assert "pip install --python /opt/glove/toolchains/python/venv/bin/python rich==13.9.4" in df
     assert 'ENV PATH="/opt/glove/toolchains/python/venv/bin:$PATH"' in df
     assert plan.environment["VIRTUAL_ENV"] == "/opt/glove/toolchains/python/venv"
@@ -241,7 +242,7 @@ def test_python_pip_requirements(tmp_path):
     (tmp_path / "tool" / "requirements.txt").write_text("rich==13.9.4\n")
     plan = _plan(tmp_path, blocks=[{**PY, "manager": "pip", "project": "tool"}])
     df = plan.derived_dockerfile
-    assert "uv venv --seed --python 3.12 /opt/glove/toolchains/python/venv" in df
+    assert "uv venv --seed --python /opt/glove/uv/python3.12 /opt/glove/toolchains/python/venv" in df
     assert "/opt/glove/toolchains/python/venv/bin/python -m pip install --no-cache-dir -r requirements.txt" in df
 
 
@@ -330,7 +331,7 @@ def test_install_flags_are_appended_to_every_managers_install(tmp_path):
     assert "pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store --prefer-offline \\\n" in df
     _py_project(tmp_path / "tool")
     df = _plan(tmp_path, blocks=[{**PY, "project": "tool", "install_flags": ["--no-dev"]}]).derived_dockerfile
-    assert "uv sync --locked --no-install-project --python 3.12 --no-dev \\\n" in df
+    assert "uv sync --locked --no-install-project --python /opt/glove/uv/python3.12 --no-dev \\\n" in df
     (tmp_path / "req").mkdir()
     (tmp_path / "req" / "requirements.txt").write_text("rich\n")
     df = _plan(tmp_path, blocks=[{**PY, "manager": "pip", "project": "req",
@@ -441,10 +442,10 @@ def test_every_install_prefix_is_outside_the_mounts(tmp_path):
     paths += [p for p in _words(tcs.image_layers(blocks)) if p.startswith("/opt/")]
     assert paths
     for p in paths:
-        assert p.startswith(tcs.ROOT + "/"), p
+        assert p.startswith((tcs.ROOT + "/", UV_HOME + "/")) or p == UV_HOME, p  # UV_HOME: shared uv, CPython
         assert not any(p == m or p.startswith(m + "/") for m in MOUNT_ROOTS), p
     # readable by every enforcer without a policy change
-    assert any(tcs.ROOT.startswith(g + "/") for g in GLOVE_READ)
+    assert all(any(r.startswith(g + "/") for g in GLOVE_READ) for r in (tcs.ROOT, UV_HOME))
 
 
 def test_no_install_runs_at_run_time(tmp_path):

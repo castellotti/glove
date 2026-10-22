@@ -96,6 +96,20 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`glove down` removes the empty mount points glove created** (R18.V1). The
+  binds over a missing path in `/work` (a `protect_ide_files` placeholder's
+  `.envrc`, `.mcp.json`, `.vscode/`, `.idea/`; a harness `protect:` file and
+  the directories pinned above it) make the runtime create an empty file or
+  directory in your tree, which stayed there (read-only on the next run).
+  `glove up` records the ones it will create in `effective.yml` (kept across a
+  run that never came down; `glove plan` records only the pinned dirs it made)
+  and `glove down`/`rm` removes each one still empty; one with content, a
+  symlink, or one reached through a symlinked parent is left alone.
+- **Relay checks run at once** (1s). An extension's consecutive `exec-ok`
+  verify checks run in a bounded pool (4), each within its own timeout, so K hung checks at
+  `glove up` cost one timeout, not K; results still report in order and a
+  failure still stops the launch. `glove skills status` does the same.
+
 - **`glove playwright solve`** (`playwright: {challenge_capture: {to:
   session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
   - It takes control of the noVNC view as `view --control` does, and records
@@ -177,6 +191,62 @@ All notable changes to glove are documented here.
   git and pytest as a build directory.
 
 ### Changed
+
+- **Faster planning** (R19.F; `glove plan` with nine extensions: 416 → 285 ms
+  per run, fresh processes, median of 9):
+  - glove parses YAML with libyaml when PyYAML has it (manifests, fragments,
+    the session file and the rendered compose file, on every plan);
+  - an extension's image tag hashes its build context once per plan, not in
+    every hook context (88 hashes → 12);
+  - the extensions are discovered once per run (startup and the command
+    each read every manifest before).
+- **`glove down` loads only the extensions that stop something** (R16.S3):
+  `glove plan`/`up` record in `effective.yml` (`resolved.teardown`) which
+  extensions define a `teardown` hook, and `glove down`/`rm` import only
+  those (none at all for a session without one; a record from an older glove
+  loads every hooked extension, as before); a failed `glove up` names them
+  from its plan. Playwright's teardown stops its host services by name,
+  without probing for Chrome or the ports, and no longer looks for a pid file
+  in core's pre-round-16 `.glove/host-logs/` (R16.S4): a host-mode browser
+  started before round 16 (no tmux) is stopped by hand.
+- **One uv and one CPython per image** (1k): `skills` and `toolchains`
+  (python) each downloaded uv and installed CPython into a directory of their
+  own; both now use one copy in `/opt/glove/uv` (`glove.api.uv_python_steps`
+  and `UV_HOME`, replacing `uv_steps`), and the second extension's layer finds
+  it in place (a no-op instead of a ~30 MB download). The skills wheelhouse
+  is its own layer after it, so a dependency change no longer reinstalls the
+  Python. `glove plan` refuses a baked PEP 723 script whose `requires-python`
+  no release of `skills.python` satisfies (it used to fail when it ran).
+- **A glove update rebuilds less of the image** (R19.D): the derived image
+  renders least volatile first: packages, the toolchains, then their
+  projects, the files extensions copy, other host trees (the skills
+  plugins), then every image `ENV`. Before, a 1 KB shim (`glove-relay`, `gh`)
+  came ahead of the toolchains, so changing it re-downloaded Node, CPython and
+  Chromium: in the `claude-code` template, its image rebuilt in 255–300 s,
+  now 0.6–1.0 s; with a toolchain `project` (npm ci with Chromium, uv sync),
+  a changed shim reran it too (235 s on Docker, 215 s on Podman; round 19
+  live verification): the projects now come before the copied files. A layer's `apt`/`pip`/`npm` render apart from its `copy`
+  (so ocr's and rag's installs stay ahead of the toolchains). For extension
+  authors: no `run` step sees an image `env` any more, its own extension's
+  included (`export` what a step needs).
+- **A browser download is on disk once** (0q): Chromium stages a download
+  in `.glove/ext/playwright/downloading/`, and the MCP copies it into the
+  output directory; the staged file used to stay until the browser context
+  closed (in a sidecar, until it stopped), so a 1 GB download took 2 GB of
+  the host volume. The sidecar's MCP now deletes it as soon as the copy is
+  complete (`image/glove-pw-staged.js`).
+- **The unit suite runs in parallel** (R19.E): `uv run pytest -q` runs a
+  worker per CPU (pytest-xdist; `-n0` for one process): 75 s became 7–9 s on
+  16 CPUs (53 s in one process). The test servers stop at once (no 0.5 s poll
+  per test), and no unit test asks the host's Docker or Podman any more
+  (`docker system df`, `docker images`, `docker ps`, `podman info`, a
+  verify check left running after its test), apart from the three that check
+  a render with `docker compose config`. The github relay tests write gh's
+  config under their own temp dir, not the host's shared `/tmp/relay-home`.
+
+- **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
+  `.glove/playwright-login` (from before round 15) is neither moved under
+  `--keep-profile` nor deleted; remove it by hand if one is left.
 
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
@@ -349,6 +419,22 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **`glove up` with `enforcer: srt` or `none` starts on Docker Desktop**
+  (R19.L1): there the harness's binds come from the native layer, and runc
+  could not create a mount point nested in another bind (Pi's
+  `/work/.pi/settings.json`, Claude Code's `/work/.claude/settings.json`):
+  "mountpoint … is outside of rootfs", so the harness never started (since
+  round 18). `glove up` now makes each missing mount point itself, empty, and
+  `glove down` removes it again while it is empty, as before.
+- **`glove up --rebuild` keeps Docker's layer cache** (R19.L2): BuildKit's
+  default provenance attestation gave every build of the base image a new
+  digest, so the srt layer and the whole derived image built on it ran again
+  (about 210 s with toolchains, each time). glove builds without it
+  (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`); Podman was not affected.
+- **`glove doctor --no-container` and `glove check --no-container` start no
+  container** (R19.E): with an srt enforcer and a local `*-srt-*` image, the
+  bwrap smoke test still ran one; it is now skipped ("container probes
+  skipped").
 - **Live drivers** (round 18 verification). `test_llm_inject.sh
   claude-code-oauth` checked the flow join against the `llm-upstream` flows
   only (a loop reused `recs`), so it always found 0 overlapping; it now passes.

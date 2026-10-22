@@ -41,6 +41,17 @@ def _no_landlock_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_podman_info(request, monkeypatch):
+    """A Podman render asks `podman info` (rootless, SELinux, kernel) once per
+    process: unit tests get no answer, as on a host without podman, whatever this
+    host runs (test_host_info_* cover the probe)."""
+    if not request.node.name.startswith("test_host_info_"):
+        from glove.runtimes import podman
+
+        monkeypatch.setattr(podman, "_probe_host_info", lambda cli: {})
+
+
+@pytest.fixture(autouse=True)
 def _throwaway_glove_home(tmp_path_factory, monkeypatch):
     """Unit tests never touch the real ~/.glove: plans compute export-root paths
     under it, and materialising writes there. A test that needs a specific
@@ -55,6 +66,14 @@ def _wide_console(monkeypatch):
 
     for c in (sessionops.console, sessionops.err):
         monkeypatch.setattr(c, "width", 400)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_discovery():
+    """`discover()` reads the extension dirs once per process: tests write theirs."""
+    from glove.extensions import _discover
+
+    _discover.cache_clear()
 
 
 @pytest.fixture

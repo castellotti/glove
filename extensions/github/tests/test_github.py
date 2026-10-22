@@ -48,6 +48,12 @@ class Req:
         return real
 
 
+@pytest.fixture(autouse=True)
+def _relay_home(tmp_path, monkeypatch):
+    # setup() writes gh's config there: not the host's /tmp, which every test process shares
+    monkeypatch.setattr(policy, "HOME", str(tmp_path / "relay-home"))
+
+
 @pytest.fixture
 def work(tmp_path):
     w = tmp_path / "work"

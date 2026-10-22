@@ -3,10 +3,12 @@ errors, and the session machinery. Re-exported from `glove.api.commands`."""
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 
@@ -15,13 +17,13 @@ from . import registry as reg
 from . import session as _session
 from . import sessiondir as sdm
 from .cafile import read_ca
-from .config import ConfigError
+from .config import ConfigError, load_yaml
 from .doctor import worst_status
 from .extensions import materialize
 from .extsession import run_teardown
 from .harness import adapter_call, get_profile
 from .harnessconfig import render_home
-from .mounts import make_bind_sources, write_placeholders
+from .mounts import make_bind_sources, missing_bind_targets, remove_empty, write_placeholders
 from .plan import build_session_plan, write_in_place, write_system_files
 from .runtimes import get_runtime
 from .runtimes.landlock_mounts import bind_layer
@@ -61,6 +63,33 @@ def mark_downloads(sd: SessionDir) -> quarantine.Marked | None:
     for path, why in r.failed:
         err.print(f"[yellow]warn:[/yellow] not quarantined: {path}: {why}")
     return r
+
+
+def _created(resolved: dict) -> list[str]:
+    return [p for p in resolved.get("created") or [] if isinstance(p, str) and os.path.isabs(p)]
+
+
+def remove_created(sd: SessionDir) -> None:
+    """Remove the mount points and pinned dirs glove's binds created in the
+    user's tree (recorded at `glove up`) that are still empty; one with
+    content is the user's now. Either way the record is cleared (read raw:
+    a config this glove no longer accepts still has one)."""
+    try:
+        doc = load_yaml(sd.effective.read_text())
+    except (OSError, yaml.YAMLError):
+        return
+    resolved = doc.get("resolved") if isinstance(doc, dict) else None
+    created = _created(resolved) if isinstance(resolved, dict) else []
+    if not created:
+        return
+    removed, failed = remove_empty(created)
+    if removed:
+        console.print(f"[dim]removed {len(removed)} empty mount point(s) glove created: "
+                      f"{', '.join(os.path.relpath(p, sd.root) for p in removed)}[/dim]")
+    for why in failed:
+        err.print(f"[yellow]warn:[/yellow] not removed: {why}")
+    del resolved["created"]
+    sd.effective.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
 def print_checks(title: str, checks: list) -> None:
@@ -190,9 +219,10 @@ def session_bind_layer(cfg) -> str:
 
 
 def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, session: str | None = None,
-                      home: bool = True, overrides: frozenset[str] = frozenset()):
+                      home: bool = True, overrides: frozenset[str] = frozenset(), launch: bool = False):
     """Build the plan and write everything the session needs under .glove/
     (policies, placeholders, compose.yml, effective/baseline, the harness home).
+    `launch`: for `glove up` (`session.launch` then makes the binds' mount points).
     Returns (plan, compose yaml, seeded home files)."""
     # Before anything is written: a nono session whose Landlock can't open /work is never started.
     runtime = get_runtime(cfg.runtime)
@@ -246,12 +276,23 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
         trust = Path(plan.trust_host_dir)
         write_in_place(trust, {n: read_ca(n, p) for n, p in plan.composition.trust.items()})
         trust.chmod(0o755)  # whatever the umask: a sidecar outside the session's user namespace reads it
+    missing = missing_bind_targets(plan.mounts, plan.protect)
     # a pinned dir, the config home or a file protected in it, or a tmpfs mount
     # point under the read-only home may not exist yet
     make_bind_sources(plan.protect, plan.home_dir, plan.hardening.tmpfs)
-    if any(p.host_path is None for p in plan.protect):
-        plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
-    rendered = runtime.render(plan, sd.state, overrides=overrides)
+    made = [p for p in missing if os.path.lexists(p)]
+    try:
+        if any(p.host_path is None for p in plan.protect):
+            plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
+        rendered = runtime.render(plan, sd.state, overrides=overrides)
+    except BaseException:
+        remove_empty(made)  # unrecorded, so never left behind
+        raise
+    # what the binds create in the user's tree (`glove down` removes each one
+    # still empty): what was just made and, at `glove up`, the mount points
+    # `launch` makes; with what an earlier run that never came down recorded
+    _, resolved = sdm.read_effective(sd.effective)
+    created = sorted({*(missing if launch else made), *_created(resolved)})
     reg.update(sid, grants=plan.composition.grants)
     if plan.model is None:  # unreachable: `inference` is a required slot
         raise ConfigError("no inference provider")
@@ -259,15 +300,18 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     # effective.yml tracks the current run (`glove down` stops its host
     # services; `glove plan` shows its resolutions); baseline.yml is written
     # once, so the widening check compares against the session's origin.
-    _, resolved = sdm.read_effective(sd.effective)
     # what extensions resolved from the host at plan time (e.g. corporate's
     # routes via an interface), for the record and `glove plan`
     ext_resolved = {a.name: a.exports["resolved"] for a in plan.composition.active if a.exports.get("resolved")}
-    resolved = {k: v for k, v in resolved.items() if k not in ("extensions", "bind_layer")}
+    resolved = {k: v for k, v in resolved.items() if k not in ("extensions", "bind_layer", "created")}
+    if created:
+        resolved["created"] = created
     if ext_resolved:
         resolved["extensions"] = ext_resolved
     # the dirs sidecars write (`glove down` quarantines them without re-planning)
     resolved["outputs"] = [o.name for o in plan.composition.outputs if not o.input]
+    # the extensions with a `teardown` hook: `glove down` loads only their code
+    resolved["teardown"] = plan.composition.hooked("teardown")
     if plan.bind_layer != "native":  # the harness's binds come from Docker Desktop's virtiofs layer
         resolved["bind_layer"] = plan.bind_layer
     sdm.write_effective(sd.effective, cfg, resolved)
@@ -320,11 +364,14 @@ def conversations(profile, home_dir: Path, sid: str):
 
 
 def stop(sd: SessionDir, sid: str, provider: str | None, *, wipe: bool, mark: bool = True) -> None:
-    cfg, _ = sdm.read_effective(sd.effective)
+    cfg, resolved = sdm.read_effective(sd.effective)
     provider = provider or sdm.session_provider(sd, cfg)
-    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {}):
+    hooked = resolved.get("teardown")  # none (an older glove's record): every extension's hooks
+    for w in run_teardown(sd, sid, provider, cfg.extensions if cfg is not None else {},
+                          only=hooked if isinstance(hooked, list) else None):
         err.print(f"[yellow]warn:[/yellow] {w}")
     _session.teardown(sid, provider=provider, wipe=wipe)
+    remove_created(sd)
     if mark:
         mark_downloads(sd)
     if wipe:

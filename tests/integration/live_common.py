@@ -34,6 +34,7 @@ from extensions.observe.netview import read_records
 from glove import registry
 from glove.enforcers.base import SECRET_DENY_VARS
 from glove.extensions import load_module
+from glove.mounts import missing_bind_targets
 from glove.plan import SessionPlan, secret_env
 from glove.runtimes import get_runtime
 from glove.session import _compose_base, compose_process_env, ensure_images, start_sidecars, teardown
@@ -260,6 +261,7 @@ class LiveSession:
         print(f"  (images ready in {time.time() - t:.0f}s: {self.plan.image})", flush=True)
         start_sidecars(self.plan, self.sd.compose, provider=self.rt, env=self.env)
         prepare_harness(self.sd, self.cfg, self.plan)
+        missing_bind_targets(self.plan.mounts, self.plan.protect, create=True)  # as `launch` does
 
     def reconfigure(self, line: str) -> None:
         """Append `line` (top-level YAML) to the session file and relaunch."""
@@ -349,7 +351,7 @@ def kept() -> bool:
 
 def _materialize(directory: Path) -> tuple:
     sd, _, sid, cfg = open_session(directory)
-    plan, _, _ = materialize_plan(sd, sid, cfg)
+    plan, _, _ = materialize_plan(sd, sid, cfg, launch=True)
     return sd, sid, cfg, plan, secret_env(plan)
 
 

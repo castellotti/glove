@@ -38,6 +38,7 @@ COMMANDS = frozenset({"gh", "git"})
 GITHUB = "github.com"
 GITHUB_HOSTS = (GITHUB, "api.github.com", "uploads.github.com", "codeload.github.com", ".githubusercontent.com")
 GIT_NET = ("push", "fetch", "clone", "ls-remote")
+HOME = "/tmp/relay-home"  # the sidecar's tmpfs: gh's config, with the Enterprise tokens
 
 
 def served(settings: dict) -> dict[str, str]:
@@ -124,7 +125,7 @@ def setup(ctx: dict) -> dict[str, str]:
     # each host's token under its own name; github.com's is gh's GH_TOKEN
     helpers = {h: "GH_TOKEN" if h == GITHUB else var for h, var in hosts.items()}
     proxy = ctx["proxy"]
-    home = "/tmp/relay-home"
+    home = HOME
     os.makedirs(f"{home}/gh", mode=0o700, exist_ok=True)
     enterprise = [h for h in hosts if h != GITHUB]
     _gh_config(f"{home}/gh", {h: tokens[h] for h in enterprise})

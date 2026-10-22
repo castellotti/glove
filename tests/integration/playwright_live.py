@@ -106,9 +106,41 @@ def big_download(argv: Callable[[list], list[str]], out_dir: Path) -> None:
     # it: a partial download ends only when the sidecar stops)
     with held_mcp(argv([["browser_navigate", {"url": big}], ["sleep", {"s": 1800}]])) as out:
         got = wait_for(landed, timeout=1800, step=5)
+        left = staged_left(out_dir)
     print(f"    {''.join(out).strip()[-300:]} ({time.time() - t:.0f}s)")
     check(f"a {size / 2**30:.1f} GiB browser download (> the 768 MB tmpfs) lands complete", bool(got),
           ", ".join(f"{p.name} {p.stat().st_size} B" for p in out_dir.glob("*.iso")))
+    check("…and is on the host volume once (its staged copy deleted, its context still open)",
+          bool(got) and not left, left and f"left: {left}")
+
+
+def staged_left(out_dir: Path) -> str:
+    """What is left in the sidecar's download staging dir (`<state>/downloading`), "" once it is
+    empty. Call it while the MCP client that downloaded is still open: with an ephemeral profile its
+    context closes with it, and Playwright then empties the dir itself (glove-pw-staged.js or not)."""
+    staged = out_dir.parent / ".glove" / "ext" / "playwright" / "downloading"
+
+    def left() -> str:
+        try:
+            return ", ".join(p.name for p in staged.iterdir())
+        except OSError as e:
+            return str(e)
+    wait_for(lambda: not left(), 10)  # unlinked just after the copy completes
+    return left()
+
+
+def staged_once(argv: Callable[[list], list[str]], out_dir: Path) -> None:
+    """The .7z again, from a client held open: its staged copy is deleted once copied (glove-pw-staged.js)."""
+    t = time.time()
+
+    def landed() -> list[Path]:
+        return [p for p in out_dir.glob("*.7z") if p.stat().st_mtime >= t - 1 and p.stat().st_size == SEVENZ_SIZE]
+
+    with held_mcp(argv([["browser_navigate", {"url": SEVENZ}], ["sleep", {"s": 300}]])):
+        got = wait_for(landed, 120)
+        left = staged_left(out_dir)
+    check("…and its staged copy is deleted once copied (its context still open)", bool(got) and not left,
+          left and f"left: {left}")
 
 
 def main(directory: str) -> int:
@@ -299,6 +331,7 @@ def main(directory: str) -> int:
                   f"{(out_dir / name).stat().st_size if (out_dir / name).exists() else 0} B")
             check("…and the response says `Downloaded file`", any("Downloaded file" in r for r in res))
             if got:
+                staged_once(mcp_argv, out_dir)
                 out = live.sh(f"7z l /work/browser-output/{name} | tail -3")
                 check("7z l reads it from the shell", "files" in out, out[-160:])
             if os.environ.get("BIG"):

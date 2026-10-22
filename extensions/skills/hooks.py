@@ -47,11 +47,13 @@ import tomllib
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 from glove.api import (
     HOST_GLOB,
     STAGE_IGNORE,
+    UV_HOME,
     HookContext,
-    apt_bootstrap,
     existing_host_path,
     hook,
     is_secret_env_name,
@@ -59,12 +61,12 @@ from glove.api import (
     overlaps,
     render_value,
     run_body,
-    uv_steps,
+    uv_python_steps,
 )
 
 ROOT = "/opt/glove/plugins"
 DATA = "/work/.glove-plugin-data"
-UV = f"{ROOT}/.uv"  # uv, its Python and the wheelhouse (a plugin name never starts with `.`)
+UV = f"{ROOT}/.uv"  # the wheelhouse, its envs and the Python link (a plugin name never starts with `.`)
 PYTHON = f"{UV}/python3"
 WHEELS = f"{UV}/wheels"
 ENVS = f"{UV}/envs"  # one per set of dependencies
@@ -76,6 +78,7 @@ RELAY_POLICY = "/opt/glove/skills/relay_policy.py"  # where the sidecar sees rel
 RELAY_CLIENT = "/opt/glove/bin/glove-relay"  # relay's client, in the harness image
 SERVICE = "skill-"  # a relay's sidecar (and channel): skill-<plugin>
 CHECK_TIMEOUT = 60  # seconds a check may take (a hung one would hold up `glove up`)
+CHECK_POOL = 4  # `glove skills status`: checks run at once (`glove up`: core's verify.EXEC_POOL)
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")
 _FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -133,11 +136,12 @@ class Relay(NamedTuple):
 
 class Script(NamedTuple):
     """A PEP 723 script in the image: `path`, its `deps`, whether its shebang
-    runs it with `uv run --script`."""
+    runs it with `uv run --script`, its `requires-python`."""
 
     path: str
     deps: tuple[str, ...]
     uv_shebang: bool
+    requires: SpecifierSet | None = None
 
     @property
     def env(self) -> str | None:
@@ -162,8 +166,13 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     out: dict[str, Any] = {"harness": h}
     plugins = [_plugin(ctx, name, raw) for name, raw in (s.get("plugins") or {}).items()]
     scripts = [x for p in plugins for x in p["scripts"] if not (p["relay"] and x.path in p["relay"].shims)]
-    if scripts:  # before the plugins: a plugin edit never rebuilds this
-        h["image"].append({"run": [_uv_layer(str(s["python"]), scripts)]})
+    if scripts:  # before the plugins: a plugin edit never rebuilds these
+        python = str(s["python"])
+        if bad := [x.path for x in scripts if x.uv_shebang and x.requires and not _admits(x.requires, python)]:
+            raise SkillsError(f"skills: {', '.join(bad)} cannot run on Python {python} (its `requires-python`); "
+                              "set skills.python to one it admits")
+        h["image"] += [{"run": [run_body(UV_HOME, *uv_python_steps(python))]},  # shared: toolchains' too
+                       {"run": [_uv_layer(python, scripts)]}]
         h["env"].update(UV_OFFLINE="1", UV_NO_INDEX="1", UV_FIND_LINKS=WHEELS, UV_PYTHON=PYTHON,
                           UV_PYTHON_DOWNLOADS="never", UV_CACHE_DIR="/tmp/glove-uv")
     for p in plugins:
@@ -402,13 +411,20 @@ def _script(where: str, name: str, data: bytes, path: str) -> Script | None:
         body = "".join(line[2:] if line.startswith("# ") else line[1:]
                        for line in m["content"].splitlines(keepends=True))
         try:
-            deps = tomllib.loads(body).get("dependencies", [])
+            meta = tomllib.loads(body)
         except tomllib.TOMLDecodeError as e:
             raise SkillsError(f"{where}: {name}: bad inline script metadata: {e}") from None
+        deps = meta.get("dependencies", [])
         if not isinstance(deps, list) or not all(isinstance(x, str) and x.isprintable() for x in deps):
             raise SkillsError(f"{where}: {name}: `dependencies` is a list of one-line strings")
+        try:
+            requires = meta.get("requires-python")
+            if requires is not None:
+                requires = SpecifierSet(requires if isinstance(requires, str) else "!")
+        except InvalidSpecifier:
+            raise SkillsError(f"{where}: {name}: `requires-python` is a version specifier (\">=3.11\")") from None
         first = text.split("\n", 1)[0]
-        return Script(path, tuple(deps), first.startswith("#!") and _UV_SHEBANG.search(first) is not None)
+        return Script(path, tuple(deps), first.startswith("#!") and _UV_SHEBANG.search(first) is not None, requires)
     return None
 
 
@@ -668,20 +684,24 @@ def _bake(plugins: list[dict[str, Any]]) -> str:
     return run_body(ROOT, *steps)
 
 
+def _admits(requires: SpecifierSet, python: str) -> bool:
+    """Whether some release of `python` (X.Y) satisfies `requires`. Which one the
+    build gets is uv's choice, so a bound on the patch level is not checked."""
+    return any(requires.contains(f"{python}.{z}", prereleases=False) for z in range(100))
+
+
 def _uv_layer(python: str, scripts: list[Script]) -> str:
-    """uv (pinned), a Python, one wheelhouse of every script's dependencies
-    (resolved with hashes; wheels only: an sdist-only dependency fails the
-    build here), and an env per set of dependencies installed from it. Keyed
-    only on the Python and the dependency sets, never a script's bytes."""
-    uv = f"{UV}/bin/uv"
+    """After uv and the Python (`uv_python_steps`): one wheelhouse of every
+    script's dependencies (resolved with hashes; wheels only: an sdist-only
+    dependency fails the build here), and an env per set of dependencies
+    installed from it. Keyed only on the Python and the dependency sets,
+    never a script's bytes."""
+    uv = f"{UV_HOME}/bin/uv"
     venv = "/tmp/glove-wheels"
-    steps = [apt_bootstrap("curl", ("ca-certificates", "curl")),
-             *uv_steps(UV),
-             f"export UV_PYTHON_INSTALL_DIR={UV}/python UV_PYTHON_PREFERENCE=only-managed UV_NO_CACHE=1",
-             f"{uv} python install --no-bin {python}",
-             f'ln -s "$({uv} python find {python})" {PYTHON}',
-             f"(command -v uv >/dev/null || ln -s {uv} /usr/local/bin/uv)",
-             f"mkdir -p {WHEELS}"]
+    steps = ["export UV_NO_CACHE=1",
+             f"mkdir -p {WHEELS}",
+             f'ln -s "$(readlink -f {UV_HOME}/python{python})" {PYTHON}',
+             f"(command -v uv >/dev/null || ln -s {uv} /usr/local/bin/uv)"]
     envs = sorted({(x.env, tuple(sorted(x.deps))) for x in scripts if x.env})
     if envs:
         steps.append(f"{uv} venv --seed --python {PYTHON} {venv}")

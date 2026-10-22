@@ -201,6 +201,61 @@ def test_a_warn_check_that_fails_lets_the_session_start(tmp_path, monkeypatch):
     assert any("⚠" in m and "a warning: the session starts anyway" in m for m in said)  # soft, then hard
 
 
+def test_consecutive_exec_ok_checks_run_at_once_bounded_and_report_in_order(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    plan = _plan(tmp_path)
+    n = verify.EXEC_POOL + 2
+    plan.composition.verify = [("x", {"name": f"c{i}", "kind": "exec-ok", "service": "r", "argv": [str(i)],
+                                      "warn": i == 1}) for i in range(n)]
+    lock, running, peak = threading.Lock(), [0], [0]
+
+    def slow(cmd, **kw):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.2)
+        with lock:
+            running[0] -= 1
+        return SimpleNamespace(returncode=5 if cmd[-1] == "1" else 0, stdout=b"")
+
+    monkeypatch.setattr(verify.subprocess, "run", slow)
+    said: list[str] = []
+    t0 = time.monotonic()
+    run_verify("docker", plan, said.append)
+    assert time.monotonic() - t0 < 0.2 * n / 2  # not one after another
+    assert peak[0] == verify.EXEC_POOL  # bounded
+    names = [m.split("/")[1].split(" ")[0] for m in said if m.startswith("  verify")]
+    assert names == [f"c{i}" for i in range(n)]
+    assert "⚠" in said[3] and "exited 5" in said[3]  # c1's warning, after c1's line
+
+
+def test_a_failed_exec_ok_check_stops_the_launch_and_cancels_the_rest(tmp_path, monkeypatch):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    plan = _plan(tmp_path)
+    monkeypatch.setattr(verify, "EXEC_POOL", 1)
+    pool = ThreadPoolExecutor(1)
+    monkeypatch.setattr(verify, "ThreadPoolExecutor", lambda n: pool)
+    plan.composition.verify = [("x", {"name": f"c{i}", "kind": "exec-ok", "service": "r", "argv": [str(i)]})
+                               for i in range(4)]
+    ran: list[str] = []
+
+    def fake(cmd, **kw):
+        ran.append(cmd[-1])
+        if cmd[-1] != "0":
+            time.sleep(0.2)  # c1 is still running when c0's failure stops the launch
+        return SimpleNamespace(returncode=1 if cmd[-1] == "0" else 0, stdout=b"")
+
+    monkeypatch.setattr(verify.subprocess, "run", fake)
+    with pytest.raises(VerifyError, match="c0"):
+        run_verify("docker", plan, _quiet)
+    pool.shutdown(wait=True)  # c1, if it started, ends on `fake`, not on the host's docker
+    assert ran[0] == "0" and not {"2", "3"} & set(ran)  # still queued: never started
+
+
 def test_unknown_kind_is_refused_at_compose_time(tmp_path):
     from glove.extensions import Manifest, compose
 
@@ -362,3 +417,26 @@ def test_a_failed_compose_up_stops_everything(tmp_path, monkeypatch):
     ups = [c for c, _ in calls if "up" in c]
     up = ["podman", "compose", "-p", "x", "-f", "f", "up", "-d", "--remove-orphans"]
     assert len(ups[0]) == len(up) + 1  # podman: one at a time
+
+
+def test_exec_ok_checks_of_two_extensions_never_overlap(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    plan = _plan(tmp_path)
+    plan.composition.verify = [(ext, {"name": ext, "kind": "exec-ok", "service": "r", "argv": [ext]})
+                               for ext in ("x", "y")]
+    lock, running, peak = threading.Lock(), [0], [0]
+
+    def slow(cmd, **kw):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.1)
+        with lock:
+            running[0] -= 1
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(verify.subprocess, "run", slow)
+    run_verify("docker", plan, _quiet)
+    assert peak[0] == 1  # y's waits for x's, as before

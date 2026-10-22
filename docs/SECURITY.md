@@ -181,7 +181,7 @@ Every capability (the model, search, the browser, …) is an extension in
   and `glove ext` list CLIs from the manifests (YAML) alone; `glove <name> …`
   imports that one `cli.py`, and refuses an untrusted out-of-tree one with how
   to trust it. Hooks (`hooks.py`) load only for the extensions a session
-  selects (plan, check, up, and `down`'s teardown for the last launch's set),
+  selects (plan, check, up, and `down`'s teardown for those of the last launch's set that define it),
   and `call_hook` refuses any other. An extension's CLI acting on a session
   refuses one that doesn't select it (`ext_session`).
 - **`extension_paths` hygiene.** As ssh treats `~/.ssh`, an entry is skipped
@@ -1054,8 +1054,10 @@ same ones:
 - **With `protect_ide_files: true`:** a *missing* `.vscode/`, `.idea/`,
   `.envrc` or `.mcp.json` gets an empty read-only placeholder too, so the agent
   can't create one. That creates an empty file or directory in your repo, which
-  is why this setting is opt-in. Other missing paths are left alone, so `git
-  init` in a fresh `/work` still works.
+  is why this setting is opt-in; `glove down` removes each one glove created
+  that is still empty (never a symlink, never one with content), as it does a
+  missing `protect:` path's mount point or pinned directory. Other missing
+  paths are left alone, so `git init` in a fresh `/work` still works.
 - Bind sources are resolved with realpath and must stay inside the mount, so a
   symlink can't expose another host path.
 

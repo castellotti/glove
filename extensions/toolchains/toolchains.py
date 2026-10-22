@@ -10,7 +10,8 @@ the project's source never rebuilds its installs.
 
 Two rules shape the layout:
 
-- Everything lands under ``ROOT`` (``/opt/glove/toolchains``): on the read-only
+- Everything lands under ``ROOT`` (``/opt/glove/toolchains``; Python's uv and
+  CPython under core's shared ``UV_HOME``, ``/opt/glove/uv``): on the read-only
   rootfs, never under a runtime bind mount (``/work``, ``/mnt/…``, the harness
   home), which would shadow it. Every enforcer already lets the harness and its
   commands read ``/opt/glove``, so no policy changes.
@@ -40,6 +41,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from glove.api import (
+    UV_HOME,
     ConfigError,
     apt_bootstrap,
     existing_host_path,
@@ -47,7 +49,7 @@ from glove.api import (
     fetch_steps,
     run_body,
     tools_run_browsers,
-    uv_steps,
+    uv_python_steps,
 )
 
 ROOT = "/opt/glove/toolchains"
@@ -321,14 +323,12 @@ class PythonHandler(Handler):
     def phases(self, tc: Toolchain) -> tuple[list[Layer], list[Layer], list[Layer]]:
         p = tc.prefix
         venv = self.venv(tc)
-        fields = {"uv": f"{p}/bin/uv", "py": f"{venv}/bin/python", "v": shlex.quote(tc.version)}
-        env = (f"export UV_PYTHON_INSTALL_DIR={p}/runtime UV_PYTHON_PREFERENCE=only-managed "
-               f"UV_NO_CACHE=1 UV_PROJECT_ENVIRONMENT={venv}")
+        fields = {"uv": f"{UV_HOME}/bin/uv", "py": f"{venv}/bin/python", "v": f"{UV_HOME}/python{tc.version}"}
+        env = f"export UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1 UV_PROJECT_ENVIRONMENT={venv}"
         runtime = [
-            run_step(p, *uv_steps(p)),
+            run_step(UV_HOME, *uv_python_steps(tc.version)),  # shared: the skills extension's too
             # seeded in every mode (`uv sync` keeps the seed packages), so the brief's `pip` is the venv's
-            run_step(p, env, "{uv} python install --no-bin {v}".format(**fields),
-                     f"{fields['uv']} venv --seed --python {fields['v']} {venv}"),
+            run_step(p, env, f"{fields['uv']} venv --seed --python {fields['v']} {venv}"),
         ]
         manager = self.managers[tc.manager]
         project = []
@@ -554,7 +554,7 @@ def harness_env(blocks: Sequence[Toolchain]) -> dict[str, str]:
 
 def image_layers(blocks: Sequence[Toolchain]) -> list[Layer]:
     """The derived image's layers, all `stage: late` (after every other
-    extension's, so their PATH never affects another build step): every
+    extension's installs; core renders the PATH last of all): every
     block's runtime, then their global tools, then their project installs, so
     bumping a lockfile never re-downloads a runtime; then the PATH."""
     phases = [HANDLERS[tc.lang].phases(tc) for tc in blocks]
@@ -570,7 +570,8 @@ def brief(blocks: Sequence[Toolchain], enforcer: str, options: Any) -> str:
     browsers_ok = tools_run_browsers(enforcer, options)
     lines = ["### Toolchains", "",
              "Baked into this image at build time (shell commands have no network, so nothing can be "
-             f"installed now). Everything lives under `{ROOT}` (read-only):", ""]
+             f"installed now). Everything lives under `{ROOT}` (Python's uv and CPython: `{UV_HOME}`; "
+             "read-only):", ""]
     for tc in blocks:
         lines += HANDLERS[tc.lang].describe(tc)
         if tc.browsers and not browsers_ok:

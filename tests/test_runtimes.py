@@ -295,6 +295,17 @@ def test_doctor_host_only_json_shape():
     assert "enforcer: nono" in {c.name for c in checks}
 
 
+@pytest.mark.parametrize("enforcer", ["srt", "nono+srt"])
+def test_doctor_host_only_skips_the_srt_smoke_container(monkeypatch, enforcer):
+    from glove.enforcers import srt
+
+    monkeypatch.setattr(srt.shutil, "which", lambda c: "/bin/" + c)  # a runtime and a local -srt image
+    monkeypatch.setattr(srt.subprocess, "run", lambda argv, **k: pytest.fail(f"ran {argv}"))
+    checks = run_doctor(runtime="docker", enforcer=enforcer, include_container_probes=False)
+    smoke = {c.name: c for c in checks}["srt bwrap smoke"]
+    assert (smoke.status, smoke.detail) == ("skip", "container probes skipped")
+
+
 def test_podman_keep_id_only_where_a_container_writes_a_host_bind(tmp_path):
     # Rootless podman's keep-id maps a container to the invoking user. Only the
     # harness (and sidecars with a rw host bind) need that; forwarders and

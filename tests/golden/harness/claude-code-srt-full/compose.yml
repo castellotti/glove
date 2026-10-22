@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-bc85a2338a-8ad1ae6bc1-srt-46f57ff955
+    image: glove/claude-code:0.2.0-bc85a2338a-d8658f3095-srt-46f57ff955
     working_dir: /work
     command: ["/opt/glove/bin/glove-pty", "relay", "--", "/opt/glove/srt/node", "/opt/glove/srt/glove-srt.mjs", "/etc/glove/enforcer/srt-harness.json", "--", "/opt/glove/bin/glove-pty", "ctty", "--", "/usr/local/bin/claude", "--add-dir", "/opt/glove/cc"]
     stdin_open: true
@@ -265,7 +265,7 @@ services:
     mem_limit: 512m
   glove-s-pw:
     container_name: glove-s-pw
-    image: glove/ext-playwright-pw:b9fbe98314
+    image: glove/ext-playwright-pw:8d19f32985
     init: true
     command:
     - glove-pw-start

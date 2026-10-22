@@ -92,7 +92,7 @@ class StandIn(BaseHTTPRequestHandler):
 def exercise(cmd: list[str]) -> list[tuple[str, bool, str]]:
     StandIn.seen, StandIn.live, StandIn.release, StandIn.refuse, StandIn.opened = [], set(), threading.Event(), [], []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), StandIn)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     p = subprocess.Popen([*cmd, f"http://127.0.0.1:{srv.server_address[1]}/mcp"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     timer = threading.Timer(60, p.kill)  # a hung bridge fails the checks, never the run

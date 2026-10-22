@@ -33,11 +33,12 @@ HERE = Path(__file__).parent
 PLAYWRIGHT_VERSION = json.loads((HERE / "image" / "package.json").read_text())["dependencies"]["playwright-core"]
 PLAYWRIGHT_MCP = f"playwright-core@{PLAYWRIGHT_VERSION}"
 PORTS_FILE = "host-ports.json"
+SERVICES = ("chrome", "mcp")  # host_services', by name: `teardown` stops them without building them
 # A second layer under the network one: no UDP (WebRTC) around the proxy.
 CHROMIUM_ARGS = ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
 # Where Chromium stages a download (`<state>/downloading`, on disk) before the
-# MCP copies it into the output dir: Playwright's default is under /tmp, a
-# tmpfs that counts against the sidecar's memory.
+# MCP copies it into the output dir (and then deletes it: image/glove-pw-staged.js):
+# Playwright's default is under /tmp, a tmpfs that counts against the sidecar's memory.
 STAGING = "/data/staging"
 # novnc: raises the page each tool call acts on (image/glove-pw-front.js)
 FRONT_PAGE = "/opt/glove/pw/glove-pw-front.js"
@@ -159,7 +160,7 @@ def host_services(ctx: HookContext, ports: dict[str, int]) -> list[hs.Service]:
     return [
         hs.Service("chrome", f'"{exe}" --remote-debugging-port={ports["cdp"]} --user-data-dir={state / "host-profile"} '
                              "--no-first-run --no-default-browser-check",
-                   ports["cdp"], keep=ctx.settings["keep_browser"]),
+                   ports["cdp"]),
         hs.Service("mcp", f"npx -y {PLAYWRIGHT_MCP} mcp --host 127.0.0.1 --port {ports['mcp']} "
                           f"--allowed-hosts {host}:{ports['mcp']} --cdp-endpoint http://127.0.0.1:{ports['cdp']} "
                           f"--shared-browser-context --output-dir {state / 'output'}",
@@ -227,7 +228,7 @@ def teardown(ctx: HookContext) -> None:
     # none without the ports every host-mode launch records
     if not (ctx.state_dir / PORTS_FILE).exists():
         return
-    hs.stop(host_services(ctx, host_ports(ctx)), ctx.session["id"], ctx.state_dir)
+    hs.stop(SERVICES, ctx.session["id"], ctx.state_dir, keep=("chrome",) if ctx.settings["keep_browser"] else ())
 
 
 @hook

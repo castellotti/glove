@@ -117,8 +117,8 @@ class NonoSrtEnforcer:
             g.append("srt.nested: strong → systempaths=unconfined exposes masked /proc,/sys to the container")
         return g
 
-    def doctor(self, runtime) -> list[Check]:
-        smoke = SrtEnforcer()._bwrap_smoke(runtime)
+    def doctor(self, runtime, containers: bool) -> list[Check]:
+        smoke = SrtEnforcer()._bwrap_smoke(runtime, containers=containers)
         return [
             Check("enforcer: nono+srt", "ok",
                   "srt wraps the harness (deny-inside-allow, no namespaces/mounts below it), nono every command"),

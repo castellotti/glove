@@ -19,9 +19,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import yaml
-
-from .config import ConfigError
+from .config import ConfigError, load_yaml
 
 HARNESSES_DIR = Path(__file__).resolve().parent.parent / "harnesses"
 MANIFEST = "harness.yml"
@@ -229,7 +227,7 @@ def tool_inventory(profile: HarnessProfile, tool_allow: list[str], actx) -> dict
 def load_profile(path: Path) -> HarnessProfile:
     """A `HarnessProfile` from `<path>/harness.yml`."""
     where = f"{path / MANIFEST}"
-    raw = yaml.safe_load((path / MANIFEST).read_text()) or {}
+    raw = load_yaml((path / MANIFEST).read_text()) or {}
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: want a mapping")
     unknown = set(raw) - MANIFEST_KEYS

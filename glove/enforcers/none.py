@@ -36,5 +36,5 @@ class NoneEnforcer:
     def cap_add(self, plan: SessionPlan) -> list[str]:
         return []
 
-    def doctor(self, runtime) -> list[Check]:
+    def doctor(self, runtime, containers: bool) -> list[Check]:
         return [Check("enforcer: none", "fail", "ring-0 only — NO in-container kernel policy")]
