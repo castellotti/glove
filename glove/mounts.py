@@ -404,12 +404,13 @@ def make_bind_sources(protect: tuple[Protect, ...], home_dir: str, mount_points:
             os.makedirs(os.path.join(home_dir, rel), exist_ok=True)
 
 
-def missing_bind_targets(mounts: list[Mount], protect: tuple[Protect, ...]) -> list[str]:
+def missing_bind_targets(mounts: list[Mount], protect: tuple[Protect, ...], *, create: bool = False) -> list[str]:
     """The host paths in a rw mount (the user's tree) that the binds of
     `protect` will create, i.e. that do not exist yet: a pinned dir, an
     "own" file, a placeholder's mount point. `glove down` removes each one
     still empty (`remove_empty`). One nested in a placeholder dir has its
-    mount point in glove's state, not here."""
+    mount point in glove's state, not here. `create` (at launch) makes each, empty, through no symlink:
+    Docker Desktop's native layer cannot make one nested in another bind ("outside of rootfs")."""
     holders = {p.container_path for p in protect if p.host_path is None and p.kind == "dir"}
     out = []
     for p in protect:
@@ -417,9 +418,13 @@ def missing_bind_targets(mounts: list[Mount], protect: tuple[Protect, ...]) -> l
                 key=lambda m: len(m.container_path), default=None)
         if m is None or m.mode != "rw" or posixpath.dirname(p.container_path) in holders:
             continue
-        host = os.path.join(m.host_path, posixpath.relpath(p.container_path, m.container_path))
+        rel = posixpath.relpath(p.container_path, m.container_path)
+        host = os.path.join(m.host_path, rel)
         if not os.path.lexists(host):
             out.append(host)
+            if create:  # the agent may have run since the plan checked the way: again, and O_EXCL
+                check_path(m.host_path, rel, p.kind)
+                os.mkdir(host) if p.kind == "dir" else os.close(os.open(host, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
     return out
 
 

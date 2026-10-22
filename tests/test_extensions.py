@@ -643,12 +643,13 @@ def test_the_derived_image_puts_the_least_volatile_layers_first(tree, tmp_path):
 
     df, _ = render_dockerfile("base", get_profile("claude-code"), comp, adapter_context(comp))
     steps = [x.split(" && ")[1] if "apt-get" in x else x for x in df.splitlines()[2:] if not x.startswith("#")]
-    # installs (a's apart from its copy), late installs, an extension's files, a late host tree, a host tree (and
-    # what follows it in b), then every ENV
+    # installs (a's apart from its copy), late installs, a late host tree (a session's project: a shim or glove
+    # update must not reinstall it), an extension's files, a host tree (and what follows it in b), then every ENV
+    # in extension order
     assert steps == ["apt-get install -y --no-install-recommends a-pkg", "RUN b-install", "RUN c-late",
-                     "COPY a/f /opt/a/f", "COPY c/opt/c/project /opt/c/project", "RUN c-project",
+                     "COPY c/opt/c/project /opt/c/project", "RUN c-project", "COPY a/f /opt/a/f",
                      "COPY b/opt/b/project /opt/b/project", "RUN b-project", "RUN b-after-project",
-                     'ENV C="1"', 'ENV B="1"']
+                     'ENV B="1"', 'ENV C="1"']
 
 
 def test_a_hook_cannot_change_the_enforcer_options(tree):

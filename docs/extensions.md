@@ -94,10 +94,12 @@ Legend:
   layers may `copy_host`. Layers render least volatile first, each group in
   extension order: packages (`apt`/`pip`/`npm`, apart from a `copy` in the
   same layer), the `stage: late` ones (a session's own, e.g. the toolchains),
-  those that `copy` (then the harness's and the skills' copies), the late ones
-  that `copy_host`, the other ones that `copy_host`, and last every `ENV` line.
+  the late ones that `copy_host` (a session's projects), those that `copy`
+  (then the harness's and the skills' copies), the other ones that
+  `copy_host`, and last every `ENV` line (in extension order).
   So no `run` sees an image `ENV`, its own extension's included: `export` what
-  a step needs. A layer never renders before its extension's previous one,
+  a step needs; and a late `copy_host` (a project install) sees no other
+  extension's `copy`: what an install needs (a CA, `.npmrc`) is a `run` step. A layer never renders before its extension's previous one,
   which it may need.
 - `env`: `{VAR: value}` or `{VAR: {value, when}}`. A variable is
   set by one extension only.

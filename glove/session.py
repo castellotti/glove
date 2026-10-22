@@ -21,6 +21,7 @@ from .cafile import TRUST_DIR, trust_script
 from .config import Config, ConfigError, load_yaml
 from .enforcers.base import SRT_IMAGE_DIR, srt_suffix, uses_srt
 from .harness import HarnessProfile, base_contexts, effective_image
+from .mounts import missing_bind_targets
 from .naming import project_name, scoped
 from .plan import FORWARDER_DIR, forwarder_image
 from .runtimes import get_runtime
@@ -42,12 +43,18 @@ def _image_exists(provider: str, tag: str) -> bool:
     )
 
 
+def _build(provider: str, *args: str) -> None:
+    """`<provider> build` without BuildKit's default provenance attestation (a new digest each build:
+    a forced rebuild of the base made every image FROM it miss Docker's cache, `up --rebuild`)."""
+    subprocess.run([provider, "build", *args], check=True, env={**os.environ, "BUILDX_NO_DEFAULT_ATTESTATIONS": "1"})
+
+
 def build_forwarder(provider: str, *, force: bool = False) -> None:
     tag = forwarder_image()
     if not force and _image_exists(provider, tag):
         return
     console.print(f"[bold]building forwarder image[/bold] {tag}")
-    subprocess.run([provider, "build", "-t", tag, str(FORWARDER_DIR)], check=True)
+    _build(provider, "-t", tag, str(FORWARDER_DIR))
 
 
 def _build_base(
@@ -66,15 +73,14 @@ def _build_base(
         raise FileNotFoundError(f"no Dockerfile for harness {profile.name}: {profile.dockerfile}")
     (_, context), *named = base_contexts(profile)
     console.print(f"[bold]building base image[/bold] {tag}  (context: {context})")
-    cmd = [provider, "build", "-t", tag, "--build-arg", f"HARNESS_VERSION={profile.version}"]
+    args = ["-t", tag, "--build-arg", f"HARNESS_VERSION={profile.version}"]
     for name, path in named:
-        cmd += ["--build-context", f"{name}={path}"]
+        args += ["--build-context", f"{name}={path}"]
     if apt_packages:
-        cmd += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
+        args += ["--build-arg", f"GLOVE_APT={' '.join(apt_packages)}"]
     if pip_packages:
-        cmd += ["--build-arg", f"GLOVE_PIP={' '.join(pip_packages)}"]
-    cmd.append(str(context))
-    subprocess.run(cmd, check=True)
+        args += ["--build-arg", f"GLOVE_PIP={' '.join(pip_packages)}"]
+    _build(provider, *args, str(context))
 
 
 def _build_srt_layer(provider: str, base: str, tag: str, *, force: bool) -> None:
@@ -83,7 +89,7 @@ def _build_srt_layer(provider: str, base: str, tag: str, *, force: bool) -> None
     if not force and _image_exists(provider, tag):
         return
     console.print(f"[bold]building srt layer[/bold] {tag}  (on {base})")
-    subprocess.run([provider, "build", "-t", tag, "--build-arg", f"BASE={base}", str(SRT_IMAGE_DIR)], check=True)
+    _build(provider, "-t", tag, "--build-arg", f"BASE={base}", str(SRT_IMAGE_DIR))
 
 
 def build_harness(
@@ -121,10 +127,7 @@ def build_harness(
         (ctx_dir / "Dockerfile").write_text(dockerfile)
         names = ", ".join(sorted({e for e, _ in plan.composition.image_layers} | {e for e, _ in staged}))
         console.print(f"[bold]composing extension image[/bold] {final_tag}  (extensions: {names})")
-        subprocess.run(
-            [provider, "build", "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir)],
-            check=True,
-        )
+        _build(provider, "-t", final_tag, "-f", str(ctx_dir / "Dockerfile"), str(ctx_dir))
     return final_tag
 
 
@@ -142,7 +145,7 @@ def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = Fa
                 continue
             ctx = a.manifest.path / str((spec or {}).get("build", name))
             console.print(f"[bold]building extension image[/bold] {tag}")
-            subprocess.run([provider, "build", "-t", tag, str(ctx)], check=True)
+            _build(provider, "-t", tag, str(ctx))
 
 
 def ensure_images(cfg: Config, plan: SessionPlan, provider: str, *, rebuild: bool = False) -> None:
@@ -283,6 +286,7 @@ def launch(
     start_sidecars(plan, compose_file, provider=provider, env=env)
     if prepare is not None:
         prepare()
+    missing_bind_targets(plan.mounts, plan.protect, create=True)  # recorded at plan: `glove down` removes them
 
     console.print("[bold]launching harness (Ctrl-D to exit)…[/bold]")
     try:

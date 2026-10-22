@@ -218,12 +218,14 @@ All notable changes to glove are documented here.
   Python. `glove plan` refuses a baked PEP 723 script whose `requires-python`
   no release of `skills.python` satisfies (it used to fail when it ran).
 - **A glove update rebuilds less of the image** (R19.D): the derived image
-  renders least volatile first: packages, the toolchains, the files
-  extensions copy, the toolchains' projects, other host trees (the skills
+  renders least volatile first: packages, the toolchains, then their
+  projects, the files extensions copy, other host trees (the skills
   plugins), then every image `ENV`. Before, a 1 KB shim (`glove-relay`, `gh`)
   came ahead of the toolchains, so changing it re-downloaded Node, CPython and
   Chromium: in the `claude-code` template, its image rebuilt in 255–300 s,
-  now 0.6–1.0 s. A layer's `apt`/`pip`/`npm` render apart from its `copy`
+  now 0.6–1.0 s; with a toolchain `project` (npm ci with Chromium, uv sync),
+  a changed shim reran it too (235 s on Docker, 215 s on Podman; round 19
+  live verification): the projects now come before the copied files. A layer's `apt`/`pip`/`npm` render apart from its `copy`
   (so ocr's and rag's installs stay ahead of the toolchains). For extension
   authors: no `run` step sees an image `env` any more, its own extension's
   included (`export` what a step needs).
@@ -417,6 +419,18 @@ All notable changes to glove are documented here.
 
 ### Fixed
 
+- **`glove up` with `enforcer: srt` or `none` starts on Docker Desktop**
+  (R19.L1): there the harness's binds come from the native layer, and runc
+  could not create a mount point nested in another bind (Pi's
+  `/work/.pi/settings.json`, Claude Code's `/work/.claude/settings.json`):
+  "mountpoint … is outside of rootfs", so the harness never started (since
+  round 18). `glove up` now makes each missing mount point itself, empty, and
+  `glove down` removes it again while it is empty, as before.
+- **`glove up --rebuild` keeps Docker's layer cache** (R19.L2): BuildKit's
+  default provenance attestation gave every build of the base image a new
+  digest, so the srt layer and the whole derived image built on it ran again
+  (about 210 s with toolchains, each time). glove builds without it
+  (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`); Podman was not affected.
 - **`glove doctor --no-container` and `glove check --no-container` start no
   container** (R19.E): with an srt enforcer and a local `*-srt-*` image, the
   bwrap smoke test still ran one; it is now skipped ("container probes

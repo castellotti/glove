@@ -58,7 +58,7 @@ def _created(d):
 
 
 def _up(d):
-    """`glove up`'s materialise (the runtime then makes the binds' mount points)."""
+    """`glove up`'s materialise (its `launch` then makes the binds' mount points)."""
     from glove.sessionops import materialize_plan, open_session
 
     sd, _, sid, cfg = open_session(d)
@@ -74,7 +74,7 @@ def test_down_removes_the_empty_mount_points_glove_created_never_one_with_conten
     (w / ".mcp.json").touch()  # the user's, after plan: never glove's
     _up(d)
     assert _created(d) == [".idea", ".pi", ".pi/settings.json", ".vscode"]
-    # as the runtime makes them; the agent wrote into .vscode (the user's now)
+    # as `launch` makes them; the agent wrote into .vscode (the user's now)
     (w / ".idea").mkdir()
     (w / ".pi" / "settings.json").touch()
     (w / ".vscode").mkdir()

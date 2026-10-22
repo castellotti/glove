@@ -31,13 +31,15 @@ build() {  # the session's images and sidecars, as `glove up` builds and starts 
   uv run --quiet --project "$ROOT" python - "$1" <<'EOF'
 import sys
 from pathlib import Path
+from glove.mounts import missing_bind_targets
 from glove.plan import secret_env
 from glove.sessionops import materialize_plan, open_session
 from glove.session import compose_process_env, ensure_images, start_sidecars
 sd, _, sid, cfg = open_session(Path(sys.argv[1]))
-plan, _, _ = materialize_plan(sd, sid, cfg)
+plan, _, _ = materialize_plan(sd, sid, cfg, launch=True)
 ensure_images(cfg, plan, cfg.provider)
 start_sidecars(plan, sd.compose, provider=cfg.provider, env=compose_process_env(cfg.provider, secret_env(plan)))
+missing_bind_targets(plan.mounts, plan.protect, create=True)  # as `glove up` does before the harness
 EOF
 }
 crun() {  # compose run of the rendered harness service; compose's progress lines dropped

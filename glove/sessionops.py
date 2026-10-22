@@ -222,7 +222,7 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
                       home: bool = True, overrides: frozenset[str] = frozenset(), launch: bool = False):
     """Build the plan and write everything the session needs under .glove/
     (policies, placeholders, compose.yml, effective/baseline, the harness home).
-    `launch`: for `glove up` (the runtime then makes the binds' mount points).
+    `launch`: for `glove up` (`session.launch` then makes the binds' mount points).
     Returns (plan, compose yaml, seeded home files)."""
     # Before anything is written: a nono session whose Landlock can't open /work is never started.
     runtime = get_runtime(cfg.runtime)
@@ -289,8 +289,8 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
         remove_empty(made)  # unrecorded, so never left behind
         raise
     # what the binds create in the user's tree (`glove down` removes each one
-    # still empty): what was just made and, at `glove up`, the mount points the
-    # runtime makes; with what an earlier run that never came down recorded
+    # still empty): what was just made and, at `glove up`, the mount points
+    # `launch` makes; with what an earlier run that never came down recorded
     _, resolved = sdm.read_effective(sd.effective)
     created = sorted({*(missing if launch else made), *_created(resolved)})
     reg.update(sid, grants=plan.composition.grants)

@@ -38,10 +38,12 @@ build() {  # build the session's images exactly as `glove up` does; prints the h
 import sys
 from pathlib import Path
 from glove.sessionops import materialize_plan, open_session
+from glove.mounts import missing_bind_targets
 from glove.session import ensure_images
 sd, _, sid, cfg = open_session(Path(sys.argv[1]))
-plan, _, _ = materialize_plan(sd, sid, cfg)
+plan, _, _ = materialize_plan(sd, sid, cfg, launch=True)
 ensure_images(cfg, plan, cfg.provider)
+missing_bind_targets(plan.mounts, plan.protect, create=True)  # as `glove up` does before the harness
 print(plan.image)
 EOF
 }

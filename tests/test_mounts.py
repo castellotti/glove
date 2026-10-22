@@ -13,6 +13,7 @@ from glove.mounts import (
     MountError,
     compute_mounts,
     make_bind_sources,
+    missing_bind_targets,
     protected_home,
     protected_paths,
     write_placeholders,
@@ -407,6 +408,33 @@ def test_protected_home_path_of_the_wrong_kind_is_refused(tmp_path, plant):
         (tmp_path / "home" / ".agents").symlink_to(tmp_path)
     with pytest.raises(MountError, match="glove protects it"):
         protected_home(_home(tmp_path), CONFIG_HOME, HOME_PROTECTED)
+
+
+def test_glove_up_makes_the_missing_mount_points_empty_of_their_kind(tmp_path):
+    # Docker Desktop's native layer cannot make one nested in another bind ("outside of rootfs")
+    work = _repo(tmp_path)
+    (work / ".envrc").write_text("export X=1\n")
+    mounts = compute_mounts(str(work)).mounts
+    protect = protected_paths(mounts, protect_ide_files=True, files=[("/work/.pi/settings.json", "empty")])
+    assert missing_bind_targets(mounts, protect) and not (work / ".pi").exists()  # plan: only reported
+    got = missing_bind_targets(mounts, protect, create=True)
+    assert sorted(os.path.relpath(p, work) for p in got) == [".idea", ".mcp.json", ".pi", ".pi/settings.json",
+                                                              ".vscode"]
+    assert (work / ".pi").is_dir() and (work / ".vscode").is_dir() and (work / ".idea").is_dir()
+    assert (work / ".pi" / "settings.json").read_bytes() == b"" and (work / ".mcp.json").read_bytes() == b""
+    assert (work / ".envrc").read_text() == "export X=1\n"  # there before: not glove's
+    assert missing_bind_targets(mounts, protect, create=True) == []
+
+
+def test_a_mount_point_is_never_made_through_a_link_planted_after_the_plan(tmp_path):
+    work = _repo(tmp_path)
+    mounts = compute_mounts(str(work)).mounts
+    protect = protected_paths(mounts, files=[("/work/.pi/settings.json", "empty")])
+    (tmp_path / "outside").mkdir()
+    (work / ".pi").symlink_to(tmp_path / "outside")  # the agent, between the plan and the launch
+    with pytest.raises(MountError, match="not a symlink"):
+        missing_bind_targets(mounts, protect, create=True)
+    assert list((tmp_path / "outside").iterdir()) == []
 
 
 def test_remove_empty_removes_only_empty_files_and_dirs_never_a_symlink_or_content(tmp_path):
