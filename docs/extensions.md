@@ -91,8 +91,14 @@ Legend:
 - `image`: `{"*" | <harness>: layer(s)}`: packages, `copy`, `run`, `env` (image
   `ENV` lines; a value may extend one, `PATH: "/x/bin:$PATH"`; never git's
   `GIT_CONFIG_*`: use `git_config`). Only a hook's
-  layers may `copy_host`. Layers render in extension order, then those with
-  `stage: late` (e.g. the toolchains), then those that `copy_host`.
+  layers may `copy_host`. Layers render least volatile first, each group in
+  extension order: packages (`apt`/`pip`/`npm`, apart from a `copy` in the
+  same layer), the `stage: late` ones (a session's own, e.g. the toolchains),
+  those that `copy` (then the harness's and the skills' copies), the late ones
+  that `copy_host`, the other ones that `copy_host`, and last every `ENV` line.
+  So no `run` sees an image `ENV`, its own extension's included: `export` what
+  a step needs. A layer never renders before its extension's previous one,
+  which it may need.
 - `env`: `{VAR: value}` or `{VAR: {value, when}}`. A variable is
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.

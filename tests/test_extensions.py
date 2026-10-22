@@ -622,6 +622,35 @@ def test_an_image_env_name_is_set_by_one_extension(tree):
         render_dockerfile("base", get_profile("pi"), comp, None)
 
 
+def test_the_derived_image_puts_the_least_volatile_layers_first(tree, tmp_path):
+    host = tmp_path / "project"
+    host.mkdir()
+    _ext(tree, "a", "api: 2\nname: a\nsummary: x\nharness:\n  image:\n    '*': {apt: [a-pkg], copy: [[f, /opt/a/f]]}\n",
+         {"f": "x"})
+    b = [{"run": ["b-install"]}, {"copy_host": [[str(host), "/opt/b/project"]], "run": ["b-project"]},
+         {"run": ["b-after-project"]}, {"env": {"B": "1"}}]
+    c = [{"run": ["c-late"], "stage": "late"}, {"copy_host": [[str(host), "/opt/c/project"]], "run": ["c-project"],
+                                                 "stage": "late"}, {"env": {"C": "1"}}]
+    for name, out in (("b", b), ("c", c)):
+        hooks = ('from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n'
+                 f'    return {{"harness": {{"image": {out!r}}}}}\n')
+        _ext(tree, name, f"api: 2\nname: {name}\nsummary: x\nhooks: hooks.py\n", {"hooks.py": hooks})
+    comp = compose({"llm": STUB_LLM, "a": {}, "b": {}, "c": {}}, harness="claude-code", session="s",
+                   state_root=Path("/x"), manifests=discover(tree))
+    from glove.harness import get_profile
+    from glove.harnessconfig import adapter_context
+    from glove.image import render_dockerfile
+
+    df, _ = render_dockerfile("base", get_profile("claude-code"), comp, adapter_context(comp))
+    steps = [x.split(" && ")[1] if "apt-get" in x else x for x in df.splitlines()[2:] if not x.startswith("#")]
+    # installs (a's apart from its copy), late installs, an extension's files, a late host tree, a host tree (and
+    # what follows it in b), then every ENV
+    assert steps == ["apt-get install -y --no-install-recommends a-pkg", "RUN b-install", "RUN c-late",
+                     "COPY a/f /opt/a/f", "COPY c/opt/c/project /opt/c/project", "RUN c-project",
+                     "COPY b/opt/b/project /opt/b/project", "RUN b-project", "RUN b-after-project",
+                     'ENV C="1"', 'ENV B="1"']
+
+
 def test_a_hook_cannot_change_the_enforcer_options(tree):
     hooks = ('from glove.api import hook\n\n\n@hook\ndef contribute(ctx):\n'
              '    ctx.enforcer_options["nono"]["browsers"] = True\n')

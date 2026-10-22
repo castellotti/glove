@@ -270,3 +270,7 @@ def test_claude_code_template_plans_once_filled(tmp_path, monkeypatch):
     assert comp.by_name("ssh") is None
     assert "/proc" in json.loads(plan.policies["tool.json"])["filesystem"]["read"]  # browsers in shell commands
     assert [tc["lang"] for tc in cfg.extensions["toolchains"]["blocks"]] == ["python", "node"]
+    # a glove update that changes a shim re-downloads no toolchain (R19.D)
+    df = plan.derived_dockerfile
+    assert df.index("playwright install") < df.index("COPY relay/glove-relay") < df.index("COPY github/gh")
+    assert df.rstrip().splitlines()[-1].startswith('ENV PATH="/opt/glove/toolchains/')

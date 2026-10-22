@@ -554,7 +554,7 @@ def harness_env(blocks: Sequence[Toolchain]) -> dict[str, str]:
 
 def image_layers(blocks: Sequence[Toolchain]) -> list[Layer]:
     """The derived image's layers, all `stage: late` (after every other
-    extension's, so their PATH never affects another build step): every
+    extension's installs; core renders the PATH last of all): every
     block's runtime, then their global tools, then their project installs, so
     bumping a lockfile never re-downloads a runtime; then the PATH."""
     phases = [HANDLERS[tc.lang].phases(tc) for tc in blocks]

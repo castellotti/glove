@@ -125,8 +125,11 @@ list); a session file that still has it is refused with this pointer.
   the global one from `packages`.
 - **OS libraries** a toolchain needs go in `apt_packages`; the two compose.
 - **Layer order.** Its layers are `stage: late`: after every other extension's
-  layers (its `PATH` never affects their build steps) and before the layers that
-  copy host trees (the `skills` extension's plugins).
+  installs (a session edits its toolchains more often than those change) and
+  before the files extensions copy, so a glove update that changes one
+  downloads no runtime again; a project's lockfile layer and those after it come
+  after them, ahead of other extensions' host trees (the `skills` extension's
+  plugins). Its `PATH` is set at the end of the image, so no build step sees it.
 
 Not selected (or `blocks: []`), nothing toolchain-specific renders: image tags,
 compose env, policies and the context file are unchanged.

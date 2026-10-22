@@ -217,6 +217,16 @@ All notable changes to glove are documented here.
   is its own layer after it, so a dependency change no longer reinstalls the
   Python. `glove plan` refuses a baked PEP 723 script whose `requires-python`
   no release of `skills.python` satisfies (it used to fail when it ran).
+- **A glove update rebuilds less of the image** (R19.D): the derived image
+  renders least volatile first: packages, the toolchains, the files
+  extensions copy, the toolchains' projects, other host trees (the skills
+  plugins), then every image `ENV`. Before, a 1 KB shim (`glove-relay`, `gh`)
+  came ahead of the toolchains, so changing it re-downloaded Node, CPython and
+  Chromium: in the `claude-code` template, its image rebuilt in 255–300 s,
+  now 0.6–1.0 s. A layer's `apt`/`pip`/`npm` render apart from its `copy`
+  (so ocr's and rag's installs stay ahead of the toolchains). For extension
+  authors: no `run` step sees an image `env` any more, its own extension's
+  included (`export` what a step needs).
 
 - **`glove playwright login` no longer moves a pre-api-2 profile** (R19.G):
   `.glove/playwright-login` (from before round 15) is neither moved under

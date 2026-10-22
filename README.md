@@ -651,8 +651,8 @@ and an extension's CLI).
   exist like the others) and `egress_hosts` (the names its sidecars reach, `*.x`
   for subdomains: `glove check` warns when an egress that filters by name, such
   as `corporate`, doesn't admit one). Only its layers may `copy_host` (host paths it checked; the `skills`
-  extension's plugins): core renders those last, after the `stage: late` layers (the toolchains), so an
-  edit to a checkout rebuilds nothing else, and refuses a source an agent can
+  extension's plugins): core renders those after every other layer (only image `ENV` lines follow), so
+  an edit to a checkout rebuilds nothing else, and refuses a source an agent can
   write (a read-write mount, `/work` included, or another session's `work/`)
   or glove's state.
 - **Fragments** (`compose/services.yml.j2`, Jinja) see a restricted context,
