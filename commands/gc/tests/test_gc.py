@@ -29,8 +29,8 @@ def test_deleting_the_dir_leaves_only_the_row_and_exports_which_gc_removes(home,
     assert "nothing to collect" in runner.invoke(app, ["gc", "--yes"]).output
 
 
-def test_gc_refuses_a_v2_registry(home):
+def test_gc_refuses_an_unsupported_registry(home):
     home.mkdir()
     (home / "registry.json").write_text("[]")
     result = runner.invoke(app, ["gc", "--yes"])
-    assert result.exit_code == 1 and "v2 registry" in result.output
+    assert result.exit_code == 1 and "unsupported registry version" in result.output

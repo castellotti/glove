@@ -1,4 +1,4 @@
-"""Runtime layer tests: registry, render, ps parsing, stubs."""
+"""Runtime layer tests: registry, render, ps parsing."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from glove.doctor import run_doctor
 from glove.plan import build_session_plan
 from glove.runtimes import get_runtime, known_runtimes
 from glove.runtimes.docker import DockerRuntime
-from glove.runtimes.stubs import AppleContainerRuntime
 
 NETWORK_SUBNETS = DockerRuntime.network_subnets  # the real one (conftest stubs it per test)
 
@@ -23,10 +22,8 @@ def _plan(tmp_path, **kw):
 
 
 def test_registry_lists_all_backends():
-    assert set(known_runtimes()) == {"docker", "podman", "apple-container", "gondolin", "utm"}
+    assert set(known_runtimes()) == {"docker", "podman"}
     assert get_runtime("docker").name == "docker"
-    # podman is validated on rootless podman (see docs/planning/runtimes/podman.md).
-    assert get_runtime("podman").caps.tested is True
 
 
 def test_unknown_runtime_raises():
@@ -238,11 +235,6 @@ def test_ps_falls_back_to_name_without_label():
     assert sessions[0].session == "ticket-1234"
 
 
-def test_stub_render_raises(tmp_path):
-    with pytest.raises(NotImplementedError):
-        AppleContainerRuntime().render(_plan(tmp_path), tmp_path)
-
-
 def test_render_wraps_command_and_mounts_policies(tmp_path):
     plan = _plan(tmp_path, enforcer="nono")
     plan.policies_host_dir = str(tmp_path / "enforcer")
@@ -265,27 +257,6 @@ def test_render_none_enforcer_no_policies_mount(tmp_path):
     assert h["command"] == list(plan.profile.entry)  # bare entry, not wrapped
     binds = {v["target"] for v in h["volumes"] if v["type"] == "bind"}
     assert "/etc/glove/enforcer" not in binds
-
-
-def test_doctor_surfaces_untested_runtime(monkeypatch):
-    import dataclasses
-
-    from glove.doctor import run_doctor
-    from glove.runtimes.podman import PodmanRuntime
-
-    # The untested-warning mechanism fires for any backend with caps.tested=False.
-    monkeypatch.setattr(
-        PodmanRuntime, "caps", dataclasses.replace(PodmanRuntime.caps, tested=False)
-    )
-    checks = run_doctor(runtime="podman", enforcer="nono", include_container_probes=False)
-    assert any(c.status == "warn" and "UNTESTED" in c.detail for c in checks)
-
-
-def test_doctor_surfaces_stub_runtime():
-    from glove.doctor import run_doctor
-
-    checks = run_doctor(runtime="gondolin", enforcer="none", include_container_probes=False)
-    assert any("not implemented" in c.detail for c in checks)
 
 
 def test_doctor_host_only_json_shape():

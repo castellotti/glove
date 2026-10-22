@@ -78,11 +78,6 @@ def match_session(refs: list[SessionRef], session_id: str) -> SessionRef | None:
     return None
 
 
-def find_session(directory: Path, session_id: str) -> SessionRef | None:
-    """Newest transcript under `directory` matching `session_id` (see match_session)."""
-    return match_session(list_sessions(directory), session_id)
-
-
 def widening_warnings(prev: Config, cur: Config) -> list[str]:
     """Human-readable warnings where `cur` grants broader access than `prev`.
 

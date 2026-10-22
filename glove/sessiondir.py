@@ -51,25 +51,14 @@ PLACEHOLDER = "<set-me>"
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
-# for the keys glove replaced (v2's, and those moved into extensions).
+# for the keys round 16 moved into extensions.
 FILE_KEYS = frozenset({
     "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_config",
     "env", "git_config", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
     "protect_ide_files", "allow_root", "allow_sensitive",
 })
-_NO_HOST = "a session starts no host processes; `playwright: {mode: host}` runs the host's Chrome"
 MOVED_KEYS = {
-    "name": "the session is the directory; its id is in .glove/id",
-    "workdir": "/work is the session's work/ directory",
-    "add_dirs": "use `mounts: [{path: ..., mode: ro|rw}]`",
-    "net": "network access comes only from extensions",
-    "services": "forwarders come only from extensions",
-    "observe": "network observability is an extension: `extensions: {observe: {}}` (plus `filter: {}` for rules)",
-    "config_home_source": "the harness home is .glove/home",
-    "host_setup": _NO_HOST,
-    "host_services": _NO_HOST,
-    "provider": "set `runtime`",
-    "rebuild": "pass `glove up --rebuild`",
+    "host_services": "a session starts no host processes; `playwright: {mode: host}` runs the host's Chrome",
     "toolchains": "an extension now: `extensions: {toolchains: {blocks: [...]}}`",
 }
 
@@ -247,6 +236,7 @@ def autodetect_provider() -> str:
 def session_provider(sd: SessionDir, cfg: Config | None = None) -> str:
     """The compose provider the session last ran under (effective.yml), else its
     session file's runtime — never a guess from PATH while either says otherwise."""
+    from .runtimes import known_runtimes
     from .userconfig import load_user_config
 
     if cfg is not None:
@@ -255,16 +245,20 @@ def session_provider(sd: SessionDir, cfg: Config | None = None) -> str:
         runtime = load_file(sd).get("runtime") or load_user_config().runtime
     except ConfigError:
         return autodetect_provider()
-    return runtime if runtime in ("docker", "podman") else autodetect_provider()
+    return runtime if runtime in known_runtimes() else autodetect_provider()
 
 
 def to_config(sd: SessionDir, raw: dict[str, Any], session_id: str, *, subnet: str | None = None,
               default_runtime: str = "docker") -> Config:
     """The session file as the internal ``Config`` the planner consumes."""
+    from .runtimes import known_runtimes
+
     data = {k: v for k, v in raw.items() if k not in ("glove", "template", "mounts")}
     data.setdefault("runtime", default_runtime)
+    if data["runtime"] not in (runtimes := known_runtimes()):
+        raise SessionError(f"{sd.file}: `runtime` must be one of {runtimes}, got {data['runtime']!r}")
     data.setdefault("enforcer", default_enforcer(data["runtime"]))
-    data["provider"] = data["runtime"] if data["runtime"] in ("docker", "podman") else "docker"
+    data["provider"] = data["runtime"]
     data["add_dirs"] = [{"path": p, "mode": m} for p, m in (_mount(sd, x) for x in raw.get("mounts") or [])]
     data["name"] = session_id
     data["workdir"] = str(sd.work)
@@ -292,8 +286,10 @@ def write_effective(path: Path, cfg: Config, resolved: dict[str, Any] | None = N
 def read_effective(path: Path) -> tuple[Config | None, dict[str, Any]]:
     try:
         doc = load_yaml(path.read_text()) or {}
+        # an older glove's record may hold keys Config has since dropped
+        known = {k: v for k, v in (doc.get("config") or {}).items() if k in Config.__dataclass_fields__}
         resolved = doc.get("resolved")
-        return _coerce(doc.get("config") or {}), resolved if isinstance(resolved, dict) else {}
+        return _coerce(known), resolved if isinstance(resolved, dict) else {}
     except (OSError, yaml.YAMLError, ConfigError, TypeError, AttributeError):
         return None, {}
 

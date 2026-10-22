@@ -96,17 +96,7 @@ def _extension_blocks(plan: SessionPlan, extra: dict) -> dict[str, str]:
 
 class DockerRuntime:
     name = "docker"
-    caps = RuntimeCaps(
-        supports_internal_networks=True,
-        supports_sidecars=True,
-        supports_seccomp_profile=True,
-        supports_userns=True,
-        supports_kvm=False,
-        host_gateway_name="host.docker.internal",
-        compose_cmd=("docker", "compose"),
-        implemented=True,
-        tested=True,
-    )
+    caps = RuntimeCaps()
     # The CLI binary this runtime shells out to (podman overrides).
     cli = "docker"
     # what a cached Landlock mount mode depends on (landlock_mounts.py)
@@ -139,7 +129,7 @@ class DockerRuntime:
         return {
             "userns_mode": None,
             "emit_seccomp": True,
-            "host_gateway_name": self.caps.host_gateway_name or "host.docker.internal",
+            "host_gateway_name": self.caps.host_gateway_name,
             # mount options of extension tmpfs volumes, owned by the plan's
             # uid/gid (rootful ids are the container's ids)
             "tmpfs_volume_opts": tmpfs_volume_opts(plan.uid, plan.gid),

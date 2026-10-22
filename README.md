@@ -112,7 +112,7 @@ symlinks).
 glove: 3
 template: minimal           # provenance only
 harness: pi                 # pi | vibe | claude-code
-runtime: docker             # docker | podman | apple-container|gondolin|utm (stub)
+runtime: docker             # docker | podman
 enforcer: nono+srt          # default: nono+srt on docker, nono on podman | nono | srt | none
 mounts:                     # explicit extra host dirs; work/ is always /work
   - { path: ~/src/shared-lib, mode: ro }
@@ -1296,7 +1296,6 @@ layer work. `glove check` and `glove policy` plan with the same choice.
 |---|---|---|
 | Runtime | docker | hardened + doctor probes. Docker Desktop 4.96.0 (engine 29.9.1, kernel 7.0.14-linuxkit, Landlock ABI 8): the `nono`/`nono+srt` enforcers run through its virtiofs layer with `mount-watch` ("Docker Desktop shared folders"), verified live 2026-10-20: `test_landlock_mounts` (incl. host-side replace/delete seen by a running harness; `MOUNTS=native` control fails), `test_pi_nono`, `test_vibe_nono`, `test_pi_srt`, `test_ring0_protect`, `test_tool_confine` (Pi nono, Vibe nono+srt), `test_config_protect` (Pi, Vibe, Claude Code), `test_teardown`, `test_session_dir`, `test_nono_srt` (Pi, Vibe), `test_cc_nono`, `test_skills`, `test_vibe_skills`, `test_llm_inject`, `test_llm_host_stub`, `test_subnet_race`, `test_toolchains`, `test_downloads direct`, `test_egress direct`, `test_observe direct`, `test_playwright headless`, `test_github`, `test_corporate`, `test_github_ghes` |
 | Runtime | podman | hardened + doctor probes; v3 session dirs verified live on Podman Desktop (macOS, podman 6.1.2 rootless, applehv, Landlock ABI 9): `test_session_dir`, `test_pi_nono`, `test_vibe_nono`, `test_tool_confine`, `test_llm_inject`, `test_ring0_protect`, `test_toolchains` (Chromium under plain nono), `test_config_protect` (Pi, Vibe), `test_vibe_skills`, `test_teardown`, and again with podman 6.1.2 on 2026-10-20 (Landlock on its bind mounts: `native`; `test_landlock_mounts`, `test_skills`, `test_llm_inject`, `test_subnet_race`, `test_egress`, `test_observe`, `test_corporate`, `test_github_ghes`); srt and nono+srt are refused on podman. Runs alongside Docker Desktop (each runtime has its own VM, image store and networks) |
-| Runtime | apple-container / gondolin / utm | stub (registered, `NotImplementedError`) |
 | Enforcer | nono (Landlock) - default on podman | nono 0.78.0; Pi and Vibe verified (`test_pi_nono`, `test_vibe_nono`, `test_config_protect`, `test_tool_confine`, `test_vibe_skills`) |
 | Enforcer | nono+srt - default on docker | srt wraps the harness (deny-inside-allow writes, `.env` hidden, no namespaces/mounts below it), nono every command; verified live on Docker with Pi, Vibe and Claude Code (`test_nono_srt.sh`, `test_config_protect.sh`) and under every extension suite (egress, observe, playwright, corporate); refused on podman |
 | Enforcer | srt (bubblewrap) - opt-in | srt 0.0.77 with glove's `apply-seccomp`; Pi verified (`test_pi_srt.sh`: env/`/proc` key leaks, no user namespaces); `test_config_protect.sh` with Pi, Vibe and Claude Code; tool commands only |

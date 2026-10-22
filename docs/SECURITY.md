@@ -1209,8 +1209,8 @@ Be precise about what "container root" means here:
   raises the bar, but a patched engine is the baseline.
 - **Prefer a per-container-VM runtime when available** — Apple `container`
   (macOS 26, Apple silicon) or a `utm`/`gondolin` VM gives each container its own
-  kernel, so an escape yields a throwaway VM, not the shared one. glove keeps the
-  runtime layer pluggable for exactly this.
+  kernel, so an escape yields a throwaway VM, not the shared one (glove implements
+  none yet; its runtime layer is pluggable for exactly this).
 - **Keep the default** (`nono+srt` on Docker, `nono` on Podman) over `srt`: srt alone
   wraps tool commands only, leaving the harness process on ring 0 alone. Both
   srt enforcers relax the container's seccomp profile to allow unprivileged

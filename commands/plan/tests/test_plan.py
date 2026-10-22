@@ -71,10 +71,10 @@ def test_two_sessions_get_distinct_ids_projects_and_subnets(home, tmp_path):
 
 
 
-@pytest.mark.parametrize(("extra", "msg"), [("workdir: .\n", "work/ directory"),
-                                            ("net: [service]\n", "only from extensions"),
-                                            ("add_dirs: [/x]\n", "mounts"), ("frobnicate: 1\n", "unknown key")])
-def test_v2_keys_and_unknown_keys_are_refused(home, tmp_path, extra, msg):
+@pytest.mark.parametrize(("extra", "msg"), [("toolchains: []\n", "an extension now"),
+                                            ("runtime: utm\n", "`runtime` must be one of"),
+                                            ("add_dirs: [/x]\n", "unknown key"), ("frobnicate: 1\n", "unknown key")])
+def test_moved_and_unknown_keys_are_refused(home, tmp_path, extra, msg):
     d = make_session(tmp_path / "s", extra)
     result = runner.invoke(app, ["plan", str(d)])
     assert result.exit_code == 1 and msg in result.output

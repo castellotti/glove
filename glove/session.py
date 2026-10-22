@@ -366,18 +366,14 @@ def probe_direct(provider: str, url: str, *, method: str = "GET", body: dict | N
 
     from .verify import PROBE_IMAGE
 
-    try:
-        runtime = get_runtime(provider)
-        add_hosts: tuple[str, ...] = ()
-        u = urlsplit(url)
-        if u.hostname in LOOPBACK:
-            gateway = runtime.caps.host_gateway_name or "host.docker.internal"
-            url = u._replace(netloc=gateway + (f":{u.port}" if u.port else "")).geturl()
-            add_hosts = (f"{gateway}:host-gateway",)
-        return _curl(provider, PROBE_IMAGE, url, method=method, body=body, headers=headers, network="bridge",
-                     ipv4=True, add_hosts=add_hosts)
-    except NotImplementedError as e:  # a runtime that runs no container yet
-        return 0, str(e)
+    add_hosts: tuple[str, ...] = ()
+    u = urlsplit(url)
+    if u.hostname in LOOPBACK:
+        gateway = get_runtime(provider).caps.host_gateway_name
+        url = u._replace(netloc=gateway + (f":{u.port}" if u.port else "")).geturl()
+        add_hosts = (f"{gateway}:host-gateway",)
+    return _curl(provider, PROBE_IMAGE, url, method=method, body=body, headers=headers, network="bridge",
+                 ipv4=True, add_hosts=add_hosts)
 
 
 def _curl(
@@ -413,6 +409,8 @@ def _curl(
         r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=90, check=False)
     except subprocess.TimeoutExpired:
         return 0, "the probe container timed out"
+    except FileNotFoundError:  # the runtime's CLI is not installed
+        return 0, f"{provider} is not installed"
     head, _, rest = r.stdout.partition("\n")
     try:
         status, curl_rc = (int(x) for x in head.split())

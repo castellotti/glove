@@ -248,6 +248,25 @@ All notable changes to glove are documented here.
   `.glove/playwright-login` (from before round 15) is neither moved under
   `--keep-profile` nor deleted; remove it by hand if one is left.
 
+- **Core extraction, phase A** (round 23; core 9,678 → 9,394 lines):
+  - **Breaking:** the unimplemented `apple-container`, `gondolin` and `utm`
+    runtimes are gone, with the `RuntimeCaps` flags nothing read
+    (`supports_*`, `compose_cmd`, `implemented`, `tested`). The session file's
+    `runtime:` is checked when it is read: `docker` or `podman`, anything else
+    refused (it was only refused once `glove up` asked for the runtime).
+  - `glove check`'s probe answers "no answer" (`<runtime> is not installed`)
+    when the runtime's CLI is missing, instead of a traceback.
+  - **Breaking:** the v2 migration hints are gone. A v2 session key (`name`,
+    `workdir`, `add_dirs`, `net`, `services`, `observe`, …) is refused as an
+    unknown key, and a v2 registry as an unsupported registry version (still
+    never overwritten). The round-16 hints (`toolchains`, `host_services`) stay.
+  - `effective.yml`/`baseline.yml` ignore any key `Config` no longer has,
+    instead of a fixed list of legacy keys, so an older glove's record still
+    reads and the resume widening warning still compares against it.
+  - The seccomp profile generator moved to `tools/seccomp/make_profile.py`
+    (`uv run python -m tools.seccomp.make_profile`); the profiles it writes
+    are unchanged. Dead code removed: `config.load_config`,
+    `sessions.find_session`.
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
   [mcp, skills]`): each server `hidden` but for its allowed tools, named

@@ -9,13 +9,11 @@ session is reproducible.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -53,8 +51,7 @@ class AddDir:
 class Config:
     harness: str = ""  # a harnesses/<name> plugin; session files must name one
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
-    # NEW in v2. `runtime` is the ring-0 layer (docker | podman |
-    # apple-container | gondolin | utm); for docker/podman it also drives which
+    # `runtime` is the ring-0 layer (docker | podman); it also names the
     # compose CLI `provider` shells out to. `enforcer` is the ring-1 in-container
     # sandbox (nono | nono+srt | srt | none).
     runtime: str = "docker"
@@ -275,25 +272,10 @@ def keychain_set(service: str, secret: str | None = None) -> int:
     return 0
 
 
-def _load_mapping(path: Path) -> dict[str, Any]:
-    text = path.read_text()
-    data = json.loads(text) if path.suffix == ".json" else load_yaml(text)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path}: top-level config must be a mapping")
-    return data
-
-
 def _coerce(data: dict[str, Any]) -> Config:
     """Build a Config from a plain mapping, coercing nested structures."""
     data = dict(data)  # shallow copy; we pop as we go
     add_dirs_raw = data.pop("add_dirs", []) or []
-    # v2 forwarder machinery, still present in effective.yml files written
-    # before v3 M5: forwarders come only from extensions now.
-    # (toolchains, host_services: an effective.yml before round 16)
-    for legacy in ("services", "net", "observe", "toolchains", "host_services"):
-        data.pop(legacy, None)
 
     add_dirs = [_coerce_add_dir(x) for x in add_dirs_raw]
 
@@ -389,10 +371,3 @@ def _coerce_add_dir(x: Any) -> AddDir:
     if isinstance(x, dict):
         return AddDir(**x)
     raise ConfigError(f"invalid add_dir entry: {x!r}")
-
-
-def load_config(path: Path | None) -> Config:
-    """Load a Config from a file, or return defaults when path is None."""
-    if path is None:
-        return Config()
-    return _coerce(_load_mapping(path))

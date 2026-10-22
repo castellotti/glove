@@ -24,12 +24,20 @@ def test_effective_config_round_trips():
     assert data["extensions"] == {"llm": {"provider": "llama.cpp"}}
 
 
-def test_legacy_v2_keys_in_an_old_effective_file_are_ignored():
-    from glove.config import _coerce
+def test_keys_config_has_dropped_in_an_old_effective_file_are_ignored(tmp_path):
+    """An older glove's effective.yml/baseline.yml still reads (v2's forwarder
+    keys, round 16's toolchains/host_services): a None here would silently
+    drop the resume widening warning."""
+    from glove.sessiondir import read_effective
 
-    cfg = _coerce({"harness": "pi", "net": ["service"], "services": [{"name": "x", "to": "a:1"}],
-                   "observe": {"enabled": True}})
-    assert cfg.harness == "pi"
+    f = tmp_path / "baseline.yml"
+    f.write_text(yaml.safe_dump({"config": {
+        "harness": "pi", "net": ["service"], "services": [{"name": "x", "to": "a:1"}],
+        "observe": {"enabled": True}, "toolchains": [], "host_services": [], "allow_root": True}}))
+    cfg, _ = read_effective(f)
+    assert cfg is not None and cfg.harness == "pi" and cfg.allow_root is True
+    with pytest.raises(ConfigError, match="unknown config keys"):  # a session file's typo still fails
+        _coerce({"harness": "pi", "toolchains": []})
 
 
 # --- secret references (keychain:/env:), resolved in memory at launch ----------

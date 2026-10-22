@@ -36,7 +36,7 @@ def test_upsert_update_remove_round_trip(tmp_path):
 def test_a_v1_registry_is_refused_not_migrated(glove_home):
     glove_home.mkdir()
     (glove_home / "registry.json").write_text('[{"dir": "/d", "harness": "pi", "env_id": "d"}]')
-    with pytest.raises(reg.RegistryError, match="glove v2 registry"):
+    with pytest.raises(reg.RegistryError, match="unsupported registry version"):
         reg.load_registry()
     with pytest.raises(reg.RegistryError):
         reg.upsert(reg.SessionEntry(id="a-000001", dir="/x", harness="pi"))

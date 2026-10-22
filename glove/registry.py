@@ -87,13 +87,9 @@ def _read() -> dict | None:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as e:
         raise RegistryError(f"{path} is unreadable ({e}); fix or move it aside") from e
-    if isinstance(data, list):
-        raise RegistryError(
-            f"{path} is a glove v2 registry (environments, not session directories). glove v3 does not "
-            f"migrate or overwrite it: move it aside (e.g. `mv {path} {path.with_name('registry.v2.json')}`) "
-            "and recreate sessions with `glove new`.")
     if not isinstance(data, dict) or data.get("v") != REGISTRY_VERSION:
-        raise RegistryError(f"{path}: unsupported registry version {data.get('v') if isinstance(data, dict) else '?'}")
+        raise RegistryError(f"{path}: unsupported registry version {data.get('v') if isinstance(data, dict) else '?'}; "
+                            "move it aside and recreate sessions with `glove new`")
     return data
 
 
