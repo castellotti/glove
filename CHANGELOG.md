@@ -311,6 +311,10 @@ All notable changes to glove are documented here.
   - **Breaking (extension API):** the `exit-confirmed` verify kind is gone (use
     `kind: hook` and a `verify` hook; the `exitcheck` library is in-tree);
     `glove.api.VerifyTools` and the `verify` hook are new.
+  - Verified live on Docker and Podman: vpn (WireGuard through a register
+    hook) and tor pass `exit-confirmed` through the hook; with a
+    `host_check_url` that names no IP, the check fails and glove stops every
+    sidecar (`FAIL_EXIT=1 tests/integration/test_egress.sh tor|vpn`, new).
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
   [mcp, skills]`): each server `hidden` but for its allowed tools, named

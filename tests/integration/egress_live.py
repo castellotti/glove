@@ -6,7 +6,7 @@ With GLOVE_HOME set and the session's llm pointed at the tool-driving stub
 (tests/integration/stubs/llm_stub.py), it:
   1. renders the session as `glove up` does, builds images, starts every
      sidecar and runs the extensions' verify checks (`session.start_sidecars`:
-     container-healthy / tcp-open / http-ok / exit-confirmed);
+     container-healthy / tcp-open / http-ok / hook: vpn/tor exit-confirmed);
   2. checks the topology: only the egress provider's containers are on the
      session's wan network; SearXNG (egress consumer) has no direct internet;
      a container on the harness network has no internet at all;
