@@ -5,14 +5,10 @@ from __future__ import annotations
 from .base import Check, RenderedProject, RunningSession, Runtime, RuntimeCaps
 from .docker import DockerRuntime
 from .podman import PodmanRuntime
-from .stubs import AppleContainerRuntime, GondolinRuntime, UTMRuntime
 
 _RUNTIMES: dict[str, type] = {
     "docker": DockerRuntime,
     "podman": PodmanRuntime,
-    "apple-container": AppleContainerRuntime,
-    "gondolin": GondolinRuntime,
-    "utm": UTMRuntime,
 }
 
 

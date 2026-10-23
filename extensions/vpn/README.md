@@ -75,7 +75,8 @@ inside `local/`, so a symlink into `work/` is refused.
 Before the harness starts: gluetun's healthcheck must report healthy (on
 failure glove reads tun0's byte counter to tell a dead handshake from other
 problems), then `egress-up`: gluetun's proxy must fetch `check_url`, then
-`exit-confirmed`: the exit file below must hold one valid IP. With
+`exit-confirmed` (the `exitcheck` library, through vpn's `verify` hook): the
+exit file below must hold one valid IP. With
 `host_check_url` set, that service must also see a different IP from this
 machine than through the tunnel. Any failure stops the session's sidecars;
 nothing starts half-tunnelled.

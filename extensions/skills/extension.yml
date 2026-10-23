@@ -13,6 +13,7 @@ settings:
 requires:
   - { extension: relay, when: { "settings.plugins.*.relay": { set: true } } }
   - { slot: egress, when: { "settings.plugins.*.relay": { set: true } } }
+  - { extension: keychain, when: { "settings.plugins.*.relay": { set: true } } }   # `glove skills refresh`
 # contribute: check each plugin, bake it, and each relay's channel, privileges,
 # hop and checks; materialize: its data dir, a relayed plugin's copy; launch_env:
 # the relays' secrets, in memory; doctor: a stdio MCP server under enforcer: none

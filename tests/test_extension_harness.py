@@ -213,15 +213,18 @@ def test_a_contribute_hook_extension_must_be_well_formed(tree, tmp_path, monkeyp
     ("{name: x, kind: exec-ok, service: harness, argv: [id]}", "exec-ok needs `service`, one of its own"),
     ("{name: x, kind: exec-ok, service: a}", "exec-ok needs `service`, one of its own"),   # no argv
     ("{name: x, kind: exec-ok, service: a, argv: id}", "exec-ok needs `service`, one of its own"),
-    ("{name: x, kind: exit-confirmed, source: exec, service: harness, argv: [id]}",
-     "exit-confirmed needs `service`, one of its own"),
-    ("{name: x, kind: exit-confirmed, service: a, argv: [id]}", "needs `source`"),
-    ("{name: x, kind: exit-confirmed, source: url, url: 'https://x/'}", "needs `url`, `ip_field`"),
-    ("{name: x, kind: exit-confirmed, source: url, url: 'https://x/', ip_field: IP, expect: [IsTor]}",
-     "needs `url`, `ip_field`"),
+    ("{name: x, kind: hook, service: harness, argv: [id]}", "hook needs `service`, one of its own"),
+    ("{name: x, kind: hook, service: a, argv: id}", "hook needs `service`, one of its own"),
 ])
 def test_an_exec_check_runs_only_in_the_extensions_own_sidecar(tree, tmp_path, monkeypatch, item, match):
-    _ext(tree, "h", f"api: 2\nname: h\nsummary: x\nservices: s.yml.j2\nverify: [{item}]\n",
-         {"s.yml.j2": 'services:\n  a: { image: "x@sha256:00", command: ["true"], network_mode: none }\n'})
+    _ext(tree, "h", f"api: 2\nname: h\nsummary: x\nhooks: hooks.py\nservices: s.yml.j2\nverify: [{item}]\n",
+         {"s.yml.j2": 'services:\n  a: { image: "x@sha256:00", command: ["true"], network_mode: none }\n',
+          "hooks.py": "from glove.api import hook\n\n\n@hook\ndef verify(ctx, item, tools):\n    return 'ok'\n"})
     with pytest.raises(ExtensionError, match=match):
+        _plan(tree, tmp_path, monkeypatch, {"h": {}})
+
+
+def test_a_hook_check_needs_the_extensions_verify_hook(tree, tmp_path, monkeypatch):
+    _ext(tree, "h", "api: 2\nname: h\nsummary: x\nverify: [{name: x, kind: hook}]\n", {})
+    with pytest.raises(ExtensionError, match="kind hook needs the extension's `verify` hook"):
         _plan(tree, tmp_path, monkeypatch, {"h": {}})

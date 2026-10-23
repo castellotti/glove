@@ -78,13 +78,6 @@ def test_settings_are_validated(tmp_path, observe, match):
         plan_for(tmp_path, observe=observe)
 
 
-def test_the_v2_top_level_observe_key_points_at_the_extension(tmp_path, monkeypatch):
-    d = make_session(tmp_path / "wd", "observe: {enabled: true}\n")
-    monkeypatch.chdir(d)
-    out = runner.invoke(app, ["plan"])
-    assert out.exit_code == 1 and "extensions: {observe: {}}" in out.output
-
-
 @pytest.mark.parametrize(("host", "gw", "scope"), [
     ("host.docker.internal", True, "local"), ("searxng", False, "local"), ("10.0.0.5", False, "local"),
     ("api.example.com", False, "direct"), ("8.8.8.8", False, "direct"),

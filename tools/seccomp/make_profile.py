@@ -32,16 +32,16 @@ harness) is narrower: Chromium's namespace sandbox needs only ``clone``
 it chroots after unsharing, and glove drops ``CAP_SYS_CHROOT``. No mount,
 ``setns`` or ``pivot_root``.
 
-Run ``python -m glove.runtimes.seccomp.make_profile`` to regenerate the
+Run ``uv run python -m tools.seccomp.make_profile`` to regenerate the
 checked-in profiles; the tests assert they are current.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-HERE = Path(__file__).parent
+from glove.runtimes.seccomp import SECCOMP_DIR as HERE
+
 DEFAULT = HERE / "default.json"
 NESTED = HERE / "nested-userns.json"
 CHROMIUM = HERE / "chromium-userns.json"

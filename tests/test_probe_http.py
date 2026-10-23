@@ -138,9 +138,11 @@ def test_probe_direct_reaches_this_machine_as_a_host_gateway_forwarder(monkeypat
     assert dialled == "http://host.docker.internal:11434/v1/models"
 
 
-def test_probe_direct_without_a_container_runtime_is_no_answer():
-    status, text = session.probe_direct("apple-container", "http://x/")
-    assert status == 0 and "not implemented" in text
+def test_a_missing_runtime_cli_is_no_answer(monkeypatch):
+    def run(cmd, **kw):
+        raise FileNotFoundError(cmd[0])
+    monkeypatch.setattr(session.subprocess, "run", run)
+    assert session.probe_direct("podman", "http://x/") == (0, "podman is not installed")
 
 
 def test_a_hung_probe_container_is_no_answer(monkeypatch):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from glove.runtimes.seccomp import DEFAULT_PROFILE, NESTED_USERNS_PROFILE
-from glove.runtimes.seccomp.make_profile import (
+from tools.seccomp.make_profile import (
     MUST_STAY_GATED,
     NS_SYSCALLS,
     build_nested,
@@ -57,7 +57,7 @@ def _allowed(profile: dict) -> set[str]:
 
 
 def test_chromium_adds_exactly_its_four_syscalls():
-    from glove.runtimes.seccomp.make_profile import CHROMIUM, CHROMIUM_SYSCALLS
+    from tools.seccomp.make_profile import CHROMIUM, CHROMIUM_SYSCALLS
 
     d = _default()
     chromium = json.loads(CHROMIUM.read_text())

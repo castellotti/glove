@@ -110,8 +110,6 @@ class PodmanRuntime(DockerRuntime):
     cli = "podman"
     caps = replace(
         DockerRuntime.caps,
-        compose_cmd=("podman", "compose"),
-        tested=True,
         # podman's compose provider inlines a referenced seccomp file (rejected by
         # the compat API), so glove omits it and relies on podman's built-in
         # default — the same moby-derived filter that allows landlock_*. This flag

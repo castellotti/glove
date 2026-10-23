@@ -45,7 +45,7 @@ def command(
         return
     try:
         ensure_home()
-        load_registry()  # refuse early on a v2 registry, before writing the directory
+        load_registry()  # refuse early on an unsupported registry, before writing the directory
         sd, sid = materialize_session(template, directory)
         raw = load_session_file(sd)
         sync_registry(sd, sid, raw)

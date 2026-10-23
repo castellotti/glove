@@ -30,7 +30,7 @@ def test_topology(tmp_path):
     ex = plan.composition.slot_exports("egress")
     assert ex["route"] == "tor" and ex["proxy_url"] == "http://glove-s-privoxy:8118"
     checks = [v for _, v in plan.composition.verify]
-    assert [v["kind"] for v in checks] == ["tcp-open", "exit-confirmed"]
+    assert [v["kind"] for v in checks] == ["tcp-open", "hook"]
     # the Tor Project's own check; no host lookup unless the operator names one
     assert {k: checks[1][k] for k in ("source", "url", "ip_field", "expect", "host_check_url")} == {
         "source": "url", "url": "https://check.torproject.org/api/ip", "ip_field": "IP", "expect": {"IsTor": True},

@@ -154,9 +154,9 @@ def test_clean_warns_when_a_runtime_does_not_answer_and_refuses_unknown_ones(hom
 
 def test_clean_refuses_an_unreadable_registry(home, tmp_path):
     (tmp_path / "ghome").mkdir()
-    (tmp_path / "ghome" / "registry.json").write_text("[]")  # a glove v2 registry
+    (tmp_path / "ghome" / "registry.json").write_text("[]")  # not a v3 registry
     result = runner.invoke(app, ["--runtime", "docker"])
-    assert result.exit_code == 1 and "v2 registry" in result.output
+    assert result.exit_code == 1 and "unsupported registry version" in result.output
 
 
 def test_glove_mounts_it():

@@ -45,7 +45,7 @@ def test_gluetun_privileges_secret_and_firewall(tmp_path):
         "environment": secret_env_var("vpn-wireguard_private_key")}
     assert "wireguard_key" not in yaml.safe_dump(env)  # the ref never reaches the container
     assert plan.composition.privileges["vpn/gluetun"]
-    assert [v["kind"] for _, v in plan.composition.verify] == ["container-healthy", "http-ok", "exit-confirmed"]
+    assert [v["kind"] for _, v in plan.composition.verify] == ["container-healthy", "http-ok", "hook"]
     # stated in the fragment: podman drops the HEALTHCHECK of an OCI-manifest image
     assert g["healthcheck"]["test"] == ["CMD-SHELL", "/gluetun-entrypoint healthcheck"]
 
@@ -70,7 +70,7 @@ def test_quad9_by_default_and_no_lookup(tmp_path):
     assert env["DNS_UPSTREAM_RESOLVERS"] == "cloudflare,google"
     assert "HEALTH_TARGET_ADDRESSES" not in env and "HEALTH_ICMP_TARGET_IPS" not in env
     checks = [v for _, v in plan.composition.verify]
-    assert [v["kind"] for v in checks] == ["container-healthy", "http-ok", "exit-confirmed"]
+    assert [v["kind"] for v in checks] == ["container-healthy", "http-ok", "hook"]
     assert checks[2]["retries"] == 15 and checks[2]["argv"] == ["cat", "/run/glove-exit/ip"]
     assert checks[2]["host_check_url"] == "https://mine.example/ip"
 

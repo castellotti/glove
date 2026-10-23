@@ -9,13 +9,12 @@ session is reproducible.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -53,8 +52,7 @@ class AddDir:
 class Config:
     harness: str = ""  # a harnesses/<name> plugin; session files must name one
     provider: str = "docker"  # docker | podman (autodetect handled in cli)
-    # NEW in v2. `runtime` is the ring-0 layer (docker | podman |
-    # apple-container | gondolin | utm); for docker/podman it also drives which
+    # `runtime` is the ring-0 layer (docker | podman); it also names the
     # compose CLI `provider` shells out to. `enforcer` is the ring-1 in-container
     # sandbox (nono | nono+srt | srt | none).
     runtime: str = "docker"
@@ -144,25 +142,28 @@ def keychain_service(ref: str) -> str | None:
 def resolve_secret(value: str) -> str:
     """Resolve a secret setting to its value, in memory only.
 
-    `keychain:<service>` reads the macOS Keychain generic password for that
-    service; `env:<VAR>` reads the process environment; anything else is the
-    literal value. Called at launch, never while planning or rendering, so a
-    dry-run never touches the Keychain and nothing is written to disk.
+    `keychain:<service>` reads the OS credential store (`keychain_tool`);
+    `env:<VAR>` reads the process environment; anything else is the literal
+    value. Called at launch, never while planning or rendering, so a dry-run
+    never touches the credential store and nothing is written to disk.
     """
     value = str(value)
     if value.startswith("keychain:"):
         service = value.removeprefix("keychain:")
         if not service:
             raise ConfigError("keychain: reference needs a service name (keychain:<service>)")
-        if not shutil.which("security"):
-            raise ConfigError(f"{value}: the macOS `security` tool is not available on this host")
-        secret = _keychain_read(service)
-        if secret is None:
-            raise ConfigError(f"{value}: no Keychain generic password for service {service!r}")
-        if not secret.startswith(PARTS):
-            return secret
-        n, _, digest = secret.removeprefix(PARTS).partition(":")
-        parts = [_keychain_read(_part(service, i)) for i in range(1, int(n) + 1)] if n.isdigit() else [None]
+        try:
+            tool = keychain_tool()
+            secret = _keychain_read(tool, service)
+            if secret is None:
+                raise ConfigError(f"no {_STORE[tool]} item for service {service!r}")
+            if not secret.startswith(KEYCHAIN_PARTS):
+                return secret
+            n, _, digest = secret.removeprefix(KEYCHAIN_PARTS).partition(":")
+            count = int(n) if n.isdigit() else 0
+            parts = [_keychain_read(tool, f"{service}.part{i}") for i in range(1, count + 1)] or [None]
+        except ConfigError as e:
+            raise ConfigError(f"{value}: {e}") from e
         joined = "".join(p or "" for p in parts)
         if None in parts or hashlib.sha256(joined.encode()).hexdigest() != digest:
             raise ConfigError(f"{value}: its parts ({service}.part<n>) are missing or don't match; store it again")
@@ -177,123 +178,74 @@ def resolve_secret(value: str) -> str:
 
 
 def secret_exists(value: str) -> tuple[bool, str]:
-    """Whether a secret reference resolves, WITHOUT reading the secret:
-    `keychain:` asks only for the item's attributes (no decrypt, no prompt)."""
+    """Whether a secret reference resolves, without handing the secret over:
+    on macOS `keychain:` asks only for the item's attributes (no decrypt, no
+    prompt); `secret-tool` has no such lookup, so it reads and discards it (a
+    locked collection may prompt to unlock)."""
     value = str(value)
     if value.startswith("keychain:"):
         service = value.removeprefix("keychain:")
-        if not shutil.which("security"):
-            return False, "the macOS `security` tool is not available on this host"
-        r = subprocess.run(["security", "find-generic-password", "-s", service],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        return (r.returncode == 0,
-                "Keychain item exists" if r.returncode == 0
-                else f"no Keychain item; create it with `glove keychain set {service}`")
+        try:
+            tool = keychain_tool()
+            found = (_keychain_read(tool, service) is not None if tool == "secret-tool" else subprocess.run(
+                _lookup(tool, service, read=False), capture_output=True, check=False).returncode == 0)
+        except ConfigError as e:
+            return False, str(e)
+        return found, (f"{_STORE[tool]} item exists" if found
+                       else f"no {_STORE[tool]} item; create it with `glove keychain set {service}`")
     if value.startswith("env:"):
         var = value.removeprefix("env:")
         return bool(os.environ.get(var)), "set" if os.environ.get(var) else f"${var} is not set"
     return False, "not a reference (keychain:<service> | env:<VAR>)"
 
 
-# `security -i` reads a line of at most ~4 KB and runs the overflow as
-# commands of its own, echoing them (the secret's tail included). A value
-# that doesn't fit one line is stored in parts (`<service>.part<i>`), with a
-# head `glove-parts:<n>:<sha256>` under the service itself.
-_LINE_MAX = 3800
-PARTS = "glove-parts:"
-_VALUE_MAX = 4 << 20
+# `keychain:` is the OS credential store, so one session file works on macOS
+# and Linux: the login Keychain (`security`), or the Secret Service of a
+# desktop session (`secret-tool`: GNOME Keyring, KWallet). Nothing else: a
+# secret never falls back to a file.
+_STORE = {"security": "Keychain", "secret-tool": "Secret Service"}
+# The head of a value stored in parts (each tool takes a bounded value per
+# write), under the service itself: `glove-parts:<n>:<sha256>`.
+KEYCHAIN_PARTS = "glove-parts:"
+NO_STORE = "without a Secret Service (a server, SSH), use env:<VAR>"
 
 
-def _keychain_read(service: str) -> str | None:
-    r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                       capture_output=True, text=True, check=False)
+def keychain_tool() -> str:
+    """The credential store's CLI on this host, else a ConfigError saying why."""
+    if sys.platform == "darwin":
+        if shutil.which("security"):
+            return "security"
+        raise ConfigError("the macOS `security` tool is not available on this host")
+    if shutil.which("secret-tool"):
+        return "secret-tool"
+    raise ConfigError(f"keychain: on Linux needs `secret-tool` (package libsecret-tools); {NO_STORE}")
+
+
+def secret_service_attrs(service: str) -> list[str]:
+    """A `keychain:<service>` item's Secret Service attributes (`secret-tool`)."""
+    return ["application", "glove", "service", service]
+
+
+def _lookup(tool: str, service: str, *, read: bool = True) -> list[str]:
+    if tool == "security":
+        return ["security", "find-generic-password", "-s", service, *(["-w"] if read else [])]
+    return ["secret-tool", "lookup", *secret_service_attrs(service)]
+
+
+def _keychain_read(tool: str, service: str) -> str | None:
+    """The stored value, None if there is none; a ConfigError if secret-tool
+    fails otherwise (no Secret Service, a locked or missing collection)."""
+    r = subprocess.run(_lookup(tool, service), capture_output=True, encoding="utf-8", check=False)
+    if r.returncode and tool == "secret-tool" and r.stderr.strip():  # a missing item fails silently
+        raise ConfigError(f"{r.stderr.strip()}; {NO_STORE}")  # it names itself
     secret = r.stdout.rstrip("\n")
     return secret if r.returncode == 0 and secret else None
-
-
-def _part(service: str, i: int) -> str:
-    return f"{service}.part{i}"
-
-
-def _quote(word: str) -> str:
-    return '"' + word.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def keychain_set(service: str, secret: str | None = None) -> int:
-    """Store a secret in the login Keychain. Prompted for (None): `-w` as the
-    last option makes `security` read it from the terminal. Given: it goes to
-    `security -i` on stdin, quoted, in parts if it is long. Never in argv
-    either way."""
-    if not service or service.startswith("-"):
-        raise ConfigError(f"invalid Keychain service name {service!r}")
-    if not shutil.which("security"):
-        raise ConfigError("the macOS `security` tool is not available on this host")
-    user = os.environ.get("USER") or "glove"
-
-    def cmd(svc: str) -> list[str]:
-        return ["add-generic-password", "-U", "-a", user, "-s", svc, "-w"]
-
-    if secret is None:
-        return subprocess.run(["security", *cmd(service)], check=False).returncode
-    if not secret or any(c in w for w in (secret, service, user) for c in "\n\r\0"):
-        raise ConfigError("the secret (and the service name) must be one non-empty line")
-    if not secret.isascii():  # `security -w` would read it back hex-encoded
-        raise ConfigError("the secret must be ASCII")
-    if secret.startswith(PARTS) or len(secret) > _VALUE_MAX:
-        raise ConfigError(f"the secret must not start with {PARTS!r} and is at most {_VALUE_MAX >> 20} MB")
-
-    def store(svc: str, value: str) -> int:
-        line = " ".join(_quote(w) for w in [*cmd(svc), value])
-        # stderr withheld: security echoes a command it could not run
-        return subprocess.run(["security", "-i"], input=line + "\n", text=True, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, check=False).returncode
-
-    budget = _LINE_MAX - len(" ".join(_quote(w) for w in cmd(_part(service, 1 << 20)))) - 3
-    parts, start, size = [], 0, 0
-    for i, c in enumerate(secret):
-        n = 2 if c in '"\\' else 1  # quoted width (ASCII)
-        if size + n > budget:
-            parts.append(secret[start:i])
-            start, size = i, 0
-        size += n
-    parts.append(secret[start:])
-    if len(parts) > 1:
-        for i, part in enumerate(parts, 1):
-            if rc := store(_part(service, i), part):
-                return rc
-        head = f"{PARTS}{len(parts)}:{hashlib.sha256(secret.encode()).hexdigest()}"
-        if rc := store(service, head):
-            return rc
-    elif rc := store(service, secret):
-        return rc
-    # a shorter value leaves no stale parts behind (bounded: never more parts
-    # than the largest value has)
-    for i in range(len(parts) + 1 if len(parts) > 1 else 1, _VALUE_MAX // budget + 2):
-        if subprocess.run(["security", "delete-generic-password", "-s", _part(service, i)],
-                          capture_output=True, check=False).returncode != 0:
-            break
-    return 0
-
-
-def _load_mapping(path: Path) -> dict[str, Any]:
-    text = path.read_text()
-    data = json.loads(text) if path.suffix == ".json" else load_yaml(text)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path}: top-level config must be a mapping")
-    return data
 
 
 def _coerce(data: dict[str, Any]) -> Config:
     """Build a Config from a plain mapping, coercing nested structures."""
     data = dict(data)  # shallow copy; we pop as we go
     add_dirs_raw = data.pop("add_dirs", []) or []
-    # v2 forwarder machinery, still present in effective.yml files written
-    # before v3 M5: forwarders come only from extensions now.
-    # (toolchains, host_services: an effective.yml before round 16)
-    for legacy in ("services", "net", "observe", "toolchains", "host_services"):
-        data.pop(legacy, None)
 
     add_dirs = [_coerce_add_dir(x) for x in add_dirs_raw]
 
@@ -389,10 +341,3 @@ def _coerce_add_dir(x: Any) -> AddDir:
     if isinstance(x, dict):
         return AddDir(**x)
     raise ConfigError(f"invalid add_dir entry: {x!r}")
-
-
-def load_config(path: Path | None) -> Config:
-    """Load a Config from a file, or return defaults when path is None."""
-    if path is None:
-        return Config()
-    return _coerce(_load_mapping(path))

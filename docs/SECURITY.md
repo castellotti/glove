@@ -130,7 +130,9 @@ Every capability (the model, search, the browser, …) is an extension in
   podman rejects it, so there it must be turned off explicitly, never dropped.
 - Secrets are references (`keychain:`/`env:`), resolved in memory and handed to
   containers as compose secrets from glove's environment; a literal secret in a
-  setting is refused. A read-only sidecar cannot take an environment-sourced
+  setting is refused. `keychain:` is the macOS Keychain or, on Linux, a desktop
+  session's Secret Service (`secret-tool`); without one it fails with the
+  tool's reason and a pointer to `env:`, never read from or written to a file. A read-only sidecar cannot take an environment-sourced
   compose secret (Docker refuses), so such a sidecar (`llm-auth`, relayd, the
   ssh relay) gets its secret from a `launch_env` hook, which fills an
   `environment:` key declared without a value, for that `compose up` only (it
@@ -290,6 +292,10 @@ public DNS, could have. Measured live: SearXNG cannot resolve or reach
   with the operator's `host_check_url`, that service must also see the host and
   the exit as two different IPs). A failure shows the sidecar's last log lines,
   with key and password lines withheld, and stops the session's sidecars.
+  `exit-confirmed` is vpn's and tor's own code (the `exitcheck` library, run by
+  core's `hook` verify kind); core still decides the outcome: a raise, a crash,
+  a missing hook or no result fails it, as does a failing `diagnose` hook's
+  check. The hook runs only the check's own command in its own sidecar.
 - **No lookup service of glove's own.** glove adds no IP-lookup service. vpn
   records the VPN server's endpoint as its exit (read from gluetun's kill-switch
   rules, no network request; the tunnel's entry address, which a provider may
@@ -1209,8 +1215,8 @@ Be precise about what "container root" means here:
   raises the bar, but a patched engine is the baseline.
 - **Prefer a per-container-VM runtime when available** — Apple `container`
   (macOS 26, Apple silicon) or a `utm`/`gondolin` VM gives each container its own
-  kernel, so an escape yields a throwaway VM, not the shared one. glove keeps the
-  runtime layer pluggable for exactly this.
+  kernel, so an escape yields a throwaway VM, not the shared one (glove implements
+  none yet; its runtime layer is pluggable for exactly this).
 - **Keep the default** (`nono+srt` on Docker, `nono` on Podman) over `srt`: srt alone
   wraps tool commands only, leaving the harness process on ring 0 alone. Both
   srt enforcers relax the container's seccomp profile to allow unprivileged

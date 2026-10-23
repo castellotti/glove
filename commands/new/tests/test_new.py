@@ -47,10 +47,10 @@ def test_new_from_a_path_and_diff(home, tmp_path):
     assert "+brief: new" in runner.invoke(app, ["new", "--diff", "x", str(d)]).output
 
 
-def test_new_refuses_to_overwrite_a_v2_registry(home, tmp_path):
+def test_new_refuses_to_overwrite_an_unsupported_registry(home, tmp_path):
     home.mkdir()
     (home / "registry.json").write_text('[{"dir": "/x", "harness": "pi", "env_id": "x"}]')
     result = runner.invoke(app, ["new", "minimal", str(tmp_path / "s")])
-    assert result.exit_code == 1 and "glove v2 registry" in result.output
+    assert result.exit_code == 1 and "unsupported registry version" in result.output
     assert not (tmp_path / "s").exists()
     assert json.loads((home / "registry.json").read_text())[0]["env_id"] == "x"  # untouched

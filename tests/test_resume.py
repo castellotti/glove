@@ -9,8 +9,8 @@ from glove.config import AddDir, Config, ConfigError
 from glove.harness import get_profile
 from glove.plan import build_session_plan
 from glove.sessions import (
-    find_session,
     list_sessions,
+    match_session,
     sessions_dir,
     widening_warnings,
 )
@@ -117,12 +117,12 @@ def test_list_and_find_sessions(tmp_path):
     root = tmp_path / ".pi" / "agent" / "sessions"
     refs = list_sessions(root)
     assert [r.id for r in refs] == ["bbbb2222", "aaaa1111"]  # newest first
-    assert find_session(root, "aaaa").id == "aaaa1111"  # partial match
-    assert find_session(root, "nope") is None
+    assert match_session(list_sessions(root), "aaaa").id == "aaaa1111"  # partial match
+    assert match_session(list_sessions(root), "nope") is None
     # A full transcript path resolves (documented --session form); its length
     # exceeds any filename so it can only match via the path/basename branch.
-    assert find_session(root, str(old)).id == "aaaa1111"
-    assert find_session(root, old.name).id == "aaaa1111"  # basename
+    assert match_session(list_sessions(root), str(old)).id == "aaaa1111"
+    assert match_session(list_sessions(root), old.name).id == "aaaa1111"  # basename
 
 
 def test_list_sessions_missing_dir(tmp_path):

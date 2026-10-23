@@ -158,9 +158,9 @@ class SrtEnforcer:
         unprivileged userns + bind /proc; the local `*-srt-<hash>` harness image has bubblewrap
         baked, so the probe never needs network or root to install it.
         """
-        cli = getattr(runtime, "cli", None)  # None: a stub runtime, which runs no container
-        if not containers or not cli or not shutil.which(cli):
-            why = f"{cli or runtime.name} not available" if containers else "container probes skipped"
+        cli = runtime.cli
+        if not containers or not shutil.which(cli):
+            why = f"{cli} not available" if containers else "container probes skipped"
             return Check("srt bwrap smoke", "skip", why)
         from .base import srt_suffix
 

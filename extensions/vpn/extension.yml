@@ -2,6 +2,8 @@ api: 2
 name: vpn
 summary: Route all session egress through a gluetun VPN tunnel (WireGuard or OpenVPN); route vpn.
 provides: [egress]
+requires:
+  - { extension: exitcheck }          # the exit-confirmed check (verify hook)
 settings:
   provider:         { type: string, required: true }   # any gluetun VPN_SERVICE_PROVIDER, or `custom`
   type:             { type: enum, values: [wireguard, openvpn], default: wireguard }
@@ -80,7 +82,8 @@ verify:
   # export, also read by observe's gate): by default the endpoint its start script reads
   # from its kill switch (compose/services.yml.j2), with `publicip_api` gluetun's
   # own lookup. Empty or absent until it is known; two endpoints are not one.
-  - { name: exit-confirmed, kind: exit-confirmed, source: exec, service: gluetun, argv: [cat, /run/glove-exit/ip],
+  # (the exitcheck library's check, through the verify hook)
+  - { name: exit-confirmed, kind: hook, source: exec, service: gluetun, argv: [cat, /run/glove-exit/ip],
       host_check_url: "{{ settings.host_check_url or '' }}",
       retries: 15 }                     # until the tunnel is up and (publicip_api) gluetun's lookup answered
 harness:

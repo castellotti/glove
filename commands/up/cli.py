@@ -108,8 +108,6 @@ def _plan_up(directory, resume: bool, session: str | None, iknow: list[str]):
         todo = placeholders_left(raw)
         if todo:
             raise SessionError(f"{sd.file}: set {', '.join(todo)} first (they still say {PLACEHOLDER})")
-        if cfg.runtime not in ("docker", "podman"):
-            raise ConfigError(f"runtime {cfg.runtime!r} is not implemented yet; use docker or podman")
         plan, _, _ = materialize_plan(sd, sid, cfg, resume=resume, session=session, home=False,
                                       overrides=frozenset(iknow), launch=True)
     except (ConfigError, ValueError, HardeningError, OSError, NotImplementedError) as e:

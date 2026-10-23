@@ -3,9 +3,7 @@
 A ``Runtime`` owns the container/VM boundary: image build, the mount
 allow-list, network topology, resource limits, and the hardening set. It turns
 a runtime-agnostic ``SessionPlan`` into a concrete ``RenderedProject`` and runs
-it. ``docker`` is the full implementation in v2; ``podman`` subclasses it;
-``apple-container``/``gondolin``/``utm`` are registered stubs so ``--runtime``
-validation, ``glove ls`` and the docs are complete from day one.
+it. ``docker`` is the full implementation; ``podman`` subclasses it.
 """
 
 from __future__ import annotations
@@ -21,23 +19,15 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RuntimeCaps:
-    """Static capability flags used for validation, doctor, and docs."""
+    """Static capability flags the render path reads."""
 
-    supports_internal_networks: bool = False
-    supports_sidecars: bool = False
-    supports_seccomp_profile: bool = False
     # True when the runtime applies a validated built-in default seccomp profile
     # if glove omits its vendored one (podman, whose compose provider can't inline
     # the file). This is what lets the render layer honour the "a seccomp profile
     # is always applied" hardening row without emitting a `seccomp=` line — see
     # DockerRuntime.render. Docker must emit the profile, so it stays False.
     applies_builtin_seccomp: bool = False
-    supports_userns: bool = False
-    supports_kvm: bool = False
-    host_gateway_name: str | None = None
-    compose_cmd: tuple[str, ...] = ()
-    implemented: bool = False
-    tested: bool = True  # False marks a backend we ship but cannot verify here
+    host_gateway_name: str = "host.docker.internal"
 
 
 @dataclass
@@ -77,6 +67,7 @@ class RunningSession:
 
 class Runtime(Protocol):
     name: str
+    cli: str  # the binary it shells out to
     caps: RuntimeCaps
 
     def doctor(self) -> list[Check]: ...
@@ -93,6 +84,5 @@ class Runtime(Protocol):
     # cached per engine; `refresh` probes again.
     def landlock_mounts(self, *, refresh: bool = False) -> MountMode: ...
 
-    # The `run` argv of a hardened throwaway container (probes, checks); a
-    # runtime that can't run one raises NotImplementedError.
+    # The `run` argv of a hardened throwaway container (probes, checks).
     def throwaway_argv(self, image: str, argv: list[str], **kw) -> list[str]: ...

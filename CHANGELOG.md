@@ -248,6 +248,73 @@ All notable changes to glove are documented here.
   `.glove/playwright-login` (from before round 15) is neither moved under
   `--keep-profile` nor deleted; remove it by hand if one is left.
 
+- **Core extraction, phase A** (round 23; core 9,678 → 9,394 lines):
+  - **Breaking:** the unimplemented `apple-container`, `gondolin` and `utm`
+    runtimes are gone, with the `RuntimeCaps` flags nothing read
+    (`supports_*`, `compose_cmd`, `implemented`, `tested`). The session file's
+    `runtime:` is checked when it is read: `docker` or `podman`, anything else
+    refused (it was only refused once `glove up` asked for the runtime).
+  - `glove check`'s probe answers "no answer" (`<runtime> is not installed`)
+    when the runtime's CLI is missing, instead of a traceback.
+  - **Breaking:** the v2 migration hints are gone. A v2 session key (`name`,
+    `workdir`, `add_dirs`, `net`, `services`, `observe`, …) is refused as an
+    unknown key, and a v2 registry as an unsupported registry version (still
+    never overwritten). The round-16 hints (`toolchains`, `host_services`) stay.
+  - `effective.yml`/`baseline.yml` ignore any key `Config` no longer has,
+    instead of a fixed list of legacy keys, so an older glove's record still
+    reads and the resume widening warning still compares against it.
+  - The seccomp profile generator moved to `tools/seccomp/make_profile.py`
+    (`uv run python -m tools.seccomp.make_profile`); the profiles it writes
+    are unchanged. Dead code removed: `config.load_config`,
+    `sessions.find_session`.
+- **Core extraction, phase B: `keychain:` on Linux, and the writer out of core**
+  (round 23):
+  - `keychain:<service>` is the host's credential store: the macOS Keychain
+    (`security`) or, on Linux with a desktop session, the Secret Service
+    (`secret-tool`, package `libsecret-tools`; items `application=glove
+    service=<service>`). Without one (a server, SSH) a `keychain:` reference
+    fails with `secret-tool`'s reason and a pointer to `env:<VAR>`; nothing
+    falls back to a file. The Linux backend is **untested** on a real Ubuntu
+    desktop. A `keychain:` error names the reference again.
+  - `glove keychain set` moved from `commands/` to the new `keychain` library
+    extension, with the code that writes a secret. A long value is stored in
+    parts on both: `secret-tool store` keeps only the first 8 KB of stdin and
+    still exits 0 (found by the Ubuntu container check,
+    `tests/integration/test_keychain_linux.sh`). It no longer prompts without
+    a terminal (`secret-tool` would store what is piped, cut at 8 KB), and a
+    value typed at the prompt clears the parts of a longer one.
+  - As an extension CLI, `glove keychain` is listed from the extension
+    manifests: a malformed `~/.glove/config.yml` hides it (`glove keychain`
+    then says why), as it does every extension CLI. The new `requires:
+    keychain` entries add nothing to a session; they declare the import. `playwright` and `skills` require it
+    when they store one (`login:`, a plugin `relay:`). Reading stays in core.
+  - **Breaking (extension API):** `glove.api.keychain_set` is gone (in-tree
+    extensions import `extensions.keychain.store`); `glove.api.keychain_tool`,
+    `secret_service_attrs`, `KEYCHAIN_PARTS` and `NO_STORE` are new.
+- **Core extraction, phase C: the exit check out of core** (round 23):
+  - vpn's and tor's `exit-confirmed` check (the exit's one IP, and the
+    operator's opt-in `host_check_url` leak check) moved from core to the new
+    `exitcheck` library extension, which both require. It runs through a new
+    generic verify kind, `hook`: core calls the extension's `verify` hook with
+    `VerifyTools` (the egress proxy, a fetch through it from a throwaway probe,
+    the check's own command in its own sidecar, a retry) and still decides:
+    a raise (a bug included), a missing hook or no result fails the check and
+    stops the session's sidecars (fail closed). What the check verifies is
+    unchanged.
+  - **Fixed:** a `diagnose` hook that raised while explaining a failed check
+    escaped as its own error, and `glove up` left the sidecars running; its
+    failure is now part of the check's message. Any failure during verify (a
+    bug, Ctrl-C) now stops the sidecars too, not only a failed check.
+  - A `hook` check's message is shown as its hook wrote it only for a
+    `ConfigError`; any other exception shows just its type (a parse bug could
+    quote what a sidecar printed).
+  - **Breaking (extension API):** the `exit-confirmed` verify kind is gone (use
+    `kind: hook` and a `verify` hook; the `exitcheck` library is in-tree);
+    `glove.api.VerifyTools` and the `verify` hook are new.
+  - Verified live on Docker and Podman: vpn (WireGuard through a register
+    hook) and tor pass `exit-confirmed` through the hook; with a
+    `host_check_url` that names no IP, the check fails and glove stops every
+    sidecar (`FAIL_EXIT=1 tests/integration/test_egress.sh tor|vpn`, new).
 - **Pi renders MCP servers.** The extensions' neutral `mcp` items reach Pi's
   built-in MCP through a read-only `~/.pi/agent/mcp.json` (`contributions:
   [mcp, skills]`): each server `hidden` but for its allowed tools, named

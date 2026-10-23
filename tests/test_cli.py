@@ -23,13 +23,13 @@ def test_help_lists_every_command():
 
     out = runner.invoke(app, ["--help"], env={"COLUMNS": "200"}).output
     names = sorted(p.name for p in COMMANDS_DIR.iterdir() if (p / "cli.py").is_file())
-    assert len(names) == 17
+    assert len(names) == 16
     for name in names:
         assert f" {name} " in out, name
     # workflow order (each command's RANK); Typer lists the groups after the commands
     shown = [line.split()[1] for line in out.splitlines() if line.startswith("│ ") and line[2:3].isalpha()]
-    assert shown[:17] == ["new", "plan", "up", "check", "down", "rm", "ls", "ps", "gc", "clean", "build", "doctor",
-                          "policy", "ext", "version", "downloads", "keychain"]
+    assert shown[:16] == ["new", "plan", "up", "check", "down", "rm", "ls", "ps", "gc", "clean", "build", "doctor",
+                          "policy", "ext", "version", "downloads"]
 
 
 # --- secrets ------------------------------------------------------------------------------
@@ -210,8 +210,9 @@ def test_glove_name_help_loads_exactly_that_cli(tmp_path):
     assert code == 0 and "block" in out
     # filter's CLI imports observe's and the gate library's (in-tree)
     assert {m.split(".")[1] for m in modules} == {"filter", "observe", "gate"}
+    # playwright's imports the keychain library's writer (`glove playwright login` stores)
     code, out, modules = _glove(tmp_path / "gh", "playwright", "--help")
-    assert code == 0 and {m.split(".")[1] for m in modules} == {"playwright"}
+    assert code == 0 and {m.split(".")[1] for m in modules} == {"playwright", "keychain"}
 
 
 def test_an_untrusted_out_of_tree_cli_never_runs(tmp_path):

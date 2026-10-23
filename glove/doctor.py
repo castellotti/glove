@@ -134,17 +134,12 @@ def run_doctor(
     """Full doctor report for the given runtime/enforcer selection."""
     checks: list[Check] = [Check("os", "info", f"{os.uname().sysname} {os.uname().release} {os.uname().machine}")]
     rt = get_runtime(runtime)
-    if not rt.caps.tested:
-        checks.append(Check(f"runtime: {runtime}", "warn",
-                            "ships but UNTESTED on this host — validate before relying on it"))
-    if not rt.caps.implemented:
-        checks.append(Check(f"runtime: {runtime}", "warn", "not implemented (stub)"))
     if include_container_probes:
         checks.extend(rt.doctor())
     else:
         checks.append(Check(f"runtime: {runtime}", "info", "container probes skipped"))
     checks.extend(_enforcer_checks(enforcer, rt, include_container_probes))
-    if include_container_probes and landlock_enforced(enforcer) and rt.caps.implemented:
+    if include_container_probes and landlock_enforced(enforcer):
         checks.append(landlock_mounts_check(rt))
     # Docker Desktop's File sharing list is a docker-only concept; podman shares
     # the whole home via the machine mount, so the hint is misleading there.

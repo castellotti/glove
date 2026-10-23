@@ -4,7 +4,17 @@ imports. Each name is re-exported from where core keeps it;
 here is deliberate. Harness adapters import `glove.api.harness` too."""
 
 from ..cafile import resolve_ca_file
-from ..config import ConfigError, is_secret_ref, keychain_service, keychain_set, resolve_secret, secret_exists
+from ..config import (
+    KEYCHAIN_PARTS,
+    NO_STORE,
+    ConfigError,
+    is_secret_ref,
+    keychain_service,
+    keychain_tool,
+    resolve_secret,
+    secret_exists,
+    secret_service_attrs,
+)
 from ..enforcers import tools_run_browsers
 from ..enforcers.base import is_secret_env_name
 from ..extensions import active_items, mcp_server, render_value, tool_names
@@ -15,14 +25,16 @@ from ..manifest import ExtensionError
 from ..mounts import existing_host_path, host_path, overlaps
 from ..naming import HOST_GLOB, scoped
 from ..sessiondir import exposes_private
+from ..verify import VerifyTools
 
 __all__ = [  # noqa: RUF022 (grouped, as in docs/extensions.md)
     # errors
     "ConfigError", "ExtensionError",
     # the hook protocol
-    "HookContext", "hook",
+    "HookContext", "VerifyTools", "hook",
     # secrets: values stay in memory
-    "is_secret_env_name", "is_secret_ref", "keychain_service", "keychain_set", "resolve_secret", "secret_exists",
+    "KEYCHAIN_PARTS", "NO_STORE", "is_secret_env_name", "is_secret_ref", "keychain_service", "keychain_tool",
+    "resolve_secret", "secret_exists", "secret_service_attrs",
     # host paths
     "existing_host_path", "exposes_private", "host_path", "overlaps", "resolve_ca_file",
     # naming

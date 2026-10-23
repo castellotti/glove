@@ -26,13 +26,13 @@ from typing import Any
 import typer
 from rich.console import Console
 
+from extensions.keychain.store import keychain_set
 from glove.api import (
     ConfigError,
     ExtensionError,
     ExtSession,
     ext_session,
     keychain_service,
-    keychain_set,
     reload_sidecar,
     resolve_secret,
     secret_exists,
