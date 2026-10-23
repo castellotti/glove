@@ -4,6 +4,23 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pi no longer warns "This project is not trusted"** at every start (round
+  25). Round 18's empty `.pi/settings.json` over the project's own made Pi
+  1.1.0 find a project resource needing trust, and `defaultProjectTrust: never`
+  then showed the warning. Pi's `protect:` now masks the whole `.pi/` with an
+  empty, read-only directory: Pi finds nothing to warn about and still never
+  sees the project's settings, and the agent can't plant anything else in
+  `.pi/` either (its `mcp.json`, extensions and skills stayed behind trust).
+  A repo with its own `.agents/skills` still gets the warning (Pi still skips
+  them). `glove up` now rebuilds `.glove/placeholders/` each time, so an
+  earlier run's placeholder never shows inside a masked dir, and re-checks
+  every protected path in the working dir for a symlink just before the
+  launch, not only a missing one. An empty `.pi/settings.json` an earlier run
+  left in `work/` is hidden and can be deleted. A repo's tracked `.pi/` files
+  look deleted to git in the sandbox (as Vibe's `.vibe/` already did).
+
 ### Security
 
 - **Only selected (and trusted) extension code runs** (round 18 A). Every

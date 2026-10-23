@@ -70,18 +70,17 @@ def test_down_removes_the_empty_mount_points_glove_created_never_one_with_conten
     w = d / "work"
     (w / ".envrc").write_text("")  # the user's own, empty: present before, so not glove's
     assert runner.invoke(app, ["plan", str(d)]).exit_code == 0
-    assert _created(d) == [".pi"]  # plan made Pi's pinned dir, and no mount point
+    assert _created(d) == []  # plan makes no mount point
     (w / ".mcp.json").touch()  # the user's, after plan: never glove's
     _up(d)
-    assert _created(d) == [".idea", ".pi", ".pi/settings.json", ".vscode"]
+    assert _created(d) == [".idea", ".pi", ".vscode"]
     # as `launch` makes them; the agent wrote into .vscode (the user's now)
-    (w / ".idea").mkdir()
-    (w / ".pi" / "settings.json").touch()
-    (w / ".vscode").mkdir()
+    for name in (".idea", ".pi", ".vscode"):
+        (w / name).mkdir()
     (w / ".vscode" / "settings.json").write_text("{}")
     monkeypatch.setattr("glove.session.teardown", lambda sid, **k: None)
     result = runner.invoke(app, ["down", str(d)])
-    assert result.exit_code == 0 and "removed 3 empty mount point(s)" in result.output, result.output
+    assert result.exit_code == 0 and "removed 2 empty mount point(s)" in result.output, result.output
     assert sorted(p.name for p in w.iterdir()) == [".envrc", ".mcp.json", ".vscode"]
     assert _created(d) == []
 
@@ -94,7 +93,7 @@ def test_a_record_left_by_a_run_that_never_came_down_is_kept_at_the_next_up(home
         (d / "work" / name).mkdir()
     (d / "work" / ".mcp.json").touch()  # now present: this run alone would not record them
     _up(d)
-    assert _created(d) == [".envrc", ".idea", ".mcp.json", ".pi", ".pi/settings.json", ".vscode"]
+    assert _created(d) == [".envrc", ".idea", ".mcp.json", ".pi", ".vscode"]
 
 
 def test_down_removes_the_record_of_a_config_this_glove_no_longer_reads(home, tmp_path, monkeypatch):

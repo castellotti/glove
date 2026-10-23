@@ -336,6 +336,19 @@ def test_a_path_inside_a_masked_dir_binds_inside_its_placeholder(tmp_path):
         "work", "work/.agents", "work/.agents/skills", "work/.vibe", "work/.vibe/skills"]
 
 
+def test_a_fresh_placeholder_dir_holds_nothing_an_earlier_run_left(tmp_path):
+    # Pi's mask was the file .pi/settings.json before round 25 and is the dir .pi/ now: glove up's
+    # fresh placeholders drop the old empty file, or Pi would still see it (and warn "not trusted")
+    work = _repo(tmp_path)
+    protect = protected_paths(compute_mounts(str(work)).mounts, files=[("/work/.pi/", "empty")])
+    old = tmp_path / "ph" / "work" / ".pi" / "settings.json"
+    old.parent.mkdir(parents=True)
+    old.touch()
+    assert old.exists() and write_placeholders(tmp_path / "ph", protect) and old.exists()  # plan keeps it
+    holders = write_placeholders(tmp_path / "ph", protect, fresh=True)
+    assert (holders / "work" / ".pi").is_dir() and list((holders / "work" / ".pi").iterdir()) == []
+
+
 HOME_PROTECTED = [".vibe/hooks.toml", ".vibe/tools/", ".agents/"]
 CONFIG_HOME = "/home/agent/.vibe"
 
@@ -415,13 +428,12 @@ def test_glove_up_makes_the_missing_mount_points_empty_of_their_kind(tmp_path):
     work = _repo(tmp_path)
     (work / ".envrc").write_text("export X=1\n")
     mounts = compute_mounts(str(work)).mounts
-    protect = protected_paths(mounts, protect_ide_files=True, files=[("/work/.pi/settings.json", "empty")])
+    protect = protected_paths(mounts, protect_ide_files=True, files=[("/work/.pi/", "empty")])
     assert missing_bind_targets(mounts, protect) and not (work / ".pi").exists()  # plan: only reported
     got = missing_bind_targets(mounts, protect, create=True)
-    assert sorted(os.path.relpath(p, work) for p in got) == [".idea", ".mcp.json", ".pi", ".pi/settings.json",
-                                                              ".vscode"]
+    assert sorted(os.path.relpath(p, work) for p in got) == [".idea", ".mcp.json", ".pi", ".vscode"]
     assert (work / ".pi").is_dir() and (work / ".vscode").is_dir() and (work / ".idea").is_dir()
-    assert (work / ".pi" / "settings.json").read_bytes() == b"" and (work / ".mcp.json").read_bytes() == b""
+    assert list((work / ".pi").iterdir()) == [] and (work / ".mcp.json").read_bytes() == b""
     assert (work / ".envrc").read_text() == "export X=1\n"  # there before: not glove's
     assert missing_bind_targets(mounts, protect, create=True) == []
 
@@ -429,12 +441,25 @@ def test_glove_up_makes_the_missing_mount_points_empty_of_their_kind(tmp_path):
 def test_a_mount_point_is_never_made_through_a_link_planted_after_the_plan(tmp_path):
     work = _repo(tmp_path)
     mounts = compute_mounts(str(work)).mounts
-    protect = protected_paths(mounts, files=[("/work/.pi/settings.json", "empty")])
+    protect = protected_paths(mounts, files=[("/work/.pi/", "empty")])
     (tmp_path / "outside").mkdir()
     (work / ".pi").symlink_to(tmp_path / "outside")  # the agent, between the plan and the launch
     with pytest.raises(MountError, match="not a symlink"):
         missing_bind_targets(mounts, protect, create=True)
     assert list((tmp_path / "outside").iterdir()) == []
+
+
+def test_a_mount_point_present_at_the_plan_and_swapped_for_a_link_is_refused_at_launch(tmp_path):
+    work = _repo(tmp_path)
+    (work / ".pi").mkdir()
+    mounts = compute_mounts(str(work)).mounts
+    protect = protected_paths(mounts, files=[("/work/.pi/", "empty")])
+    assert missing_bind_targets(mounts, protect, create=True) == []  # nothing to make
+    (work / ".pi").rmdir()
+    (tmp_path / "outside").mkdir()
+    (work / ".pi").symlink_to(tmp_path / "outside")
+    with pytest.raises(MountError, match="not a symlink"):
+        missing_bind_targets(mounts, protect, create=True)
 
 
 def test_remove_empty_removes_only_empty_files_and_dirs_never_a_symlink_or_content(tmp_path):

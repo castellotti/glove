@@ -386,9 +386,12 @@ Pi also skips the project's `.pi/` and `.agents/skills` (rendered
 and Vibe's still load: they are prompts, like any file the agent reads.
 
 Pi's session dir is pinned to its default (`PI_CODING_AGENT_SESSION_DIR`), and
-Pi only ever sees an empty `.pi/settings.json` (glove binds one over the repo's,
+Pi only ever sees an empty, read-only `.pi/` (glove binds one over the repo's,
 creating `.pi/` when missing), so a repo's settings can't move where sessions
-are written or change anything else (see [SECURITY.md](docs/SECURITY.md)).
+are written or change anything else, and Pi shows no "project is not trusted"
+warning (see [SECURITY.md](docs/SECURITY.md)). A repo's tracked `.pi/` files
+look deleted to git inside the sandbox, so don't let the agent `git commit -a`
+in such a repo (Vibe's `.vibe/` is masked the same way).
 
 **Vibe: the repo's skills, opt-in.** With
 

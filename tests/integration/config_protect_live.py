@@ -8,7 +8,7 @@ hook shadowing glove's, a Pi project extension: each would touch a marker):
   1. in the harness service, every read-only ring-0 bind (`protect:` in
      harness.yml, the /work paths the host trusts) refuses
      a write, and the config home cannot be renamed away; the masked project
-     paths (Vibe's dirs, Pi's .pi/settings.json) are empty though the host's
+     paths (Vibe's dirs, Pi's .pi/) are empty though the host's
      are not; the home outside the
      config home is read-only (EROFS: a new file or dir at its top level, in
      ~/.config, ~/.agents, ~/.local/bin, above the config home) while the
@@ -21,7 +21,8 @@ hook shadowing glove's, a Pi project extension: each would touch a marker):
   4. the harness's own writes: its sessions dir holds the turns (Pi: not the
      project's planted sessionDir; its auth.json is a read-only bind), and
      `--continue` resumes the latest session (a session file grows);
-  5. Vibe's TUI: a command its pre_tool hook denies (strict) shows the denial.
+  5. Vibe's TUI: a command its pre_tool hook denies (strict) shows the denial;
+     Pi's TUI: no "project is not trusted" warning.
 Prints PASS/FAIL per check; exits non-zero on any failure.
 """
 
@@ -141,6 +142,13 @@ def main(directory: str) -> int:
                   " ".join(tui.text(shown).split())[-300:])
             if tui.waited:
                 print(f"  (shown after {tui.waited:.1f}s)")
+        if h == "pi":
+            print("== Pi's TUI: no \"project is not trusted\" warning (the planted .pi/ is masked)")
+            tui = s.tui(40, 140)
+            drawn = tui.text(tui.wait_drawn(settle=5))
+            tui.kill()
+            check("Pi's TUI is up and shows no trust warning", tui.waited is not None and "not trusted" not in drawn,
+                  " ".join(drawn.split())[-300:])
     return summary()
 
 

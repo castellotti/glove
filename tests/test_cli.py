@@ -78,7 +78,7 @@ def test_launch_makes_the_binds_missing_mount_points_just_before_the_harness(tmp
     monkeypatch.setattr(session_mod, "ensure_images", lambda *a, **k: None)
     monkeypatch.setattr(session_mod, "start_sidecars", lambda *a, **k: None)
     monkeypatch.setattr(session_mod.subprocess, "run",
-                        lambda cmd, **k: seen.append((tmp_path / "work" / ".pi" / "settings.json").is_file()))
+                        lambda cmd, **k: seen.append((tmp_path / "work" / ".pi").is_dir()))
     cfg, plan = _launch_plan(tmp_path, "env:MY_LLM_KEY")
     session_mod.launch(cfg, plan, tmp_path / "compose.yml", provider="docker", rebuild=False, secrets={},
                        prepare=lambda: seen.append((tmp_path / "work" / ".pi").exists()))

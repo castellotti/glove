@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import shutil
 import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -420,10 +421,11 @@ def missing_bind_targets(mounts: list[Mount], protect: tuple[Protect, ...], *, c
             continue
         rel = posixpath.relpath(p.container_path, m.container_path)
         host = os.path.join(m.host_path, rel)
+        if create:  # the agent may have run since the plan checked the way (a mount point too): again, and O_EXCL
+            check_path(m.host_path, rel, p.kind)
         if not os.path.lexists(host):
             out.append(host)
-            if create:  # the agent may have run since the plan checked the way: again, and O_EXCL
-                check_path(m.host_path, rel, p.kind)
+            if create:
                 os.mkdir(host) if p.kind == "dir" else os.close(os.open(host, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
     return out
 
@@ -455,10 +457,14 @@ def remove_empty(paths: Sequence[str]) -> tuple[list[str], list[str]]:
     return removed, failed
 
 
-def write_placeholders(directory: Path, protect: tuple[Protect, ...]) -> Path:
+def write_placeholders(directory: Path, protect: tuple[Protect, ...], *, fresh: bool = False) -> Path:
     """Create the empty file/dir sources for placeholder binds (outside /work),
     and the mount point of each bind nested in a placeholder directory (the
-    runtime cannot create one in a read-only bind)."""
+    runtime cannot create one in a read-only bind). `fresh` (at launch, no
+    harness running) starts from none: an earlier run's file placeholder may
+    now sit inside a placeholder dir, which must be empty."""
+    if fresh:
+        shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True, exist_ok=True)
     holders = {p.container_path for p in protect if p.host_path is None and p.kind == "dir"}
     for p in protect:

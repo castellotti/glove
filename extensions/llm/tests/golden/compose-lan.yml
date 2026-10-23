@@ -43,11 +43,6 @@ services:
       # ring 0: re-bound read-write: a mount point, so it cannot be renamed away
       # (after the bind it sits in, so it overlays it)
       - type: bind
-        source: "<tmp>/work/.pi"
-        target: "/work/.pi"
-      # ring 0: re-bound read-write: a mount point, so it cannot be renamed away
-      # (after the bind it sits in, so it overlays it)
-      - type: bind
         source: "<tmp>/home/.pi/agent"
         target: "/home/agent/.pi/agent"
       # ring 0: read-only over a path the host or the harness later runs or trusts
