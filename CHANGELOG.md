@@ -96,6 +96,14 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`playwright: {apt_packages: [...]}`** adds Debian packages to the browser
+  sidecar's image (headless/novnc; refused with `mode: host`), e.g. `[xdotool]`
+  to drive the novnc display from `docker exec`. Opt-in: with none the image is
+  as before. The packages are a build arg, so each list gets its own image tag.
+  Names only (`^[a-z0-9][a-z0-9.+-]+$`). Core: an extension's `images:` entry may
+  name `args: {ARG: <setting>}`; set ones become `--build-arg`s and part of the
+  tag's hash.
+
 - **`glove down` removes the empty mount points glove created** (R18.V1). The
   binds over a missing path in `/work` (a `protect_ide_files` placeholder's
   `.envrc`, `.mcp.json`, `.vscode/`, `.idea/`; a harness `protect:` file and

@@ -785,15 +785,25 @@ def required_libs(comp: Composition, a: Active) -> list[Active]:
     return [x for x in comp.active if x.name in names]
 
 
+def image_build_args(a: Active, name: str) -> dict[str, str]:
+    """An extension image's build args: `args: {ARG: <setting>}` in its manifest,
+    each from that setting (a list joined by spaces); unset ones are left out."""
+    spec = (a.manifest.raw.get("images") or {}).get(name) or {}
+    vals = {str(k): a.settings.get(s) for k, s in (spec.get("args") or {}).items()}
+    return {k: " ".join(map(str, v)) if isinstance(v, list) else str(v)
+            for k, v in vals.items() if v not in (None, "", [])}
+
+
 def image_tag(a: Active, name: str) -> str:
-    """Local tag for an extension-built image: content-addressed by its context,
-    hashed once per selection (every hook context names it)."""
+    """Local tag for an extension-built image: content-addressed by its context
+    and build args, hashed once per selection (every hook context names it)."""
     if name not in a.tags:
         from .image import content_hash
 
         spec = (a.manifest.raw.get("images") or {}).get(name) or {}
         ctx_dir = a.manifest.path / str(spec.get("build", name))
-        a.tags[name] = f"glove/ext-{a.name}-{name}:{content_hash('', [(name, ctx_dir)])}"
+        args = "".join(f"{k}={v}\n" for k, v in sorted(image_build_args(a, name).items()))
+        a.tags[name] = f"glove/ext-{a.name}-{name}:{content_hash(args, [(name, ctx_dir)])}"
     return a.tags[name]
 
 

@@ -295,6 +295,33 @@ def test_host_mode_builds_no_sidecar_image(tmp_path, monkeypatch):
     assert any("ext-playwright-pw" in " ".join(c) for c in built)
 
 
+def test_apt_packages_are_opt_in_and_derive_their_own_image(tmp_path, monkeypatch):
+    import glove.session as session_mod
+
+    built = []
+    monkeypatch.setattr(session_mod, "_image_exists", lambda *a: False)
+    monkeypatch.setattr(session_mod.subprocess, "run", lambda cmd, **kw: built.append(cmd))
+    plain, extra = _plan(tmp_path / "p", mode="novnc"), _plan(tmp_path / "x", mode="novnc", apt_packages=["xdotool"])
+    session_mod.build_extension_images("docker", plain)
+    session_mod.build_extension_images("docker", extra)
+    pw = [c for c in built if any("ext-playwright-pw" in str(x) for x in c)]
+    assert len(pw) == 2
+    (plain_cmd, extra_cmd) = pw
+    # no packages: no build arg and the tag the image always had; with them, its own tag
+    assert not any(str(x).startswith("--build-arg") for x in plain_cmd)
+    assert "--build-arg=APT_PACKAGES=xdotool" in extra_cmd
+    tag = lambda c: c[c.index("-t") + 1]  # noqa: E731
+    assert tag(plain_cmd) != tag(extra_cmd)
+    assert 'ARG APT_PACKAGES=""' in (IMAGE / "Dockerfile").read_text()
+
+
+def test_apt_packages_are_names_only_and_not_for_host_mode(tmp_path):
+    with pytest.raises(ExtensionError, match="must match"):
+        _plan(tmp_path, apt_packages=["xdotool; curl evil"])
+    with pytest.raises(ExtensionError, match="apt_packages applies to the sidecar modes"):
+        _plan(tmp_path / "h", egress=None, mode="host", apt_packages=["xdotool"])
+
+
 def test_podman_refuses_the_sandbox_profile_it_cannot_apply(tmp_path):
     from glove.runtimes.podman import PodmanRuntime
 

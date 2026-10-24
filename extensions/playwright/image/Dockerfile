@@ -27,6 +27,12 @@ RUN chmod 0755 /usr/local/bin/glove-pw-start /usr/local/bin/glove-pw-capture \
     && mkdir -p /data/output /data/uploads /data/staging /data/profile /etc/glove/playwright \
     && chmod 0777 /data/output /data/profile
 
+# `apt_packages` (opt-in, e.g. xdotool): last, so every layer above stays cached
+ARG APT_PACKAGES=""
+RUN if [ -n "$APT_PACKAGES" ]; then apt-get update \
+      && apt-get install -y --no-install-recommends $APT_PACKAGES \
+      && rm -rf /var/lib/apt/lists/*; fi
+
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright NODE_PATH=/opt/glove/pw/node_modules
 WORKDIR /data/uploads
 CMD ["glove-pw-start", "headless"]
