@@ -20,6 +20,9 @@ All notable changes to glove are documented here.
   launch, not only a missing one. An empty `.pi/settings.json` an earlier run
   left in `work/` is hidden and can be deleted. A repo's tracked `.pi/` files
   look deleted to git in the sandbox (as Vibe's `.vibe/` already did).
+  `test_config_protect.sh pi` checks Pi's TUI shows no warning: 15/15 on
+  Docker (nono+srt) and Podman (nono); with the old file mask that check
+  fails, showing the warning.
 
 ### Security
 
