@@ -148,7 +148,8 @@ def main(directory: str) -> int:
             for p in (work / ".mcp.json", work / ".pi" / "mcp.json"):
                 p.write_text(server)
             answer = live.call(search_tool, {"query": "wikipedia"}, timeout=240)
-            check("a planted /work/.mcp.json or .pi/mcp.json never starts (glove's servers still work)",
+            # .pi/mcp.json is hidden by the empty .pi/ mask; .mcp.json is what Pi's trust setting keeps out
+            check("a planted /work/.mcp.json (or masked .pi/mcp.json) never starts (glove's servers still work)",
                   "TOOL RESULT" in answer and not (work / "MCP-PLANTED").exists(), answer[-160:])
 
         if comp.by_name("observe") and comp.by_name("webfetch"):

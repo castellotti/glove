@@ -927,15 +927,21 @@ wrapper and the planted hook ran in the harness.
   them). `PI_CODING_AGENT_SESSION_DIR` is set to Pi's default for `/work`
   (`~/.pi/agent/sessions/--work--`), and the variable wins over the setting;
   `test_config_protect.sh pi` plants one and checks no session lands there.
-- **Pi never sees the project's `.pi/settings.json`.** Some Pi 1.x code paths
-  (its resource loader and session services) load it as trusted whatever
-  `defaultProjectTrust` says. Pi's `protect:` has `{path: .pi/settings.json,
-  source: empty}`: the harness gets an empty file (Pi reads it as `{}`, checked
-  in Pi 1.1.0), `.pi/` is pinned, and a `.pi/` with an empty `settings.json`
-  appears in the working dir when missing. A `.pi` or `.pi/settings.json` that
-  is a symlink (or `.pi` a file) refuses the session, as any `protect:` path
-  does. `test_config_protect.sh pi` checks that the file reads empty though
-  the host's is planted.
+- **Pi never sees the project's `.pi/`.** Some Pi 1.x code paths (its
+  resource loader and session services) load `.pi/settings.json` as trusted
+  whatever `defaultProjectTrust` says. Pi's `protect:` has `{path: .pi/,
+  source: empty}`: the harness gets an empty, read-only directory (a missing
+  `settings.json` reads as `{}`, as an empty one did), so nothing in it can be
+  read or planted, and an empty `.pi/` appears in the working dir when
+  missing. The whole directory, not just `settings.json`: Pi 1.1.0 warns that
+  "this project is not trusted" whenever a file it would load is in `.pi/`,
+  even an empty one (a repo's own `.agents/skills` still shows it). A `.pi`
+  that is a symlink or a file refuses the session, as any `protect:` path
+  does, checked again just before the launch. A repo's tracked `.pi/` files
+  look deleted to git inside the sandbox (a `git commit -a` there would
+  delete them), as with Vibe's `.vibe/`. `test_config_protect.sh pi` checks
+  that `.pi/` is empty though the host's is planted, and that Pi's TUI shows
+  no warning.
 - **Gaps:** context files (`AGENTS.md`) are prompts, re-rendered at each start.
   An older session home: see "The harness home" above (its `auth.json` is
   overwritten with `{}` at launch, so credentials it held are gone).

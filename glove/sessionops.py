@@ -283,7 +283,7 @@ def materialize_plan(sd: SessionDir, sid: str, cfg, *, resume: bool = False, ses
     made = [p for p in missing if os.path.lexists(p)]
     try:
         if any(p.host_path is None for p in plan.protect):
-            plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect))
+            plan.placeholder_host_dir = str(write_placeholders(sd.state / "placeholders", plan.protect, fresh=launch))
         rendered = runtime.render(plan, sd.state, overrides=overrides)
     except BaseException:
         remove_empty(made)  # unrecorded, so never left behind
