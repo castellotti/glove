@@ -133,7 +133,7 @@ def build_harness(
 
 def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = False) -> None:
     """Build every image an active extension declares (`images:` in its manifest)."""
-    from .extensions import image_tag, when_context, when_matches
+    from .extensions import image_build_args, image_tag, when_context, when_matches
 
     for a in plan.composition.active:
         for name, spec in (a.manifest.raw.get("images") or {}).items():
@@ -145,7 +145,8 @@ def build_extension_images(provider: str, plan: SessionPlan, *, force: bool = Fa
                 continue
             ctx = a.manifest.path / str((spec or {}).get("build", name))
             console.print(f"[bold]building extension image[/bold] {tag}")
-            _build(provider, "-t", tag, str(ctx))
+            args = [f"--build-arg={k}={v}" for k, v in image_build_args(a, name).items()]
+            _build(provider, "-t", tag, *args, str(ctx))
 
 
 def ensure_images(cfg: Config, plan: SessionPlan, provider: str, *, rebuild: bool = False) -> None:

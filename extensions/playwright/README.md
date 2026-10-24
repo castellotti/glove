@@ -29,6 +29,7 @@ extensions:
     # downloads: session       # work: what the browser saves lands in <session>/browser-output/ (/work/browser-output, read-only)
     # uploads: none            # work: browser_file_upload may send files from /work/browser-uploads/ (<session>/browser-uploads/)
     # resources: {memory: 2g, cpus: 2, pids: 2048}
+    # apt_packages: []         # extra Debian packages in the sidecar image, e.g. [xdotool]: an image of their own
     # ca: local/browser-ca.pem   # a private CA's PEM the sidecar trusts too (no default)
     # storage_state: keychain:<service>   # a signed-in session the browser starts with (below)
     # login: {start_url, domains, capture}  # what `glove playwright login` stores (below)
