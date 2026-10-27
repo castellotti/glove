@@ -27,7 +27,7 @@ import os
 import sys
 from pathlib import Path
 
-from live_common import check, live_session, summary, tool_result
+from live_common import check, check_version, live_session, summary, tool_result
 
 ROOT = "/opt/glove/plugins/demo"
 
@@ -35,6 +35,7 @@ ROOT = "/opt/glove/plugins/demo"
 def main(directory: str) -> int:
     with live_session(directory) as s:
         harness = s.cfg.harness
+        check_version(s)
 
         sh = functools.partial(s.sh, echo=True)
 

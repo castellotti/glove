@@ -33,7 +33,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from live_common import check, live_session, summary, tool_result
+from live_common import check, check_version, live_session, summary, tool_result
 from nono_srt_live import PLANTED, PLANTED_SESSIONS, PLANTS, lines
 
 from glove.mounts import CONTAINER_HOME
@@ -61,6 +61,7 @@ def main(directory: str) -> int:
     with live_session(directory) as s:
         plan, h = s.plan, s.cfg.harness
         work, home = s.sd.root / "work", plan.profile.config_home_path
+        check_version(s)
         masked = [e.path.rstrip("/") for e in plan.profile.protect if not e.home and e.source == "empty"]
         dirs = {e.path.rstrip("/") for e in plan.profile.protect if e.source == "empty" and e.path.endswith("/")}
         plants = {"AGENTS.md": "# project notes\n", **{f"{m}/.glove-probe" if m in dirs else m: "x\n" for m in masked},

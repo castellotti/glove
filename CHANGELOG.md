@@ -18,16 +18,21 @@ All notable changes to glove are documented here.
   `PI_CLIPBOARD_OSC52`, `PI_CODEMODE_MAX_WORKERS`) widen nothing.
   Live on Docker (nono+srt where it applies) and Podman (nono):
   `test_tool_confine.sh pi` 27/27 (every tool Pi offers in the inventory),
-  `test_config_protect.sh pi` 15/15, `test_skills.sh pi` 13/13 and
-  `test_llm_inject.sh pi` 15/15 on both; `test_pi_nono.sh` 19/19 and
+  `test_config_protect.sh pi` 17/17, `test_skills.sh pi` 15/15 and
+  `test_llm_inject.sh pi` 17/17 on both (each now with the models.json check); `test_pi_nono.sh` 19/19 and
   `test_pi_srt.sh` 12/12 on Docker.
 - **Pi's `models.json` sets `thinkingFormat: "openai"`.** Pi drops the whole
-  `models.json` when its schema refuses a value, and Pi 1.2 made the provider
-  `compat` schema strict (one object instead of a union whose other branches
-  took any key), so glove's old `"reasoning_effort"` left Pi with no provider ("No
-  API key found for the selected model"). 1.1.0 read that value as `"openai"`
-  anyway, so requests are unchanged. The live drivers check that Pi lists
-  glove's provider with no schema error.
+  `models.json` when its schema refuses a value. Pi 1.2 made the provider
+  `compat` schema one object instead of a union whose other branches took any
+  value; unknown keys are still allowed, but a known key such as
+  `thinkingFormat` must hold one of its listed values. glove's old
+  `"reasoning_effort"` therefore left Pi with no provider ("No API key found
+  for the selected model"). 1.1.0 read that value as `"openai"` anyway, so
+  requests are unchanged. glove now refuses a session's
+  `harness_config.model.compat` whose `thinkingFormat` or `maxTokensField` Pi
+  1.4.0 would refuse, and the Pi live drivers (`tool_confine`,
+  `config_protect`, `skills`, `llm_inject`) check that Pi lists glove's
+  provider with no schema error.
 
 ### Fixed
 
