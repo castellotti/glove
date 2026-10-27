@@ -91,6 +91,12 @@ def check_version(s: LiveSession) -> None:
     r = s.run("--version", entry=s.tools["cli"])
     out = r.stdout + r.stderr
     check(f"the image runs {s.cfg.harness} {want}", want in out.split(), out[-200:])
+    if s.cfg.harness == "pi":  # Pi drops all of a models.json its schema refuses, glove's provider with it
+        r = s.run("--list-models", entry=s.tools["cli"])
+        out = r.stdout + r.stderr
+        check("Pi loads glove's models.json (its provider listed, no schema error)",
+              "Invalid models.json" not in out and any(ln.split()[:1] == ["glove"] for ln in out.splitlines()),
+              out[-300:])
 
 
 def tool_result(out: str, n: int | None = None) -> str:

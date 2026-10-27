@@ -167,7 +167,9 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         glove_provider["compat"] = {
             "supportsDeveloperRole": False,
             "supportsReasoningEffort": model.reasoning,
-            "thinkingFormat": "reasoning_effort",
+            # top-level `reasoning_effort` (Pi ≥ 1.2 refuses all of models.json
+            # for a value outside its schema, so the provider never loads)
+            "thinkingFormat": "openai",
             "maxTokensField": "max_tokens",
         }
     models = [_pi_model({}, model), *(_pi_model(dict(e), model) for e in model.extra_models)]

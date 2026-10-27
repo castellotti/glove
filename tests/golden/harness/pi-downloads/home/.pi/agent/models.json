@@ -7,7 +7,7 @@
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
-        "thinkingFormat": "reasoning_effort",
+        "thinkingFormat": "openai",
         "maxTokensField": "max_tokens"
       },
       "models": [

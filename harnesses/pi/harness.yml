@@ -5,11 +5,11 @@ summary: Pi coding agent (earendil-works/pi-coding-agent).
 # enforcer extension) only. Optional capabilities are opt-in extensions.
 image: glove/pi:0.5.0
 # The harness release the image installs (the Dockerfile's HARNESS_VERSION).
-version: 1.1.0
+version: 1.4.0
 # The release `protect` was audited against: a new release can add a dir it
 # loads code or config from, so glove refuses a `version` that has not been
 # re-audited.
-audited_version: 1.1.0
+audited_version: 1.4.0
 # Load only the always-on ring-1 `enforcer` extension (deps are node builtins)
 # from a system path; the user's own extensions still load from the config home.
 # An extension's own Pi code (`harness: {pi: {extensions: …}}`; none in-tree:
@@ -36,7 +36,7 @@ context_file: /home/agent/.pi/agent/AGENTS.override.md
 # `.agents/` is read-only with the home. Some Pi 1.x code paths load the
 # project's `.pi/settings.json` as trusted anyway, so the harness only ever
 # sees an empty, read-only `.pi/` (it creates an empty `.pi/` in the working
-# dir when missing). The dir, not just the file: Pi 1.1.0 warns that "this
+# dir when missing). The dir, not just the file: Pi 1.x warns that "this
 # project is not trusted" when any file it loads (settings.json included) is
 # in `.pi/`, even an empty one.
 protect:

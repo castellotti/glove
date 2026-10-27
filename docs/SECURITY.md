@@ -933,7 +933,7 @@ wrapper and the planted hook ran in the harness.
   source: empty}`: the harness gets an empty, read-only directory (a missing
   `settings.json` reads as `{}`, as an empty one did), so nothing in it can be
   read or planted, and an empty `.pi/` appears in the working dir when
-  missing. The whole directory, not just `settings.json`: Pi 1.1.0 warns that
+  missing. The whole directory, not just `settings.json`: Pi 1.x warns that
   "this project is not trusted" whenever a file it would load is in `.pi/`,
   even an empty one (a repo's own `.agents/skills` still shows it). A `.pi`
   that is a symlink or a file refuses the session, as any `protect:` path
