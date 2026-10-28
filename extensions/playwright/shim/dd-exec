@@ -1,0 +1,17 @@
+#!/bin/bash
+# dd-exec — fire the pinned DataDome drag executor in THIS session's browser
+# sidecar, over the glove `dd` relay channel (see the playwright extension's
+# relay_policy.py for what the sidecar runs and why anything else is refused).
+#
+#   dd-exec PLAN [--allow-while-recording] [--dry-run]
+#     PLAN  bare file name of a plan staged at /run/glove/dd/plans/PLAN
+#           (the channel dir, writable from the sandbox; fresh <= 25 s, v1)
+#   Result + evidence shots: /run/glove/dd/out/result.json, out/shots/
+#           (copy result.json into your workdir as soon as the call returns)
+#   Audit: /work/dd-audit/trigger.jsonl (read-only) + the sidecar's container log
+#
+# Exit codes (from the relay client/protocol): 0 ok; 126 the sidecar refused
+# (message on stderr: stale plan, active solve recording, schema error, …);
+# 127 the relay is not being served (sidecar down / dd_relay off: fall back
+# to `glove playwright solve`); 124 the executor was killed at its timeout.
+exec /opt/glove/bin/glove-relay dd dd-exec "$@"

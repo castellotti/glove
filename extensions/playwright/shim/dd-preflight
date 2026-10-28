@@ -1,0 +1,6 @@
+#!/bin/bash
+# dd-preflight — liveness probe for the `dd` trigger relay (no pointer events):
+# reports this sidecar's X display, pointer, XTest availability and whether a
+# human solve recording is active. Run it before `dd-exec`; if the relay is not
+# being served it exits 127 (fall back to `glove playwright solve`).
+exec /opt/glove/bin/glove-relay dd dd-preflight

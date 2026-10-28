@@ -151,7 +151,17 @@ case "${1:-headless}" in
     websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900 &
     mapfile -t args < <(mcp_args)
     (cd "$PW_UPLOADS" && DISPLAY=:1 NODE_OPTIONS=$MCP_NODE_OPTIONS exec playwright-core "${args[@]}") &
-    # any child's death ends the container (compose restarts it)
+    # `dd_relay: true`: relayd serves the `dd` channel in this container, beside
+    # this X display. It runs only the pinned commands image/relay_policy.py
+    # allows. Detached (disown) so its death cannot end the container — `wait -n`
+    # below then still only sees the tracked jobs above, and a dead relayd just
+    # means `dd-exec` exits 127 (the agent falls back to the operator path).
+    if [ "${PW_DD_RELAY:-false}" = true ]; then
+      relayd --channel /run/glove/dd --policy /opt/glove/dd/relay_policy.py \
+             --work /run/glove/dd --timeout "${PW_DD_TIMEOUT:-120}" --max 1 &
+      disown
+    fi
+    # any tracked child's death ends the container (compose restarts it)
     wait -n
     exit $?
     ;;

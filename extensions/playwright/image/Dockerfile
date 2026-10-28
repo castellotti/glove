@@ -18,6 +18,14 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
     && ln -s /opt/glove/pw/node_modules/.bin/playwright-core /usr/local/bin/playwright-core
 
 COPY glove-pw-start glove-pw-capture /usr/local/bin/
+# the `dd` trigger relay (opt-in, `playwright.dd_relay`): relayd serves the
+# `dd` channel in this container, beside the X display the pinned commands
+# act on. relayd.py is a vendored copy of extensions/relay/image/relayd.py
+# (keep in lockstep: re-copy when it changes); the policy and the two pinned
+# executables are reviewed, and relay_policy.py pins their SHA-256s.
+COPY relayd.py /usr/local/bin/relayd
+COPY relay_policy.py dd_execute.py dd_preflight.py /opt/glove/dd/
+RUN chmod 0755 /usr/local/bin/relayd /opt/glove/dd/dd_execute.py /opt/glove/dd/dd_preflight.py
 # novnc: keeps the page the agent acts on in front (mcp.json's browser.initPage);
 # the MCP deletes a staged download once it has copied it (glove-pw-start)
 COPY glove-pw-front.js glove-pw-staged.js /opt/glove/pw/

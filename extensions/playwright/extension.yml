@@ -5,6 +5,7 @@ provides: [browser]
 requires:
   - { slot: egress, when: { mode: [headless, novnc] } }
   - { extension: keychain, when: { "settings.login": { set: true } } }   # `glove playwright login` stores
+  - { extension: relay, when: { mode: [novnc], dd_relay: true } }        # the `dd` trigger channel's harness client
 settings:
   mode:              { type: enum, values: [headless, novnc, host], default: headless }
   tools:             { type: list, pattern: "^browser_[a-z_]+$",
@@ -34,6 +35,11 @@ settings:
   # `glove playwright solve` records the operator's pointer while they solve a
   # challenge (needs allow_control): {to: session|work, max_seconds, motion_hz}
   challenge_capture: { type: map }
+  # the `dd` trigger relay: the agent fires the pinned command in this sidecar
+  # (on its X display) over the `dd` channel — no host process, no operator,
+  # no docker CLI (see the playwright README). Needs mode: novnc; off by default.
+  dd_relay:          { type: bool, default: false }
+  dd_timeout:        { type: int, default: 120 }    # s; the child's process group is killed on overrun
   # host
   port:              { type: int }                      # host MCP port (default: a free one per session)
   cdp_port:          { type: int }                      # host Chrome remote-debugging port (likewise)
@@ -55,14 +61,26 @@ validate:
       profile: ephemeral, or set allow_persistent_profile_with_tor: true to accept that
   - when: { mode: [headless, host], allow_control: true }
     error: "allow_control applies to mode: novnc only"
+  - when: { mode: [headless, host], dd_relay: true }
+    error: "dd_relay applies to mode: novnc only (the trigger fires on the sidecar's X display)"
 hooks: hooks.py
 cli: cli.py
 # the sidecar trusts the session's corporate_ca and `ca` (glove-pw-start adds them to Chromium's NSS db)
 trust: [pw]
+# `dd_relay: true` (novnc): the `dd` channel the agent's `dd-exec`/
+# `dd-preflight` shims leave requests on — files and FIFOs, no socket. relayd
+# runs in the pw sidecar (beside its X display) and runs only the pinned
+# commands the policy allows (image/relay_policy.py).
+channels:
+  dd: { services: [pw], when: { mode: [novnc], dd_relay: true } }
 # `downloads: work`: what the browser saves lands in <session>/browser-output/,
 # written by the sidecar and read-only to the harness at /work/browser-output
 outputs:
   browser-output: { services: [pw], when: { downloads: work, mode: [headless, novnc] } }
+  # the dd relay's audit: one JSON line per request, written by the sidecar and
+  # read-only to the harness (and the agent) at /work/dd-audit — it cannot be
+  # written or deleted from the sandbox
+  dd-audit: { services: [pw], when: { mode: [novnc], dd_relay: true } }
 # `uploads: work`: files the agent puts in /work/browser-uploads (<session>/browser-uploads/),
 # which the sidecar reads, read-only, at the same path, and browser_file_upload may send
 inputs:
@@ -101,6 +119,12 @@ endpoints:
 verify:
   - { name: browser-up, kind: container-healthy, service: pw, when: { mode: [headless, novnc] } }
 harness:
+  image:
+    # the dd trigger relay's shims, in the harness image: the `dd-exec` /
+    # `dd-preflight` shell commands the agent runs; they call the relay's
+    # `glove-relay` client, which the `relay` extension provides
+    "*":
+      copy: [[shim/dd-exec, /usr/local/bin/dd-exec], [shim/dd-preflight, /usr/local/bin/dd-preflight]]
   mcp:                                  # rendered by harnesses that speak MCP
     - name: playwright
       transport: http

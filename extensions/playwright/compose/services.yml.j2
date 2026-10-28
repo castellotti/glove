@@ -34,6 +34,13 @@ services:
 {% if settings.mode == "novnc" %}
       VNC_ACCEPT_INPUT: "{{ settings.allow_control | lower }}"
       VNC_CLIPBOARD: "{{ settings.clipboard }}"
+{% if settings.dd_relay %}
+      # the `dd` trigger relay: relayd serves the `dd` channel in this container,
+      # beside the X display (glove-pw-start starts it; the channel and the
+      # dd-audit output are mounted by core)
+      PW_DD_RELAY: "true"
+      PW_DD_TIMEOUT: "{{ settings.dd_timeout }}"
+{% endif %}
 {% endif %}
     volumes:
 {% if settings.downloads != "work" %}
