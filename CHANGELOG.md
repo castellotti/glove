@@ -4,6 +4,22 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Live checks that an MCP tool off a session's allowlist never runs**
+  (round 27). The `skills` fixture's MCP server has a second tool, `secret`,
+  which the session doesn't allow, and it logs every call it receives.
+  `test_skills.sh` calls `secret` and checks it is refused and never reaches
+  the server, with the allowed `echo` call in the server's log as the control.
+  Each path must show the harness's own refusal. On Pi 1.4.0 that is a direct
+  call ("not found"), a codemode script naming it ("does not exist"), and
+  `ALL_TOOLS`, which doesn't list it (glove renders it `hidden`); on Vibe a
+  `run_typescript` call ("not a function"); on Claude Code a call never
+  granted. The server's argv probes `$HOME` and `!x` arrive literally on all
+  three. The live drivers share Pi's codemode helper (`pi_codemode`). Docker
+  so far: `test_skills.sh` pi 24/24, vibe 18/18, claude-code 19/19;
+  `test_tool_confine.sh pi` 27/27.
+
 ### Changed
 
 - **Pi 1.4.0** (round 26, from 1.1.0; `version` and `audited_version`).

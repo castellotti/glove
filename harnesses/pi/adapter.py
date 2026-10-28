@@ -9,7 +9,10 @@ them from the model, and its scripts could reach the rest). Pi names them
 the enforcer extension refuses every other tool by. A stdio server runs as its
 contributor wrote it (the `skills` extension's go through `glove-tool --`, the
 tool wrapper). Pi expands `${VAR}` and runs a `!command` in `env` values, so
-glove's literal values may hold no `$` and start with no `!`.
+glove's literal values may hold no `$` and start with no `!`. Pi resolves an
+http server's `headers` the same way: core refuses `headers` today (an http
+server takes only `url`); if it ever passes them, they need the same refusal.
+Stdio `args` reach the server as written (only a leading `~/` expands).
 
 Extensions may also contribute Pi code as `harness: {pi: {extensions: [<dir>,
 …], tools: [<name>, …]}}`: each directory is baked into the derived image under
