@@ -233,6 +233,68 @@ can't cover the window you are working in.
   nothing, and the agent's brief says to recognise a challenge, never to solve
   it.
 
+### Firing a pinned command in the sidecar: the `dd` trigger relay
+
+With `dd_relay: true` (needs `mode: novnc`; off by default) the agent can fire
+a **pinned** command on the sidecar's own X display — no host process, no
+operator action, no `docker` CLI. It is the agent-side, unattended counterpart
+of `solve`: where `solve` records *your* input, the relay runs a command the
+*agent* staged, and the two are mutually exclusive (below).
+
+```yaml
+  playwright:
+    mode: novnc
+    dd_relay: true          # start relayd in the pw sidecar, serving the `dd` channel
+    dd_timeout: 120         # optional; one command's budget (its process group is killed on overrun)
+```
+
+The agent's tools are two shell commands (the relay's `glove-relay` client,
+wrapped): `dd-preflight` probes the sidecar (display, pointer, XTest, whether a
+`solve` recording is armed) and `dd-exec PLAN [--dry-run] [--allow-while-recording]`
+fires a plan the agent staged at the channel's `plans/` dir. The result and two
+evidence frames come back at the channel's `out/`; an audit line lands at
+`/work/dd-audit/trigger.jsonl` (read-only to the agent).
+
+**The trust boundary is a policy file, not the agent.** `relayd` runs inside the
+`pw` container, beside the X display, and runs only what
+`image/relay_policy.py` allows — a static set of commands (`dd-exec`,
+`dd-preflight`) that exec **pinned** executables whose SHA-256s the policy
+re-checks when relayd starts. What the policy holds, and only this:
+
+- **Pinned code.** The command is a fixed path in the image; a hash mismatch at
+  start kills relayd, so the channel stops being served (fail closed) rather than
+  running code that is not the reviewed one. The agent chooses a plan file name
+  (a bare name in `plans/`, regex-checked, `O_NOFOLLOW`) and two flags — never
+  the program, the display, the output paths, or any value that reaches the
+  child.
+- **Fresh, validated plans.** A plan must be schema-valid, at most `STALE_S`
+  (25 s) old — the puzzle it aims at is gone after ~15–18 s — and is handed to
+  the child as a checked `/dev/fd` (what is validated is what is opened).
+- **No network, no stdin.** The child's environment is built by the policy
+  (`DISPLAY` and a minimal `PATH`/`HOME`/`TZ` only): it reaches the X display
+  and nothing else. There is no egress fence because there is no route to give.
+- **Human/agent exclusivity.** While a `solve` recording is armed
+  (`/tmp/capture/.current` — the same marker `glove-pw-front.js` and the manual
+  one-liner read), a fire is refused; `--allow-while-recording` is an explicit
+  override. Every synthetic event is tagged as such, so a concurrent recording
+  can still tell them apart.
+- **Audited before it fires.** One JSON line (plan sha256, age, flags, dx) is
+  appended to the `dd-audit` output root — writable by the sidecar, read-only to
+  the harness, so the agent can read the trail but not write or delete it — and
+  a request that could not be audited is refused, never fired. relayd's own
+  `… -> rc` line goes to the sidecar's container log on the host.
+- **Bounded and detached.** One command at a time (`--max 1`); the child runs in
+  its own session and is killed by process group on `dd_timeout`. relayd starts
+  detached (`disown`), so even if it dies the browser keeps running — `dd-exec`
+  then exits `127` and the agent falls back to the `solve` path.
+
+Exit codes from `dd-exec`: `0` ok · `126` the sidecar **refused** (the reason is
+on stderr: stale plan, an active recording, a schema error, …) · `127` the relay
+is not being served (sidecar down, or `dd_relay` off) · `124` killed at its
+timeout. `relayd` is a vendored copy of the `relay` extension's `relayd.py` (the
+same supervisor `github` and `ssh` use); the policy is playwright's and names its
+own commands.
+
 ### Signing in on the host: `glove playwright login` and `storage_state`
 
 For sites behind single sign-on, especially SSO that needs your machine's
