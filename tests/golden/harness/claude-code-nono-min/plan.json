@@ -28,7 +28,7 @@
     "REQUESTS_CA_BUNDLE": "/etc/glove/ca/bundle.pem",
     "SSL_CERT_FILE": "/etc/glove/ca/bundle.pem"
   },
-  "image": "glove/claude-code:0.2.0-bc85a2338a",
+  "image": "glove/claude-code:0.2.0-c79b46e38d",
   "transcripts": [
     null,
     null

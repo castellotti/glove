@@ -29,7 +29,7 @@
     "REQUESTS_CA_BUNDLE": "/etc/glove/ca/bundle.pem",
     "SSL_CERT_FILE": "/etc/glove/ca/bundle.pem"
   },
-  "image": "glove/claude-code:0.2.0-bc85a2338a-srt-46f57ff955",
+  "image": "glove/claude-code:0.2.0-c79b46e38d-srt-46f57ff955",
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.claude/projects"

@@ -41,7 +41,7 @@ for line in sys.stdin:
             reply(rid, {"content": [{"type": "text", "text": f"SECRET-REACHED {message}"}]})
             continue
         text = (f"ECHO {message} root={os.environ.get('CLAUDE_PLUGIN_ROOT')} data={os.environ.get('DEMO_DATA')}"
-                f" argv={'|'.join(sys.argv[1:])}")
+                f" argv={'|'.join(sys.argv[1:])} probe={os.environ.get('DEMO_PROBE', '-')}")
         if ":" in message:
             host, _, port = message.rpartition(":")
             try:

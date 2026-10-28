@@ -1,5 +1,18 @@
 {
   "allowManagedHooksOnly": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(?!(?:mcp__webdownload__web_download|mcp__webdownload__web_download_status)$)mcp__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/glove/bin/glove-cc-prefix --deny-mcp"
+          }
+        ]
+      }
+    ]
+  },
   "allowManagedPermissionRulesOnly": true,
   "disableSideloadFlags": true,
   "allowManagedMcpServersOnly": true,

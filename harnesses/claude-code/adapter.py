@@ -13,7 +13,8 @@ stops Claude Code from starting. They carry:
   from `mcp-<name>.argv` beside the settings under the harness's own sandbox,
   as Pi and Vibe run theirs: the tool profile has no network to reach a sidecar;
 - managed-only hooks (which also keeps installed mods from running),
-  permission rules and MCP servers, and no sideloaded plugins; the tools the
+  permission rules and MCP servers, and no sideloaded plugins; one managed
+  hook refuses every MCP tool off the session's allowlist; the tools the
   session's inventory (tools.json) classes shell, file_write and allow are
   approved, `deny` ones denied, and the rest (`ask`, a tool a new release
   adds) prompt;
@@ -45,6 +46,7 @@ from glove.api.harness import CONTAINER_HOME, INJECTED_KEY, AdapterContext, argv
 
 MANAGED_DIR = "/etc/claude-code"
 SHELL_PREFIX = "/opt/glove/bin/glove-cc-prefix"
+MCP_GATE = f"{SHELL_PREFIX} --deny-mcp"  # the prefix exits 2 on it (see _mcp_gate)
 SKILLS_ROOT = "/opt/glove/cc"  # `--add-dir`: Claude Code loads <dir>/.claude/skills
 DEFAULT_HOST = "api.anthropic.com"
 # What the harness process may write beyond the write roots, under any
@@ -87,6 +89,9 @@ def _config(actx: AdapterContext) -> dict[str, Any]:
         rules = perms.get(key) or []
         if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
             raise ConfigError(f"claude-code permissions.{key} must be a list of rule strings")
+    if any(r.startswith("mcp__") for r in perms.get("allow") or []):
+        raise ConfigError("claude-code permissions.allow: an MCP tool is allowed by its extension's `tools` "
+                          "(glove refuses every other)")
     if perms.get("defaultMode", "default") not in MODES:
         raise ConfigError(f"claude-code permissions.defaultMode must be one of {list(MODES)}")
     return hc
@@ -97,15 +102,20 @@ def _mcp(actx: AdapterContext, wrapped: bool = False) -> tuple[dict[str, Any], l
     permission rules their `tools` allowlists imply: allow rules for the listed
     tools, deny rules for every other tool the server is known to have
     (`all_tools`; Claude Code's rules can't say "only these", and an unknown
-    tool prompts); and, when `wrapped` (a shell prefix is set), each stdio
-    server's argv file."""
+    tool would prompt: `_mcp_gate` refuses it); and, when `wrapped` (a shell
+    prefix is set), each stdio server's argv file. Claude Code expands `${VAR}`
+    (and `${VAR:-default}`) from its own env in a server's command, args, env
+    and url, so a value naming one is refused (an argv file is read as written)."""
     servers: dict[str, Any] = {}
     allow: list[str] = []
     deny: list[str] = []
     argv_files: dict[str, str] = {}
     for _ext, item in actx.mcp:
         name, tools = item["name"], item.get("tools")  # core checked them
+        if "__" in name:  # Claude Code splits mcp__<server>__<tool> at the first `__`
+            raise ConfigError(f"MCP server {name!r}: Claude Code can't tell a server name with `__` from its tools")
         if item["transport"] == "http":
+            _no_expansion(name, "url", [item["url"]])
             servers[name] = {"type": "http", "url": item["url"]}
         else:
             argv = [item["command"], *item.get("args", [])]
@@ -114,6 +124,8 @@ def _mcp(actx: AdapterContext, wrapped: bool = False) -> tuple[dict[str, Any], l
                     raise ConfigError(f"MCP server {name!r}: an argument with a newline")
                 argv_files[f"mcp-{name}.argv"] = argv_lines(argv)
                 argv = [SHELL_PREFIX, "--mcp", name]
+            _no_expansion(name, "command and args", argv)
+            _no_expansion(name, "env", list((item.get("env") or {}).values()))
             servers[name] = {"type": "stdio", "command": argv[0], "args": argv[1:],
                              **({"env": dict(item["env"])} if item.get("env") else {})}
         if tools is None:
@@ -122,6 +134,24 @@ def _mcp(actx: AdapterContext, wrapped: bool = False) -> tuple[dict[str, Any], l
             allow += [f"mcp__{name}__{t}" for t in tools]
             deny += [f"mcp__{name}__{t}" for t in item.get("all_tools", []) if t not in tools]
     return servers, allow, deny, argv_files
+
+
+def _no_expansion(name: str, where: str, values: list[str]) -> None:
+    if any("${" in v for v in values):
+        raise ConfigError(f"MCP server {name!r}: a `${{` in its {where}: Claude Code would fill in "
+                          "a `${VAR}` from its own env")
+
+
+def _mcp_gate(servers: dict[str, Any], mcp_allow: list[str]) -> dict[str, Any]:
+    """A managed PreToolUse hook refusing every MCP tool the session does not
+    allow: an unlisted tool would otherwise prompt, and the operator could
+    grant it. Its matcher (a regex) matches only those tools; the prefix
+    answers its command with exit 2, which blocks the call."""
+    # an allow rule names a tool, or (a server without an allowlist) the
+    # server; names are [A-Za-z0-9_-] (core checks them), literal in a regex
+    allowed = [r + ("__.*" if r.removeprefix("mcp__") in servers else "") for r in mcp_allow]
+    matcher = f"^(?!(?:{'|'.join(allowed)})$)mcp__" if allowed else "^mcp__"
+    return {"PreToolUse": [{"matcher": matcher, "hooks": [{"type": "command", "command": MCP_GATE}]}]}
 
 
 def _web_fetch_proxy(actx: AdapterContext) -> str | None:
@@ -172,6 +202,7 @@ def managed_settings(actx: AdapterContext, servers: dict[str, Any], mcp_allow: l
     return {
         # also keeps installed mods (in-process plugin code) from running
         "allowManagedHooksOnly": True,
+        "hooks": _mcp_gate(servers, mcp_allow),
         "allowManagedPermissionRulesOnly": True,
         "disableSideloadFlags": True,
         "allowManagedMcpServersOnly": True,
@@ -276,6 +307,6 @@ def _approved_keys(path: Path) -> list:
 
 
 def describe(actx: AdapterContext) -> list[str]:
-    servers, _, _, _ = _mcp(actx)
-    return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {n}" for n in servers),
+    # not `_mcp`: `actx` is the early one, without `wrapped`, and system_files checked the servers
+    return [f"managed settings → {MANAGED_DIR} (read-only)", *(f"mcp server: {i['name']}" for _, i in actx.mcp),
             *(f"skill: {name} → {dest}" for name, dest in actx.skill_links)]

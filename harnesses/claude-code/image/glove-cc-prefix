@@ -29,4 +29,12 @@ if [[ "$1" =~ ^/opt/glove/bin/glove-cc-prefix\ --mcp\ ([A-Za-z0-9_-]+)$ ]]; then
   fi
   exec "${server[@]}"
 fi
+# glove's managed hook refusing an MCP tool off the session's allowlist: exit 2,
+# the one code that blocks a PreToolUse call (any other lets it prompt), so it
+# never goes through a sandbox that could fail to start. Without an enforcer
+# Claude Code runs the hook command itself: `<this prefix> --deny-mcp`.
+if [ "$1" = "--deny-mcp" ] || [ "$1" = "/opt/glove/bin/glove-cc-prefix --deny-mcp" ]; then
+  echo "glove: this MCP tool is not on the allowlist of this session" >&2
+  exit 2
+fi
 exec /opt/glove/bin/glove-tool -c "$1"

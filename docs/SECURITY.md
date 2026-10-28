@@ -12,7 +12,7 @@ README, or tool result that makes the model run a command it shouldn't.
 |---|---|---|---|
 | 0 — Runtime | container / VM | namespaces, bind-mount allow-list, a read-only harness home (only its config home writable), internal-only network, the hardening set (non-root, `cap_drop ALL`, `no-new-privileges`, read-only rootfs, seccomp, pids/mem/ipc) | escaping the namespace; reaching un-exposed host dirs; reaching the LAN/host; privilege escalation via setuid/caps |
 | 1 — Enforcer | every process | **nono+srt** by default on Docker (srt/bubblewrap around the harness, nono/Landlock around every command); **nono** by default on Podman; or **srt** (tool commands only); wraps the harness *and* every shell command in a kernel policy | a shell command reading the harness home / secrets, writing outside `/work`, or opening the network — even though it runs *inside* ring 0 |
-| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 via one launcher, `glove-tool -c <cmd>` (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
+| 2 — Harness | tool calls | Pi extension / Vibe `pre_tool` hook / Claude Code's managed `CLAUDE_CODE_SHELL_PREFIX` route every `bash`/`!` through ring 1 via one launcher, `glove-tool -c <cmd>` (nested tool calls too: Pi's codemode, Vibe's `run_typescript`); Pi's and Vibe's hold the file-write tools to the write roots and refuse every tool not in the session's tool inventory (fail closed; Claude Code: permission rules from the same inventory, an unlisted tool prompts the human, except an MCP tool off the session's allowlist, which a managed hook refuses); the context file tells the agent the rules | the agent invoking an unsandboxed shell; its file tools writing the harness home; a tool a new release adds or renames, or one nobody classified, running unchecked |
 
 A compromise must defeat **all three, in order**. Ring 1 also shrinks the kernel
 attack surface the agent can even reach (no raw sockets, no `AF_UNIX` to the
@@ -691,6 +691,23 @@ Claude Code from starting (fail closed).
   sandbox, with network, as under Pi and Vibe. The agent cannot produce that
   string: a Bash or `!` string always starts with Claude Code's snapshot
   `source`, and hooks are managed-only. An unknown name exits 126.
+- **MCP tools and `${VAR}`.** A server's `tools` allowlist becomes allow rules,
+  and the rest of `all_tools` deny rules. Any other tool would prompt, and an
+  operator could grant it, so a managed `PreToolUse` hook whose matcher catches
+  every `mcp__` name off the allowlist blocks the call
+  (`test_skills.sh claude-code`: the fixture's `secret` never reaches its
+  server). Its command is `glove-cc-prefix --deny-mcp`, which the prefix
+  answers with exit 2 itself, without starting a sandbox: exit 2 is the one
+  code that blocks, and any other (a sandbox that fails to start exits 126)
+  would let Claude Code prompt again. With no MCP server the matcher is
+  `^mcp__`. An `mcp__` rule in `harness_config.permissions.allow` is refused
+  (the hook would refuse the tool anyway), and so is a server name with `__`
+  (Claude Code splits `mcp__<server>__<tool>` at the first `__`, so the
+  matcher couldn't tell the server from its tools). Claude Code expands `${VAR}` and `${VAR:-default}` from its own env
+  in `managed-mcp.json` (live: a planted `${HOME}` arrived as `/home/agent`; a
+  bare `$HOME` stays literal), which could hand a server or a URL a value from
+  the harness env. The adapter therefore refuses a `${` in a server's command,
+  args, env or url; an argv file under the prefix is read as written.
 - **Project settings** (`/work/.claude/settings.json`, `settings.local.json`)
   are bound read-only at ring 0, on every enforcer (`protect:` in
   `harness.yml`; an empty placeholder when missing, created on the host, and

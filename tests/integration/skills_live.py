@@ -26,12 +26,13 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 from __future__ import annotations
 
 import functools
+import json
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from live_common import check, check_version, live_session, pi_codemode, summary, tool_result
+from live_common import check, check_version, host_edit, live_session, pi_codemode, summary, tool_result
 
 ROOT = "/opt/glove/plugins/demo"
 
@@ -93,6 +94,18 @@ def main(directory: str) -> int:
         print(f"      argv: {out.partition('argv=')[2][:60] or 'none'}")
         check("its argv probes arrive literally ($HOME, !x)", "argv=$HOME|!x" in out, out[-120:])
 
+        if harness == "claude-code":
+            # Claude Code expands `${VAR}` in managed-mcp.json (glove's adapter refuses `${` there): planted
+            # on the host, `${HOME}` and a default arrive expanded, a bare `$HOME` literally
+            mcp = s.sd.state / "harness" / "claude-code" / "managed-mcp.json"
+            spec = json.loads(mcp.read_text())
+            spec["mcpServers"]["demo"].setdefault("env", {})["DEMO_PROBE"] = "${HOME}|${GLOVE_UNSET:-dflt}|$HOME"
+            with host_edit(mcp, json.dumps(spec)):
+                out = tool_result(s.call(echo, {"message": "probe"}), 300)
+            print(f"      env probe: {out.partition('probe=')[2][:60] or 'none'}")
+            check("Claude Code expands ${VAR} in managed-mcp.json (so glove refuses it)",
+                  "probe=/home/agent|dflt|$HOME" in out, out[-200:])
+
         print("== a tool off the allowlist (the server has `secret`; the session allows only `echo`)")
         calls = s.sd.root / "work" / ".glove-plugin-data" / "demo" / "calls.log"
 
@@ -106,7 +119,7 @@ def main(directory: str) -> int:
         tries: dict[str, tuple[Callable[[str], str], tuple[str, ...]]] = {
             "called by name": (lambda m: s.call(echo.replace("echo", "secret"), {"message": m}),
                                {"pi": ("not found",), "vibe": ("ERR ", "not a function"),
-                                "claude-code": ("haven't granted",)}[harness]),
+                                "claude-code": ("not on the allowlist of this session",)}[harness]),
         }
         if harness == "pi":
             out = tool_result(pi_codemode(s, "return 'CODEMODE-' + 'ON';"), 200)
