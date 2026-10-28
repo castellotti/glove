@@ -308,7 +308,7 @@ and observe's `session.json` record them, and external monitors (Layman) pick a
 transcript parser by them.
 
 Each manifest pins the harness release its image installs (`version`, passed
-to the build as `HARNESS_VERSION`; Pi 1.1.0, Vibe 2.26.1, Claude Code
+to the build as `HARNESS_VERSION`; Pi 1.4.0, Vibe 2.26.1, Claude Code
 2.1.296) and names the release its protected paths (below) were audited
 against (`audited_version`). glove refuses a manifest whose two differ, so a
 new release goes in only with a re-audit. The base image tag is the `image`

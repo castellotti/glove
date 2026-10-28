@@ -4,6 +4,36 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Pi 1.4.0** (round 26, from 1.1.0; `version` and `audited_version`).
+  `pi-lock` regenerated: Pi's own packages, AWS SDK and `@smithy` minor and
+  patch bumps, `marked-cjk-friendly` new (and two nested `@smithy` copies), and
+  `esbuild` (26 platform binaries) and `@earendil-works/chord` gone.
+  Re-audited for 1.4.0, compared with 1.1.0: no new file Pi
+  loads config or code from (so `protect:` is unchanged), the project-trust
+  check and the MCP `env`/`headers` resolver are the same, and stdio MCP
+  `command`/`args` still go to the server as plain arguments (only a leading
+  `~/` expands). The new environment variables (`PI_ATTRIBUTION`,
+  `PI_CLIPBOARD_OSC52`, `PI_CODEMODE_MAX_WORKERS`) widen nothing.
+  Live on Docker (nono+srt where it applies) and Podman (nono):
+  `test_tool_confine.sh pi` 27/27 (every tool Pi offers in the inventory),
+  `test_config_protect.sh pi` 17/17, `test_skills.sh pi` 15/15 and
+  `test_llm_inject.sh pi` 17/17 on both (each now with the models.json check); `test_pi_nono.sh` 19/19 and
+  `test_pi_srt.sh` 12/12 on Docker.
+- **Pi's `models.json` sets `thinkingFormat: "openai"`.** Pi drops the whole
+  `models.json` when its schema refuses a value. Pi 1.2 made the provider
+  `compat` schema one object instead of a union whose other branches took any
+  value; unknown keys are still allowed, but a known key such as
+  `thinkingFormat` must hold one of its listed values. glove's old
+  `"reasoning_effort"` therefore left Pi with no provider ("No API key found
+  for the selected model"). 1.1.0 read that value as `"openai"` anyway, so
+  requests are unchanged. glove now refuses a session's
+  `harness_config.model.compat` whose `thinkingFormat` or `maxTokensField` Pi
+  1.4.0 would refuse, and the Pi live drivers (`tool_confine`,
+  `config_protect`, `skills`, `llm_inject`) check that Pi lists glove's
+  provider with no schema error.
+
 ### Fixed
 
 - **Pi no longer warns "This project is not trusted"** at every start (round

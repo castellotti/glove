@@ -24,13 +24,20 @@ import json
 from pathlib import Path
 from typing import Any
 
-from glove.api import ExtensionError
+from glove.api import ConfigError, ExtensionError
 from glove.api import tool_names as checked_tool_names
 from glove.api.harness import AdapterContext, HarnessSection, staged_name
 
 # What Pi sends when the endpoint needs no key (Pi refuses a provider without one).
 NO_KEY_PLACEHOLDER = "glove-no-key"
 SECTION_KEYS = frozenset({"extensions", "tools"})
+# Pi 1.4.0's values for the openai-completions `compat` keys a session sets most
+# (pi-ai's compat-schema.js): Pi drops all of models.json for any other value.
+COMPAT_VALUES = {
+    "thinkingFormat": frozenset({"openai", "openrouter", "deepseek", "together", "baseten", "zai", "qwen",
+                                 "chat-template", "qwen-chat-template", "string-thinking", "ant-ling"}),
+    "maxTokensField": frozenset({"max_completion_tokens", "max_tokens"}),
+}
 
 
 def _merged(first: list, extra: list | None) -> list:
@@ -130,6 +137,16 @@ def describe(actx: AdapterContext) -> list[str]:
             *(f"mcp server: {n}" for n in _mcp_servers(actx))]
 
 
+def _check_compat(compat: Any) -> None:
+    """Refuse a `compat` value Pi's schema would refuse (it would then load no
+    provider at all, and say only "No API key found for the selected model")."""
+    if not isinstance(compat, dict):
+        raise ConfigError("pi harness_config.model: `compat` must be a mapping")
+    for key, allowed in COMPAT_VALUES.items():
+        if key in compat and compat[key] not in allowed:
+            raise ConfigError(f"pi harness_config.model: compat.{key} {compat[key]!r} is not one of {sorted(allowed)}")
+
+
 def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
     """One Pi model entry; `entry` may override id/vision/context for extra models."""
     mid = entry.get("id", model.model)
@@ -167,7 +184,9 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         glove_provider["compat"] = {
             "supportsDeveloperRole": False,
             "supportsReasoningEffort": model.reasoning,
-            "thinkingFormat": "reasoning_effort",
+            # top-level `reasoning_effort` (Pi ≥ 1.2 refuses all of models.json
+            # for a value outside its schema, so the provider never loads)
+            "thinkingFormat": "openai",
             "maxTokensField": "max_tokens",
         }
     models = [_pi_model({}, model), *(_pi_model(dict(e), model) for e in model.extra_models)]
@@ -205,6 +224,8 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         settings_json.setdefault("env", {}).update(extra_env)
     model_overrides = actx.harness_config.get("model", {})
     if model_overrides:
+        if "compat" in model_overrides:
+            _check_compat(model_overrides["compat"])
         models[0].update(model_overrides)
 
     written: list[Path] = []

@@ -266,6 +266,23 @@ def test_pi_harness_config_overrides(tmp_path):
     assert model["maxTokens"] == 100000
 
 
+def test_pi_compat_values_are_ones_pi_accepts(tmp_path):
+    llm = {**STUB_LLM, "capabilities": {"reasoning": True}}
+    _, _, home = _home("pi", tmp_path, llm=llm, extensions={})
+    compat = json.loads((home / ".pi" / "agent" / "models.json").read_text())["providers"]["glove"]["compat"]
+    # values in Pi 1.4.0's compat schema (pi-ai compat-schema.js); any other drops all of models.json
+    assert compat["thinkingFormat"] == "openai" and compat["maxTokensField"] == "max_tokens"
+
+
+@pytest.mark.parametrize("compat", [{"thinkingFormat": "reasoning_effort"}, {"maxTokensField": "max_output_tokens"},
+                                    "openai"])
+def test_pi_refuses_a_compat_override_pi_would_refuse(tmp_path, compat):
+    cfg, plan, home = _home("pi", tmp_path)
+    cfg.harness_config = {"model": {"compat": compat}}
+    with pytest.raises(ConfigError, match=r"harness_config\.model"):
+        render_home(cfg, plan, home)
+
+
 @pytest.mark.parametrize("opt", [None, False, True])
 def test_vibe_project_skills_opt_in(tmp_path, opt):
     # The repo's .vibe/ and .agents/ stay masked; project_skills shows only

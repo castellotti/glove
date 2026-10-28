@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from live_common import LiveSession, check, check_next, container_log, inspect, live_session, summary, wait_for
+from live_common import LiveSession, check, check_next, check_version, container_log, inspect, live_session, summary, wait_for
 
 from glove.harnessconfig import INJECTED_KEY
 
@@ -108,6 +108,7 @@ def main(directory: str, stub_log: str | None) -> int:
         base = urlsplit(plan.model.base_url)
         root = f"{base.scheme}://{base.netloc}"
         upstream_port = plan.composition.slot_exports("inference")["inject"]["upstream"].rsplit(":", 1)[1]
+        check_version(s)
         print("== the plan")
         check("the key is injected (the model descriptor says so)", plan.model.api_key_injected)
         check(f"the harness env has the placeholder in {plan.model.api_key_env}",
