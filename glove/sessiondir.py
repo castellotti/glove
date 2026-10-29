@@ -47,7 +47,7 @@ SCHEMA_VERSION = 3
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 PLACEHOLDER = "<set-me>"
 
-# <dirname>-<6 hex>: a valid compose project suffix and Layman's SAFE_NAME.
+# <dirname>-<6 hex>: a valid compose project suffix and Layman's SAFE_NAME (`_`: older ids).
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
@@ -136,9 +136,9 @@ def find(path: str | Path | None = None) -> SessionDir:
 
 
 def sanitize(name: str) -> str:
-    """A dirname as the id prefix: lowercase ``[a-z0-9_-]``, starting alnum."""
-    s = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-_")
-    return s[:40].rstrip("-_") or "session"
+    """A dirname as the id prefix: lowercase ``[a-z0-9-]`` (a hostname: it names aliases)."""
+    s = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
+    return s[:40].rstrip("-") or "session"
 
 
 def new_id(dirname: str) -> str:
@@ -155,8 +155,9 @@ def ensure_private(sd: SessionDir) -> Path:
 
 
 def ensure_state(sd: SessionDir) -> str:
-    """Create ``.glove/`` (0700) and its id if missing; returns the id."""
+    """Create ``.glove/`` (0700), its id and ``work/`` (a hand-copied template) if missing; returns the id."""
     ensure_private(sd)
+    sd.work.mkdir(exist_ok=True)
     if (sid := sd.read_id()) is None:
         sid = new_id(sd.root.name)
         (sd.state / "id").write_text(sid + "\n")
@@ -389,7 +390,6 @@ def materialize(spec: str, dest: Path) -> tuple[SessionDir, str]:
                 target.mkdir(exist_ok=True)
             elif not target.exists():
                 shutil.copy2(entry, target)
-        sd.work.mkdir(exist_ok=True)
         sid = ensure_state(sd)
         sd.template_record.write_text(yaml.safe_dump({"source": source, "sha256": digest(text)}, sort_keys=False))
         return sd, sid

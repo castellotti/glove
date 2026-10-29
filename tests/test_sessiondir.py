@@ -18,7 +18,7 @@ COMPOSE_PROJECT = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 @pytest.mark.parametrize(("name", "prefix"), [
     ("research-1", "research-1"), ("tmp.XyZ12", "tmp-xyz12"), ("My Project!", "my-project"),
-    ("...", "session"), ("_x_", "x"), ("a" * 60, "a" * 40), ("ünïcode", "n-code")])
+    ("...", "session"), ("_x_", "x"), ("agent_model", "agent-model"), ("a" * 60, "a" * 40), ("ünïcode", "n-code")])
 def test_ids_are_sanitised_dirnames_plus_six_hex(name, prefix):
     sid = sdm.new_id(name)
     assert sid.rsplit("-", 1)[0] == prefix
@@ -27,8 +27,10 @@ def test_ids_are_sanitised_dirnames_plus_six_hex(name, prefix):
 
 def test_ensure_state_is_idempotent_and_private(tmp_path):
     sd = sdm.SessionDir(make_session(tmp_path / "s"))
+    sd.work.rmdir()  # a template copied by hand, not via `glove new`
     sid = sdm.ensure_state(sd)
     assert (sd.state / "id").read_text() == sid + "\n" and sdm.ensure_state(sd) == sid
+    assert sd.work.is_dir()
     assert (sd.state / ".gitignore").read_text().endswith("*\n")  # never committed with a repo
     (sd.state / "id").write_text("../../etc\n")  # a tampered id is not trusted
     assert sd.read_id() is None
