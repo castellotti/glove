@@ -453,14 +453,21 @@ DRAG = {"v": 1, "display": [1280, 800],
                    *({"t": 40 * i, "type": "move", "x": 300 + 50 * i, "y": 400 + 2 * i} for i in range(1, 9)),
                    {"t": 400, "type": "up", "x": 700, "y": 420, "button": 1}]}
 PLANS = "/run/glove/browser-event/plans"
+# 5 s of pointer moves (no button): long enough to try arming a recorder while it runs
+SLOW = {"v": 1, "display": [1280, 800],
+        "events": [{"t": 250 * i, "type": "move", "x": 100 + 10 * i, "y": 100} for i in range(21)]}
+# SIGTERM to relayd (python3 /usr/local/bin/relayd --channel …), never to this script itself
+KILL_RELAYD = ("python3 -c \"import os, signal; [os.kill(int(p), signal.SIGTERM) for p in os.listdir('/proc') "
+               "if p.isdigit() and int(p) != os.getpid() "
+               "and open(f'/proc/{p}/cmdline', 'rb').read().split(b'\\0')[1:2] == [b'/usr/local/bin/relayd']]\"")
 
 
 def event_checks(live, sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
     print("== events (`browser-event`, event_relay)")
     sh = live.sh
 
-    def stage(name: str, plan, touch: str = "") -> str:
-        return f"printf '%s' '{json.dumps(plan)}' > {PLANS}/{name}{f' && touch -d {touch} {PLANS}/{name}' if touch else ''}"
+    def stage(name: str, plan) -> str:
+        return f"printf '%s' '{json.dumps(plan)}' > {PLANS}/{name}"
 
     out = sh("browser-event status; echo rc=$?")
     st = json.loads(out[out.index("{"):out.index("}") + 1]) if "{" in out else {}
@@ -492,24 +499,45 @@ def event_checks(live, sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
     out = sh("touch /work/browser-events/x; echo rc=$?")
     check("the agent can't write the log (read-only at /work/browser-events)", "rc=0" not in out, out[-200:])
     for label, cmd, want in [
-        ("a stale plan", stage("old.json", DRAG, "@0") + " && browser-event replay old.json", "stage it again"),
         ("an invalid plan", stage("bad.json", {**DRAG, "display": [1280]}) + " && browser-event replay bad.json",
          "display: want"),
         ("a path, not a name", "browser-event replay ../plans/drag.json", "want a file name"),
         ("another event", "browser-event click", "usage: browser-event"),
+        ("an override flag (the session's call, not the agent's)",
+         stage("drag.json", DRAG) + " && browser-event replay drag.json --allow-while-recording", "unexpected"),
     ]:
         out = sh(f"{cmd}; echo rc=$?")
         check(f"refused (126): {label}", "rc=126" in out and want in out, out[-200:])
+    log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
+    check("each refusal is logged too, with its reason", sum("refused" in e for e in log) == 4, str(log[-1])[-300:])
     exec_pw("mkdir -p /tmp/capture && echo '20261020-101741-0a1b2c 999999' > /tmp/capture/.current")
     out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
     check("a marker a dead recorder left behind does not block a replay", "rc=0" in out, out[-200:])
     cid = exec_pw("rm -f /tmp/capture/.current; glove-pw-capture start --max-seconds 60").stdout.split()
     try:
+        out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json; echo rc=$?")
+        check("a replay is refused while the operator records (a live glove-pw-capture)",
+              "rc=126" in out and "operator is recording" in out and "--" not in out.split("recording")[-1], out[-200:])
         out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
-        check("refused while the operator records (a live glove-pw-capture)",
-              "rc=126" in out and "operator is recording" in out, out[-200:])
+        check("a dry-run (no input) still runs while they record", "rc=0" in out and "dry-run" in out, out[-200:])
     finally:
         exec_pw(f"glove-pw-capture stop; rm -rf /tmp/capture/{cid[0] if cid else 'none'} /tmp/capture/.*.log")
+    replayed: list[str] = []
+    t = threading.Thread(target=lambda: replayed.append(
+        sh(stage("slow.json", SLOW) + " && browser-event replay slow.json; echo rc=$?")))
+    t.start()
+    claimed = wait_for(lambda: exec_pw("cat /tmp/capture/.replay").returncode == 0, timeout=30, step=0.2)
+    r = exec_pw("glove-pw-capture start --max-seconds 30")
+    t.join()
+    out = replayed[0] if replayed else ""
+    check("a recorder does not arm while a replay sends input", bool(claimed) and '"status": "ok"' in out
+          and r.returncode == 1 and "replaying input" in r.stderr, f"{r.returncode} {r.stderr[-150:]} | {out[-150:]}")
+    if r is not None and r.returncode == 0:
+        exec_pw(f"glove-pw-capture stop; rm -rf /tmp/capture/{r.stdout.split()[0]} /tmp/capture/.*.log")
+    exec_pw(KILL_RELAYD)
+    up = wait_for(lambda: "rc=0" in sh("browser-event status >/dev/null; echo rc=$?"), timeout=30, step=2)
+    check("relayd is restarted when it dies (`browser-event status` answers again)", bool(up),
+          exec_pw("ps -eo args | grep -c '[r]elayd'").stdout.strip())
 
 
 def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:

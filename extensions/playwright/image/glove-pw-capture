@@ -14,6 +14,9 @@ novnc display while they use the browser (`glove playwright record`).
 
 Only one recorder runs at a time (`start` holds a lock while it arms). The
 `record` that started it stops and saves it; one that attached only watches.
+It doesn't arm while a `browser-event replay` sends input, and a replay
+doesn't start while it records (claim_replay(), under the same lock), unless
+the session sets `replay_while_recording`.
 
 Passive only: it selects XI2 *raw* events on the root window (they reach a
 root listener whatever holds focus or a grab, and carry no coordinates), and
@@ -56,6 +59,8 @@ from pathlib import Path
 ROOT = Path("/tmp/capture")
 CURRENT = ROOT / ".current"  # "<id> <pid>" while a recorder runs (glove-pw-front.js reads it too)
 LOCK = ROOT / ".lock"
+REPLAY = ROOT / ".replay"  # "<pid>" while a replay sends input (browser_event.py)
+OVERLAP_OK = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # playwright `replay_while_recording`
 MAX_SHOTS = 400
 MAX_BYTES = 150 * 1024 * 1024
 TITLE_MAX = 300
@@ -93,6 +98,35 @@ def running() -> tuple[str, int] | None:
         return cid, int(pid)
     except (OSError, ValueError):
         return None
+
+
+def replaying() -> int | None:
+    """The pid of the replay sending input, if `.replay` names a live one."""
+    try:
+        pid = int(REPLAY.read_text())
+        return pid if b"browser_event.py" in Path(f"/proc/{pid}/cmdline").read_bytes() else None
+    except (OSError, ValueError):
+        return None
+
+
+def claim_replay(overlap_ok: bool) -> bool:
+    """Mark this process as the replay sending input (`.replay`), unless a recorder runs and the session
+    doesn't allow the two at once. Under `start`'s lock: a recorder arming and a replay starting never
+    miss each other."""
+    ROOT.mkdir(mode=0o700, exist_ok=True)
+    with open(LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if running() is not None and not overlap_ok:
+            return False
+        REPLAY.write_text(f"{os.getpid()}\n")
+        return True
+
+
+def release_replay() -> None:
+    """Remove `.replay` if it names this process."""
+    with contextlib.suppress(OSError, ValueError):
+        if int(REPLAY.read_text()) == os.getpid():
+            REPLAY.unlink()
 
 
 class Recorder:
@@ -285,6 +319,10 @@ def start(args) -> int:
         if (cur := running()) is not None:
             print(f"{cur[0]} attached")
             return 0
+        if not OVERLAP_OK and replaying() is not None:
+            print("glove-pw-capture: the agent is replaying input (`browser-event replay`), which would end up "
+                  "in the recording; record once it has finished", file=sys.stderr)
+            return 1
         # unguessable: the sidecar must not be able to pre-create the host's directory for it
         cid = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         log_path = ROOT / f".{cid}.log"

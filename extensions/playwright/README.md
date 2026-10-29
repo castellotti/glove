@@ -41,6 +41,7 @@ extensions:
     #   motion_hz: 120         # pointer samples per second while a button is down (0: none)
     # event_relay: false       # true: the agent sends events to the sidecar (`browser-event`, below)
     # event_timeout: 120       # an event's program is killed after this many seconds
+    # replay_while_recording: false  # true: a replay may send input while you record
     # host only:
     # port: <free port>        # host MCP port (default: a free one, kept for the session)
     # cdp_port: <free port>    # host Chrome remote-debugging port (likewise)
@@ -246,11 +247,12 @@ once, with no operator action, no host process and no `docker` CLI:
     mode: novnc
     event_relay: true      # serve the agent's events in the browser sidecar
     event_timeout: 120     # optional: an event's program is killed after this many seconds
+    replay_while_recording: false  # optional: true lets a replay send input while you record
 ```
 
 ```sh
 browser-event status                                       # display size, pointer, XTest, is the operator recording
-browser-event replay PLAN [--dry-run] [--allow-while-recording]
+browser-event replay PLAN [--dry-run]
 ```
 
 `replay` plays a timed input sequence on the sidecar's display. The agent
@@ -265,12 +267,13 @@ writes it to `/run/glove/browser-event/plans/PLAN` just before it replays it:
 
 These are the rows of a recording's `events.jsonl`, so what `glove playwright
 record` captured (with `recording: {to: work}`, at
-`/work/browser-output/recordings/<id>/events.jsonl`) replays as it is. Each event
-is sent `t - events[0].t` ms after the first. It moves the pointer to `(x, y)`;
-`down`/`up` then press or release button 1–3, and `wheel` clicks button 4–7. A
-button still held at the end, or after an error, is released. If a replay is
-killed at its timeout, a button it held is released when the next replay
-starts. The plan's
+`/work/browser-output/recordings/<id>/events.jsonl`) replays as it is, if it is
+shorter than `event_timeout` allows (split a longer one into several plans).
+Each event is sent `t - events[0].t` ms after the first. It moves the pointer
+to `(x, y)`; `down`/`up` then press or release button 1–3, 8 or 9 (back,
+forward), and `wheel` clicks button 4–7. A button still held at the end, or
+after an error, is released. If a replay is killed at its timeout, a button
+1–3 it held is released when the next replay starts. The plan's
 `display` must be the sidecar's (`viewport`), or nothing is sent. `--dry-run`
 checks all of that and sends nothing. The result is printed, and each replay
 leaves `plan.json`, `result.json`, `before.png` and `after.png` in
@@ -285,28 +288,34 @@ and runs only what `image/relay_policy.py` allows:
 
 - **Two events.** `status` and `replay`, each running `image/browser_event.py`
   with arguments the policy builds. The agent chooses the plan's name (a bare
-  file name in `plans/`) and the two flags. It never chooses the program, the
+  file name in `plans/`) and `--dry-run`. It never chooses the program, the
   display or where results go.
 - **The plan is checked before anything is sent.** It must be a regular file
   in `plans/` (neither may be a link), at most 2 MiB and 10,000 events, valid
-  JSON and a valid v1 plan, dated within the last 30 s (a plan is aimed at
-  what is on screen now), and short enough to end within `event_timeout`
+  JSON and a valid v1 plan, and short enough to end within `event_timeout`
   (30 to 3600 s). The policy reads it once and removes it from `plans/` (one
   staged plan, one replay). The very bytes it checked are what runs: it
   writes them to the replay's own `plan.json`, where the agent can't write.
 - **No replay while you record.** While `glove playwright record` runs, a
-  replay is refused, since its input would end up in your recording.
-  `--allow-while-recording` overrides that. The result is marked
-  `"synthetic": true`.
+  replay is refused, since its input would end up in your recording (a
+  `--dry-run` sends nothing, so it still runs). The other way round too: while
+  a replay sends input, `glove playwright record` won't start a recorder. Both
+  claim the display under the recorder's lock, so neither can slip in while
+  the other starts. Only the session can allow the two at once
+  (`replay_while_recording: true`); the agent has no flag for it. A replay's
+  result is marked `"synthetic": true`.
 - **Logged before it runs.** Every event is one line in
-  `/work/browser-events/log.jsonl` (with the plan's SHA-256 and age for a
-  replay). The sidecar writes it and the agent can only read it. An event that
-  can't be logged is refused.
+  `/work/browser-events/log.jsonl` (with the plan's SHA-256 for a replay), and
+  so is every refusal, with its reason. The sidecar writes it and the agent can
+  only read it. An event that can't be logged is refused.
+- **The output stays bounded.** Past 4 MiB the log moves to `log.1.jsonl`
+  (replacing the one before), and only the newest 20 replays' directories are
+  kept.
 - **Bounded.** One event at a time (a second one gets "busy"). The program gets
   no stdin, an environment of `DISPLAY` and a minimal `PATH`, and no proxy (it
   has nothing to reach). Its process group is killed at `event_timeout`.
-  relayd is started detached, so if it dies the browser keeps running and
-  `browser-event` exits `127`.
+  relayd is started detached and restarted if it dies; the browser keeps
+  running either way.
 
 Exit codes: `0` ok · `126` refused (the reason is on stderr) · `127` the sidecar
 is not serving events (`event_relay` off, or the sidecar down) · `124` the

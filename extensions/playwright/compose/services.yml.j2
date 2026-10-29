@@ -38,6 +38,7 @@ services:
       # glove-pw-start serves the browser-event channel (core mounts it and the browser-events output)
       PW_EVENT_RELAY: "true"
       PW_EVENT_TIMEOUT: "{{ settings.event_timeout }}"
+      PW_REPLAY_WHILE_RECORDING: "{{ settings.replay_while_recording | lower }}"
 {% endif %}
 {% endif %}
     volumes:

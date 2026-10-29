@@ -7,29 +7,34 @@ with the argv relay_policy.py built; the agent never picks its arguments.
         One JSON object: the display's size, the pointer, whether XTest is
         there, and whether the operator is recording. Sends no input.
 
-    browser_event.py replay PLAN --out DIR [--display :1] [--dry-run]
+    browser_event.py replay PLAN --out DIR [--display :1] [--dry-run] [--while-recording]
         Replay PLAN's input events on the display, then write DIR/result.json
         (also printed) and DIR/before.png, DIR/after.png. --dry-run checks the
-        plan against the display and sends nothing.
+        plan against the display and sends nothing. Refused while the operator
+        records, unless --while-recording (the session's
+        `replay_while_recording`, which the policy passes on).
 
 A plan (v1) is a timed input sequence in the recorder's own `events.jsonl`
-shape (`glove playwright record`), so a recording replays as it is:
+shape (`glove playwright record`), so a recording replays as it is (one
+longer than the event timeout allows must be split):
 
     {"v": 1, "display": [w, h],
      "events": [{"t": ms, "type": "move|down|up|wheel", "x": X, "y": Y, "button": B}, …]}
 
 `t` never decreases; each event is replayed `t - events[0].t` ms after the
 first. Each moves the pointer to (x, y) first; `down`/`up` then press or
-release button 1-3 there, `wheel` clicks button 4-7. Other keys (the
-recorder's `xt`, `wall`, `mask`) are ignored. A button still held at the end,
-or when anything fails, is released; one held when a replay starts (left by a
-replay killed at its timeout) is released first. The input is XTest's
-(python3-xlib), which the X server treats like a real device's.
+release button 1-3, 8 or 9 (back, forward) there, `wheel` clicks button 4-7.
+Other keys (the recorder's `xt`, `wall`, `mask`) are ignored. A button still
+held at the end, or when anything fails, is released; one of 1-3 held when a
+replay starts (left by a replay killed at its timeout) is released first. The
+input is XTest's (python3-xlib), which the X server treats like a real
+device's. Whatever fails, a replay writes its result and exits 2.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import importlib.machinery
 import importlib.util
@@ -42,7 +47,8 @@ import time
 RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png()
 MAX_EVENTS = 10_000
 MAX_SIDE = 1 << 14
-BUTTONS = {"down": range(1, 4), "up": range(1, 4), "wheel": range(4, 8), "move": None}
+PRESS = (1, 2, 3, 8, 9)  # left, middle, right, back, forward
+BUTTONS = {"down": PRESS, "up": PRESS, "wheel": (4, 5, 6, 7), "move": None}
 
 
 def _num(v, lo: float, hi: float) -> bool:
@@ -70,7 +76,7 @@ def validate(plan) -> str | None:
         if not (_num(e.get("x"), 0, disp[0]) and _num(e.get("y"), 0, disp[1])):
             return f"events[{i}]: x, y must be inside the display {disp[0]}x{disp[1]}"
         if (allowed := BUTTONS[e["type"]]) is not None and e.get("button") not in allowed:
-            return f"events[{i}]: a {e['type']} needs button {allowed.start}-{allowed.stop - 1}"
+            return f"events[{i}]: a {e['type']} needs button {'1-3, 8 or 9' if allowed is PRESS else '4-7'}"
     return None
 
 
@@ -138,50 +144,68 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
-def replay(plan: dict, display: str, out: str, dry_run: bool) -> int:
-    s = Screen(display)
+def replay(plan: dict, display: str, out: str, dry_run: bool, while_recording: bool = False) -> int:
     events = plan["events"]
     result = {"synthetic": True, "dry_run": dry_run, "events": len(events),
-              "duration_ms": round(events[-1]["t"] - events[0]["t"]), "display": s.size,
-              "pointer_before": s.pointer()}
+              "duration_ms": round(events[-1]["t"] - events[0]["t"])}
+    try:
+        _replay(plan, Screen(display), out, dry_run, while_recording, result)
+    except Exception as e:  # the display or a frame: still a result, and exit 2
+        result.update(status="error", error=result.get("error") or f"{type(e).__name__}: {e}"[:300])
+    body = json.dumps(result, indent=1)
+    with contextlib.suppress(OSError):
+        create(os.path.join(out, "result.json"), (body + "\n").encode())
+    print(body)
+    return {"ok": 0, "dry-run": 0}.get(result["status"], 2)
+
+
+def _replay(plan: dict, s: Screen, out: str, dry_run: bool, while_recording: bool, result: dict) -> None:
+    result.update(display=s.size, pointer_before=s.pointer())
     if s.size != plan["display"]:
         result.update(status="refused", error=f"the display is {s.size[0]}x{s.size[1]}, the plan was made for "
                                               f"{plan['display'][0]}x{plan['display'][1]}")
     elif dry_run:
         result["status"] = "dry-run"
+    elif not _recorder().claim_replay(while_recording):
+        result.update(status="refused", error="the operator is recording (`glove playwright record`): a replay's "
+                                              "input would end up in their recording")
     else:
-        result.update(status="ok", started_at=_recorder().wall(), sent=0, released_first=s.held())
-        for b in result["released_first"]:
-            s.button(b, False)
-        s.frame(os.path.join(out, "before.png"))
-        held: set[int] = set()
-        start, base = time.monotonic(), events[0]["t"]
         try:
-            for e in events:
-                if (wait := start + (e["t"] - base) / 1000 - time.monotonic()) > 0:
-                    time.sleep(wait)
-                s.move(e["x"], e["y"])
-                if e["type"] in ("down", "wheel"):
-                    s.button(e["button"], True)
-                    held.add(e["button"])
-                if e["type"] in ("up", "wheel"):
-                    s.button(e["button"], False)
-                    held.discard(e["button"])
-                result["sent"] += 1
-        except Exception as e:
-            result.update(status="error", error=str(e))
+            _send(s, plan["events"], out, result)
         finally:
-            for b in sorted(held):
+            _recorder().release_replay()
+
+
+def _send(s: Screen, events: list[dict], out: str, result: dict) -> None:
+    result.update(status="ok", started_at=_recorder().wall(), sent=0, released_first=s.held())
+    for b in result["released_first"]:
+        s.button(b, False)
+    s.frame(os.path.join(out, "before.png"))
+    held: set[int] = set()
+    start, base = time.monotonic(), events[0]["t"]
+    try:
+        for e in events:
+            if (wait := start + (e["t"] - base) / 1000 - time.monotonic()) > 0:
+                time.sleep(wait)
+            s.move(e["x"], e["y"])
+            if e["type"] in ("down", "wheel"):
+                s.button(e["button"], True)
+                held.add(e["button"])
+            if e["type"] in ("up", "wheel"):
+                s.button(e["button"], False)
+                held.discard(e["button"])
+            result["sent"] += 1
+    except Exception as e:
+        result.update(status="error", error=str(e))
+    finally:
+        result["released"] = sorted(held)
+        for b in sorted(held):
+            with contextlib.suppress(Exception):  # the X server may be gone: the rest still get released
                 s.button(b, False)
-            result["released"] = sorted(held)
-        result.update(ended_at=_recorder().wall(), pointer_after=s.pointer())
-        result["end_error_px"] = max(abs(a - int(b)) for a, b in
-                                     zip(result["pointer_after"], (events[-1]["x"], events[-1]["y"]), strict=True))
-        s.frame(os.path.join(out, "after.png"))
-    body = json.dumps(result, indent=1)
-    create(os.path.join(out, "result.json"), (body + "\n").encode())
-    print(body)
-    return {"ok": 0, "dry-run": 0}.get(result["status"], 2)
+    result.update(ended_at=_recorder().wall(), pointer_after=s.pointer())
+    result["end_error_px"] = max(abs(a - int(b)) for a, b in
+                                 zip(result["pointer_after"], (events[-1]["x"], events[-1]["y"]), strict=True))
+    s.frame(os.path.join(out, "after.png"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--out", required=True)
     rp.add_argument("--display", default=":1")
     rp.add_argument("--dry-run", action="store_true")
+    rp.add_argument("--while-recording", action="store_true")
     a = ap.parse_args(argv)
     if a.event == "status":
         return status(a.display)
@@ -202,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     if (err := validate(plan)) is not None:
         print(f"browser_event: {err}", file=sys.stderr)
         return 2
-    return replay(plan, a.display, a.out, a.dry_run)
+    return replay(plan, a.display, a.out, a.dry_run, a.while_recording)
 
 
 if __name__ == "__main__":

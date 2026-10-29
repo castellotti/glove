@@ -152,12 +152,18 @@ case "${1:-headless}" in
     mapfile -t args < <(mcp_args)
     (cd "$PW_UPLOADS" && DISPLAY=:1 NODE_OPTIONS=$MCP_NODE_OPTIONS exec playwright-core "${args[@]}") &
     # `event_relay`: relayd serves the agent's events (`browser-event`), one at
-    # a time, running only what relay_policy.py allows. Disowned: `wait -n`
-    # doesn't track it, so if it dies the browser goes on and `browser-event`
-    # exits 127.
+    # a time, running only what relay_policy.py allows. Restarted if it dies;
+    # disowned, so `wait -n` doesn't track it and it never takes the browser down.
     if [ "${PW_EVENT_RELAY:-false}" = true ]; then
-      relayd --channel /run/glove/browser-event --policy /opt/glove/events/relay_policy.py \
-             --timeout "${PW_EVENT_TIMEOUT:-120}" --max 1 &
+      (
+        while :; do
+          rc=0
+          relayd --channel /run/glove/browser-event \
+            --policy /opt/glove/events/relay_policy.py --timeout "${PW_EVENT_TIMEOUT:-120}" --max 1 || rc=$?
+          echo "glove: relayd exited ($rc); restarting it" >&2
+          sleep 2
+        done
+      ) &
       disown
     fi
     # any tracked child's death ends the container (compose restarts it)

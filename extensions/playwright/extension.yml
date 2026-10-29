@@ -39,6 +39,9 @@ settings:
   # the `browser-event` channel; see the README)
   event_relay:       { type: bool, default: false }
   event_timeout:     { type: int, default: 120 }    # s; an event's program is killed after this
+  # let a replay send input while the operator records (it ends up in the
+  # recording); the session's choice: the agent has no flag for it
+  replay_while_recording: { type: bool, default: false }
   # host
   port:              { type: int }                      # host MCP port (default: a free one per session)
   cdp_port:          { type: int }                      # host Chrome remote-debugging port (likewise)
