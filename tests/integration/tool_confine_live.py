@@ -33,10 +33,10 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
-from contextlib import contextmanager
 from pathlib import Path
 
-from live_common import check, check_version, live_session, offered_tools, summary, tool_result
+from live_common import (check, check_version, host_edit, live_session, offered_tools, pi_codemode, summary,
+                         tool_result)
 from nono_srt_live import lines
 
 CONFIG = {"pi": "/home/agent/.pi/agent/settings.json", "vibe": "/home/agent/.vibe/config.toml"}
@@ -71,28 +71,6 @@ def probe(config: str, out: str, env: str) -> str:
             f"{env}; }} > /work/{out} 2>&1")
 
 
-@contextmanager
-def host_edit(path: Path, text: str | None):
-    """`path` holds `text` (None: is gone) for the block (the host's copy: a
-    ring-0 read-only file the harness could never write), then its old contents
-    and mode again."""
-    old, mode = (path.read_text(), path.stat().st_mode) if path.exists() else (None, None)
-    try:
-        if old is not None:
-            path.chmod(mode | 0o200)
-        if text is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(text)
-        yield
-    finally:
-        if old is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(old)
-            path.chmod(mode)
-
-
 def main(directory: str) -> int:
     with live_session(directory) as s:
         h, home, work = s.cfg.harness, s.sd.home, s.sd.root / "work"
@@ -107,8 +85,7 @@ def main(directory: str) -> int:
             call; Vibe's run_typescript): `body` is a function body, `return`s its result."""
             if h == "vibe":
                 return s.call("run_typescript", {"code": f"async function main() {{ {body} }}"})
-            with host_edit(settings, json.dumps({**json.loads(settings.read_text()), "defaultTools": ["+codemode"]})):
-                return s.call("codemode", {"code": body})
+            return pi_codemode(s, body)
 
         def nested_bash(fn: str, after: str = "") -> Callable[[str], str]:
             return lambda p: code(f"const r = await tools.{fn}({{command: {json.dumps(p)}}}); {after}return r;")

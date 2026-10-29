@@ -7,7 +7,7 @@ services:
   # --- harness: the sandboxed agent (internal net only, hardened) ------------
   glove-s-harness:
     container_name: glove-s-harness
-    image: glove/claude-code:0.2.0-bc85a2338a
+    image: glove/claude-code:0.2.0-c79b46e38d
     working_dir: /work
     command: ["/bin/sh", "-c", "for f in /run/glove/llm-ca/ca.pem; do i=0; until grep -qF \u0027BEGIN CERTIFICATE\u0027 \"$$f\" 2\u003e/dev/null || [ $$i -ge 30 ]; do i=$$((i+1)); sleep 1; done; done; for f in /run/glove/llm-ca/ca.pem; do grep -qF \u0027BEGIN CERTIFICATE\u0027 \"$$f\" 2\u003e/dev/null || { echo \"glove: the trusted CA $$f is missing\" \u003e\u00262; exit 90; }; done; grep -qF \u0027BEGIN CERTIFICATE\u0027 /etc/ssl/certs/ca-certificates.crt || { echo \"glove: no CA roots at /etc/ssl/certs/ca-certificates.crt\" \u003e\u00262; exit 90; }; for f in /run/glove/llm-ca/ca.pem; do cat \"$$f\"; echo; done \u003e /etc/glove/ca/extra.pem \u0026\u0026 cat /etc/ssl/certs/ca-certificates.crt /etc/glove/ca/extra.pem \u003e /etc/glove/ca/bundle.pem || exit 90; exec \"$$@\"", "glove-trust", "nono", "run", "-s", "--allow-cwd", "--profile", "/etc/glove/enforcer/harness.json", "--", "/usr/local/bin/claude"]
     stdin_open: true

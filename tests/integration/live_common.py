@@ -99,6 +99,36 @@ def check_version(s: LiveSession) -> None:
               out[-300:])
 
 
+@contextmanager
+def host_edit(path: Path, text: str | None):
+    """`path` holds `text` (None: is gone) for the block (the host's copy: a
+    ring-0 read-only file the harness could never write), then its old contents
+    and mode again."""
+    old, mode = (path.read_text(), path.stat().st_mode) if path.exists() else (None, None)
+    try:
+        if old is not None:
+            path.chmod(mode | 0o200)
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(text)
+        yield
+    finally:
+        if old is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(old)
+            path.chmod(mode)
+
+
+def pi_codemode(s: LiveSession, body: str) -> str:
+    """One Pi codemode call (`body`: a script that `return`s its result), with
+    codemode on for the call (Pi's `defaultTools`, edited on the host)."""
+    settings = s.sd.home / ".pi" / "agent" / "settings.json"
+    with host_edit(settings, json.dumps({**json.loads(settings.read_text()), "defaultTools": ["+codemode"]})):
+        return s.call("codemode", {"code": body})
+
+
 def tool_result(out: str, n: int | None = None) -> str:
     """The tool result the model saw (the stub's `TOOL RESULT`, its first `n`
     characters), else the run's tail."""

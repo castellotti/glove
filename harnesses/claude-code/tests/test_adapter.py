@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
 from helpers import make_cfg
 
 from glove.config import ConfigError
+from glove.harness import adapter_call
 from glove.harnessconfig import render_home
 from glove.plan import build_session_plan, write_system_files
 
@@ -267,6 +269,14 @@ def _stdio_probe(tmp_path, enforcer):
     return files, json.loads(files["managed-mcp.json"])["mcpServers"]["probe"]
 
 
+def _mcp_with(tmp_path, enforcer: str, item: str):
+    exts = tmp_path / "exts" / "var-probe"
+    exts.mkdir(parents=True)
+    (exts / "extension.yml").write_text(f"api: 2\nname: var-probe\nsummary: x\nharness:\n  mcp:\n    - {item}\n")
+    (Path(os.environ["GLOVE_HOME"]) / "config.yml").write_text(f"extension_paths: [{exts.parent}]\n")
+    return _plan(tmp_path, enforcer=enforcer, extensions={"var-probe": {}})[1]
+
+
 def test_stdio_mcp_runs_through_the_prefix_from_a_read_only_argv(tmp_path):
     # not the tool wrapper: its profile has no network, and a server may talk to a sidecar
     files, server = _stdio_probe(tmp_path, "nono")
@@ -277,6 +287,72 @@ def test_stdio_mcp_runs_through_the_prefix_from_a_read_only_argv(tmp_path):
 def test_stdio_mcp_without_an_enforcer_runs_directly(tmp_path):
     files, server = _stdio_probe(tmp_path, "none")
     assert server["command"] == "bash" and not any(f.endswith(".argv") for f in files)
+
+
+def _gate(m: dict) -> str:
+    [entry] = m["hooks"]["PreToolUse"]
+    # the prefix answers it with exit 2, outside any sandbox (the prefix test below)
+    assert entry["hooks"] == [{"type": "command", "command": "/opt/glove/bin/glove-cc-prefix --deny-mcp"}]
+    return entry["matcher"]
+
+
+def test_a_managed_hook_refuses_every_mcp_tool_off_the_allowlist(tmp_path):
+    # Claude Code would prompt for an unlisted tool (one `all_tools` does not name), and an operator could
+    # grant it: the hook's matcher (a JS regex; Python's agrees on these) catches exactly those
+    _, plan = _plan(tmp_path, extensions={"direct": {}, "playwright": {"tools": ["browser_navigate"]}})
+    matcher = _gate(_managed(plan))
+    assert not re.search(matcher, "mcp__playwright__browser_navigate")
+    for name in ("mcp__playwright__browser_click", "mcp__playwright__browser_navigatex",
+                 "mcp__playwright__new_tool", "mcp__other__browser_navigate"):
+        assert re.search(matcher, name), name
+    assert not re.search(matcher, "Bash")
+
+
+def test_a_server_without_an_allowlist_passes_the_hook_whole(tmp_path):
+    files, _ = _stdio_probe(tmp_path, "nono")
+    matcher = _gate(json.loads(files["managed-settings.json"]))
+    assert not re.search(matcher, "mcp__probe__anything")
+    assert re.search(matcher, "mcp__probex__anything") and re.search(matcher, "mcp__other__x")
+
+
+def test_without_an_mcp_server_the_hook_refuses_every_mcp_tool(tmp_path):
+    assert _gate(_managed(_plan(tmp_path)[1])) == "^mcp__"
+
+
+def test_glove_check_describes_a_server_whose_argv_file_names_a_variable(tmp_path):
+    plan = _mcp_with(tmp_path, "nono", "{name: v, transport: stdio, command: srv, args: ['${HOME}']}")
+    assert "mcp server: v" in adapter_call(plan.profile, "describe", plan.adapter, default=[])
+
+
+def test_a_server_name_with_a_double_underscore_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match=r"MCP server 'x__y'"):
+        _mcp_with(tmp_path, "nono", "{name: x__y, transport: http, url: 'http://h:1/mcp'}")
+
+
+def test_an_operators_mcp_allow_rule_is_refused(tmp_path):
+    # the hook would refuse the tool anyway: say so at config time
+    with pytest.raises(ConfigError, match="its extension's `tools`"):
+        _plan(tmp_path, harness_config={"permissions": {"allow": ["mcp__demo__extra"]}})
+
+
+@pytest.mark.parametrize("enforcer, item", [
+    ("nono", "{name: v, transport: stdio, command: srv, env: {K: '${HOME}'}}"),
+    ("nono", "{name: v, transport: http, url: 'http://h:1/${TOKEN}'}"),
+    ("none", "{name: v, transport: stdio, command: srv, args: ['${HOME}']}"),
+    ("none", "{name: v, transport: stdio, command: '${X}'}"),
+])
+def test_a_variable_claude_code_would_expand_is_refused(tmp_path, enforcer, item):
+    # Claude Code fills `${VAR}` in managed-mcp.json from its own env (live: test_skills.sh claude-code)
+    with pytest.raises(ConfigError, match=r"MCP server 'v'.*\$\{VAR\}"):
+        _mcp_with(tmp_path, enforcer, item)
+
+
+def test_an_argv_file_and_a_bare_dollar_are_not_expanded(tmp_path):
+    plan = _mcp_with(tmp_path, "nono", "{name: v, transport: stdio, command: srv, args: ['${HOME}'], "
+                                       "env: {K: '$HOME'}}")
+    files = plan.system_files["/etc/claude-code"]
+    assert json.loads(files["managed-mcp.json"])["mcpServers"]["v"]["env"] == {"K": "$HOME"}
+    assert files["mcp-v.argv"] == "srv\n${HOME}\n"  # the prefix reads it; Claude Code never sees it
 
 
 def test_the_trusted_project_settings_and_the_home_loaders_are_protected(tmp_path):
@@ -321,6 +397,12 @@ def test_the_shell_prefix_hands_the_string_to_glove_tool_or_runs_a_rendered_mcp_
     run = lambda *a: subprocess.run(["bash", str(script), *a], capture_output=True, text=True)  # noqa: E731
     assert run("echo 'a b'; x").stdout == "TOOL|-c|echo 'a b'; x|"
     assert run("/opt/glove/bin/glove-cc-prefix --mcp probe").stdout == "srv a|"
+    # the MCP gate hook: exit 2 (the one code that blocks), never glove-tool; as Claude Code runs it under
+    # the prefix, and without one
+    for arg in ("/opt/glove/bin/glove-cc-prefix --deny-mcp", "--deny-mcp"):
+        r = run(arg)
+        assert r.returncode == 2 and "not on the allowlist" in r.stderr and "TOOL" not in r.stdout
+    assert run("/opt/glove/bin/glove-cc-prefix --deny-mcp; id").stdout.startswith("TOOL|-c|")
     for args in (("a", "b"), (), ("/opt/glove/bin/glove-cc-prefix --mcp nope",)):
         r = run(*args)
         assert r.returncode == 126 and "fail closed" in r.stderr and "TOOL" not in r.stdout

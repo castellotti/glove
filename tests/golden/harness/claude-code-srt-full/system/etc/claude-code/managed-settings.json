@@ -1,5 +1,18 @@
 {
   "allowManagedHooksOnly": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(?!(?:mcp__playwright__browser_navigate|mcp__playwright__browser_navigate_back|mcp__playwright__browser_snapshot|mcp__playwright__browser_take_screenshot|mcp__playwright__browser_click|mcp__playwright__browser_type|mcp__playwright__browser_hover|mcp__playwright__browser_select_option|mcp__playwright__browser_press_key|mcp__playwright__browser_wait_for|mcp__playwright__browser_tabs|mcp__playwright__browser_handle_dialog|mcp__searxng__web_search)$)mcp__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/glove/bin/glove-cc-prefix --deny-mcp"
+          }
+        ]
+      }
+    ]
+  },
   "allowManagedPermissionRulesOnly": true,
   "disableSideloadFlags": true,
   "allowManagedMcpServersOnly": true,

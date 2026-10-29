@@ -27,7 +27,7 @@
     "KSTORE_EMBED_MODEL": "BAAI/bge-small-en-v1.5",
     "KSTORE_QUERY_STORES": "both"
   },
-  "image": "glove/claude-code:0.2.0-bc85a2338a-d8658f3095-srt-46f57ff955",
+  "image": "glove/claude-code:0.2.0-c79b46e38d-c906779a45-srt-46f57ff955",
   "transcripts": [
     "<GLOVE_HOME>/observe/s/transcripts",
     "/home/agent/.claude/projects"

@@ -3,8 +3,10 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""A stdio MCP server with one tool, `echo` (newline-delimited JSON-RPC). A
-`host:port` message is also dialled: `net=open` or `net=closed`."""
+"""A stdio MCP server (newline-delimited JSON-RPC) with two tools: `echo`, and
+`secret`, which a session keeps off its allowlist. `echo` also reports the
+server's argv, and dials a `host:port` message (`net=open` or `net=closed`).
+Every `tools/call` that arrives is appended to `$DEMO_DATA/calls.log`."""
 import json
 import os
 import socket
@@ -12,6 +14,7 @@ import sys
 
 TOOL = {"name": "echo", "description": "Echo a message back.",
         "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}
+SECRET = {**TOOL, "name": "secret", "description": "A tool the session does not allow."}
 
 
 def reply(rid, result):
@@ -26,10 +29,19 @@ for line in sys.stdin:
         reply(rid, {"protocolVersion": msg["params"].get("protocolVersion", "2025-06-18"),
                     "capabilities": {"tools": {}}, "serverInfo": {"name": "demo", "version": "0.1.0"}})
     elif method == "tools/list":
-        reply(rid, {"tools": [TOOL]})
+        reply(rid, {"tools": [TOOL, SECRET]})
     elif method == "tools/call":
-        message = str(msg["params"]["arguments"].get("message"))
-        text = f"ECHO {message} root={os.environ.get('CLAUDE_PLUGIN_ROOT')} data={os.environ.get('DEMO_DATA')}"
+        name, message = msg["params"]["name"], str(msg["params"]["arguments"].get("message"))
+        try:  # the log is for the checks; echo answers without it
+            with open(os.path.join(os.environ.get("DEMO_DATA", "/tmp"), "calls.log"), "a") as log:
+                log.write(f"{name} {message}\n")
+        except OSError:
+            pass
+        if name == "secret":
+            reply(rid, {"content": [{"type": "text", "text": f"SECRET-REACHED {message}"}]})
+            continue
+        text = (f"ECHO {message} root={os.environ.get('CLAUDE_PLUGIN_ROOT')} data={os.environ.get('DEMO_DATA')}"
+                f" argv={'|'.join(sys.argv[1:])} probe={os.environ.get('DEMO_PROBE', '-')}")
         if ":" in message:
             host, _, port = message.rpartition(":")
             try:

@@ -15,7 +15,10 @@ session's enforcer. It checks:
   3. the harness loads the skill (Pi: in its system prompt; Vibe: its `skill`
      tool; Claude Code: the skill link it loads with --add-dir);
   4. the plugin's stdio MCP server answers, with its env
-     resolved, under the tool wrapper (it can't reach the llm forwarder);
+     resolved, under the tool wrapper (it can't reach the llm forwarder); its
+     argv probes (`$HOME`, `!x`) arrive literally; a call to its `secret` tool,
+     off the session's allowlist, is refused and never reaches the server (Pi:
+     also from a codemode script, by name and through a discovery global);
   5. the shell still has no network (uv cannot reach an index).
 Prints PASS/FAIL per check; exits non-zero on any failure.
 """
@@ -23,11 +26,13 @@ Prints PASS/FAIL per check; exits non-zero on any failure.
 from __future__ import annotations
 
 import functools
+import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from live_common import check, check_version, live_session, summary, tool_result
+from live_common import check, check_version, host_edit, live_session, pi_codemode, summary, tool_result
 
 ROOT = "/opt/glove/plugins/demo"
 
@@ -86,6 +91,55 @@ def main(directory: str) -> int:
         check("it answers, its env resolved",
               f"ECHO {target} root={ROOT} data=/work/.glove-plugin-data/demo" in out, out[-200:])
         check("it has no network (not even the harness's llm forwarder)", "net=closed" in out, out[-60:])
+        print(f"      argv: {out.partition('argv=')[2][:60] or 'none'}")
+        check("its argv probes arrive literally ($HOME, !x)", "argv=$HOME|!x" in out, out[-120:])
+
+        if harness == "claude-code":
+            # Claude Code expands `${VAR}` in managed-mcp.json (glove's adapter refuses `${` there): planted
+            # on the host, `${HOME}` and a default arrive expanded, a bare `$HOME` literally
+            mcp = s.sd.state / "harness" / "claude-code" / "managed-mcp.json"
+            spec = json.loads(mcp.read_text())
+            spec["mcpServers"]["demo"].setdefault("env", {})["DEMO_PROBE"] = "${HOME}|${GLOVE_UNSET:-dflt}|$HOME"
+            with host_edit(mcp, json.dumps(spec)):
+                out = tool_result(s.call(echo, {"message": "probe"}), 300)
+            print(f"      env probe: {out.partition('probe=')[2][:60] or 'none'}")
+            check("Claude Code expands ${VAR} in managed-mcp.json (so glove refuses it)",
+                  "probe=/home/agent|dflt|$HOME" in out, out[-200:])
+
+        print("== a tool off the allowlist (the server has `secret`; the session allows only `echo`)")
+        calls = s.sd.root / "work" / ".glove-plugin-data" / "demo" / "calls.log"
+
+        def logged() -> list[str]:
+            return calls.read_text().splitlines() if calls.exists() else []
+
+        check("control: the allowed call is in the server's call log",
+              f"echo {target}" in logged(), "\n".join(logged()[-5:]) or "none")
+        catch = "catch (e) { return 'ERR ' + e; }"
+        # each try: how it calls `secret` (with its own message), and what its refusal says
+        tries: dict[str, tuple[Callable[[str], str], tuple[str, ...]]] = {
+            "called by name": (lambda m: s.call(echo.replace("echo", "secret"), {"message": m}),
+                               {"pi": ("not found",), "vibe": ("ERR ", "not a function"),
+                                "claude-code": ("not on the allowlist of this session",)}[harness]),
+        }
+        if harness == "pi":
+            out = tool_result(pi_codemode(s, "return 'CODEMODE-' + 'ON';"), 200)
+            check("control: Pi's codemode runs a script", "CODEMODE-ON" in out, out[-200:])
+            tries["from a codemode script"] = (
+                lambda m: pi_codemode(s, f"try {{ return await tools.mcp__demo__secret({{message: '{m}'}}); }} {catch}"),
+                ("ERR ", "does not exist"))
+            # ALL_TOOLS lists what a script may call: `secret` is not in it, and a call by its name fails
+            tries["through ALL_TOOLS"] = (lambda m: pi_codemode(s, (
+                "let listed = 'LISTED=?'; try { const names = ALL_TOOLS.map((t) => String(t.name ?? t)); "
+                "listed = 'LISTED=' + names.some((n) => n.endsWith('secret')) + ' n=' + names.length; "
+                f"return listed + ' ' + await tools['mcp__demo__' + 'secret']({{message: '{m}'}}); }} "
+                "catch (e) { return listed + ' ERR ' + e; }")), ("LISTED=false n=", "ERR "))
+        for i, (how, (run, refusal)) in enumerate(tries.items()):
+            msg = f"probe-{i}"
+            out = tool_result(run(msg), 300)
+            print(f"      {how}: {out[:200]}")
+            check(f"{how}: refused ({' / '.join(refusal)})", all(r in out for r in refusal), out[-200:])
+            check(f"{how}: the server never saw it",
+                  f"secret {msg}" not in logged() and "SECRET-REACHED" not in out, "\n".join(logged()[-5:]))
 
         print("== still offline")
         out = sh("cd /tmp && uv run --no-project --with requests -- python -c 'print(\"NET\" + \"-OK\")' 2>&1 | tail -2")

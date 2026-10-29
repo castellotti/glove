@@ -4,7 +4,44 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Live checks that an MCP tool off a session's allowlist never runs**
+  (round 27). The `skills` fixture's MCP server has a second tool, `secret`,
+  which the session doesn't allow, and it logs every call it receives.
+  `test_skills.sh` calls `secret` and checks it is refused and never reaches
+  the server, with the allowed `echo` call in the server's log as the control.
+  Each path must show the harness's own refusal. On Pi 1.4.0 that is a direct
+  call ("not found"), a codemode script naming it ("does not exist"), and
+  `ALL_TOOLS`, which doesn't list it (glove renders it `hidden`); on Vibe a
+  `run_typescript` call ("not a function"); on Claude Code glove's managed
+  hook (below). The server's argv probes `$HOME` and `!x` arrive literally on all
+  three. The live drivers share Pi's codemode helper (`pi_codemode`). Live on
+  Docker (nono+srt) and Podman (nono), each: `test_skills.sh` pi 24/24, vibe
+  18/18, claude-code 20/20; `test_tool_confine.sh pi` 27/27; on Docker also
+  `test_cc_nono.sh` 29/29.
+
+- **Claude Code: a managed hook refuses an MCP tool off the session's
+  allowlist** (round 27). Before, such a tool (one `all_tools` didn't name,
+  like a skills plugin's) got a permission prompt, so headless it was never
+  granted but an operator could approve it interactively. Now a `PreToolUse`
+  hook, with a matcher for every `mcp__` name not on the allowlist (`^mcp__`
+  with no server), blocks the call: its command `glove-cc-prefix --deny-mcp`
+  exits 2 in the prefix itself, never through a sandbox that could fail to
+  start (any other exit code would let Claude Code prompt). glove also
+  refuses an `mcp__` allow rule in `harness_config.permissions` (allow the
+  tool in its extension's `tools`) and an MCP server name with `__`. Live
+  on Docker and Podman: `test_skills.sh claude-code` 20/20.
+
 ### Changed
+
+- **Claude Code: a `${VAR}` in an MCP server is refused** (round 27). Measured
+  live, Claude Code expands `${VAR}` and `${VAR:-default}` from its own env in
+  `managed-mcp.json` (a planted `${HOME}` arrived as `/home/agent`; a bare
+  `$HOME` stayed literal). The adapter refuses `${` in a server's command,
+  args, env or url, as Pi's refuses `$` and `!` in env; an argv file under the
+  shell prefix is read as written. `test_skills.sh claude-code` pins the
+  expansion.
 
 - **Pi 1.4.0** (round 26, from 1.1.0; `version` and `audited_version`).
   `pi-lock` regenerated: Pi's own packages, AWS SDK and `@smithy` minor and
