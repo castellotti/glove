@@ -394,6 +394,7 @@ def test_the_vendored_relayd_is_the_relay_extensions(tmp_path):
     # image, so it carries a copy: it must stay the same file
     assert (IMAGE / "relayd.py").read_bytes() == (IN_TREE_DIR / "relay" / "image" / "relayd.py").read_bytes()
 
+
 def _session(tmp_path, **settings):
     work = tmp_path / "work"
     work.mkdir(parents=True, exist_ok=True)

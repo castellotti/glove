@@ -89,8 +89,7 @@ def _log(entry: dict) -> None:
         with contextlib.suppress(FileNotFoundError):
             if os.stat(path, follow_symlinks=False).st_size > LOG_MAX:
                 os.replace(path, os.path.join(LOG_ROOT, "log.1.jsonl"))
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
-                     0o644)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
         try:
             os.write(fd, (line + "\n").encode())
         finally:
@@ -165,7 +164,7 @@ def _prepare(event: str, args: list[str]) -> list[str]:
         raise Refused(f"replay: unexpected {bad[0]} (it takes --dry-run, at most once)")
     if len(names) != 1:
         raise Refused("replay takes one plan name")
-    dry_run, recording = bool(flags), program.recording()
+    dry_run, recording = "--dry-run" in flags, program.recording()
     if recording and not dry_run and not WHILE_RECORDING:
         raise Refused("the operator is recording (`glove playwright record`): a replay's input would end up in "
                       "their recording; wait until they tell you they are done")

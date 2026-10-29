@@ -199,7 +199,7 @@ def _send(s: Screen, events: list[dict], out: str, result: dict) -> None:
         result.update(status="error", error=str(e))
     finally:
         result["released"] = sorted(held)
-        for b in sorted(held):
+        for b in result["released"]:
             with contextlib.suppress(Exception):  # the X server may be gone: the rest still get released
                 s.button(b, False)
     result.update(ended_at=_recorder().wall(), pointer_after=s.pointer())
