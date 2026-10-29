@@ -47,7 +47,7 @@ SCHEMA_VERSION = 3
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 PLACEHOLDER = "<set-me>"
 
-# <dirname>-<6 hex>: a valid compose project suffix and Layman's SAFE_NAME (`_`: older ids).
+# <dirname>-<6 hex>: a valid compose project suffix and Layman's SAFE_NAME.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
@@ -157,7 +157,7 @@ def ensure_private(sd: SessionDir) -> Path:
 def ensure_state(sd: SessionDir) -> str:
     """Create ``.glove/`` (0700), its id and ``work/`` (a hand-copied template) if missing; returns the id."""
     ensure_private(sd)
-    sd.work.mkdir(exist_ok=True)
+    os.path.lexists(sd.work) or sd.work.mkdir()  # a file or link there: the mount checks name it
     if (sid := sd.read_id()) is None:
         sid = new_id(sd.root.name)
         (sd.state / "id").write_text(sid + "\n")

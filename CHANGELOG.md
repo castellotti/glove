@@ -39,8 +39,10 @@ All notable changes to glove are documented here.
 - A session directory whose name has an `_` (e.g. `agent_model`) no longer
   fails `glove check`/`up` with "aliases must be hostnames" once `observe` is
   on: session ids map `_` to `-` like any other non-hostname character (ids
-  already stored in `.glove/id` keep theirs). `glove up` now creates `work/`
-  when it is missing, so a template folder copied by hand (not via
+  already stored in `.glove/id` keep theirs: delete it for a new one). When the plan
+  fails, `glove check` no longer adds a misleading "needs a session directory
+  (with a work dir)". Commands that open a session (`up`, `plan`, …) now
+  create a missing `work/`, so a template folder copied by hand (not via
   `glove new`) is ready to launch.
 
 - **Pi no longer warns "This project is not trusted"** at every start (round

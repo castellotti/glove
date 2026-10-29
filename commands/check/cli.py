@@ -71,7 +71,8 @@ def command(
     try:
         checks += run_doctor(runtime=cfg.runtime, enforcer=cfg.enforcer, include_container_probes=not no_container)
         checks += extension_checks(cfg.extensions, harness=cfg.harness, comp=plan and plan.composition,
-                                   session_dir=sd.root, enforcer=cfg.enforcer, enforcer_options=cfg.enforcer_options,
+                                   session_dir=sd.root, work_dir=sd.work, enforcer=cfg.enforcer,
+                                   enforcer_options=cfg.enforcer_options,
                                    probe=None if offline or no_container else partial(probe_direct, cfg.provider))
     except ValueError as e:
         checks.append(Check("doctor", "fail", str(e)))
