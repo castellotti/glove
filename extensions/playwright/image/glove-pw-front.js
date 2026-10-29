@@ -12,8 +12,8 @@
 // `tabSymbol` property, set before init pages run. So this wraps that
 // context's ensureTab, once, to bring the tab it returns to the front. It only
 // raises; it never navigates, clicks or reads the page. If a later MCP version
-// moves either internal, it logs once and does nothing. While the operator
-// solves a challenge (`glove playwright solve`: glove-pw-capture's `.current`
+// moves either internal, it logs once and does nothing. While the operator's
+// input is recorded (`glove playwright record`: glove-pw-capture's `.current`
 // exists) it raises nothing, so the agent's next call can't cover their window.
 "use strict";
 

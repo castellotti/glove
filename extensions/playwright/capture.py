@@ -1,4 +1,4 @@
-"""`glove playwright solve`'s host side: the `challenge_capture` setting, and
+"""`glove playwright record`'s host side: the `recording` setting, and
 a capture copied out of the sidecar, checked and written.
 
 The sidecar runs a browser, so its tar is hostile input, like a download:
@@ -35,27 +35,28 @@ TITLE_MAX = 300
 COORD = 1 << 14
 STOP_REASONS = {"viewer-closed", "interrupted", "stop", "max_seconds", "cap", "error"}
 DEFAULTS = {"to": "session", "max_seconds": 600, "motion_hz": 120}
+DIR = "recordings"  # under the session state dir and, with `to: work`, browser-output/
 
 
 def spec(settings: dict[str, Any]) -> dict[str, Any] | None:
-    """`challenge_capture` with its defaults, or None when off; ValueError when it can't apply."""
-    cc = settings.get("challenge_capture")
-    if cc is None:
+    """`recording` with its defaults, or None when off; ValueError when it can't apply."""
+    rec = settings.get("recording")
+    if rec is None:
         return None
-    if unknown := set(cc) - set(DEFAULTS):
-        raise ValueError(f"playwright.challenge_capture: unknown key(s) {', '.join(sorted(unknown))} "
+    if unknown := set(rec) - set(DEFAULTS):
+        raise ValueError(f"playwright.recording: unknown key(s) {', '.join(sorted(unknown))} "
                          "(to, max_seconds, motion_hz)")
-    out = {**DEFAULTS, **cc}
+    out = {**DEFAULTS, **rec}
     if out["to"] not in ("session", "work"):
-        raise ValueError("playwright.challenge_capture.to: session or work")
+        raise ValueError("playwright.recording.to: session or work")
     for key, lo, hi in (("max_seconds", 10, 3600), ("motion_hz", 0, 500)):
         if not _int(out[key], lo, hi):
-            raise ValueError(f"playwright.challenge_capture.{key}: an integer from {lo} to {hi}")
+            raise ValueError(f"playwright.recording.{key}: an integer from {lo} to {hi}")
     if settings["mode"] != "novnc" or settings["allow_control"] is not True:
-        raise ValueError("playwright.challenge_capture records the operator solving in the noVNC view: it needs "
+        raise ValueError("playwright.recording records the operator's input in the noVNC view: it needs "
                          "mode: novnc and allow_control: true")
     if out["to"] == "work" and settings["downloads"] != "work":
-        raise ValueError("playwright.challenge_capture: to: work writes into <session>/browser-output/, which "
+        raise ValueError("playwright.recording: to: work writes into <session>/browser-output/, which "
                          "needs downloads: work")
     return out
 
@@ -218,13 +219,13 @@ def read_tar(data: bytes, cid: str) -> Capture:
 
 
 def write(base: Path, cap: Capture, *, private: bool) -> Path:
-    """Write `cap` to `<base>/challenges/<id>/`, never following a link and never
-    overwriting: `base` must exist; `challenges/` is made if missing; `<id>/` must not exist."""
+    """Write `cap` to `<base>/recordings/<id>/`, never following a link and never
+    overwriting: `base` must exist; `recordings/` is made if missing; `<id>/` must not exist."""
     dmode, fmode = (0o700, 0o600) if private else (0o755, 0o644)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fds = [os.open(base, flags)]
     try:
-        for part, exist_ok in (("challenges", True), (cap.id, False)):
+        for part, exist_ok in ((DIR, True), (cap.id, False)):
             try:
                 os.mkdir(part, dmode, dir_fd=fds[-1])
             except FileExistsError:
@@ -243,7 +244,7 @@ def write(base: Path, cap: Capture, *, private: bool) -> Path:
     finally:
         for fd in fds:
             os.close(fd)
-    return base / "challenges" / cap.id
+    return base / DIR / cap.id
 
 
 def printable(s: str) -> str:

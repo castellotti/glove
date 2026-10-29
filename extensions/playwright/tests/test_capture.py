@@ -1,4 +1,4 @@
-"""`playwright: {challenge_capture: …}` and `glove playwright solve`'s host side:
+"""`playwright: {recording: …}` and `glove playwright record`'s host side:
 the setting's refusals, the brief, and a capture copied out of the (hostile)
 sidecar: checked, then written without following links."""
 
@@ -33,7 +33,7 @@ EVENTS = [
      "x": 700, "y": 420, "mask": 0},
 ]
 WINDOWS = [{"t": 0, "wall": "2026-10-20T10:17:41.459Z", "reason": "arm", "display": [1280, 800],
-            "windows": [{"id": 7, "title": "Just a moment…", "x": 0, "y": 0, "w": 1279, "h": 799}]},
+            "windows": [{"id": 7, "title": "Example page", "x": 0, "y": 0, "w": 1279, "h": 799}]},
            {"t": 1334, "wall": "2026-10-20T10:17:42.792Z", "reason": "change", "display": [1280, 800],
             "windows": [{"id": 7, "title": "Results\x1b]0;pwned\x07", "x": 0, "y": 0, "w": 1279, "h": 799}]}]
 META = {"capture": 1, "glove_version": "3.0.0", "display": [1280, 800], "viewport": "1280x800",
@@ -84,36 +84,36 @@ def _good() -> dict[str, bytes]:
 
 def test_off_by_default_and_defaults_when_on(tmp_path):
     plan = _plan(tmp_path, **NOVNC)
-    assert "glove playwright solve" not in _brief(plan)
+    assert "glove playwright record" not in _brief(plan)
     assert capture.spec({**NOVNC, "downloads": "session"}) is None
-    assert capture.spec({**NOVNC, "downloads": "session", "challenge_capture": {}}) == \
+    assert capture.spec({**NOVNC, "downloads": "session", "recording": {}}) == \
         {"to": "session", "max_seconds": 600, "motion_hz": 120}
 
 
-def test_the_brief_says_hand_off_never_solve(tmp_path):
-    brief = _brief(_plan(tmp_path, **NOVNC, challenge_capture={}))
-    assert "tell the operator to run `glove playwright solve`" in brief
-    assert "You never interact with the challenge yourself." in brief
-    assert "record" not in brief.lower()  # nothing about the recording beyond the hand-off
+def test_the_brief_says_hand_off_and_stay_out(tmp_path):
+    brief = _brief(_plan(tmp_path, **NOVNC, recording={}))
+    assert "ask them to run `glove playwright record`" in brief
+    assert "Don't use the browser until they tell you they are done." in brief
+    assert "recordings" not in brief  # nothing about where the recording goes
 
 
 @pytest.mark.parametrize(("settings", "match"), [
     ({"mode": "novnc"}, "needs mode: novnc and allow_control: true"),
     ({"mode": "headless"}, "needs mode: novnc and allow_control: true"),
-    ({**NOVNC, "challenge_capture": {"to": "work"}}, "needs downloads: work"),
-    ({**NOVNC, "challenge_capture": {"to": "disk"}}, "session or work"),
-    ({**NOVNC, "challenge_capture": {"max_seconds": 5}}, "max_seconds: an integer from 10 to 3600"),
-    ({**NOVNC, "challenge_capture": {"motion_hz": True}}, "motion_hz: an integer"),
-    ({**NOVNC, "challenge_capture": {"keys": True}}, "unknown key"),
+    ({**NOVNC, "recording": {"to": "work"}}, "needs downloads: work"),
+    ({**NOVNC, "recording": {"to": "disk"}}, "session or work"),
+    ({**NOVNC, "recording": {"max_seconds": 5}}, "max_seconds: an integer from 10 to 3600"),
+    ({**NOVNC, "recording": {"motion_hz": True}}, "motion_hz: an integer"),
+    ({**NOVNC, "recording": {"keys": True}}, "unknown key"),
 ])
 def test_refusals_at_plan_time(tmp_path, settings, match):
-    settings = {"challenge_capture": {}, **settings}
+    settings = {"recording": {}, **settings}
     with pytest.raises(ExtensionError, match=match):
         _plan(tmp_path, **settings)
 
 
 def test_to_work_with_downloads_work():
-    assert capture.spec({**NOVNC, "downloads": "work", "challenge_capture": {"to": "work"}})["to"] == "work"
+    assert capture.spec({**NOVNC, "downloads": "work", "recording": {"to": "work"}})["to"] == "work"
 
 
 # --- the capture's checks ----------------------------------------------------------------------------------------
@@ -182,8 +182,8 @@ def test_deeply_nested_json_is_dropped_not_a_crash():
 def test_doctor_reports_a_bad_setting():
     hooks = load_module(PW / "hooks.py", "playwright")
     ctx = type("Ctx", (), {"settings": {**NOVNC, "mode": "headless", "downloads": "session", "login": None,
-                                        "challenge_capture": {}}})()
-    assert hooks.doctor(ctx, None)[0][:2] == ("playwright challenge capture", "fail")
+                                        "recording": {}}})()
+    assert hooks.doctor(ctx, None)[0][:2] == ("playwright recording", "fail")
 
 
 def test_not_a_tar_or_a_bad_id_is_refused():
@@ -213,7 +213,7 @@ def test_a_planted_link_is_refused_not_followed(tmp_path):
     out, elsewhere = tmp_path / "browser-output", tmp_path / "elsewhere"
     out.mkdir()
     elsewhere.mkdir()
-    os.symlink(elsewhere, out / "challenges")
+    os.symlink(elsewhere, out / "recordings")
     with pytest.raises(OSError):
         capture.write(out, cap, private=False)
     os.symlink(elsewhere, tmp_path / "linked-base")
@@ -229,4 +229,4 @@ def test_summary_and_titles_are_printable():
     text = capture.summary(cap)
     assert "1 press(es)" in text and "drags 400 px in 534 ms" in text and "stopped: viewer-closed" in text
     assert "\x1b" not in text and "\x07" not in text and "Results]0;pwned" in text
-    assert capture.front_title(WINDOWS[0]) == "Just a moment…"
+    assert capture.front_title(WINDOWS[0]) == "Example page"

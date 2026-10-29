@@ -1,5 +1,5 @@
 """RFB over noVNC's WebSocket, the way a browser tab running noVNC talks to
-`glove playwright view|solve`: one drag, then close.
+`glove playwright view|record`: one drag, then close.
 
     uv run --no-project --with pycryptodome python tests/integration/ws_rfb_drag.py <x0> <y0> <x1> <y1>   (URL on stdin)
 

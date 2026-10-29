@@ -6,6 +6,11 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove playwright record`** is the new name of `glove playwright solve`
+  (round 28): the setting `challenge_capture` is now `recording`, and captures
+  go to `recordings/<id>/` (was `challenges/<id>/`), under
+  `.glove/ext/playwright/` and, with `to: work`, `browser-output/`. A session
+  that still sets `challenge_capture` fails `glove check` (unknown setting).
 - **Pi 1.4.0** (round 26, from 1.1.0; `version` and `audited_version`).
   `pi-lock` regenerated: Pi's own packages, AWS SDK and `@smithy` minor and
   patch bumps, `marked-cjk-friendly` new (and two nested `@smithy` copies), and
@@ -169,10 +174,10 @@ All notable changes to glove are documented here.
   `glove up` cost one timeout, not K; results still report in order and a
   failure still stops the launch. `glove skills status` does the same.
 
-- **`glove playwright solve`** (`playwright: {challenge_capture: {to:
+- **`glove playwright record`** (`playwright: {recording: {to:
   session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
   - It takes control of the noVNC view as `view --control` does, and records
-    the operator solving a bot challenge: presses and releases with display
+    the operator's pointer input: presses and releases with display
     coordinates, pointer positions while a button is down, a screenshot at
     arm, each press and release, and stop, and the windows' titles and
     stacking.
@@ -183,12 +188,13 @@ All notable changes to glove are documented here.
     (`--stop` saves one left running). The host copies the capture out of the
     sidecar's tmpfs, validates it as hostile input (names, sizes, PNG
     signature, JSON schemas, rewritten from parsed values), and writes it
-    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/challenges/<id>/`
-    (0700) and, with `to: work`, to `browser-output/challenges/<id>/`.
-  - The brief tells the agent to leave a challenge in front and hand off,
-    never to solve it.
+    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/recordings/<id>/`
+    (0700) and, with `to: work`, to `browser-output/recordings/<id>/`.
+  - The brief tells the agent, when it needs the operator to do a step in
+    the browser, to leave the tab in front, ask them to run `record`, and not
+    use the browser until they are done.
   - Live: `tests/integration/test_playwright.sh capture` drives a drag
-    through `solve`'s own noVNC WebSocket and compares it with the page's
+    through `record`'s own noVNC WebSocket and compares it with the page's
     pointer log (±1 px).
 - **playwright novnc keeps the agent's page in front.**
   - A second MCP client's window, a popup or a tab a link opened used to

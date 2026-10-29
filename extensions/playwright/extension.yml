@@ -31,9 +31,9 @@ settings:
   # novnc
   allow_control:     { type: bool, default: false }
   clipboard:         { type: enum, values: ["off", to-browser, both], default: "off" }
-  # `glove playwright solve` records the operator's pointer while they solve a
-  # challenge (needs allow_control): {to: session|work, max_seconds, motion_hz}
-  challenge_capture: { type: map }
+  # `glove playwright record` records the operator's pointer input while they
+  # use the browser (needs allow_control): {to: session|work, max_seconds, motion_hz}
+  recording:         { type: map }
   # host
   port:              { type: int }                      # host MCP port (default: a free one per session)
   cdp_port:          { type: int }                      # host Chrome remote-debugging port (likewise)

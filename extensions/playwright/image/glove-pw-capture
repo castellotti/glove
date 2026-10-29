@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""glove `playwright` challenge capture: record the operator's pointer on the
-novnc display while they solve a bot challenge (`glove playwright solve`).
+"""glove `playwright` recording: record the operator's pointer input on the
+novnc display while they use the browser (`glove playwright record`).
 
     glove-pw-capture start [--max-seconds N] [--motion-hz N] [--glove-version V]
                                     arm, or find the running capture: prints
@@ -13,16 +13,16 @@ novnc display while they solve a bot challenge (`glove playwright solve`).
     glove-pw-capture list           the finished capture ids under /tmp/capture
 
 Only one recorder runs at a time (`start` holds a lock while it arms). The
-`solve` that started it stops and saves it; one that attached only watches.
+`record` that started it stops and saves it; one that attached only watches.
 
 Passive only: it selects XI2 *raw* events on the root window (they reach a
 root listener whatever holds focus or a grab, and carry no coordinates), and
 on each one asks QueryPointer where the pointer is. It never grabs, never
 selects input on Chromium's windows and never sends input. Keys, the
 clipboard and anything from the page or network are never recorded; window
-titles are (they say challenge → results).
+titles are (they show which page was in front).
 
-Output, on the sidecar's tmpfs, which `glove playwright solve` copies out
+Output, on the sidecar's tmpfs, which `glove playwright record` copies out
 (validating everything: this container runs a browser) and then removes:
 
     /tmp/capture/<id>/events.jsonl   {"t", "xt", "wall", "type": down|up|move|wheel, "button", "x", "y", "mask"}
