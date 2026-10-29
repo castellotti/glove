@@ -1,4 +1,4 @@
-"""`glove playwright view|solve|status|login|reload` — the browser sidecar from the host.
+"""`glove playwright view|record|status|login|reload` — the browser sidecar from the host.
 
 `view` opens a loopback-only listener on a random port for as long as the
 command runs. Each connection it accepts is checked (Host and Origin must be
@@ -48,7 +48,7 @@ err = Console(stderr=True)
 DIR_OPT = typer.Option(None, "--dir", help="session directory (default: the nearest one)")
 WEBSOCKIFY = "TCP4:127.0.0.1:6080"
 MAX_HEAD = 16384
-VIEWER_GRACE = 5.0  # seconds without a viewer before `solve` stops
+VIEWER_GRACE = 5.0  # seconds without a viewer before `record` stops
 CAPTURE = "glove-pw-capture"
 
 
@@ -103,7 +103,7 @@ async def _pipe(reader: asyncio.StreamReader, writer) -> None:
 
 async def _serve(runtime: str, container: str, password: str, *, control: bool, open_browser: bool,
                  viewers_gone: asyncio.Event | None = None) -> None:
-    """Serve noVNC until cancelled. `viewers_gone` (solve) is set once no viewer's
+    """Serve noVNC until cancelled. `viewers_gone` (record) is set once no viewer's
     WebSocket has been open for VIEWER_GRACE seconds (noVNC reconnects by itself,
     e.g. when the tab reloads)."""
     port = 0
@@ -191,62 +191,62 @@ def view(
         console.print("closed")
 
 
-@app.command("solve")
-def solve(
+@app.command("record")
+def record(
     directory: Path | None = DIR_OPT,
     no_open: bool = typer.Option(False, "--no-open", help="print the URL instead of opening it"),
     stop: bool = typer.Option(False, "--stop", help="stop and save a capture left running (e.g. the terminal died)"),
 ) -> None:
-    """Take control of the novnc browser to solve a bot challenge, recording your
-    pointer (challenge_capture); closing the tab or Ctrl-C stops and saves it."""
+    """Take control of the novnc browser and record your pointer input as you use
+    it (`recording`); closing the tab or Ctrl-C stops and saves it."""
     s = _session(directory)
     runtime, container, pw = s.runtime, s.container("pw"), s.settings
     try:
-        cc = capture.spec(dict(pw))
+        rec = capture.spec(dict(pw))
     except ValueError as e:
         raise _fail(str(e)) from e
-    if cc is None:
-        raise _fail("`solve` needs `playwright: {challenge_capture: {}}` (with mode: novnc and allow_control: true)")
+    if rec is None:
+        raise _fail("`record` needs `playwright: {recording: {}}` (with mode: novnc and allow_control: true)")
     if not s.running("pw"):
         raise _fail(f"{container} is not running — `glove up` first")
     if stop:
         if not _stop(runtime, container, "stop"):
-            raise _fail("the recorder is still finishing; run `glove playwright solve --stop` again")
+            raise _fail("the recorder is still finishing; run `glove playwright record --stop` again")
         ids = _exec(runtime, container, CAPTURE, "list").split()
         if not ids:
             console.print("no capture to save")
         for cid in ids:
-            _collect(s, cid, cc)
+            _collect(s, cid, rec)
         return
     password = _vnc_password(runtime, container, "full")
-    started = _exec(runtime, container, CAPTURE, "start", "--max-seconds", str(cc["max_seconds"]),
-                    "--motion-hz", str(cc["motion_hz"]), "--glove-version", _glove_version()).split()
+    started = _exec(runtime, container, CAPTURE, "start", "--max-seconds", str(rec["max_seconds"]),
+                    "--motion-hz", str(rec["motion_hz"]), "--glove-version", _glove_version()).split()
     if not started or not capture.ID.fullmatch(started[0]):
         raise _fail(f"the recorder in {container} did not start")
     cid, owner = started[0], not started[1:]
-    console.print(f"[bold]recording[/bold] capture {cid}" + ("" if owner else " (attached: another `solve` runs it)")
-                  + f": your pointer, for up to {cc['max_seconds']} s")
+    console.print(f"[bold]recording[/bold] capture {cid}" + ("" if owner else " (attached: another `record` runs it)")
+                  + f": your pointer, for up to {rec['max_seconds']} s")
     reason = "interrupted"
     try:
         with contextlib.suppress(KeyboardInterrupt):
-            reason = asyncio.run(_solve(runtime, container, password, cid, open_browser=not no_open))
+            reason = asyncio.run(_record(runtime, container, password, cid, open_browser=not no_open))
     finally:  # also when serving failed: never leave the recorder running unsaved
         if owner:
             try:
                 if _stop(runtime, container, reason):
-                    _collect(s, cid, cc)
+                    _collect(s, cid, rec)
                 else:
                     err.print(f"[yellow]capture {cid} is still finishing:[/yellow] "
-                              "`glove playwright solve --stop` saves it")
+                              "`glove playwright record --stop` saves it")
             except KeyboardInterrupt:
                 err.print(f"[yellow]interrupted while saving capture {cid}:[/yellow] "
-                          "`glove playwright solve --stop` saves it")
+                          "`glove playwright record --stop` saves it")
         else:
-            console.print(f"capture {cid} goes on: the `solve` that started it saves it "
-                          "(or `glove playwright solve --stop`)")
+            console.print(f"capture {cid} goes on: the `record` that started it saves it "
+                          "(or `glove playwright record --stop`)")
 
 
-async def _solve(runtime: str, container: str, password: str, cid: str, *, open_browser: bool) -> str:
+async def _record(runtime: str, container: str, password: str, cid: str, *, open_browser: bool) -> str:
     """View with control and print the front window's title as it changes, until the
     viewer has gone ("viewer-closed") or the recorder has stopped ("stop": `stop` is then a no-op)."""
     gone = asyncio.Event()
@@ -326,7 +326,7 @@ def _read_capped(argv: list[str], cap: int) -> bytes:
     return b"".join(chunks)
 
 
-def _collect(s: ExtSession, cid: str, cc: dict) -> None:
+def _collect(s: ExtSession, cid: str, rec: dict) -> None:
     """Copy the finished capture `cid` out of the sidecar, check it, write it to the
     host (and browser-output/ with `to: work`), and remove it from the sidecar once
     the host copy is safe."""
@@ -335,9 +335,9 @@ def _collect(s: ExtSession, cid: str, cc: dict) -> None:
         err.print(f"[yellow]skipped[/yellow] a capture with an unexpected name ({escape(capture.printable(cid[:40]))})")
         return
     if cid not in _exec(runtime, container, CAPTURE, "list").split():
-        console.print(f"[dim]capture {cid} was already saved (another `solve`)[/dim]")
+        console.print(f"[dim]capture {cid} was already saved (another `record`)[/dim]")
         return
-    kept = f"; it stays in {container}:/tmp/capture/{cid} (`glove playwright solve --stop` retries)"
+    kept = f"; it stays in {container}:/tmp/capture/{cid} (`glove playwright record --stop` retries)"
     try:
         cap = capture.read_tar(_read_capped([runtime, "exec", container, "tar", "-C", "/tmp/capture", "-c", cid],
                                             capture.MAX_TAR), cid)
@@ -349,16 +349,16 @@ def _collect(s: ExtSession, cid: str, cc: dict) -> None:
         saved = [capture.write(state, cap, private=True)]
     except FileExistsError:
         saved = []
-        console.print(f"[dim]capture {cid} is already saved in {state}/challenges/[/dim]")
+        console.print(f"[dim]capture {cid} is already saved in {state}/{capture.DIR}/[/dim]")
     except OSError as e:
-        shutil.rmtree(state / "challenges" / cid, ignore_errors=True)  # ours, never the sidecar's
+        shutil.rmtree(state / capture.DIR / cid, ignore_errors=True)  # ours, never the sidecar's
         err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
         return
-    if cc["to"] == "work":
+    if rec["to"] == "work":
         try:
             saved.append(capture.write(s.root / "browser-output", cap, private=False))
         except FileExistsError:  # ids are unguessable: glove didn't make it, and its files are unchecked
-            err.print(f"[red]refused:[/red] browser-output/challenges/{cid} already exists, and glove did not "
+            err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already exists, and glove did not "
                       "write it (the browser sidecar can write there); the checked copy is the host's")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")

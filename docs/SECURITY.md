@@ -441,6 +441,33 @@ has no server-side switch for it). The controls:
   outside the session. The sidecar holds no glove secret (the VNC passwords
   guard a loopback listener; a CA is public). Keep `uploads: work` off with a
   persistent profile you have logged in with.
+- **Events (`event_relay`).** The agent's `browser-event` command reaches the
+  sidecar only through the `browser-event` channel: files and FIFOs, as for the
+  [relays](#relays-gh-and-git-from-shell-commands-relay-github). relayd runs in
+  the browser sidecar itself, because its X display listens on no socket that
+  another container can reach. **What widens:** the agent sends pointer input
+  to the sidecar's display, through XTest, at the times its plan names. A page
+  can't tell that input from a person's, and it reaches whatever window is in
+  front. **Bound:**
+  - two events (`status`, `replay`), whose program and arguments the policy
+    fixes; the agent picks only a plan name and `--dry-run`;
+  - a plan is data, checked against the display before anything is sent, no
+    longer than the timeout allows, and run from the copy that was checked
+    (out of the agent's reach);
+  - one event at a time, killed at `event_timeout`, with no network (no proxy:
+    there is nothing for it to reach);
+  - a replay and the operator's recorder exclude each other (claimed under one
+    lock): no replay while they record, and no recorder while a replay sends
+    input. Only the session's `replay_while_recording` allows both, never the
+    agent;
+  - every event and every refusal is logged before it runs, in an output
+    (`/work/browser-events/`) that the agent reads but cannot write. The output
+    is bounded on the host: the log rotates at 4 MiB (one older file kept),
+    and the newest 20 replays are kept.
+
+  The program runs as the browser's uid, so it could read the profile. It is
+  glove's own code, baked into the image; code the agent writes never runs in
+  the sidecar.
 - **A stored session (`storage_state`, `glove playwright login`).** The
   operator signs in with a dedicated Chrome on the host: a fresh profile under
   `.glove/` (deleted afterwards), driven over CDP on a pipe, so no debugging

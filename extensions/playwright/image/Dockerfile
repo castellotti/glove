@@ -18,12 +18,17 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
     && ln -s /opt/glove/pw/node_modules/.bin/playwright-core /usr/local/bin/playwright-core
 
 COPY glove-pw-start glove-pw-capture /usr/local/bin/
+# `event_relay`: relayd serves the agent's events in this container, beside
+# the X display they act on. relayd.py is a copy of the relay extension's
+# (this image can't build FROM relay's; a unit test holds the two equal).
+COPY relayd.py /usr/local/bin/relayd
+COPY relay_policy.py browser_event.py /opt/glove/events/
 # novnc: keeps the page the agent acts on in front (mcp.json's browser.initPage);
 # the MCP deletes a staged download once it has copied it (glove-pw-start)
 COPY glove-pw-front.js glove-pw-staged.js /opt/glove/pw/
 # a playwright-core that saves a download some other way fails the build here
 RUN grep -q 'promises.copyFile(localPath, params2.path)' node_modules/playwright-core/lib/coreBundle.js
-RUN chmod 0755 /usr/local/bin/glove-pw-start /usr/local/bin/glove-pw-capture \
+RUN chmod 0755 /usr/local/bin/glove-pw-start /usr/local/bin/glove-pw-capture /usr/local/bin/relayd \
     && mkdir -p /data/output /data/uploads /data/staging /data/profile /etc/glove/playwright \
     && chmod 0777 /data/output /data/profile
 

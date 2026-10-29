@@ -63,7 +63,7 @@ UPLOAD_PAGE = "data:text/html,<input type=file onchange=\"this.files[0].text().t
 CLICK_PAGE = ("data:text/html,<title>WAITING</title><body style='margin:0;height:100vh;background:%23eee' "
               "onmousedown=\"document.title='CLICKED'\"></body>")
 BUTTON_PAGE = "data:text/html,<title>WAITING</title><button onclick=\"document.title='CLICKED'\">Go</button>"
-# challenge capture: the page titles itself with where it saw the press and the release (screen coordinates,
+# recording: the page titles itself with where it saw the press and the release (screen coordinates,
 # which are the display's: the window is at 0,0); the recorder logs titles, so the capture carries both
 POINTER_PAGE = ("data:text/html,<title>AGENT</title><body style='margin:0;height:100vh' "
                 "onpointerdown=\"window.d='D:'+event.screenX+','+event.screenY\" "
@@ -433,8 +433,10 @@ def main(directory: str) -> int:
             check(f"full password, allow_control {pws['allow_control']}: the click "
                   + ("lands" if want == "CLICKED" else "does NOT land"), auth == "auth ok" and title == want,
                   f"{auth}; title {title}")
-            if pws.get("challenge_capture") is not None:
+            if pws.get("recording") is not None:
                 capture_checks(sd, rt, s, mcp_argv, exec_pw)
+            if pws["event_relay"]:
+                event_checks(live, sd, rt, s, mcp_argv, exec_pw)
     return summary()
 
 
@@ -445,8 +447,101 @@ def front(rt: str, container: str) -> str:
     return lines[-1] if lines else r.stderr[-120:]
 
 
+# a drag for `browser-event replay`: POINTER_PAGE titles itself with where it saw the press and the release
+DRAG = {"v": 1, "display": [1280, 800],
+        "events": [{"t": 0, "type": "down", "x": 300, "y": 400, "button": 1},
+                   *({"t": 40 * i, "type": "move", "x": 300 + 50 * i, "y": 400 + 2 * i} for i in range(1, 9)),
+                   {"t": 400, "type": "up", "x": 700, "y": 420, "button": 1}]}
+PLANS = "/run/glove/browser-event/plans"
+# 5 s of pointer moves (no button): long enough to try arming a recorder while it runs
+SLOW = {"v": 1, "display": [1280, 800],
+        "events": [{"t": 250 * i, "type": "move", "x": 100 + 10 * i, "y": 100} for i in range(21)]}
+# SIGTERM to relayd (python3 /usr/local/bin/relayd --channel …), never to this script itself
+KILL_RELAYD = ("python3 -c \"import os, signal; [os.kill(int(p), signal.SIGTERM) for p in os.listdir('/proc') "
+               "if p.isdigit() and int(p) != os.getpid() "
+               "and open(f'/proc/{p}/cmdline', 'rb').read().split(b'\\0')[1:2] == [b'/usr/local/bin/relayd']]\"")
+
+
+def event_checks(live, sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
+    print("== events (`browser-event`, event_relay)")
+    sh = live.sh
+
+    def stage(name: str, plan) -> str:
+        return f"printf '%s' '{json.dumps(plan)}' > {PLANS}/{name}"
+
+    out = sh("browser-event status; echo rc=$?")
+    st = json.loads(out[out.index("{"):out.index("}") + 1]) if "{" in out else {}
+    check("`browser-event status` from the agent's shell: the display, XTest, not recording",
+          "rc=0" in out and st.get("display") == [1280, 800] and st.get("xtest") is True
+          and st.get("recording") is False, out[-200:])
+    agent = subprocess.Popen(mcp_argv([["browser_navigate", {"url": POINTER_PAGE}], ["sleep", {"s": 120}]]),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(lambda: front(rt, f"{s}-pw").startswith("AGENT"), timeout=60, step=2)
+        out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
+        check("--dry-run checks the plan and sends nothing", '"status": "dry-run"' in out and "rc=0" in out
+              and front(rt, f"{s}-pw").startswith("AGENT"), out[-200:])
+        out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json; echo rc=$?")
+        check("a replay drags on the sidecar's display (the result: ok, the pointer where the plan ends)",
+              '"status": "ok"' in out and '"end_error_px": 0' in out and "rc=0" in out, out[-300:])
+        seen = wait_for(lambda: re.match(r"D:(\d+),(\d+) U:(\d+),(\d+)", front(rt, f"{s}-pw")), timeout=10)
+        check("the page saw the press at (300, 400) and the release at (700, 420)",
+              bool(seen) and seen.groups() == ("300", "400", "700", "420"), front(rt, f"{s}-pw"))
+    finally:
+        agent.terminate()
+    log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
+    replays = [e for e in log if e["event"] == "replay"]
+    run = sd.root / "browser-events" / replays[-1]["id"] if replays else None
+    check("every event is in log.jsonl; the replay left plan.json, result.json, before.png and after.png",
+          [e["event"] for e in log] == ["status", "replay", "replay"] and run is not None
+          and sorted(p.name for p in run.iterdir()) == ["after.png", "before.png", "plan.json", "result.json"]
+          and (run / "after.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", str(log)[-300:])
+    out = sh("touch /work/browser-events/x; echo rc=$?")
+    check("the agent can't write the log (read-only at /work/browser-events)", "rc=0" not in out, out[-200:])
+    for label, cmd, want in [
+        ("an invalid plan", stage("bad.json", {**DRAG, "display": [1280]}) + " && browser-event replay bad.json",
+         "display: want"),
+        ("a path, not a name", "browser-event replay ../plans/drag.json", "want a file name"),
+        ("another event", "browser-event click", "usage: browser-event"),
+        ("an override flag (the session's call, not the agent's)",
+         stage("drag.json", DRAG) + " && browser-event replay drag.json --allow-while-recording", "unexpected"),
+    ]:
+        out = sh(f"{cmd}; echo rc=$?")
+        check(f"refused (126): {label}", "rc=126" in out and want in out, out[-200:])
+    log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
+    check("each refusal is logged too, with its reason", sum("refused" in e for e in log) == 4, str(log[-1])[-300:])
+    exec_pw("mkdir -p /tmp/capture && echo '20261020-101741-0a1b2c 999999' > /tmp/capture/.current")
+    out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
+    check("a marker a dead recorder left behind does not block a replay", "rc=0" in out, out[-200:])
+    cid = exec_pw("rm -f /tmp/capture/.current; glove-pw-capture start --max-seconds 60").stdout.split()
+    try:
+        out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json; echo rc=$?")
+        check("a replay is refused while the operator records (a live glove-pw-capture)",
+              "rc=126" in out and "operator is recording" in out and "--" not in out.split("recording")[-1], out[-200:])
+        out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
+        check("a dry-run (no input) still runs while they record", "rc=0" in out and "dry-run" in out, out[-200:])
+    finally:
+        exec_pw(f"glove-pw-capture stop; rm -rf /tmp/capture/{cid[0] if cid else 'none'} /tmp/capture/.*.log")
+    replayed: list[str] = []
+    t = threading.Thread(target=lambda: replayed.append(
+        sh(stage("slow.json", SLOW) + " && browser-event replay slow.json; echo rc=$?")))
+    t.start()
+    claimed = wait_for(lambda: exec_pw("cat /tmp/capture/.replay").returncode == 0, timeout=30, step=0.2)
+    r = exec_pw("glove-pw-capture start --max-seconds 30")
+    t.join()
+    out = replayed[0] if replayed else ""
+    check("a recorder does not arm while a replay sends input", bool(claimed) and '"status": "ok"' in out
+          and r.returncode == 1 and "replaying input" in r.stderr, f"{r.returncode} {r.stderr[-150:]} | {out[-150:]}")
+    if r is not None and r.returncode == 0:
+        exec_pw(f"glove-pw-capture stop; rm -rf /tmp/capture/{r.stdout.split()[0]} /tmp/capture/.*.log")
+    exec_pw(KILL_RELAYD)
+    up = wait_for(lambda: "rc=0" in sh("browser-event status >/dev/null; echo rc=$?"), timeout=30, step=2)
+    check("relayd is restarted when it dies (`browser-event status` answers again)", bool(up),
+          exec_pw("ps -eo args | grep -c '[r]elayd'").stdout.strip())
+
+
 def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
-    print("== challenge capture (`glove playwright solve`)")
+    print("== recording (`glove playwright record`)")
     agent = subprocess.Popen(mcp_argv([["browser_navigate", {"url": POINTER_PAGE}], ["sleep", {"s": 20}],
                                        ["browser_snapshot", {}], ["sleep", {"s": 120}]]),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -460,29 +555,29 @@ def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
         back = wait_for(lambda: front(rt, f"{s}-pw").startswith("AGENT"), timeout=60, step=1)
         check("the agent's next tool call brings its page back in front (glove-pw-front.js)", bool(back),
               front(rt, f"{s}-pw"))
-        solve = subprocess.Popen([sys.executable, "-m", "glove.cli", "playwright", "solve", "--no-open"],
-                                 cwd=sd.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        rec = subprocess.Popen([sys.executable, "-m", "glove.cli", "playwright", "record", "--no-open"],
+                               cwd=sd.root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         url, lines = "", []
-        for line in solve.stdout:  # the URL carries the password: never printed here
+        for line in rec.stdout:  # the URL carries the password: never printed here
             if line.startswith("open: "):
                 url = line.split(" ", 1)[1].strip()
                 break
             lines.append(line)
-        check("`solve` arms the recorder and serves the viewer", bool(url), "".join(lines)[-200:])
+        check("`record` arms the recorder and serves the viewer", bool(url), "".join(lines)[-200:])
         again = exec_pw("glove-pw-capture start").stdout.split()
         check("a second start attaches to it (one recorder at a time)", again[1:] == ["attached"], " ".join(again))
         drag = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pycryptodome", "python",
                                str(HERE / "ws_rfb_drag.py"), "300", "400", "700", "420"],
                               input=url + "\n", capture_output=True, text=True, timeout=120)
-        check("a drag through solve's noVNC WebSocket (Host/Origin of the listener)", "auth ok" in drag.stdout,
+        check("a drag through record's noVNC WebSocket (Host/Origin of the listener)", "auth ok" in drag.stdout,
               (drag.stdout + drag.stderr)[-160:])
-        out, _ = solve.communicate(timeout=90)  # the viewer is gone: solve stops and saves by itself
-        check("`solve` stops once the viewer has gone and saves the capture", "✓ capture" in out, out[-300:])
+        out, _ = rec.communicate(timeout=90)  # the viewer is gone: record stops and saves by itself
+        check("`record` stops once the viewer has gone and saves the capture", "✓ capture" in out, out[-300:])
     finally:
         for p in (agent, other):
             if p is not None:
                 p.terminate()
-    host = sorted((sd.root / ".glove" / "ext" / "playwright" / "challenges").glob("*"))
+    host = sorted((sd.root / ".glove" / "ext" / "playwright" / "recordings").glob("*"))
     if not host:
         check("the capture is on the host", False)
         return
@@ -504,8 +599,8 @@ def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
         abs(a - int(b)) <= 1 for a, b in zip((down["x"], down["y"], up["x"], up["y"]), seen.groups(), strict=True))
     check("press and release match the page's own pointer log (±1 px), with the drag's moves",
           ok and moves >= 5, f"down {down} up {up} page {seen.group(0) if seen else titles[-3:]} moves {moves}")
-    work = sd.root / "browser-output" / "challenges" / cap.name
-    check("to: work: also in browser-output/challenges/ (read-only at /work/browser-output)",
+    work = sd.root / "browser-output" / "recordings" / cap.name
+    check("to: work: also in browser-output/recordings/ (read-only at /work/browser-output)",
           (work / "meta.json").is_file() and (work / "shots").is_dir())
     left = exec_pw(f"ls -A /tmp/capture 2>/dev/null; test -e /tmp/capture/{cap.name} && echo LEFT").stdout
     check("removed from the sidecar's tmpfs", "LEFT" not in left, left.strip())

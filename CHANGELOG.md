@@ -6,6 +6,11 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`glove playwright record`** is the new name of `glove playwright solve`
+  (round 28): the setting `challenge_capture` is now `recording`, and captures
+  go to `recordings/<id>/` (was `challenges/<id>/`), under
+  `.glove/ext/playwright/` and, with `to: work`, `browser-output/`. A session
+  that still sets `challenge_capture` fails `glove check` (unknown setting).
 - **Pi 1.4.0** (round 26, from 1.1.0; `version` and `audited_version`).
   `pi-lock` regenerated: Pi's own packages, AWS SDK and `@smithy` minor and
   patch bumps, `marked-cjk-friendly` new (and two nested `@smithy` copies), and
@@ -155,6 +160,37 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **The agent sends events to the browser sidecar** (`playwright:
+  {event_relay: true}`, novnc; round 28). This replaces PR #56.
+  - `browser-event status` reports the display, the pointer and whether the
+    operator is recording. `browser-event replay PLAN [--dry-run]` plays a
+    timed input sequence (XTest) on the sidecar's display.
+  - A plan is `{"v": 1, "display": [w, h], "events": [{t, type:
+    move|down|up|wheel, x, y, button}]}`: the rows of a recording's
+    `events.jsonl` (buttons 1–3, 8 and 9 for down/up, 4–7 for wheel), so what
+    `glove playwright record` captured replays as it is if it fits the event
+    timeout.
+  - Built on the `relay` library. The event travels over the session tmpfs
+    channel `browser-event` (files and FIFOs, no route). `relayd` serves it in
+    the `pw` sidecar beside the X display and runs only what
+    `image/relay_policy.py` allows: two events, with program and arguments
+    fixed.
+  - A plan is a bare name in `plans/`, at most 2 MiB and the event timeout
+    long. It is validated, taken out of `plans/`, and run from the checked
+    copy. One event at a time, killed at `event_timeout` (30 to 3600 s).
+  - A replay and the operator's recorder exclude each other, claimed under
+    the recorder's lock: no replay while they record, and no recorder while a
+    replay sends input. Only `replay_while_recording: true` (a session
+    setting, never an agent flag) allows both.
+  - Every event and every refusal is logged before it runs, in
+    `/work/browser-events/log.jsonl` (read-only to the agent), and each
+    replay leaves `plan.json`, `result.json`, `before.png` and `after.png`
+    beside it. The log rotates at 4 MiB to `log.1.jsonl`, and the newest 20
+    replays are kept.
+  - Whatever fails (the display, a frame), a replay writes its result and
+    exits 2. relayd is restarted if it dies.
+  - `image/relayd.py` is a copy of the relay extension's, and a unit test
+    holds the two equal. No core change.
 - **`glove down` removes the empty mount points glove created** (R18.V1). The
   binds over a missing path in `/work` (a `protect_ide_files` placeholder's
   `.envrc`, `.mcp.json`, `.vscode/`, `.idea/`; a harness `protect:` file and
@@ -169,10 +205,10 @@ All notable changes to glove are documented here.
   `glove up` cost one timeout, not K; results still report in order and a
   failure still stops the launch. `glove skills status` does the same.
 
-- **`glove playwright solve`** (`playwright: {challenge_capture: {to:
+- **`glove playwright record`** (`playwright: {recording: {to:
   session|work, max_seconds, motion_hz}}`, novnc with `allow_control`):
   - It takes control of the noVNC view as `view --control` does, and records
-    the operator solving a bot challenge: presses and releases with display
+    the operator's pointer input: presses and releases with display
     coordinates, pointer positions while a button is down, a screenshot at
     arm, each press and release, and stop, and the windows' titles and
     stacking.
@@ -183,12 +219,13 @@ All notable changes to glove are documented here.
     (`--stop` saves one left running). The host copies the capture out of the
     sidecar's tmpfs, validates it as hostile input (names, sizes, PNG
     signature, JSON schemas, rewritten from parsed values), and writes it
-    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/challenges/<id>/`
-    (0700) and, with `to: work`, to `browser-output/challenges/<id>/`.
-  - The brief tells the agent to leave a challenge in front and hand off,
-    never to solve it.
+    with `O_NOFOLLOW|O_EXCL` to `.glove/ext/playwright/recordings/<id>/`
+    (0700) and, with `to: work`, to `browser-output/recordings/<id>/`.
+  - The brief tells the agent, when it needs the operator to do a step in
+    the browser, to leave the tab in front, ask them to run `record`, and not
+    use the browser until they are done.
   - Live: `tests/integration/test_playwright.sh capture` drives a drag
-    through `solve`'s own noVNC WebSocket and compares it with the page's
+    through `record`'s own noVNC WebSocket and compares it with the page's
     pointer log (±1 px).
 - **playwright novnc keeps the agent's page in front.**
   - A second MCP client's window, a popup or a tab a link opened used to

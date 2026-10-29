@@ -5,6 +5,7 @@ provides: [browser]
 requires:
   - { slot: egress, when: { mode: [headless, novnc] } }
   - { extension: keychain, when: { "settings.login": { set: true } } }   # `glove playwright login` stores
+  - { extension: relay, when: { mode: [novnc], event_relay: true } }     # `browser-event`'s client (glove-relay)
 settings:
   mode:              { type: enum, values: [headless, novnc, host], default: headless }
   tools:             { type: list, pattern: "^browser_[a-z_]+$",
@@ -31,9 +32,16 @@ settings:
   # novnc
   allow_control:     { type: bool, default: false }
   clipboard:         { type: enum, values: ["off", to-browser, both], default: "off" }
-  # `glove playwright solve` records the operator's pointer while they solve a
-  # challenge (needs allow_control): {to: session|work, max_seconds, motion_hz}
-  challenge_capture: { type: map }
+  # `glove playwright record` records the operator's pointer input while they
+  # use the browser (needs allow_control): {to: session|work, max_seconds, motion_hz}
+  recording:         { type: map }
+  # the agent sends events to the sidecar (`browser-event status|replay`, over
+  # the `browser-event` channel; see the README)
+  event_relay:       { type: bool, default: false }
+  event_timeout:     { type: int, default: 120 }    # s; an event's program is killed after this
+  # let a replay send input while the operator records (it ends up in the
+  # recording); the session's choice: the agent has no flag for it
+  replay_while_recording: { type: bool, default: false }
   # host
   port:              { type: int }                      # host MCP port (default: a free one per session)
   cdp_port:          { type: int }                      # host Chrome remote-debugging port (likewise)
@@ -55,14 +63,26 @@ validate:
       profile: ephemeral, or set allow_persistent_profile_with_tor: true to accept that
   - when: { mode: [headless, host], allow_control: true }
     error: "allow_control applies to mode: novnc only"
+  - when: { mode: [headless, host], event_relay: true }
+    error: "event_relay applies to mode: novnc only (events act on the sidecar's X display)"
 hooks: hooks.py
 cli: cli.py
 # the sidecar trusts the session's corporate_ca and `ca` (glove-pw-start adds them to Chromium's NSS db)
 trust: [pw]
+# `event_relay: true`: /run/glove/browser-event in the harness and the sidecar,
+# where `browser-event` leaves events (files and FIFOs; no socket, no network)
+# and stages replay plans (plans/). relayd serves it in the sidecar, beside the
+# X display, and runs only what image/relay_policy.py allows.
+channels:
+  browser-event: { services: [pw], when: { mode: [novnc], event_relay: true } }
 # `downloads: work`: what the browser saves lands in <session>/browser-output/,
 # written by the sidecar and read-only to the harness at /work/browser-output
 outputs:
   browser-output: { services: [pw], when: { downloads: work, mode: [headless, novnc] } }
+  # `event_relay: true`: the events' log (log.jsonl) and each replay's result
+  # and frames, written by the sidecar and read-only to the harness at
+  # /work/browser-events
+  browser-events: { services: [pw], when: { mode: [novnc], event_relay: true } }
 # `uploads: work`: files the agent puts in /work/browser-uploads (<session>/browser-uploads/),
 # which the sidecar reads, read-only, at the same path, and browser_file_upload may send
 inputs:
@@ -101,6 +121,9 @@ endpoints:
 verify:
   - { name: browser-up, kind: container-healthy, service: pw, when: { mode: [headless, novnc] } }
 harness:
+  image:
+    "*":
+      - { copy: [[shim/browser-event, /usr/local/bin/browser-event]], when: { mode: [novnc], event_relay: true } }
   mcp:                                  # rendered by harnesses that speak MCP
     - name: playwright
       transport: http

@@ -35,10 +35,13 @@ extensions:
     # novnc only:
     # allow_control: false     # true: `glove playwright view --control` may click and type
     # clipboard: "off"         # off | to-browser | both
-    # challenge_capture: {}    # `glove playwright solve` records your solve (below); needs allow_control
-    #   to: session            # work: also <session>/browser-output/challenges/ (needs downloads: work)
+    # recording: {}            # `glove playwright record` records your pointer input (below); needs allow_control
+    #   to: session            # work: also <session>/browser-output/recordings/ (needs downloads: work)
     #   max_seconds: 600       # a capture stops itself after this
     #   motion_hz: 120         # pointer samples per second while a button is down (0: none)
+    # event_relay: false       # true: the agent sends events to the sidecar (`browser-event`, below)
+    # event_timeout: 120       # an event's program is killed after this many seconds
+    # replay_while_recording: false  # true: a replay may send input while you record
     # host only:
     # port: <free port>        # host MCP port (default: a free one, kept for the session)
     # cdp_port: <free port>    # host Chrome remote-debugging port (likewise)
@@ -176,24 +179,25 @@ tool calls acts on. It only raises the page; it never navigates, clicks or
 reads it. It relies on two internals of the pinned MCP, and if they move it
 logs one line and does nothing (the `capture` live test checks it).
 
-### Recording a challenge solve: `glove playwright solve` (`challenge_capture`)
+### Recording your pointer input: `glove playwright record` (`recording`)
 
 ```sh
-glove playwright solve            # view --control + record; close the tab or Ctrl-C to stop and save
-glove playwright solve --no-open  # print the URL instead
-glove playwright solve --stop     # stop and save a capture left running (e.g. the terminal died)
+glove playwright record            # view --control + record; close the tab or Ctrl-C to stop and save
+glove playwright record --no-open  # print the URL instead
+glove playwright record --stop     # stop and save a capture left running (e.g. the terminal died)
 ```
 
-With `challenge_capture` set (it needs `mode: novnc` and `allow_control:
-true`), the brief tells the agent that when it recognises a bot challenge it
-should leave that tab in front, not navigate it, and ask you to run `solve`.
-It also says the agent never touches the challenge itself. `solve` serves the
-viewer exactly as `view --control` does and starts a recorder in the sidecar
-(`glove-pw-capture`). While the recorder runs it prints the title of the
-window in front each time it changes, so you see "challenge → results". It
-stops 5 s after the last viewer tab closes, on Ctrl-C, or after `max_seconds`.
-Only one recorder runs at a time. A second `solve` while one runs attaches
-and only watches; the `solve` that started the capture stops and saves it.
+With `recording` set (it needs `mode: novnc` and `allow_control: true`), the
+brief tells the agent that when it needs you to do a step in the browser for
+it, it leaves that tab in front, doesn't navigate it, and asks you to run
+`record`, and that it doesn't use the browser until you say you are done. `record`
+serves the viewer exactly as `view --control` does and starts a recorder in
+the sidecar (`glove-pw-capture`). While the recorder runs it prints the title
+of the window in front each time it changes, so you see which page you are
+on. It stops 5 s after the last viewer tab closes, on Ctrl-C, or after
+`max_seconds`. Only one recorder runs at a time. A second `record` while one
+runs attaches and only watches; the `record` that started the capture stops
+and saves it.
 While a capture runs, glove stops raising the agent's page, so the agent
 can't cover the window you are working in.
 
@@ -210,11 +214,11 @@ can't cover the window you are working in.
   server where the pointer is. It never grabs, never selects input on
   Chromium's windows and never sends input. Keystrokes, the clipboard, page
   content and network traffic are never recorded.
-- **Where it goes:** `.glove/ext/playwright/challenges/<id>/` (0700). With
-  `to: work` it also goes to `<session>/browser-output/challenges/<id>/`,
-  which the agent reads at `/work/browser-output/challenges/`. Each capture
+- **Where it goes:** `.glove/ext/playwright/recordings/<id>/` (0700). With
+  `to: work` it also goes to `<session>/browser-output/recordings/<id>/`,
+  which the agent reads at `/work/browser-output/recordings/`. Each capture
   holds `events.jsonl`, `windows.jsonl`, `meta.json` and `shots/*.png`. The
-  recorder writes to the sidecar's tmpfs; `solve` copies the capture out with
+  recorder writes to the sidecar's tmpfs; `record` copies the capture out with
   `exec … tar` and then removes it, and the sidecar gets no new mount.
 - **The sidecar's output is treated as hostile** (it runs a browser):
   - only known file names are read, and sizes and the screenshot count are
@@ -229,9 +233,94 @@ can't cover the window you are working in.
 - **Privacy:** your mouse movement is a behavioural biometric. Captures stay
   under `.glove/` (git-ignored) unless you choose `to: work`, which hands them
   to the agent.
-- **Out of scope:** solving. glove records only your own input. It injects
-  nothing, and the agent's brief says to recognise a challenge, never to solve
-  it.
+- **Passive:** the recorder records only your own input and injects
+  nothing.
+
+### Sending events to the sidecar: `browser-event` (`event_relay`)
+
+With `event_relay: true` (it needs `mode: novnc`; off by default) the agent can
+send events to the browser sidecar from its shell. The sidecar runs each one at
+once, with no operator action, no host process and no `docker` CLI:
+
+```yaml
+  playwright:
+    mode: novnc
+    event_relay: true      # serve the agent's events in the browser sidecar
+    event_timeout: 120     # optional: an event's program is killed after this many seconds
+    replay_while_recording: false  # optional: true lets a replay send input while you record
+```
+
+```sh
+browser-event status                                       # display size, pointer, XTest, is the operator recording
+browser-event replay PLAN [--dry-run]
+```
+
+`replay` plays a timed input sequence on the sidecar's display. The agent
+writes it to `/run/glove/browser-event/plans/PLAN` just before it replays it:
+
+```json
+{"v": 1, "display": [1280, 800],
+ "events": [{"t": 0, "type": "down", "x": 300, "y": 400, "button": 1},
+            {"t": 120, "type": "move", "x": 340, "y": 402},
+            {"t": 480, "type": "up", "x": 700, "y": 420, "button": 1}]}
+```
+
+These are the rows of a recording's `events.jsonl`, so what `glove playwright
+record` captured (with `recording: {to: work}`, at
+`/work/browser-output/recordings/<id>/events.jsonl`) replays as it is, if it is
+shorter than `event_timeout` allows (split a longer one into several plans).
+Each event is sent `t - events[0].t` ms after the first. It moves the pointer
+to `(x, y)`; `down`/`up` then press or release button 1–3, 8 or 9 (back,
+forward), and `wheel` clicks button 4–7. A button still held at the end, or
+after an error, is released. If a replay is killed at its timeout, a button
+1–3 it held is released when the next replay starts. The plan's
+`display` must be the sidecar's (`viewport`), or nothing is sent. `--dry-run`
+checks all of that and sends nothing. The result is printed, and each replay
+leaves `plan.json`, `result.json`, `before.png` and `after.png` in
+`/work/browser-events/<id>/`.
+
+How it works: `browser-event` is a client of the `relay` library (the same
+protocol as `github`'s `gh`). It leaves the event on the `browser-event`
+channel, a session tmpfs shared by the harness and the sidecar: files and
+FIFOs, with no socket and no network. `relayd` serves the channel inside the
+browser sidecar, beside the X display (which no other container can reach),
+and runs only what `image/relay_policy.py` allows:
+
+- **Two events.** `status` and `replay`, each running `image/browser_event.py`
+  with arguments the policy builds. The agent chooses the plan's name (a bare
+  file name in `plans/`) and `--dry-run`. It never chooses the program, the
+  display or where results go.
+- **The plan is checked before anything is sent.** It must be a regular file
+  in `plans/` (neither may be a link), at most 2 MiB and 10,000 events, valid
+  JSON and a valid v1 plan, and short enough to end within `event_timeout`
+  (30 to 3600 s). The policy reads it once and removes it from `plans/` (one
+  staged plan, one replay). The very bytes it checked are what runs: it
+  writes them to the replay's own `plan.json`, where the agent can't write.
+- **No replay while you record.** While `glove playwright record` runs, a
+  replay is refused, since its input would end up in your recording (a
+  `--dry-run` sends nothing, so it still runs). The other way round too: while
+  a replay sends input, `glove playwright record` won't start a recorder. Both
+  claim the display under the recorder's lock, so neither can slip in while
+  the other starts. Only the session can allow the two at once
+  (`replay_while_recording: true`); the agent has no flag for it. A replay's
+  result is marked `"synthetic": true`.
+- **Logged before it runs.** Every event is one line in
+  `/work/browser-events/log.jsonl` (with the plan's SHA-256 for a replay), and
+  so is every refusal, with its reason. The sidecar writes it and the agent can
+  only read it. An event that can't be logged is refused.
+- **The output stays bounded.** Past 4 MiB the log moves to `log.1.jsonl`
+  (replacing the one before), and only the newest 20 replays' directories are
+  kept.
+- **Bounded.** One event at a time (a second one gets "busy"). The program gets
+  no stdin, an environment of `DISPLAY` and a minimal `PATH`, and no proxy (it
+  has nothing to reach). Its process group is killed at `event_timeout`.
+  relayd is started detached and restarted if it dies; the browser keeps
+  running either way.
+
+Exit codes: `0` ok · `126` refused (the reason is on stderr) · `127` the sidecar
+is not serving events (`event_relay` off, or the sidecar down) · `124` the
+event ran out of time · `2` the replay failed (see its result). `image/relayd.py`
+is a copy of the relay extension's (a unit test holds the two equal).
 
 ### Signing in on the host: `glove playwright login` and `storage_state`
 

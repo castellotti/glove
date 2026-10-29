@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""glove `playwright` challenge capture: record the operator's pointer on the
-novnc display while they solve a bot challenge (`glove playwright solve`).
+"""glove `playwright` recording: record the operator's pointer input on the
+novnc display while they use the browser (`glove playwright record`).
 
     glove-pw-capture start [--max-seconds N] [--motion-hz N] [--glove-version V]
                                     arm, or find the running capture: prints
@@ -13,16 +13,19 @@ novnc display while they solve a bot challenge (`glove playwright solve`).
     glove-pw-capture list           the finished capture ids under /tmp/capture
 
 Only one recorder runs at a time (`start` holds a lock while it arms). The
-`solve` that started it stops and saves it; one that attached only watches.
+`record` that started it stops and saves it; one that attached only watches.
+It doesn't arm while a `browser-event replay` sends input, and a replay
+doesn't start while it records (claim_replay(), under the same lock), unless
+the session sets `replay_while_recording`.
 
 Passive only: it selects XI2 *raw* events on the root window (they reach a
 root listener whatever holds focus or a grab, and carry no coordinates), and
 on each one asks QueryPointer where the pointer is. It never grabs, never
 selects input on Chromium's windows and never sends input. Keys, the
 clipboard and anything from the page or network are never recorded; window
-titles are (they say challenge → results).
+titles are (they show which page was in front).
 
-Output, on the sidecar's tmpfs, which `glove playwright solve` copies out
+Output, on the sidecar's tmpfs, which `glove playwright record` copies out
 (validating everything: this container runs a browser) and then removes:
 
     /tmp/capture/<id>/events.jsonl   {"t", "xt", "wall", "type": down|up|move|wheel, "button", "x", "y", "mask"}
@@ -56,6 +59,8 @@ from pathlib import Path
 ROOT = Path("/tmp/capture")
 CURRENT = ROOT / ".current"  # "<id> <pid>" while a recorder runs (glove-pw-front.js reads it too)
 LOCK = ROOT / ".lock"
+REPLAY = ROOT / ".replay"  # "<pid>" while a replay sends input (browser_event.py)
+OVERLAP_OK = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # playwright `replay_while_recording`
 MAX_SHOTS = 400
 MAX_BYTES = 150 * 1024 * 1024
 TITLE_MAX = 300
@@ -93,6 +98,35 @@ def running() -> tuple[str, int] | None:
         return cid, int(pid)
     except (OSError, ValueError):
         return None
+
+
+def replaying() -> int | None:
+    """The pid of the replay sending input, if `.replay` names a live one."""
+    try:
+        pid = int(REPLAY.read_text())
+        return pid if b"browser_event.py" in Path(f"/proc/{pid}/cmdline").read_bytes() else None
+    except (OSError, ValueError):
+        return None
+
+
+def claim_replay(overlap_ok: bool) -> bool:
+    """Mark this process as the replay sending input (`.replay`), unless a recorder runs and the session
+    doesn't allow the two at once. Under `start`'s lock: a recorder arming and a replay starting never
+    miss each other."""
+    ROOT.mkdir(mode=0o700, exist_ok=True)
+    with open(LOCK, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if running() is not None and not overlap_ok:
+            return False
+        REPLAY.write_text(f"{os.getpid()}\n")
+        return True
+
+
+def release_replay() -> None:
+    """Remove `.replay` if it names this process."""
+    with contextlib.suppress(OSError, ValueError):
+        if int(REPLAY.read_text()) == os.getpid():
+            REPLAY.unlink()
 
 
 class Recorder:
@@ -285,6 +319,10 @@ def start(args) -> int:
         if (cur := running()) is not None:
             print(f"{cur[0]} attached")
             return 0
+        if not OVERLAP_OK and replaying() is not None:
+            print("glove-pw-capture: the agent is replaying input (`browser-event replay`), which would end up "
+                  "in the recording; record once it has finished", file=sys.stderr)
+            return 1
         # unguessable: the sidecar must not be able to pre-create the host's directory for it
         cid = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         log_path = ROOT / f".{cid}.log"

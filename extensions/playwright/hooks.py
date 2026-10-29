@@ -135,6 +135,8 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     login = login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
     check_storage_state(s)
     capture.spec(s)
+    if s.get("event_relay") and not capture._int(s["event_timeout"], 30, 3600):
+        raise ValueError("playwright.event_timeout: an integer from 30 to 3600 (seconds)")
     if s["mode"] != "host":
         if not s.get("storage_state") or login is None:
             return {}
@@ -239,15 +241,16 @@ def doctor(ctx: HookContext, probe) -> list[tuple[str, str, str]]:
         checks.append(("playwright login: browser", "ok" if path else "warn",
                        path or "no Chrome/Chromium found for `glove playwright login`"))
     try:
-        cc = capture.spec(ctx.settings)
+        rec = capture.spec(ctx.settings)
     except ValueError as e:
-        checks.append(("playwright challenge capture", "fail", str(e)))
-        cc = None
-    if cc is not None:
-        where = ".glove/ext/playwright/challenges/" + (" and browser-output/challenges/" if cc["to"] == "work" else "")
-        checks.append(("playwright challenge capture", "info",
-                       f"`glove playwright solve` records your pointer (presses, drags, screenshots) while you solve "
-                       f"a challenge, into {where}"))
+        checks.append(("playwright recording", "fail", str(e)))
+        rec = None
+    if rec is not None:
+        d = capture.DIR
+        where = f".glove/ext/playwright/{d}/" + (f" and browser-output/{d}/" if rec["to"] == "work" else "")
+        checks.append(("playwright recording", "info",
+                       f"`glove playwright record` records your pointer input (presses, drags, screenshots) as you "
+                       f"use the browser, into {where}"))
     if ctx.settings["mode"] != "host":
         return checks
     for svc in host_services(ctx, ctx.slot["browser"]["host_ports"]):  # what `glove up` runs outside the sandbox
