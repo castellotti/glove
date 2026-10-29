@@ -1,0 +1,15 @@
+#!/bin/bash
+# browser-event — send an event to this session's browser sidecar (playwright
+# `event_relay: true`), over the `browser-event` relay channel: files and
+# FIFOs, no socket and no network. The sidecar's policy (the playwright
+# extension's image/relay_policy.py) decides what each event runs.
+#
+#   browser-event status                    the display, the pointer, whether the operator is recording
+#   browser-event replay PLAN [--dry-run] [--allow-while-recording]
+#                                           replay the input sequence staged at
+#                                           /run/glove/browser-event/plans/PLAN
+#
+# The result is printed, and a replay's frames land in /work/browser-events/<id>/.
+# Exit codes: 0 ok; 126 refused (the reason is on stderr); 127 the sidecar is
+# not serving events (event_relay off, or the sidecar down); 124 timed out.
+exec /opt/glove/bin/glove-relay browser-event browser-event "$@"

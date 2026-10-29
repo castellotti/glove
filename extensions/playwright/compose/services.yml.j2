@@ -34,6 +34,11 @@ services:
 {% if settings.mode == "novnc" %}
       VNC_ACCEPT_INPUT: "{{ settings.allow_control | lower }}"
       VNC_CLIPBOARD: "{{ settings.clipboard }}"
+{% if settings.event_relay %}
+      # glove-pw-start serves the browser-event channel (core mounts it and the browser-events output)
+      PW_EVENT_RELAY: "true"
+      PW_EVENT_TIMEOUT: "{{ settings.event_timeout }}"
+{% endif %}
 {% endif %}
     volumes:
 {% if settings.downloads != "work" %}

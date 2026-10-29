@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live (v3 M7): the playwright browser sidecar end to end.
 #
-#   bash tests/integration/test_playwright.sh [headless|novnc|control|capture|vibe|claude-code]   (default: headless)
+#   bash tests/integration/test_playwright.sh [headless|novnc|control|capture|events|vibe|claude-code]   (default: headless)
 #   RT=podman …                                                                # Podman
 #
 #   headless  Pi, direct egress, observe + filter: hardening, confinement,
@@ -11,6 +11,8 @@
 #   control   novnc with allow_control: the full password's click lands
 #   capture   control + recording {to: work}: a second client's window covers the agent's page and
 #             its next call raises it; `glove playwright record` records a drag through its noVNC WebSocket
+#   events    novnc with event_relay: `browser-event status|replay` from the agent's shell (a replayed
+#             drag lands on the page), the log, every refusal
 #   vibe      Vibe, headless, direct egress: the allowlist hides the rest
 #   claude-code  Claude Code, headless, direct egress, observe: the allowlist
 #             is allow rules, every other known tool a managed deny
@@ -38,6 +40,7 @@ case "$CASE" in
   control)  PW="{mode: novnc, allow_control: true}" ;;
   capture)  PW="{mode: novnc, allow_control: true, downloads: work, recording: {to: work}}"
             TOP=$'apt_packages: [p7zip-full]\n' ;;  # downloads: work runs the 7z check too
+  events)   PW="{mode: novnc, event_relay: true}" ;;
   vibe)     HARNESS=vibe ;;
   claude-code) HARNESS=claude-code; EXTRA=$'  observe: {}\n' ;;
   downloads) HARNESS="$CASE_HARNESS"
