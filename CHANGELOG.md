@@ -16,9 +16,10 @@ All notable changes to glove are documented here.
   `ALL_TOOLS`, which doesn't list it (glove renders it `hidden`); on Vibe a
   `run_typescript` call ("not a function"); on Claude Code glove's managed
   hook (below). The server's argv probes `$HOME` and `!x` arrive literally on all
-  three. The live drivers share Pi's codemode helper (`pi_codemode`). Docker
-  so far: `test_skills.sh` pi 24/24, vibe 18/18, claude-code 19/19;
-  `test_tool_confine.sh pi` 27/27.
+  three. The live drivers share Pi's codemode helper (`pi_codemode`). Live on
+  Docker (nono+srt) and Podman (nono), each: `test_skills.sh` pi 24/24, vibe
+  18/18, claude-code 20/20; `test_tool_confine.sh pi` 27/27; on Docker also
+  `test_cc_nono.sh` 29/29.
 
 - **Claude Code: a managed hook refuses an MCP tool off the session's
   allowlist** (round 27). Before, such a tool (one `all_tools` didn't name,
@@ -30,7 +31,7 @@ All notable changes to glove are documented here.
   start (any other exit code would let Claude Code prompt). glove also
   refuses an `mcp__` allow rule in `harness_config.permissions` (allow the
   tool in its extension's `tools`) and an MCP server name with `__`. Live
-  on Podman: `test_skills.sh claude-code` 20/20.
+  on Docker and Podman: `test_skills.sh claude-code` 20/20.
 
 ### Changed
 
