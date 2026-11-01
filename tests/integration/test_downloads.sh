@@ -31,7 +31,7 @@ OCR_EXT=""; [ -n "${OCR:-}" ] && OCR_EXT=$'  ocr: {}\n'
 mkdir -p "$S/work"
 if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
 printf 'glove: 3\ntemplate: test\nruntime: %s\nharness: %s\nextensions:\n  llm: %s\n%s\n  webfetch: {downloads: work}\n  observe: {}\n  filter: {}\n%s' \
-  "$RT" "$HARNESS" "$LLM" "$EG" "$OCR_EXT" > "$S/glove-session.yml"
+  "$RT" "$(harness_of "$HARNESS")" "$LLM" "$EG" "$OCR_EXT" > "$S/glove-session.yml"
 echo "== runtime $RT, route $ROUTE, harness $HARNESS"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/downloads_live.py" . )
 RC=$?

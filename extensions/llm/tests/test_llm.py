@@ -28,6 +28,7 @@ def test_every_catalog_entry_is_valid(path):
     cat = hooks.load_provider(path.stem)
     assert cat["name"] == path.stem
     assert cat["api"] in hooks.API_PATHS
+    assert set(cat.get("harnesses") or []) <= {"pi", "vibe", "claude-code"}
     assert set(cat["locations"]) <= {"host", "lan", "internet"}
     # a dedicated entry must offer what openai-compatible cannot (see its header)
     if cat["name"] != "openai-compatible" and "internet" not in cat["locations"]:
@@ -278,12 +279,21 @@ def test_the_responses_api_allows_only_responses_under_the_full_prefix():
     cat = hooks.load_provider("openai-responses-compatible")
     r = hooks.route(RESPONSES, cat)
     assert (r["host"], r["port"], r["base_path"]) == ("localhost", 6655, "/openai/v1")
-    # the model list (and the probe, the same path) under the prefix minus the catalog's /v1
+    # the model list under the prefix minus the catalog's /v1 (no probe)
     assert hooks.allowed_paths(cat, r["base_path"]) == [["POST", "/openai/v1/responses"],
                                                         ["GET", "/openai/v1/models"]]
-    for s in ({"location": "lan", "endpoint": "192.168.1.50:8080"},
-              {"location": "internet", "endpoint": "https://gw.example.com/openai/v1"}):
-        assert hooks.allowed_paths(cat, hooks.route({**RESPONSES, **s}, cat)["base_path"])[0][0] == "POST"
+    for s, want in [({"location": "lan", "endpoint": "192.168.1.50:8080"}, "/v1"),
+                    ({"location": "internet", "endpoint": "https://gw.example.com/openai/v1"}, "/openai/v1")]:
+        assert hooks.allowed_paths(cat, hooks.route({**RESPONSES, **s}, cat)["base_path"]) == \
+            [["POST", f"{want}/responses"], ["GET", f"{want}/models"]]
+
+
+@pytest.mark.parametrize("endpoint", ["http://localhost:6655/openai", "http://localhost:6655/openai/v1x"])
+def test_a_responses_endpoint_must_be_the_full_api_prefix(endpoint):
+    # …/openai would list models at …/openai/v1/models (glove check passes) and post to …/openai/responses
+    cat = hooks.load_provider("openai-responses-compatible")
+    with pytest.raises(hooks.LlmError, match="full API prefix"):
+        hooks.route({**RESPONSES, "endpoint": endpoint}, cat)
 
 
 def test_a_responses_session_goes_through_llm_auth_with_its_wire(tmp_path):
@@ -303,11 +313,9 @@ def test_a_responses_session_goes_through_llm_auth_with_its_wire(tmp_path):
 
 @pytest.mark.parametrize("harness", ["claude-code", "vibe"])
 def test_only_pi_speaks_the_responses_api(tmp_path, harness):
-    from glove.harnessconfig import render_home
-
-    with pytest.raises((ConfigError, ValueError), match="openai-responses"):
-        plan, _, _ = _plan(tmp_path, harness=harness, **RESPONSES)
-        render_home(make_cfg(harness=harness, name="s"), plan, tmp_path / "home")
+    # refused at plan time (glove check), by the catalog's `harnesses:`
+    with pytest.raises((ExtensionError, ValueError), match=f"is for harness pi only, not '{harness}'"):
+        _plan(tmp_path, harness=harness, **RESPONSES)
 
 
 def test_oauth_paths_join_the_allowlist_under_the_server_root():

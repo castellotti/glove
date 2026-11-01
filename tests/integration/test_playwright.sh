@@ -57,7 +57,7 @@ pw_add() { local in="${PW#\{}"; in="${in%\}}"; PW="{${in}${in:+, }$1}"; }
 [ "${PROFILE:-ephemeral}" = session ] && pw_add 'profile: session'
 mkdir -p "$S/work"
 printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\n%sextensions:\n  llm: %s\n  direct: {}\n  playwright: %s\n%s' \
-  "$RT" "$HARNESS" "$TOP" "$LLM" "$PW" "$EXTRA" > "$S/glove-session.yml"
+  "$RT" "$(harness_of "$HARNESS")" "$TOP" "$LLM" "$PW" "$EXTRA" > "$S/glove-session.yml"
 echo "== runtime $RT, case $CASE"
 ( cd "$S" && STUB_LOG="$TMPROOT/stub.log" uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/playwright_live.py" . )
 RC=$?

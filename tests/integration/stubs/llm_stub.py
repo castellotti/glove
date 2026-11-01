@@ -24,6 +24,7 @@ The skill directories Pi lists in its system prompt are logged as `skills=`.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -38,6 +39,7 @@ PROPS = {
 }
 REPLY = "hello from the glove llm stub"
 KEY = os.environ.get("GLOVE_TEST_LLM_KEY", "")
+RESPONSE_IDS = itertools.count(1)
 
 
 def key_kind(value: str | None, key: str) -> str:
@@ -121,35 +123,49 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(f"data: {json.dumps(usage)}\n\ndata: [DONE]\n\n".encode())
 
     def _responses(self, req):
-        """The Responses API, streamed: an optional reasoning item, then the
-        reply (a message) or the tool call (a function_call)."""
+        """The Responses API: an optional reasoning item, then the reply (a
+        message) or the tool call (a function_call); streamed as a server
+        does it (each item `added` empty, filled by deltas, whole at `done`),
+        or one JSON response with `stream: false`. Ids are per request."""
         tools = [t.get("name") for t in req.get("tools") or [] if t.get("type") == "function"]
         effort = (req.get("reasoning") or {}).get("effort")
         print(f"stub: responses model={req.get('model')} stream={req.get('stream')} reasoning={effort} "
               f"tools={','.join(tools)}", flush=True)
         reply, call = answer([_chat_message(i) for i in req.get("input") or []], tools)
+        n = next(RESPONSE_IDS)
+        # (item, its empty form for `added`, the delta events that fill it)
+        items = []
+        if effort and effort != "none":
+            thought = f"stub reasoning at {effort}"
+            summary = [{"type": "summary_text", "text": thought}]
+            items.append(({"type": "reasoning", "id": f"rs_{n}", "summary": summary}, {"summary": []},
+                          [("response.reasoning_summary_text.delta", {"summary_index": 0, "delta": thought})]))
+        if call:
+            fn = call["function"]
+            items.append(({"type": "function_call", "id": f"fc_{n}", "call_id": call["id"], "name": fn["name"],
+                           "arguments": fn["arguments"], "status": "completed"},
+                          {"arguments": "", "status": "in_progress"},
+                          [("response.function_call_arguments.delta", {"delta": fn["arguments"]}),
+                           ("response.function_call_arguments.done", {"arguments": fn["arguments"]})]))
+        else:
+            items.append(({"type": "message", "id": f"msg_{n}", "role": "assistant", "status": "completed",
+                           "content": [{"type": "output_text", "text": reply, "annotations": []}]},
+                          {"content": [], "status": "in_progress"},
+                          [("response.output_text.delta", {"content_index": 0, "delta": reply})]))
+        response = {"id": f"resp_{n}", "object": "response", "status": "completed", "model": MODEL,
+                    "output": [item for item, _, _ in items],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+        if not req.get("stream"):
+            return self._json(response)
+        events = [{"type": "response.created", "response": {**response, "status": "in_progress", "output": []}}]
+        for i, (item, empty, deltas) in enumerate(items):
+            events.append({"type": "response.output_item.added", "output_index": i, "item": {**item, **empty}})
+            events += [{"type": t, "output_index": i, "item_id": item["id"], **e} for t, e in deltas]
+            events.append({"type": "response.output_item.done", "output_index": i, "item": item})
+        events.append({"type": "response.completed", "response": response})
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.end_headers()
-        items = [{"type": "reasoning", "id": "rs_1",
-                  "summary": [{"type": "summary_text", "text": f"stub reasoning at {effort}"}]}
-                 ] if effort and effort != "none" else []
-        if call:
-            fn = call["function"]
-            items.append({"type": "function_call", "id": "fc_1", "call_id": call["id"], "name": fn["name"],
-                          "arguments": fn["arguments"], "status": "completed"})
-        else:
-            items.append({"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
-                          "content": [{"type": "output_text", "text": reply, "annotations": []}]})
-        events = [{"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}]
-        for i, item in enumerate(items):
-            events.append({"type": "response.output_item.added", "output_index": i, "item": item})
-            if item["type"] == "message":
-                events.append({"type": "response.output_text.delta", "output_index": i, "delta": reply})
-            events.append({"type": "response.output_item.done", "output_index": i, "item": item})
-        events.append({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed", "output": items,
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
         for e in events:
             self.wfile.write(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode())
 

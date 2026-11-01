@@ -13,9 +13,14 @@ All notable changes to glove are documented here.
   supported". Over `POST <endpoint>/responses`, Pi sends the effort and the tools
   together, at every thinking level. llm-auth allows `/responses` and the
   model list only. The endpoint is the full API prefix, e.g.
-  `http://localhost:6655/openai/v1`. Claude Code and Vibe refuse the API, as
-  before. Core's model descriptor accepts `openai-responses` (one name in
-  `DESCRIPTOR_APIS`, no new lines). The llm stub serves `/v1/responses`.
+  `http://localhost:6655/openai/v1`; a path not ending in `/v1` is refused
+  (the model list would answer at `…/openai/v1/models` while every turn
+  posted to `…/openai/responses`). No capability probe: set `capabilities:`.
+  A catalog entry may name the harnesses it is for (`harnesses: [pi]`), so
+  `glove check` refuses this one for Claude Code and Vibe. Core's model descriptor accepts `openai-responses` (one name in
+  `DESCRIPTOR_APIS`, no new lines). The llm stub serves `/v1/responses`
+  (streamed as a server does, or JSON with `stream: false`). The live drivers
+  that write a session's harness take a `stub_llm` variant (`harness_of`).
   Live on Docker (nono+srt): `test_llm_inject.sh pi-responses` 20/20 (a
   tool call at thinking level `low`, `chat/completions` a 403).
 

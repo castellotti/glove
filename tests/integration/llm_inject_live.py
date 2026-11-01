@@ -226,6 +226,8 @@ def main(directory: str, stub_log: str | None) -> int:
         print("== a turn")
         out = s.ask("Say hello.")
         check("a turn answers through llm-auth", "hello from the glove" in out, out[-300:])
+        if responses:  # built from the deltas, not doubled by the `added` or `done` item
+            check("the reply arrives once", out.count("hello from the glove") == 1, out[-300:])
 
         if responses:
             out = s.call("bash", {"command": "echo responses-tool-$((40 + 2))"})

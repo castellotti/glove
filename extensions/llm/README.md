@@ -174,17 +174,21 @@ extensions:
     api_key: keychain:<service>
 ```
 
-- **Pi only.** Claude Code and Vibe refuse the session: they do not speak this API.
+- **Pi only.** The catalog's `harnesses: [pi]` makes `glove check` (and the
+  plan) refuse it for Claude Code and Vibe, which do not speak this API.
 - **The endpoint is the full API prefix.** The harness posts to
   `<endpoint>/responses`, and the model list is at the endpoint minus the
   catalog's `/v1`, plus `/v1/models`. `http://localhost:6655/openai/v1` gives
-  `…/openai/v1/responses` and `…/openai/v1/models`. With `…/openai` the
-  harness would post to `…/openai/responses`, which most proxies don't serve.
+  `…/openai/v1/responses` and `…/openai/v1/models`. An endpoint path that
+  doesn't end in `/v1` (e.g. `…/openai`) is refused: the model list would
+  still answer, so `glove check` would pass, but every turn would post to
+  `…/openai/responses`.
 - llm-auth allows `POST <prefix>/responses` and the model list, and nothing
   else (`chat/completions` included). Pi 1.4.0 calls only `responses.create`
   (streamed, `store: false`).
-- **Set `capabilities:` explicitly.** The only probe is vLLM's
-  `max_model_len` on `/v1/models`, which gateways rarely report.
+- **Set `capabilities:` explicitly.** There is no capability probe: a gateway
+  lists many models, and none of them reports its window in a way glove can
+  match to the model (else the catalog defaults apply).
 - Pi's `models.json` gets no `compat` block: pi-ai's defaults for this API
   (no strict mode, no grammar tools) are what a gateway wants. A reasoning
   model's `thinkingLevelMap` is the same as on chat/completions; `max`
@@ -203,6 +207,8 @@ dedicated entry only when a server offers something the generic path cannot:
   (e.g. speculative/MTP decoding flags, an in-session `sidecar` runtime).
 
 An entry is `providers/<name>.yml` (see `llama.cpp.yml`) plus its name in the
-`provider` enum in `extension.yml`. `tests/test_llm.py` validates every catalog
+`provider` enum in `extension.yml`. An API only some harnesses speak takes
+`harnesses: [<name>, …]` (`openai-responses-compatible`: `[pi]`), checked
+when the session is planned. `tests/test_llm.py` validates every catalog
 file and refuses a local-server entry whose only probe is `/v1/models`, since
 that adds nothing over `openai-compatible`.

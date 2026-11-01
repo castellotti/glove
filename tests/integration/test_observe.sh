@@ -32,7 +32,7 @@ esac
 mkdir -p "$S/work"
 if [ -n "${VPN_LOCAL:-}" ]; then cp -R "$VPN_LOCAL" "$S/local"; fi
 printf 'glove: 3\ntemplate: test\nruntime: %s\n'"${ENFORCER:+enforcer: $ENFORCER\\n}"'harness: %s\nextensions:\n  llm: %s\n  %s\n  search: {}\n  webfetch: {}\n  observe: {}\n  filter: {}\n' \
-  "$RT" "$HARNESS" "$LLM" "$EG" > "$S/glove-session.yml"
+  "$RT" "$(harness_of "$HARNESS")" "$LLM" "$EG" > "$S/glove-session.yml"
 echo "== runtime $RT, route $ROUTE, harness $HARNESS"
 ( cd "$S" && uv run --quiet --project "$ROOT" python "$ROOT/tests/integration/observe_live.py" . )
 RC=$?
