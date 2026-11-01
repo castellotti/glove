@@ -10,7 +10,8 @@ capabilities, whether the key is injected).
 extensions:
   llm:
     provider: openai-compatible  # the default for any OpenAI-API server (vLLM, NInfer, SGLang, …)
-                                 # | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+                                 # | openai-responses-compatible | anthropic-compatible | llama.cpp | ollama
+                                 # | lmstudio | openai | anthropic | mistral | openrouter
     location: lan              # host (this Mac) | lan | internet
     endpoint: <host>:<port>    # host/lan; cloud providers use the catalog host
     model: auto                # or an id
@@ -153,6 +154,46 @@ bridge (nothing of the session is up yet), dialling the server as `llm-upstream`
 does: direct (never through a proxy), over IPv4, and `location: host` through
 `host.docker.internal`. `--offline` and `--no-container` skip it.
 
+## Responses API servers (`openai-responses-compatible`)
+
+Some models refuse function tools with a reasoning effort on chat/completions.
+gpt-6-luna answers HTTP 400 "Function tools with reasoning_effort are not
+supported … in /v1/chat/completions", so `openai-compatible` can run it only at
+effort `none`. `openai-responses-compatible` speaks the OpenAI Responses API
+instead. Pi sends `reasoning.effort` and the tools in one `POST …/responses`,
+and every thinking level works with tools (`off` sends effort `none`).
+
+```yaml
+extensions:
+  llm:
+    provider: openai-responses-compatible
+    location: host
+    endpoint: http://localhost:6655/openai/v1   # the full API prefix, /v1 included
+    model: gpt-6-luna
+    capabilities: {vision: true, context_window: 1050000, max_tokens: 32768, reasoning: true}
+    api_key: keychain:<service>
+```
+
+- **Pi only.** The catalog's `harnesses: [pi]` makes `glove check` (and the
+  plan) refuse it for Claude Code and Vibe, which do not speak this API.
+- **The endpoint is the full API prefix.** The harness posts to
+  `<endpoint>/responses`, and the model list is at the endpoint minus the
+  catalog's `/v1`, plus `/v1/models`. `http://localhost:6655/openai/v1` gives
+  `…/openai/v1/responses` and `…/openai/v1/models`. An endpoint path that
+  doesn't end in `/v1` (e.g. `…/openai`) is refused: the model list would
+  still answer, so `glove check` would pass, but every turn would post to
+  `…/openai/responses`.
+- llm-auth allows `POST <prefix>/responses` and the model list, and nothing
+  else (`chat/completions` included). Pi 1.4.0 calls only `responses.create`
+  (streamed, `store: false`).
+- **Set `capabilities:` explicitly.** There is no capability probe: a gateway
+  lists many models, and none of them reports its window in a way glove can
+  match to the model (else the catalog defaults apply).
+- Pi's `models.json` gets no `compat` block: pi-ai's defaults for this API
+  (no strict mode, no grammar tools) are what a gateway wants. A reasoning
+  model's `thinkingLevelMap` is the same as on chat/completions; `max`
+  clamps to `xhigh`.
+
 ## When a server gets its own provider
 
 Use `openai-compatible` for anything that speaks the OpenAI API. Add a
@@ -160,12 +201,14 @@ dedicated entry only when a server offers something the generic path cannot:
 
 - a native capability endpoint (llama.cpp `/props`, ollama `/api/show`,
   LM Studio `/api/v0`);
-- a different wire protocol (`anthropic-messages`, `mistral-conversations`);
+- a different wire protocol (`anthropic-messages`, `openai-responses`, `mistral-conversations`);
 - a fixed cloud host and required key (openai, openrouter);
 - in future, a server-specific feature or optimization worth configuring
   (e.g. speculative/MTP decoding flags, an in-session `sidecar` runtime).
 
 An entry is `providers/<name>.yml` (see `llama.cpp.yml`) plus its name in the
-`provider` enum in `extension.yml`. `tests/test_llm.py` validates every catalog
+`provider` enum in `extension.yml`. An API only some harnesses speak takes
+`harnesses: [<name>, …]` (`openai-responses-compatible`: `[pi]`), checked
+when the session is planned. `tests/test_llm.py` validates every catalog
 file and refuses a local-server entry whose only probe is `/v1/models`, since
 that adds nothing over `openai-compatible`.

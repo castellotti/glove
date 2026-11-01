@@ -10,7 +10,7 @@ runtime: docker                # docker | podman
 mounts: []                     # e.g. [{path: ~/src/corp-repo, mode: ro}]; work/ is always /work
 extensions:
   llm:                         # the model (required): see extensions/llm/README.md
-    provider: <set-me>         # openai-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | …
+    provider: <set-me>         # openai-compatible | openai-responses-compatible | llama.cpp | ollama | lmstudio | openai | anthropic | …
     location: <set-me>         # host | lan | internet
     endpoint: <set-me>         # host:port for host/lan
     model: auto

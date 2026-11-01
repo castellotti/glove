@@ -189,6 +189,8 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
             "thinkingFormat": "openai",
             "maxTokensField": "max_tokens",
         }
+    # openai-responses takes pi-ai's defaults (no strict mode, no grammar tools):
+    # `reasoning.effort` and function tools travel together on that wire.
     models = [_pi_model({}, model), *(_pi_model(dict(e), model) for e in model.extra_models)]
     models_json = {"providers": {"glove": {**glove_provider, "models": models}}}
     settings_json = {

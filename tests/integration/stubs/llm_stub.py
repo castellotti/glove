@@ -1,7 +1,10 @@
 """A tiny llama-server look-alike for live tests (stdlib only).
 
 Serves /v1/models (one model), /props (llama.cpp's capability fields) and a
-streaming /v1/chat/completions that answers with a fixed sentence. Logs every
+streaming /v1/chat/completions that answers with a fixed sentence, and the
+same over the OpenAI Responses API (/v1/responses, logged as `responses
+… reasoning=<effort>`, with a reasoning item first when an effort other than
+`none` is asked: reasoning and tools in one request). Logs every
 request line (and which key arrived, never its value: `key=`, see
 `key_kind`) and the names of the tools offered to stdout. With
 GLOVE_TEST_LLM_KEY set it is `llama-server --api-key`: a request without
@@ -21,6 +24,7 @@ The skill directories Pi lists in its system prompt are logged as `skills=`.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -35,6 +39,7 @@ PROPS = {
 }
 REPLY = "hello from the glove llm stub"
 KEY = os.environ.get("GLOVE_TEST_LLM_KEY", "")
+RESPONSE_IDS = itertools.count(1)
 
 
 def key_kind(value: str | None, key: str) -> str:
@@ -91,33 +96,15 @@ class H(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(n) or b"{}")
         if self._refused():
             return None
+        if self.path == "/v1/responses":
+            return self._responses(req)
         if self.path != "/v1/chat/completions":
             return self._json({"error": "not found"}, 404)
         tools = [t.get("function", {}).get("name") for t in req.get("tools") or []]
         print(f"stub: chat model={req.get('model')} stream={req.get('stream')} tools={','.join(tools)}", flush=True)
-        system = " ".join(_text(m.get("content")) for m in req.get("messages") or [] if m.get("role") == "system")
-        skills = sorted(set(re.findall(r"(/[\w./-]+)/SKILL\.md", system)))
-        if skills:
-            print(f"stub: skills={','.join(skills)}", flush=True)
-        base = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": MODEL}
-        reply, call = REPLY, None
         msgs = req.get("messages") or []
-        last = msgs[-1] if msgs else {}
-        text = _text(last.get("content"))
-        first = next((m for m in msgs if m.get("role") == "user"), {})
-        done = [_text(m.get("content")) for m in msgs if m.get("role") == "tool"]
-        step = seq_step(_text(first.get("content")), done) if tools else None
-        if isinstance(step, tuple):
-            call = {"index": 0, "id": f"call_{len(done) + 1}", "type": "function",
-                    "function": {"name": step[0], "arguments": json.dumps(step[1])}}
-        elif step is not None:
-            reply = step
-        elif last.get("role") == "tool":
-            reply = "TOOL RESULT: " + " ".join(text.split())[:1500]
-        elif last.get("role") == "user" and (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
-            call = {"index": 0, "id": "call_1", "type": "function",
-                    "function": {"name": m.group(1), "arguments": m.group(2)}}
-        print(f"stub: -> {'call ' + call['function']['name'] if call else reply[:120]}", flush=True)
+        reply, call = answer(msgs, tools)
+        base = {"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": MODEL}
         if not req.get("stream"):
             msg = {"role": "assistant", "content": None if call else reply}
             if call:
@@ -134,6 +121,87 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
         usage = {**base, "choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
         self.wfile.write(f"data: {json.dumps(usage)}\n\ndata: [DONE]\n\n".encode())
+
+    def _responses(self, req):
+        """The Responses API: an optional reasoning item, then the reply (a
+        message) or the tool call (a function_call); streamed as a server
+        does it (each item `added` empty, filled by deltas, whole at `done`),
+        or one JSON response with `stream: false`. Ids are per request."""
+        tools = [t.get("name") for t in req.get("tools") or [] if t.get("type") == "function"]
+        effort = (req.get("reasoning") or {}).get("effort")
+        print(f"stub: responses model={req.get('model')} stream={req.get('stream')} reasoning={effort} "
+              f"tools={','.join(tools)}", flush=True)
+        reply, call = answer([_chat_message(i) for i in req.get("input") or []], tools)
+        n = next(RESPONSE_IDS)
+        # (item, its empty form for `added`, the delta events that fill it)
+        items = []
+        if effort and effort != "none":
+            thought = f"stub reasoning at {effort}"
+            summary = [{"type": "summary_text", "text": thought}]
+            items.append(({"type": "reasoning", "id": f"rs_{n}", "summary": summary}, {"summary": []},
+                          [("response.reasoning_summary_text.delta", {"summary_index": 0, "delta": thought})]))
+        if call:
+            fn = call["function"]
+            items.append(({"type": "function_call", "id": f"fc_{n}", "call_id": call["id"], "name": fn["name"],
+                           "arguments": fn["arguments"], "status": "completed"},
+                          {"arguments": "", "status": "in_progress"},
+                          [("response.function_call_arguments.delta", {"delta": fn["arguments"]}),
+                           ("response.function_call_arguments.done", {"arguments": fn["arguments"]})]))
+        else:
+            items.append(({"type": "message", "id": f"msg_{n}", "role": "assistant", "status": "completed",
+                           "content": [{"type": "output_text", "text": reply, "annotations": []}]},
+                          {"content": [], "status": "in_progress"},
+                          [("response.output_text.delta", {"content_index": 0, "delta": reply})]))
+        response = {"id": f"resp_{n}", "object": "response", "status": "completed", "model": MODEL,
+                    "output": [item for item, _, _ in items],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+        if not req.get("stream"):
+            return self._json(response)
+        events = [{"type": "response.created", "response": {**response, "status": "in_progress", "output": []}}]
+        for i, (item, empty, deltas) in enumerate(items):
+            events.append({"type": "response.output_item.added", "output_index": i, "item": {**item, **empty}})
+            events += [{"type": t, "output_index": i, "item_id": item["id"], **e} for t, e in deltas]
+            events.append({"type": "response.output_item.done", "output_index": i, "item": item})
+        events.append({"type": "response.completed", "response": response})
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.end_headers()
+        for e in events:
+            self.wfile.write(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode())
+
+
+def answer(msgs: list[dict], tools: list[str]) -> tuple[str, dict | None]:
+    """The reply text, or the tool call (chat/completions' shape), for chat
+    `msgs`: SEQ, a tool result, `CALL <tool> <json>`, else REPLY."""
+    system = " ".join(_text(m.get("content")) for m in msgs if m.get("role") in ("system", "developer"))
+    skills = sorted(set(re.findall(r"(/[\w./-]+)/SKILL\.md", system)))
+    if skills:
+        print(f"stub: skills={','.join(skills)}", flush=True)
+    reply, call = REPLY, None
+    last = msgs[-1] if msgs else {}
+    text = _text(last.get("content"))
+    first = next((m for m in msgs if m.get("role") == "user"), {})
+    done = [_text(m.get("content")) for m in msgs if m.get("role") == "tool"]
+    step = seq_step(_text(first.get("content")), done) if tools else None
+    if isinstance(step, tuple):
+        call = {"index": 0, "id": f"call_{len(done) + 1}", "type": "function",
+                "function": {"name": step[0], "arguments": json.dumps(step[1])}}
+    elif step is not None:
+        reply = step
+    elif last.get("role") == "tool":
+        reply = "TOOL RESULT: " + " ".join(text.split())[:1500]
+    elif last.get("role") == "user" and (m := re.search(r"CALL (\w+) (\{.*\})", text, re.S)):
+        call = {"index": 0, "id": "call_1", "type": "function",
+                "function": {"name": m.group(1), "arguments": m.group(2)}}
+    print(f"stub: -> {'call ' + call['function']['name'] if call else reply[:120]}", flush=True)
+    return reply, call
+
+
+def _chat_message(item: dict) -> dict:
+    """A Responses `input` item as a chat message (a tool's output is `tool`)."""
+    if item.get("type") == "function_call_output":
+        return {"role": "tool", "content": item.get("output")}
+    return {"role": item.get("role") or item.get("type"), "content": item.get("content")}
 
 
 def seq_step(first_user: str, done: list[str]) -> tuple[str, dict] | str | None:

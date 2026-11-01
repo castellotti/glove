@@ -50,7 +50,7 @@ from glove.api import HookContext, hook, scoped
 PROVIDERS = Path(__file__).parent / "providers"
 CATALOG_KEYS = frozenset({
     "name", "api", "host", "base_path", "default_port", "locations", "auth", "headers", "models_endpoint",
-    "models_cursor", "dated_aliases", "probes", "defaults",
+    "models_cursor", "dated_aliases", "probes", "defaults", "harnesses",
 })
 HEADER_NAME = re.compile(r"[A-Za-z0-9-]+")
 HEADER_VALUE = re.compile(r"[\x20-\x7e]*")
@@ -62,6 +62,7 @@ LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 API_PATHS = {
     "anthropic-messages": [("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("HEAD", "/api/hello")],
     "openai-completions": [("POST", "/chat/completions")],
+    "openai-responses": [("POST", "/responses")],  # pi-ai calls only responses.create (no retrieve/cancel)
     "mistral-conversations": [("POST", "/chat/completions"), ("POST", "/conversations")],
 }
 AUTH_PORT = 8080  # llm-auth's listener, and the harness's `llm` port for a cloud provider
@@ -130,6 +131,19 @@ def _split_endpoint(endpoint: str, default_port: int | None) -> tuple[str, int, 
     return host.strip("[]"), int(port), None, None
 
 
+def _base_path(path: str | None, cat: dict[str, Any]) -> str:
+    """The endpoint URL's path, else the catalog's. The Responses API's must
+    end in the catalog's (`/v1`): the harness posts under it, the model list is
+    under it minus that, so `…/openai` would pass `glove check` and fail every turn."""
+    want = cat.get("base_path", "")
+    if path is None:
+        return want
+    if cat["api"] == "openai-responses" and not path.endswith(want):
+        raise LlmError(f"llm: provider {cat['name']!r} takes the full API prefix as the endpoint, "
+                       f"ending in {want!r} (e.g. …{path}{want}), not {path!r}")
+    return path
+
+
 def route(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
     """Where the forwarder dials and what the harness sees."""
     locations = cat.get("locations") or []
@@ -149,7 +163,7 @@ def route(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
         else:
             raise LlmError(f"llm: provider {cat['name']!r} needs `endpoint` (a URL) for location internet")
         scheme = scheme or ("https" if port == 443 else "http")
-        base_path = path if path is not None else cat.get("base_path", "")
+        base_path = _base_path(path, cat)
         return {"location": location, "host": host, "port": port, "listen_port": port, "scheme": scheme,
                 "base_path": base_path, "alias": host, "scope": "cloud"}
     if not endpoint:
@@ -163,7 +177,7 @@ def route(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, Any]:
         )
     if location == "lan" and host in LOCAL_HOSTS:
         raise LlmError("llm: a loopback endpoint is location: host, not lan")
-    base_path = path if path is not None else cat.get("base_path", "")
+    base_path = _base_path(path, cat)
     return {"location": location, "host": host, "port": port, "listen_port": port, "scheme": "http",
             "base_path": base_path, "alias": None, "scope": "local" if location == "host" else "lan"}
 
@@ -214,6 +228,9 @@ def _capabilities(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, An
 def contribute(ctx: HookContext) -> dict[str, Any]:
     s = ctx.settings
     cat = load_provider(s["provider"])
+    if cat.get("harnesses") and ctx.harness not in cat["harnesses"]:
+        raise LlmError(f"llm: provider {cat['name']!r} ({cat['api']}) is for harness "
+                       f"{', '.join(cat['harnesses'])} only, not {ctx.harness!r}")
     auth, headers = _auth(s, cat, ctx.harness)
     if auth.get("required") and not s.get("api_key"):
         raise LlmError(f"llm: provider {cat['name']!r} needs `api_key: keychain:<service>`")

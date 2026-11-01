@@ -89,12 +89,17 @@ new_session() {
 #     glove's llm-auth holds it and the harness a placeholder.
 #     claude-code-oauth: Claude Code with a subscription token for the
 #     provider itself (no STUB_PY: the driver stands in for it).
+#     pi-responses: Pi over the OpenAI Responses API (openai-responses-compatible),
+#     a reasoning model, against the same stub.
 stub_llm() {
   export GLOVE_TEST_LLM_KEY=sk-test-llm-inject-1
   local key='api_key: "env:GLOVE_TEST_LLM_KEY"'
   STUB_PY=
   if [ "$1" = claude-code-oauth ]; then
     LLM="{provider: anthropic, auth: oauth, model: claude-stub, $key}"
+  elif [ "$1" = pi-responses ]; then
+    STUB_PY=llm_stub.py
+    LLM="{provider: openai-responses-compatible, location: host, endpoint: \"http://127.0.0.1:$2/v1\", model: auto, capabilities: {reasoning: true}, $key}"
   elif [ "$1" = claude-code ]; then
     STUB_PY=anthropic_stub.py
     LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, $key}"
@@ -112,13 +117,18 @@ stub_llm() {
 # secret-shaped names in mixed case and a plain one: what a tool command must
 # lose and keep (live_common's secret_probe reads them back from the session)
 SESSION_ENV='{FAKE_API_KEY: sk-probe-not-a-secret, db_password: probe, My_Api_Key: probe, GLOVE_PROBE_KEEP: keep}'
+#   harness_of <variant>: the harness a stub_llm variant runs (claude-code-oauth → claude-code)
+harness_of() {
+  local h="${1%-oauth}"; echo "${h%-responses}"
+}
+
 stub_session() {
   local dir="$1" harness="$2" enforcer="$3" extra="${4:-}" port="${STUB_PORT:-18080}"
   stub_llm "$harness" "$port"
   [ -z "$STUB_PY" ] || launch_stub "$port" "$dir.stub.log"
   uv run --quiet --project "$ROOT" glove new minimal "$dir" >/dev/null || return 1
   printf 'glove: 3\ntemplate: minimal\nruntime: %s\nharness: %s\nenforcer: %s\nenv: %s\nextensions:\n  llm: %s\n%b' \
-    "${RT:-docker}" "${harness%-oauth}" "$enforcer" "$SESSION_ENV" "$LLM" "$extra" > "$dir/glove-session.yml"
+    "${RT:-docker}" "$(harness_of "$harness")" "$enforcer" "$SESSION_ENV" "$LLM" "$extra" > "$dir/glove-session.yml"
   [ -z "$STUB_PY" ] || wait_stub "$port" "$dir.stub.log"
 }
 

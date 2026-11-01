@@ -40,7 +40,7 @@ for enf in "${ENFORCERS[@]}"; do
 glove: 3
 template: test
 runtime: $RT
-harness: $HARNESS
+harness: $(harness_of "$HARNESS")
 enforcer: $enf
 extensions:
   llm: $LLM

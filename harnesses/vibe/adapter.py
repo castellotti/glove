@@ -78,7 +78,7 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
     (cfg_dir / actx.sessions_subdir).mkdir(parents=True, exist_ok=True)
 
     if model.api not in VIBE_BACKENDS:
-        raise ValueError(f"Vibe cannot speak the {model.api!r} API; pick an OpenAI-compatible or Mistral provider")
+        raise ValueError(f"Vibe cannot speak the {model.api!r} API; pick a chat/completions or Mistral provider")
     backend, api_style = VIBE_BACKENDS[model.api]
     model_id = model.model
     # Must NOT be a built-in Vibe alias ("local" is its bundled llamacpp Devstral;

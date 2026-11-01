@@ -1,0 +1,21 @@
+# Any server that speaks the OpenAI **Responses** API (v1/responses): a gateway
+# or proxy fronting OpenAI's current models. Use it for a model that refuses
+# function tools with a reasoning effort on chat/completions (gpt-6-luna:
+# "Function tools with reasoning_effort are not supported … in
+# /v1/chat/completions"); otherwise openai-compatible is the default.
+#
+# The endpoint is the full API prefix (http://localhost:6655/openai/v1): the
+# harness posts to <endpoint>/responses, and the model list is at the prefix
+# minus this entry's base_path (/v1), plus /v1/models.
+#
+# No capability probe: a gateway lists many models, and `$.data[0]` would be
+# another model's. Set `capabilities:` explicitly (else the defaults below).
+name: openai-responses-compatible
+api: openai-responses
+harnesses: [pi]  # Claude Code and Vibe do not speak this API
+base_path: /v1
+default_port: 8080
+locations: [host, lan, internet]
+auth: { header: Authorization, scheme: Bearer, required: false }
+models_endpoint: /v1/models
+defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: false }

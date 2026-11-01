@@ -2,7 +2,7 @@
 # Live: the LLM key stays in glove's llm-auth sidecar and never enters the
 # harness, against the host llm stub (which answers only with the real key).
 #
-#   bash tests/integration/test_llm_inject.sh [pi|vibe|claude-code|claude-code-oauth] [enforcer]
+#   bash tests/integration/test_llm_inject.sh [pi|pi-responses|vibe|claude-code|claude-code-oauth] [enforcer]
 #   RT=podman bash tests/integration/test_llm_inject.sh pi
 #
 # claude-code-oauth: a subscription token (`provider: anthropic, auth: oauth`,
@@ -10,7 +10,8 @@
 # session (llm_inject_live.stand_in) instead of the host stub. CORPORATE=1 adds a
 # throwaway corporate_ca, trusted together with the session CA (one bundle).
 # The enforcer defaults to the runtime's (nono+srt on Docker, nono where srt
-# can't run). See llm_inject_live.py for the checks.
+# can't run). pi-responses: Pi over the OpenAI Responses API, a reasoning model
+# calling a tool. See llm_inject_live.py for the checks.
 set -u
 HARNESS="${1:-pi}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

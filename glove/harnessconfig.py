@@ -37,7 +37,7 @@ LLM_API_KEY_ENV = "GLOVE_LLM_API_KEY"
 # What that variable holds when the inference provider injects the key itself
 # (`api_key_injected`): a public placeholder, so the harness never holds the key.
 INJECTED_KEY = "glove-injected"
-DESCRIPTOR_APIS = ("openai-completions", "anthropic-messages", "mistral-conversations")
+DESCRIPTOR_APIS = ("openai-completions", "openai-responses", "anthropic-messages", "mistral-conversations")
 
 
 @dataclass(frozen=True)

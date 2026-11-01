@@ -45,6 +45,9 @@ server can't be probed.
 - Raise the default reasoning effort with
   `harness_config.settings.defaultThinkingLevel` (`off|low|medium|xhigh`).
 - Override any generated model field via `harness_config.model`.
+- A model that refuses tools with a reasoning effort on chat/completions
+  (gpt-6-luna) needs the Responses API: `provider: openai-responses-compatible`,
+  see [the llm README](../extensions/llm/README.md#responses-api-servers-openai-responses-compatible).
 - **Sampling** (`temperature`, `top_p`, …) is **not** sent by Pi; pin it
   **server-side** (e.g. llama.cpp flags).
 
