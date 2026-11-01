@@ -117,11 +117,11 @@ def test_git_url_detection():
     assert not sdm._is_git_url("minimal") and not sdm._is_git_url("./tpl")
 
 
-def test_subnet_slices_are_deterministic_27s():
+def test_subnet_slices_are_deterministic_28s():
     assert slice_subnet("172.31.4.0/24", ["n", "h", "x"]) == {
-        "n": "172.31.4.0/27", "h": "172.31.4.32/27", "x": "172.31.4.64/27"}
-    with pytest.raises(ValueError, match="room for 8"):
-        slice_subnet("172.31.4.0/24", [str(i) for i in range(9)])
+        "n": "172.31.4.0/28", "h": "172.31.4.16/28", "x": "172.31.4.32/28"}
+    with pytest.raises(ValueError, match="room for 16"):
+        slice_subnet("172.31.4.0/24", [str(i) for i in range(17)])
 
 
 def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
@@ -166,6 +166,58 @@ def test_pi_rag_template_plans_once_filled(tmp_path, monkeypatch):
     assert [a.name for a in comp.active] == ["llm", "media", "ocr", "rag"]
     assert "egress" not in comp.slots and [e.name for e in comp.endpoints] == ["llm"]  # offline
     assert any(m.container_path == "/mnt/rag-models" and m.mode == "ro" for m in plan.mounts)
+
+
+CORPORATE_FULL = """\
+glove: 3
+template: corporate
+harness: pi
+extensions:
+  llm: {provider: openai-compatible, location: internet, endpoint: "https://llm.corp.example/v1", model: m,
+        api_key: "keychain:llm"}
+  corporate:
+    allow_domains: [wiki.corp.example, git.corp.example, "*.git.corp.example"]
+    tcp: [{name: git-ssh, to: "git.corp.example:22"}]
+  webfetch: {}
+  observe: {}
+  filter: {}
+  skills:
+    plugins:
+      wiki:
+        path: skills/wiki
+        relay:
+          commands:
+            scripts/wiki.py: {hosts: [wiki.corp.example], allow: [search], env: {WIKI_TOKEN: "keychain:wiki"}}
+  github:
+    hosts: [{host: git.corp.example, token: "keychain:gh"}]
+    git: [fetch, clone, ls-remote]
+  playwright:
+    profile: ephemeral
+    storage_state: keychain:pw
+    login: {start_url: "https://wiki.corp.example/", domains: [wiki.corp.example]}
+brief: b
+"""
+
+
+def test_corporate_template_with_its_credentialed_tools_fits_its_subnet(tmp_path, monkeypatch):
+    """The corporate template with every commented credentialed tool enabled and
+    an internet LLM needs more networks than eight /27s held."""
+    monkeypatch.setenv("GLOVE_HOME", str(tmp_path / "gh"))
+    sd, sid = sdm.materialize("corporate", tmp_path / "corp")
+    plugin = sd.root / "skills" / "wiki"
+    for rel, body in {".claude-plugin/plugin.json": '{"name": "wiki"}',
+                      "skills/wiki/SKILL.md": "---\nname: wiki\ndescription: w\n---\nw\n",
+                      "scripts/wiki.py": "#!/usr/bin/env python3\n"}.items():
+        (plugin / rel).parent.mkdir(parents=True, exist_ok=True)
+        (plugin / rel).write_text(body)
+    sd.file.write_text(CORPORATE_FULL)
+    from glove.plan import build_session_plan
+
+    cfg = sdm.to_config(sd, sdm.load_file(sd), sid, subnet="172.31.9.0/24")
+    plan = build_session_plan(cfg, home_dir=str(sd.home), cwd=str(sd.work), state_dir=str(sd.ext),
+                              session_dir=str(sd.root))
+    assert len(plan.network.subnets) > 8
+    assert all(s.endswith("/28") for s in plan.network.subnets.values())
 
 
 def test_browse_watch_template_plans_once_filled(tmp_path, monkeypatch):

@@ -299,7 +299,7 @@ def test_a_failed_up_on_a_subnet_a_foreign_network_took_is_subnet_taken(tmp_path
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(session.subprocess, "run", run)
-    mine = "172.31.5.0/27"
+    mine = "172.31.5.0/28"
     plan.network = replace(plan.network, subnets={"net": mine})
     nets = {"glove-s-net": [mine], "unrelated": ["10.99.0.0/24"]}  # its own networks are no conflict
     monkeypatch.setattr(DockerRuntime, "network_subnets", lambda self: nets)

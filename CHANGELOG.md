@@ -6,6 +6,15 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Session networks are /28 slices** of the session's /24 (were /27): room for
+  16 networks of 14 addresses each, up from 8 of 29. The `corporate` template
+  with its commented credentialed tools enabled (a relayed Claude Code plugin,
+  GitHub Enterprise, a signed-in browser) and an internet LLM needs 9, which
+  `glove plan` refused ("room for 8 networks"); a test now plans it. Take a
+  session that is up down (`glove down`) before its next `glove up`, so its
+  networks are recreated.
+- **The wheel includes `commands`, `extensions` and `harnesses`** as well as
+  `glove` (`harnesses/__init__.py` added).
 - **`glove playwright record`** is the new name of `glove playwright solve`
   (round 28): the setting `challenge_capture` is now `recording`, and captures
   go to `recordings/<id>/` (was `challenges/<id>/`), under

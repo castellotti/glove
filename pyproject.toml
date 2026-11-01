@@ -30,7 +30,7 @@ dev = [
 glove = "glove.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["glove"]
+packages = ["glove", "commands", "extensions", "harnesses"]
 artifacts = [
     "glove/templates/*",
     "glove/enforcers/entrypoint/*",

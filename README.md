@@ -182,11 +182,12 @@ browsers, baked into the image at build time (shell commands are offline):
 projects/web}]}}`. See [extensions/toolchains/README.md](extensions/toolchains/README.md).
 
 Each session gets a /24 from `subnet_pool` in `~/.glove/config.yml` (default
-`172.31.0.0/16`), recorded in the registry, and each of its networks a /27 of
-it. Allocation avoids other sessions and the runtime's existing networks; if a
-foreign network takes the range later, `glove up` re-allocates. If one takes
-it between the check and `compose up` (another session starting at the same
-moment), `glove up` says so, re-allocates and retries (3 attempts).
+`172.31.0.0/16`), recorded in the registry, and each of its networks a /28 of
+it (room for 16 networks, 14 addresses each). Allocation avoids other sessions
+and the runtime's existing networks; if a foreign network takes the range
+later, `glove up` re-allocates. If one takes it between the check and
+`compose up` (another session starting at the same moment), `glove up` says
+so, re-allocates and retries (3 attempts).
 
 `.git/hooks` and `.git/config` in every rw mount are always bound read-only (and
 `.git` is pinned so it can't be renamed away): an agent must not plant a hook your
