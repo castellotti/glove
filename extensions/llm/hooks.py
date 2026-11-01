@@ -135,11 +135,12 @@ def _base_path(path: str | None, cat: dict[str, Any]) -> str:
     """The endpoint URL's path, else the catalog's. The Responses API's must
     end in the catalog's (`/v1`): the harness posts under it, the model list is
     under it minus that, so `…/openai` would pass `glove check` and fail every turn."""
+    want = cat.get("base_path", "")
     if path is None:
-        return cat.get("base_path", "")
-    if cat["api"] == "openai-responses" and not path.endswith(cat.get("base_path", "")):
+        return want
+    if cat["api"] == "openai-responses" and not path.endswith(want):
         raise LlmError(f"llm: provider {cat['name']!r} takes the full API prefix as the endpoint, "
-                       f"ending in {cat.get('base_path')!r} (e.g. …{path}{cat.get('base_path')}), not {path!r}")
+                       f"ending in {want!r} (e.g. …{path}{want}), not {path!r}")
     return path
 
 

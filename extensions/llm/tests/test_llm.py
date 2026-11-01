@@ -13,6 +13,7 @@ from helpers import STUB_LLM, hook_ctx, make_cfg, render
 
 from glove.config import ConfigError
 from glove.extensions import IN_TREE_DIR, ExtensionError, load_module
+from glove.harness import known_harnesses
 
 HERE = Path(__file__).resolve().parent
 GOLDEN = HERE / "golden"
@@ -28,7 +29,7 @@ def test_every_catalog_entry_is_valid(path):
     cat = hooks.load_provider(path.stem)
     assert cat["name"] == path.stem
     assert cat["api"] in hooks.API_PATHS
-    assert set(cat.get("harnesses") or []) <= {"pi", "vibe", "claude-code"}
+    assert set(cat.get("harnesses") or []) <= set(known_harnesses())
     assert set(cat["locations"]) <= {"host", "lan", "internet"}
     # a dedicated entry must offer what openai-compatible cannot (see its header)
     if cat["name"] != "openai-compatible" and "internet" not in cat["locations"]:
