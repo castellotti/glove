@@ -25,6 +25,10 @@ With `auth: oauth` also:
      a tool command can write neither the channel nor the bundle;
   7. the TUI draws within TUI_START seconds; the session has observe on, and
      both hops of a model call are flows to the provider's name (their SNI).
+With the Responses API (`pi-responses`, provider openai-responses-compatible) also:
+  8. chat/completions is a 403 (the allowlist is /responses), and a tool call
+     at a thinking level above off completes: the request carried
+     `reasoning.effort` and the tools together, and the tool's result came back.
 test_observe.sh checks the two flows each model call makes (`llm`, client
 harness; `llm-upstream`, client llm) for an API key.
 Prints PASS/FAIL per check; exits non-zero on any failure.
@@ -108,6 +112,7 @@ def main(directory: str, stub_log: str | None) -> int:
         base = urlsplit(plan.model.base_url)
         root = f"{base.scheme}://{base.netloc}"
         upstream_port = plan.composition.slot_exports("inference")["inject"]["upstream"].rsplit(":", 1)[1]
+        responses = plan.model.api == "openai-responses"
         check_version(s)
         print("== the plan")
         check("the key is injected (the model descriptor says so)", plan.model.api_key_injected)
@@ -166,6 +171,9 @@ def main(directory: str, stub_log: str | None) -> int:
                   and re.search(r"llm-upstream:\d+=[1-9]", out) is not None, out[-200:])
             out = status("GET", "/v1/files")
             check("a path off the allowlist is a 403", out == "403", out[-200:])
+            if responses:
+                out = status("POST", base.path + "/chat/completions")
+                check("a Responses session refuses chat/completions (403)", out == "403", out[-200:])
             if oauth:
                 out = in_probe("grep -c 'BEGIN CERTIFICATE' /etc/glove/ca/extra.pem; "
                                "[ $(grep -c 'BEGIN CERTIFICATE' /etc/glove/ca/bundle.pem) -gt 100 ] && echo ROOTS")
@@ -219,7 +227,16 @@ def main(directory: str, stub_log: str | None) -> int:
         out = s.ask("Say hello.")
         check("a turn answers through llm-auth", "hello from the glove" in out, out[-300:])
 
+        if responses:
+            out = s.call("bash", {"command": "echo responses-tool-$((40 + 2))"})
+            check("a tool call with reasoning on completes over the Responses API", "responses-tool-42" in out,
+                  out[-300:])
         server_log = container_log(rt, f"{prefix}-{STAND_IN}") if oauth else Path(stub_log).read_text()
+        if responses:
+            asked = re.findall(r"stub: responses .* reasoning=(\S+) tools=(\S*)", server_log)
+            check("every model call went to /responses with an effort and the tools",
+                  bool(asked) and all(e not in ("None", "none") and t for e, t in asked)
+                  and "/chat/completions" not in server_log, f"{asked[:3]}")
         kinds = re.findall(r" key=(\w+)", server_log)
         check("every request the server saw carried the real key", bool(kinds) and set(kinds) == {"real"},
               f"{len(kinds)} requests: {sorted(set(kinds))}")

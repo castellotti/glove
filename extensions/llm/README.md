@@ -10,7 +10,8 @@ capabilities, whether the key is injected).
 extensions:
   llm:
     provider: openai-compatible  # the default for any OpenAI-API server (vLLM, NInfer, SGLang, …)
-                                 # | llama.cpp | ollama | lmstudio | openai | anthropic | mistral | openrouter
+                                 # | openai-responses-compatible | anthropic-compatible | llama.cpp | ollama
+                                 # | lmstudio | openai | anthropic | mistral | openrouter
     location: lan              # host (this Mac) | lan | internet
     endpoint: <host>:<port>    # host/lan; cloud providers use the catalog host
     model: auto                # or an id
@@ -153,6 +154,42 @@ bridge (nothing of the session is up yet), dialling the server as `llm-upstream`
 does: direct (never through a proxy), over IPv4, and `location: host` through
 `host.docker.internal`. `--offline` and `--no-container` skip it.
 
+## Responses API servers (`openai-responses-compatible`)
+
+Some models refuse function tools with a reasoning effort on chat/completions.
+gpt-6-luna answers HTTP 400 "Function tools with reasoning_effort are not
+supported … in /v1/chat/completions", so `openai-compatible` can run it only at
+effort `none`. `openai-responses-compatible` speaks the OpenAI Responses API
+instead. Pi sends `reasoning.effort` and the tools in one `POST …/responses`,
+and every thinking level works with tools (`off` sends effort `none`).
+
+```yaml
+extensions:
+  llm:
+    provider: openai-responses-compatible
+    location: host
+    endpoint: http://localhost:6655/openai/v1   # the full API prefix, /v1 included
+    model: gpt-6-luna
+    capabilities: {vision: true, context_window: 1050000, max_tokens: 32768, reasoning: true}
+    api_key: keychain:<service>
+```
+
+- **Pi only.** Claude Code and Vibe refuse the session: they do not speak this API.
+- **The endpoint is the full API prefix.** The harness posts to
+  `<endpoint>/responses`, and the model list is at the endpoint minus the
+  catalog's `/v1`, plus `/v1/models`. `http://localhost:6655/openai/v1` gives
+  `…/openai/v1/responses` and `…/openai/v1/models`. With `…/openai` the
+  harness would post to `…/openai/responses`, which most proxies don't serve.
+- llm-auth allows `POST <prefix>/responses` and the model list, and nothing
+  else (`chat/completions` included). Pi 1.4.0 calls only `responses.create`
+  (streamed, `store: false`).
+- **Set `capabilities:` explicitly.** The only probe is vLLM's
+  `max_model_len` on `/v1/models`, which gateways rarely report.
+- Pi's `models.json` gets no `compat` block: pi-ai's defaults for this API
+  (no strict mode, no grammar tools) are what a gateway wants. A reasoning
+  model's `thinkingLevelMap` is the same as on chat/completions; `max`
+  clamps to `xhigh`.
+
 ## When a server gets its own provider
 
 Use `openai-compatible` for anything that speaks the OpenAI API. Add a
@@ -160,7 +197,7 @@ dedicated entry only when a server offers something the generic path cannot:
 
 - a native capability endpoint (llama.cpp `/props`, ollama `/api/show`,
   LM Studio `/api/v0`);
-- a different wire protocol (`anthropic-messages`, `mistral-conversations`);
+- a different wire protocol (`anthropic-messages`, `openai-responses`, `mistral-conversations`);
 - a fixed cloud host and required key (openai, openrouter);
 - in future, a server-specific feature or optimization worth configuring
   (e.g. speculative/MTP decoding flags, an in-session `sidecar` runtime).

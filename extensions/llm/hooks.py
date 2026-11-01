@@ -62,6 +62,7 @@ LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 API_PATHS = {
     "anthropic-messages": [("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("HEAD", "/api/hello")],
     "openai-completions": [("POST", "/chat/completions")],
+    "openai-responses": [("POST", "/responses")],  # pi-ai calls only responses.create (no retrieve/cancel)
     "mistral-conversations": [("POST", "/chat/completions"), ("POST", "/conversations")],
 }
 AUTH_PORT = 8080  # llm-auth's listener, and the harness's `llm` port for a cloud provider

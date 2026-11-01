@@ -27,7 +27,7 @@ REGEN = os.environ.get("GLOVE_REGEN_GOLDEN") == "1"
 def test_every_catalog_entry_is_valid(path):
     cat = hooks.load_provider(path.stem)
     assert cat["name"] == path.stem
-    assert cat["api"] in ("openai-completions", "anthropic-messages", "mistral-conversations")
+    assert cat["api"] in hooks.API_PATHS
     assert set(cat["locations"]) <= {"host", "lan", "internet"}
     # a dedicated entry must offer what openai-compatible cannot (see its header)
     if cat["name"] != "openai-compatible" and "internet" not in cat["locations"]:
@@ -270,6 +270,46 @@ def test_allowed_paths_per_provider(provider, endpoint, want):
     assert hooks.allowed_paths(cat, hooks.route(settings, cat)["base_path"]) == want
 
 
+RESPONSES = {"provider": "openai-responses-compatible", "location": "host",
+             "endpoint": "http://localhost:6655/openai/v1", "model": "gpt-6-luna"}
+
+
+def test_the_responses_api_allows_only_responses_under_the_full_prefix():
+    cat = hooks.load_provider("openai-responses-compatible")
+    r = hooks.route(RESPONSES, cat)
+    assert (r["host"], r["port"], r["base_path"]) == ("localhost", 6655, "/openai/v1")
+    # the model list (and the probe, the same path) under the prefix minus the catalog's /v1
+    assert hooks.allowed_paths(cat, r["base_path"]) == [["POST", "/openai/v1/responses"],
+                                                        ["GET", "/openai/v1/models"]]
+    for s in ({"location": "lan", "endpoint": "192.168.1.50:8080"},
+              {"location": "internet", "endpoint": "https://gw.example.com/openai/v1"}):
+        assert hooks.allowed_paths(cat, hooks.route({**RESPONSES, **s}, cat)["base_path"])[0][0] == "POST"
+
+
+def test_a_responses_session_goes_through_llm_auth_with_its_wire(tmp_path):
+    caps = {"vision": True, "context_window": 1050000, "max_tokens": 32768, "reasoning": True}
+    plan, doc, _ = _plan(tmp_path, **RESPONSES, capabilities=caps, api_key="env:K")
+    assert plan.model.api == "openai-responses"
+    assert plan.model.base_url == "http://glove-s-llm:6655/openai/v1"
+    assert (plan.model.context_window, plan.model.reasoning) == (1050000, True)
+    env = doc["services"]["glove-s-llm-auth"]["environment"]
+    assert json.loads(env["LLM_AUTH_ALLOW"]) == [["POST", "/openai/v1/responses"], ["GET", "/openai/v1/models"]]
+    # an openai-compatible session at the same proxy keeps chat/completions only
+    _, doc, _ = _plan(tmp_path / "c", **{**RESPONSES, "provider": "openai-compatible",
+                                         "endpoint": "http://localhost:6655/litellm/v1"}, api_key="env:K")
+    assert json.loads(doc["services"]["glove-s-llm-auth"]["environment"]["LLM_AUTH_ALLOW"]) == \
+        [["POST", "/litellm/v1/chat/completions"], ["GET", "/litellm/v1/models"]]
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "vibe"])
+def test_only_pi_speaks_the_responses_api(tmp_path, harness):
+    from glove.harnessconfig import render_home
+
+    with pytest.raises((ConfigError, ValueError), match="openai-responses"):
+        plan, _, _ = _plan(tmp_path, harness=harness, **RESPONSES)
+        render_home(make_cfg(harness=harness, name="s"), plan, tmp_path / "home")
+
+
 def test_oauth_paths_join_the_allowlist_under_the_server_root():
     cat = hooks.load_provider("anthropic")
     got = hooks.allowed_paths(cat, "", cat["auth"]["oauth"]["paths"])
@@ -325,6 +365,22 @@ def test_pi_models_json_from_the_descriptor(tmp_path):
     models = json.loads((tmp_path / "home/.pi/agent/models.json").read_text())["providers"]["glove"]
     assert models["models"][0]["input"] == ["text", "image"]
     assert models["models"][0]["contextWindow"] == 131072
+
+
+def test_pi_models_json_for_the_responses_api(tmp_path):
+    from glove.harnessconfig import render_home
+
+    caps = {"vision": True, "context_window": 1050000, "max_tokens": 128000, "reasoning": True}
+    plan, _, _ = _plan(tmp_path, **RESPONSES, capabilities=caps, api_key="env:K")
+    render_home(make_cfg(harness="pi", name="s"), plan, tmp_path / "home")
+    prov = json.loads((tmp_path / "home/.pi/agent/models.json").read_text())["providers"]["glove"]
+    assert {k: prov[k] for k in ("baseUrl", "api", "apiKey")} == {
+        "baseUrl": "http://glove-s-llm:6655/openai/v1", "api": "openai-responses", "apiKey": "$GLOVE_LLM_API_KEY"}
+    assert "compat" not in prov  # pi-ai's defaults: no grammar tools, no strict mode
+    m = prov["models"][0]
+    assert (m["id"], m["reasoning"], m["input"], m["contextWindow"], m["maxTokens"]) == \
+        ("gpt-6-luna", True, ["text", "image"], 1050000, 128000)
+    assert m["thinkingLevelMap"]["xhigh"] == "xhigh"
 
 
 # --- model: auto / capabilities: auto ---------------------------------------------------------
@@ -553,6 +609,8 @@ def _models(*ids, status=200):
     ({}, _models(status=502), "fail", "HTTP 502"),
     ({"api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
     ({}, _models(status=401), "fail", "HTTP 401"),
+    ({**RESPONSES, "model": "gpt-6-luna"}, _models("gpt-6-luna"), "ok", "http://localhost:6655/openai; serves"),
+    ({**RESPONSES, "api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
 ])
 def test_server_check(settings, probe, status, detail):
     name, got, text = _server(settings, probe)

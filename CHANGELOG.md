@@ -4,6 +4,21 @@ All notable changes to glove are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`openai-responses-compatible`**: an `llm` provider for servers that speak
+  the OpenAI Responses API (`api: openai-responses`), for Pi. Some models
+  refuse function tools with a reasoning effort on chat/completions:
+  gpt-6-luna answers HTTP 400 "Function tools with reasoning_effort are not
+  supported". Over `POST <endpoint>/responses`, Pi sends the effort and the tools
+  together, at every thinking level. llm-auth allows `/responses` and the
+  model list only. The endpoint is the full API prefix, e.g.
+  `http://localhost:6655/openai/v1`. Claude Code and Vibe refuse the API, as
+  before. Core's model descriptor accepts `openai-responses` (one name in
+  `DESCRIPTOR_APIS`, no new lines). The llm stub serves `/v1/responses`.
+  Live on Docker (nono+srt): `test_llm_inject.sh pi-responses` 20/20 (a
+  tool call at thinking level `low`, `chat/completions` a 403).
+
 ### Changed
 
 - **Session networks are /28 slices** of the session's /24 (were /27): room for

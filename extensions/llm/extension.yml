@@ -4,9 +4,9 @@ summary: The inference engine — pick a provider like a gluetun VPN provider; t
 provides: [inference]
 settings:
   provider:     { type: enum, required: true,
-                  values: [openai-compatible, anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter] }
+                  values: [openai-compatible, openai-responses-compatible, anthropic-compatible, llama.cpp, ollama, lmstudio, openai, anthropic, mistral, openrouter] }
   location:     { type: enum, values: [host, lan, internet] }       # where the server is, relative to this Mac
-  endpoint:     { type: string }                                    # host:port (host/lan) or a URL (openai-compatible)
+  endpoint:     { type: string }                                    # host:port (host/lan) or a URL (openai-compatible, openai-responses-compatible)
   model:        { type: string, default: auto }                     # an id, or `auto` (the single model /v1/models lists)
   api_key:      { type: secret }                                    # keychain:<service> | env:<VAR>
   auth:         { type: enum, values: [api-key, oauth], default: api-key }  # oauth: a subscription token, where the catalog allows it
