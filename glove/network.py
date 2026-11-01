@@ -73,7 +73,7 @@ class NetworkPlan:
     hostgw_network: str | None = None
     # Session-owned networks from extensions: full name → internal?
     session_networks: dict[str, bool] = field(default_factory=dict)
-    # Session-owned network name → its /27 of the session subnet (empty: the
+    # Session-owned network name → its /28 of the session subnet (empty: the
     # runtime's default pools).
     subnets: dict[str, str] = field(default_factory=dict)
 
@@ -86,11 +86,11 @@ class NetworkPlan:
         return [s for s in self.sidecars if s.impl is not None]
 
 
-SLICE_PREFIX = 27  # 8 networks per /24 session subnet, 29 usable addresses each
+SLICE_PREFIX = 28  # 16 networks per /24 session subnet, 14 usable addresses each
 
 
 def slice_subnet(subnet: str, networks: list[str]) -> dict[str, str]:
-    """Deterministic /27 slices of a session's subnet, one per owned network
+    """Deterministic /28 slices of a session's subnet, one per owned network
     (in the given order), so a session's addresses never depend on what else
     the runtime has allocated."""
     slices = list(ipaddress.ip_network(subnet).subnets(new_prefix=SLICE_PREFIX))

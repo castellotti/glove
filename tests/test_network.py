@@ -24,7 +24,7 @@ def test_endpoints_join_their_target_networks_and_sessions_get_slices(tmp_path):
     assert search.networks == ("glove-s-searchnet",) and search.impl is None
     assert list(net.subnets) == ["glove-s-net", "glove-s-hostgw", "glove-s-egress", "glove-s-searchnet",
                                  "glove-s-wan"]
-    assert net.subnets["glove-s-net"] == "172.31.4.0/27"
+    assert net.subnets["glove-s-net"] == "172.31.4.0/28"
 
 
 def test_an_uninterposed_hop_renders_no_forwarder(tmp_path):

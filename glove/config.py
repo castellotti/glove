@@ -99,7 +99,7 @@ class Config:
     tools: dict[str, Any] = field(default_factory=dict)
     enforcer_options: dict[str, Any] = field(default_factory=dict)
     # Internal (not a session-file key): the session's /24 from the user's
-    # subnet pool, recorded in the registry; each session network gets a /27.
+    # subnet pool, recorded in the registry; each session network gets a /28.
     subnet: str | None = None
 
     def __post_init__(self) -> None:

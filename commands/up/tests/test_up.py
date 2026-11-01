@@ -60,7 +60,7 @@ def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_
     assert runner.invoke(app, ["new", "minimal", str(d)]).exit_code == 0
     sid = session_id(d)
     assert reg.find(sid).subnet == "172.31.1.0/24"  # allocation skipped the runtime's network
-    taken[f"glove-{sid}-net"] = ["172.31.1.0/27"]  # its own networks are not a conflict
+    taken[f"glove-{sid}-net"] = ["172.31.1.0/28"]  # its own networks are not a conflict
     make_session(d)  # fill in the model so `up` gets as far as planning
     monkeypatch.setattr(up, "launch", lambda *a, **k: None)
     assert runner.invoke(app, ["up", str(d)]).exit_code == 0
@@ -69,7 +69,7 @@ def test_subnets_avoid_the_runtimes_networks_and_move_off_a_taken_one(home, tmp_
     result = runner.invoke(app, ["up", str(d)])
     assert result.exit_code == 0 and "re-allocating" in result.output
     assert reg.find(sid).subnet == "172.31.2.0/24"
-    assert "172.31.2.0/27" in (d / ".glove" / "compose.yml").read_text()
+    assert "172.31.2.0/28" in (d / ".glove" / "compose.yml").read_text()
 
 
 
