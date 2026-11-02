@@ -135,8 +135,11 @@ def contribute(ctx: HookContext) -> dict[str, Any]:
     login = login_spec(s)  # fail at plan time (`glove check`), not at `up` or `login`
     check_storage_state(s)
     capture.spec(s)
-    if s.get("event_relay") and not capture._int(s["event_timeout"], 30, 3600):
-        raise ValueError("playwright.event_timeout: an integer from 30 to 3600 (seconds)")
+    if s.get("event_relay"):
+        if not capture._int(s["event_timeout"], 30, 3600):
+            raise ValueError("playwright.event_timeout: an integer from 30 to 3600 (seconds)")
+        if not capture._int(s["event_keep"], 5, 1000):
+            raise ValueError("playwright.event_keep: an integer from 5 to 1000 (replays' directories)")
     if s["mode"] != "host":
         if not s.get("storage_state") or login is None:
             return {}

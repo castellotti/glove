@@ -449,11 +449,16 @@ has no server-side switch for it). The controls:
   to the sidecar's display, through XTest, at the times its plan names. A page
   can't tell that input from a person's, and it reaches whatever window is in
   front. **Bound:**
-  - two events (`status`, `replay`), whose program and arguments the policy
-    fixes; the agent picks only a plan name and `--dry-run`;
+  - three events (`status`, `recordings`, `replay`), whose program and
+    arguments the policy fixes; the agent picks only a plan name or a saved
+    recording's id, and `--dry-run`;
   - a plan is data, checked against the display before anything is sent, no
     longer than the timeout allows, and run from the copy that was checked
-    (out of the agent's reach);
+    (out of the agent's reach). A recording's plan is built from the files
+    the recorder keeps in the sidecar (`/tmp/capture/.saved/`, which the agent
+    can't reach), read without following links, bounded, and cut to the
+    fields a plan has. Only recordings with `to: work` are kept there, so
+    `--recording` shows the agent nothing it couldn't already read;
   - one event at a time, killed at `event_timeout`, with no network (no proxy:
     there is nothing for it to reach);
   - a replay and the operator's recorder exclude each other (claimed under one
@@ -463,7 +468,7 @@ has no server-side switch for it). The controls:
   - every event and every refusal is logged before it runs, in an output
     (`/work/browser-events/`) that the agent reads but cannot write. The output
     is bounded on the host: the log rotates at 4 MiB (one older file kept),
-    and the newest 20 replays are kept.
+    and the newest `event_keep` replays are kept (20 by default, 5 to 1000).
 
   The program runs as the browser's uid, so it could read the profile. It is
   glove's own code, baked into the image; code the agent writes never runs in

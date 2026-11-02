@@ -6,6 +6,24 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`browser-event replay --recording <id>`** (playwright `event_relay`):
+  replay a recording `glove playwright record` saved, by its id, without the
+  agent copying its rows into `plans/`. With `event_relay` and
+  `recording: {to: work}` (only recordings the agent may read anyway), once the
+  host has its copy, `record` leaves the sidecar the recording's `events.jsonl`
+  and `meta.json` (in `/tmp/capture/.saved/<id>/`, the newest 20 whose events
+  fit a 2 MiB plan) instead of removing it all. The policy builds
+  `{"v": 1, "display", "events"}` from them (no links followed, each bounded,
+  rows cut to a plan's fields) and runs it through the same
+  validator, timeout, log and `plan.json` as a staged plan. `browser-event
+  recordings` lists the ids.
+- **A replay's result names itself**: `id`, `dir` (`/work/browser-events/<id>`)
+  and `frames` (the `before`/`after` PNGs written), so a caller needn't search
+  `log.jsonl` for the replay it just caused.
+- **playwright `event_keep`** (default 20, 5 to 1000): how many replays'
+  directories `browser-events/` keeps (was a fixed 20). `glove check` refuses
+  other values.
+
 - **`openai-responses-compatible`**: an `llm` provider for servers that speak
   the OpenAI Responses API (`api: openai-responses`), for Pi. Some models
   refuse function tools with a reasoning effort on chat/completions:

@@ -41,6 +41,7 @@ extensions:
     #   motion_hz: 120         # pointer samples per second while a button is down (0: none)
     # event_relay: false       # true: the agent sends events to the sidecar (`browser-event`, below)
     # event_timeout: 120       # an event's program is killed after this many seconds
+    # event_keep: 20           # replays' directories kept in browser-events/ (5-1000)
     # replay_while_recording: false  # true: a replay may send input while you record
     # host only:
     # port: <free port>        # host MCP port (default: a free one, kept for the session)
@@ -219,7 +220,9 @@ can't cover the window you are working in.
   which the agent reads at `/work/browser-output/recordings/`. Each capture
   holds `events.jsonl`, `windows.jsonl`, `meta.json` and `shots/*.png`. The
   recorder writes to the sidecar's tmpfs; `record` copies the capture out with
-  `exec … tar` and then removes it, and the sidecar gets no new mount.
+  `exec … tar` and then removes it, and the sidecar gets no new mount. With
+  `event_relay` and `to: work` it leaves the sidecar the capture's
+  `events.jsonl` and `meta.json`, so the agent can replay it (below).
 - **The sidecar's output is treated as hostile** (it runs a browser):
   - only known file names are read, and sizes and the screenshot count are
     capped;
@@ -247,12 +250,15 @@ once, with no operator action, no host process and no `docker` CLI:
     mode: novnc
     event_relay: true      # serve the agent's events in the browser sidecar
     event_timeout: 120     # optional: an event's program is killed after this many seconds
+    event_keep: 20         # optional: replays' directories kept in browser-events/ (5-1000)
     replay_while_recording: false  # optional: true lets a replay send input while you record
 ```
 
 ```sh
 browser-event status                                       # display size, pointer, XTest, is the operator recording
-browser-event replay PLAN [--dry-run]
+browser-event recordings                                   # the recordings it can replay: {"recordings": [id, …]}
+browser-event replay PLAN [--dry-run]                      # a plan the agent staged
+browser-event replay --recording ID [--dry-run]            # a recording `glove playwright record` saved
 ```
 
 `replay` plays a timed input sequence on the sidecar's display. The agent
@@ -265,10 +271,22 @@ writes it to `/run/glove/browser-event/plans/PLAN` just before it replays it:
             {"t": 480, "type": "up", "x": 700, "y": 420, "button": 1}]}
 ```
 
-These are the rows of a recording's `events.jsonl`, so what `glove playwright
-record` captured (with `recording: {to: work}`, at
-`/work/browser-output/recordings/<id>/events.jsonl`) replays as it is, if it is
-shorter than `event_timeout` allows (split a longer one into several plans).
+These are the rows of a recording's `events.jsonl`, so a recording replays as
+it is, if it is shorter than `event_timeout` allows (split a longer one into
+several plans).
+
+The agent needn't copy a recording into `plans/`: `browser-event replay
+--recording <id>` builds the plan in the sidecar, from the `events.jsonl` (each
+row cut to `t`, `type`, `x`, `y`, `button`) and `meta.json` (its `display`) of
+a recording that `glove playwright record` has saved. This needs
+`recording: {to: work}`, so the agent replays only recordings it may read
+anyway. Once the host has its copy, `record` leaves the sidecar only those two
+files, in `/tmp/capture/.saved/<id>/`, where the agent can't write. It keeps
+them only if `events.jsonl` is at most 2 MiB (a plan's limit), for the newest
+20 recordings (a fixed limit, apart from `event_keep`), and only while the
+sidecar runs. `browser-event recordings` lists their ids. A recording still
+running isn't there yet.
+
 Each event is sent `t - events[0].t` ms after the first. It moves the pointer
 to `(x, y)`; `down`/`up` then press or release button 1–3, 8 or 9 (back,
 forward), and `wheel` clicks button 4–7. A button still held at the end, or
@@ -277,7 +295,10 @@ after an error, is released. If a replay is killed at its timeout, a button
 `display` must be the sidecar's (`viewport`), or nothing is sent. `--dry-run`
 checks all of that and sends nothing. The result is printed, and each replay
 leaves `plan.json`, `result.json`, `before.png` and `after.png` in
-`/work/browser-events/<id>/`.
+`/work/browser-events/<id>/`. The result names itself, as the agent sees it:
+`"id"`, `"dir": "/work/browser-events/<id>"` and `"frames": {"before": …,
+"after": …}` (only the frames written; none for a dry run). A caller needn't
+search `log.jsonl` for the replay it just caused.
 
 How it works: `browser-event` is a client of the `relay` library (the same
 protocol as `github`'s `gh`). It leaves the event on the `browser-event`
@@ -286,16 +307,19 @@ FIFOs, with no socket and no network. `relayd` serves the channel inside the
 browser sidecar, beside the X display (which no other container can reach),
 and runs only what `image/relay_policy.py` allows:
 
-- **Two events.** `status` and `replay`, each running `image/browser_event.py`
-  with arguments the policy builds. The agent chooses the plan's name (a bare
-  file name in `plans/`) and `--dry-run`. It never chooses the program, the
-  display or where results go.
+- **Three events.** `status`, `recordings` and `replay`, each running
+  `image/browser_event.py` with arguments the policy builds. The agent chooses
+  the plan's name (a bare file name in `plans/`) or a recording's id, and
+  `--dry-run`. It never chooses the program, the display or where results go.
 - **The plan is checked before anything is sent.** It must be a regular file
   in `plans/` (neither may be a link), at most 2 MiB and 10,000 events, valid
   JSON and a valid v1 plan, and short enough to end within `event_timeout`
   (30 to 3600 s). The policy reads it once and removes it from `plans/` (one
   staged plan, one replay). The very bytes it checked are what runs: it
   writes them to the replay's own `plan.json`, where the agent can't write.
+  A recording's plan is built from its two files, each opened without
+  following a link and bounded (`events.jsonl` at 2 MiB), and then checked the
+  same way. Its log line names the `recording` instead of the `plan`.
 - **No replay while you record.** While `glove playwright record` runs, a
   replay is refused, since its input would end up in your recording (a
   `--dry-run` sends nothing, so it still runs). The other way round too: while
@@ -309,8 +333,12 @@ and runs only what `image/relay_policy.py` allows:
   so is every refusal, with its reason. The sidecar writes it and the agent can
   only read it. An event that can't be logged is refused.
 - **The output stays bounded.** Past 4 MiB the log moves to `log.1.jsonl`
-  (replacing the one before), and only the newest 20 replays' directories are
-  kept.
+  (replacing the one before), and only the newest `event_keep` replays'
+  directories are kept (20 by default, 5 to 1000). Each holds the plan (at
+  most 2 MiB), two 1280x800 PNGs (usually a few hundred KiB each, at most
+  about 3 MiB) and the result: at worst about 8 MiB a replay, so 160 MiB at
+  the default and 8 GiB at 1000. To keep frames for good, copy them out of
+  `/work/browser-events/`.
 - **Bounded.** One event at a time (a second one gets "busy"). The program gets
   no stdin, an environment of `DISPLAY` and a minimal `PATH`, and no proxy (it
   has nothing to reach). Its process group is killed at `event_timeout`.

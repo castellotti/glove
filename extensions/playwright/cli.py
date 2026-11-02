@@ -328,8 +328,8 @@ def _read_capped(argv: list[str], cap: int) -> bytes:
 
 def _collect(s: ExtSession, cid: str, rec: dict) -> None:
     """Copy the finished capture `cid` out of the sidecar, check it, write it to the
-    host (and browser-output/ with `to: work`), and remove it from the sidecar once
-    the host copy is safe."""
+    host (and browser-output/ with `to: work`), and once the host copy is safe, remove
+    it from the sidecar (but for what a replay needs, with `event_relay` and `to: work`)."""
     runtime, container = s.runtime, s.container("pw")
     if not capture.ID.fullmatch(cid):
         err.print(f"[yellow]skipped[/yellow] a capture with an unexpected name ({escape(capture.printable(cid[:40]))})")
@@ -362,8 +362,13 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
                       "write it (the browser sidecar can write there); the checked copy is the host's")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
-    subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
-                   capture_output=True, check=False)
+    # the sidecar keeps what `browser-event replay --recording` needs only for a recording the agent may read
+    # anyway (to: work), and only when it can replay (event_relay); otherwise, or if that fails, nothing
+    replayable = s.settings.get("event_relay") and rec["to"] == "work"
+    if not replayable or subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid],
+                                        capture_output=True, check=False).returncode != 0:
+        subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
+                       capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
     for p in saved:
         console.print(f"  {p}")
