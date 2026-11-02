@@ -85,7 +85,6 @@ def _keep() -> int:
 
 # replays' directories (each: the plan, at most PLAN_MAX, two frames and the result); `event_keep`
 KEEP = _keep()
-ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")  # a replay's (the recorder's capture ids look the same)
 
 COMMANDS = frozenset({"browser-event"})
 HOSTS = ()  # the program makes no network calls: no fence, no proxy
@@ -120,7 +119,8 @@ def _log(entry: dict) -> None:
 
 def _prune() -> None:
     """Leave room for one more replay: remove the oldest directories beyond KEEP - 1."""
-    ids = sorted(n for n in os.listdir(LOG_ROOT) if ID.fullmatch(n))
+    replay_id = program._recorder().ID  # a replay's id looks like a capture's
+    ids = sorted(n for n in os.listdir(LOG_ROOT) if replay_id.fullmatch(n))
     for rid in ids[:max(0, len(ids) - (KEEP - 1))]:
         shutil.rmtree(os.path.join(LOG_ROOT, rid), ignore_errors=True)
 

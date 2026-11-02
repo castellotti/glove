@@ -225,7 +225,7 @@ def test_the_output_stays_bounded(pol, monkeypatch):
         _stage(pol, f"p{i}.json")
         _prepare(pol, "replay", f"p{i}.json")
     kept = sorted(os.listdir(pol.LOG_ROOT))
-    replays = [n for n in kept if pol.ID.fullmatch(n)]
+    replays = [n for n in kept if pol.program._recorder().ID.fullmatch(n)]
     assert len(replays) == 3 and not set(old) & set(replays) and "keep-me" in kept
     assert "log.1.jsonl" in kept and os.path.getsize(os.path.join(pol.LOG_ROOT, "log.jsonl")) <= 2 * 200
 
@@ -243,13 +243,13 @@ def test_event_keep_is_bounded_in_the_policy_too(monkeypatch, value, want):
     assert want == _load("relay_policy").KEEP
 
 
-def test_the_policy_and_the_recorder_agree_on_ids():
+def test_the_recorder_and_the_host_agree_on_ids():
     from glove_ext.playwright import capture
 
     prog = _load("browser_event")
     prog.RECORDER = str(IMAGE / "glove-pw-capture")
-    # a capture's id: the policy's replays look the same, and `record` (on the host) checks it too
-    assert prog._recorder().ID.pattern == _load("relay_policy").ID.pattern == capture.ID.pattern.removeprefix("^")
+    # a capture's id (the policy's replays look the same): `record` (on the host) checks it too
+    assert prog._recorder().ID.pattern == capture.ID.pattern.removeprefix("^")
 
 
 def test_recordings_lists_them_and_is_logged(pol):
@@ -301,7 +301,7 @@ def test_a_recording_is_refused_unless_saved_whole_and_small(pol, tmp_path):
     assert "not JSON" in msgs["not json"] and "inside the display 200x200" in msgs["invalid"]
     log = _log(pol)
     assert len(log) == len(msgs) and all("refused" in e for e in log)
-    assert not [n for n in os.listdir(pol.LOG_ROOT) if pol.ID.fullmatch(n)]  # nothing ran
+    assert not [n for n in os.listdir(pol.LOG_ROOT) if pol.program._recorder().ID.fullmatch(n)]  # nothing ran
 
 
 def test_no_saved_recordings_at_all(pol):

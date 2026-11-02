@@ -60,6 +60,7 @@ import secrets
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -419,6 +420,22 @@ def _unreplayable(src: Path) -> str | None:
     return events.validate(plan) or events.fits(plan)
 
 
+def _is_dir(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:  # pruned meanwhile (another `record`)
+        return False
+
+
+def saved_ids() -> list[str]:
+    """The recordings kept in SAVED (directories, never links), oldest first; browser_event.py lists them."""
+    try:
+        names = os.listdir(SAVED)
+    except FileNotFoundError:
+        return []
+    return sorted(n for n in names if ID.fullmatch(n) and _is_dir(SAVED / n))
+
+
 def saved(cid: str) -> int:
     """`record` has the capture safe on the host: keep events.jsonl and meta.json in .saved/<cid>/ when a
     replay can use them (printing whether it did, and why not), remove the rest, and prune .saved/ to the
@@ -440,9 +457,9 @@ def saved(cid: str) -> int:
     print(f"kept for `browser-event replay --recording {cid}`" if why is None else f"not kept for replay: {why}")
     shutil.rmtree(src, ignore_errors=True)
     (ROOT / f".{cid}.log").unlink(missing_ok=True)
-    kept = sorted(p for p in SAVED.iterdir() if ID.fullmatch(p.name)) if SAVED.is_dir() else []
+    kept = saved_ids()
     for old in kept[:max(0, len(kept) - SAVED_KEEP)]:
-        shutil.rmtree(old, ignore_errors=True)
+        shutil.rmtree(SAVED / old, ignore_errors=True)
     return 0
 
 

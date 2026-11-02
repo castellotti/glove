@@ -49,7 +49,6 @@ import importlib.util
 import json
 import math
 import os
-import stat
 import sys
 import time
 
@@ -176,22 +175,12 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
-def _is_dir(path) -> bool:
-    try:
-        return stat.S_ISDIR(path.lstat().st_mode)
-    except OSError:  # pruned meanwhile (another `record`)
-        return False
-
-
 def recordings() -> int:
-    rec, out = _recorder(), {"recordings": []}
+    rec = _recorder()
     try:
-        names = os.listdir(rec.SAVED)
-    except FileNotFoundError:
-        names = []
+        out = {"recordings": rec.saved_ids()}
     except OSError as e:
-        names, out["error"] = [], f"{rec.SAVED}: {e.strerror}"
-    out["recordings"] = sorted(n for n in names if rec.ID.fullmatch(n) and _is_dir(rec.SAVED / n))
+        out = {"recordings": [], "error": f"{rec.SAVED}: {e.strerror}"}
     print(json.dumps(out))
     return 1 if "error" in out else 0
 

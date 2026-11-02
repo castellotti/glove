@@ -367,18 +367,19 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
     # the sidecar keeps what `browser-event replay --recording` needs only for a recording the agent can read
     # anyway (written to browser-output/), and only when it can replay (event_relay); otherwise, or if that
     # fails, nothing
-    copy = None
+    note = None  # `saved`'s output, when it ran
     if s.settings.get("event_relay") and in_work:
-        copy = subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid],
-                              capture_output=True, text=True, check=False)
-    if copy is None or copy.returncode != 0:
+        r = subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid], capture_output=True, text=True,
+                           check=False)
+        note = r.stdout.strip() if r.returncode == 0 else None
+    if note is None:
         subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
                        capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
     for p in saved:
         console.print(f"  {p}")
-    if copy is not None and copy.returncode == 0 and copy.stdout.strip():
-        console.print(f"  [dim]{escape(capture.printable(copy.stdout.strip()[:300]))}[/dim]")
+    if note:
+        console.print(f"  [dim]{escape(capture.printable(note[:300]))}[/dim]")
 
 
 @app.command("status")
