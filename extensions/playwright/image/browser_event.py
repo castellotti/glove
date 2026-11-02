@@ -22,7 +22,9 @@ with the argv relay_policy.py built; the agent never picks its arguments.
 
 A plan (v1) is a timed input sequence in the recorder's own `events.jsonl`
 shape (`glove playwright record`), so a recording replays as it is (one
-longer than the event timeout allows must be split):
+longer than the event timeout allows must be split; `from_recording` builds
+one, and the recorder keeps a recording for `--recording` only if it passes
+`validate` and `fits`):
 
     {"v": 1, "display": [w, h],
      "events": [{"t": ms, "type": "move|down|up|wheel", "x": X, "y": Y, "button": B}, …]}
@@ -54,6 +56,9 @@ import time
 RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png(), SAVED
 SEEN_AT = "/work/browser-events"  # the `browser-events` output, as the harness mounts it
 MAX_EVENTS = 10_000
+TIMEOUT_S = int(os.environ.get("PW_EVENT_TIMEOUT", "120"))  # relayd's --timeout (glove-pw-start)
+MARGIN_S = 10  # what a replay needs besides its events (the display, two frames)
+ROW = ("t", "type", "x", "y", "button")  # what a recording's row keeps in a plan (the sidecar's output is hostile)
 MAX_SIDE = 1 << 14
 PRESS = (1, 2, 3, 8, 9)  # left, middle, right, back, forward
 BUTTONS = {"down": PRESS, "up": PRESS, "wheel": (4, 5, 6, 7), "move": None}
@@ -86,6 +91,25 @@ def validate(plan) -> str | None:
         if (allowed := BUTTONS[e["type"]]) is not None and e.get("button") not in allowed:
             return f"events[{i}]: a {e['type']} needs button {'1-3, 8 or 9' if allowed is PRESS else '4-7'}"
     return None
+
+
+def fits(plan) -> str | None:
+    """None when `plan` (a valid one) ends within the event timeout; otherwise why not."""
+    seconds = (plan["events"][-1]["t"] - plan["events"][0]["t"]) / 1000
+    if seconds > TIMEOUT_S - MARGIN_S:
+        return f"lasts {seconds:.0f} s: a replay must end within {TIMEOUT_S - MARGIN_S} s (event_timeout {TIMEOUT_S} s)"
+    return None
+
+
+def from_recording(meta: bytes, rows: bytes):
+    """The plan of a recording: {"v": 1, "display": meta.json's, "events": events.jsonl's rows, each cut
+    to ROW}, unchecked. ValueError when either isn't JSON."""
+    try:
+        meta, events = json.loads(meta), [json.loads(line) for line in rows.splitlines() if line.strip()]
+    except RecursionError:
+        raise ValueError("nested too deeply") from None
+    events = [{k: e[k] for k in ROW if k in e} if isinstance(e, dict) else e for e in events]
+    return {"v": 1, "display": meta.get("display") if isinstance(meta, dict) else None, "events": events}
 
 
 def create(path: str, data: bytes) -> None:
@@ -152,15 +176,22 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
+def _is_dir(path) -> bool:
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:  # pruned meanwhile (another `record`)
+        return False
+
+
 def recordings() -> int:
     rec, out = _recorder(), {"recordings": []}
     try:
-        out["recordings"] = sorted(p.name for p in rec.SAVED.iterdir()
-                                   if rec.ID.fullmatch(p.name) and stat.S_ISDIR(p.lstat().st_mode))
+        names = os.listdir(rec.SAVED)
     except FileNotFoundError:
-        pass
+        names = []
     except OSError as e:
-        out["error"] = f"{rec.SAVED}: {e.strerror}"
+        names, out["error"] = [], f"{rec.SAVED}: {e.strerror}"
+    out["recordings"] = sorted(n for n in names if rec.ID.fullmatch(n) and _is_dir(rec.SAVED / n))
     print(json.dumps(out))
     return 1 if "error" in out else 0
 

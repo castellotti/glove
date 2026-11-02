@@ -26,8 +26,8 @@ The agent sends an event with the `browser-event` shell command:
       `replay_while_recording` allows it, never the agent.
       With --recording, the plan is built from a saved recording instead (one
       the agent may read anyway: `record` keeps them only with event_relay and
-      `to: work`): the recorder's SAVED/ID/events.jsonl (at most PLAN_MAX
-      bytes) as its events, each row cut to ROW, and meta.json's display, both
+      `to: work`): the recorder's SAVED/ID/events.jsonl (at most its SAVED_MAX
+      bytes) as its events, each row cut to browser_event.py's ROW, and meta.json's display, both
       read without following a link (the agent can't write there). From then on it is
       the same: one validator, the timeout, the log, the replay's plan.json.
 
@@ -69,17 +69,23 @@ CHANNEL = "/run/glove/browser-event"
 LOG_ROOT = "/run/glove-output/browser-events"  # the `browser-events` output, as core binds it here
 DISPLAY = ":1"
 PROGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_event.py")
-TIMEOUT_S = int(os.environ.get("PW_EVENT_TIMEOUT", "120"))  # relayd's --timeout (glove-pw-start)
-MARGIN_S = 10  # what a replay needs besides its events (the display, two frames)
 PLAN_MAX = 2 * 1024 * 1024
 PLAN_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\.json\Z")
 WHILE_RECORDING = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # the session's, never the agent's
 LOG_MAX = 4 * 1024 * 1024
+
+
+def _keep() -> int:
+    """`event_keep` (hooks.py bounds it to 5-1000); 20 when it isn't an integer."""
+    try:
+        return min(max(int(os.environ.get("PW_EVENT_KEEP", "20")), 5), 1000)
+    except ValueError:
+        return 20
+
+
 # replays' directories (each: the plan, at most PLAN_MAX, two frames and the result); `event_keep`
-KEEP = int(os.environ.get("PW_EVENT_KEEP", "20"))
-ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")  # a replay's
-META_MAX = 64 * 1024
-ROW = ("t", "type", "x", "y", "button")  # what a recording's row keeps in a plan (the sidecar's output is hostile)
+KEEP = _keep()
+ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")  # a replay's (the recorder's capture ids look the same)
 
 COMMANDS = frozenset({"browser-event"})
 HOSTS = ()  # the program makes no network calls: no fence, no proxy
@@ -143,9 +149,12 @@ def _read(dfd: int, name: str, limit: int, what: str) -> bytes:
         os.close(fd)
 
 
-def _checked(plan, what: str) -> dict:
+def _checked(plan, what: str, split: str) -> dict:
+    """`plan`, when it is valid and ends within the timeout (`split`: how to shorten it)."""
     if (err := program.validate(plan)) is not None:
         raise Refused(f"{what}: {err}")
+    if (err := program.fits(plan)) is not None:
+        raise Refused(f"{what} {err}; {split}")
     return plan
 
 
@@ -162,9 +171,9 @@ def _take_plan(name: str) -> tuple[bytes, dict]:
         os.close(dfd)
     try:
         plan = json.loads(raw)
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         raise Refused(f"plan {name}: not JSON ({e})") from None
-    return raw, _checked(plan, f"plan {name}")
+    return raw, _checked(plan, f"plan {name}", "split it into shorter plans")
 
 
 def _from_recording(cid: str) -> tuple[bytes, dict]:
@@ -182,17 +191,16 @@ def _from_recording(cid: str) -> tuple[bytes, dict]:
     finally:
         os.close(root)
     try:
-        meta = _read(dfd, "meta.json", META_MAX, f"{what}: meta.json (not finished?)")
-        rows = _read(dfd, "events.jsonl", PLAN_MAX, f"{what}: events.jsonl")
+        meta = _read(dfd, "meta.json", rec.META_MAX, f"{what}: meta.json (not finished?)")
+        rows = _read(dfd, "events.jsonl", rec.SAVED_MAX, f"{what}: events.jsonl")
     finally:
         os.close(dfd)
     try:
-        meta, events = json.loads(meta), [json.loads(line) for line in rows.splitlines() if line.strip()]
+        plan = program.from_recording(meta, rows)
     except ValueError as e:
         raise Refused(f"{what}: not JSON ({e})") from None
-    events = [{k: e[k] for k in ROW if k in e} if isinstance(e, dict) else e for e in events]
-    plan = {"v": 1, "display": meta.get("display") if isinstance(meta, dict) else None, "events": events}
-    return json.dumps(plan, separators=(",", ":")).encode(), _checked(plan, what)
+    return json.dumps(plan, separators=(",", ":")).encode(), _checked(
+        plan, what, "copy its rows from browser-output/ into shorter plans in plans/")
 
 
 def prepare(req, env: dict[str, str]) -> list[str]:
@@ -242,10 +250,6 @@ def _prepare(event: str, args: list[str]) -> list[str]:
     else:
         kind, name = "plan", names[0]
         raw, plan = _take_plan(name)
-    seconds = (plan["events"][-1]["t"] - plan["events"][0]["t"]) / 1000
-    if seconds > TIMEOUT_S - MARGIN_S:
-        raise Refused(f"{kind} {name} lasts {seconds:.0f} s: a replay must end within {TIMEOUT_S - MARGIN_S} s "
-                      f"(event_timeout {TIMEOUT_S} s); split it into shorter plans")
     rid = time.strftime("%Y%m%d-%H%M%S", time.gmtime()) + "-" + secrets.token_hex(3)
     _log({"event": "replay", "id": rid, kind: name, "plan_sha256": hashlib.sha256(raw).hexdigest(),
           "events": len(plan["events"]), "dry_run": dry_run, "while_recording": recording})

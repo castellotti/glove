@@ -11,8 +11,11 @@ All notable changes to glove are documented here.
   agent copying its rows into `plans/`. With `event_relay` and
   `recording: {to: work}` (only recordings the agent may read anyway), once the
   host has its copy, `record` leaves the sidecar the recording's `events.jsonl`
-  and `meta.json` (in `/tmp/capture/.saved/<id>/`, the newest 20 whose events
-  fit a 2 MiB plan) instead of removing it all. The policy builds
+  and `meta.json` (in `/tmp/capture/.saved/<id>/`, the newest 20 that would
+  replay: at most 2 MiB, accepted by the plan validator, within the event
+  timeout) instead of removing it all, and says whether it kept it and why
+  not. Nothing is kept when the copy into `browser-output/` failed or was
+  refused. The policy builds
   `{"v": 1, "display", "events"}` from them (no links followed, each bounded,
   rows cut to a plan's fields) and runs it through the same
   validator, timeout, log and `plan.json` as a staged plan. `browser-event
@@ -22,7 +25,7 @@ All notable changes to glove are documented here.
   `log.jsonl` for the replay it just caused.
 - **playwright `event_keep`** (default 20, 5 to 1000): how many replays'
   directories `browser-events/` keeps (was a fixed 20). `glove check` refuses
-  other values.
+  other values, and the policy clamps them (20 if not a number).
 
 - **`openai-responses-compatible`**: an `llm` provider for servers that speak
   the OpenAI Responses API (`api: openai-responses`), for Pi. Some models

@@ -354,24 +354,31 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
         shutil.rmtree(state / capture.DIR / cid, ignore_errors=True)  # ours, never the sidecar's
         err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
         return
+    in_work = False
     if rec["to"] == "work":
         try:
             saved.append(capture.write(s.root / "browser-output", cap, private=False))
+            in_work = True
         except FileExistsError:  # ids are unguessable: glove didn't make it, and its files are unchecked
             err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already exists, and glove did not "
                       "write it (the browser sidecar can write there); the checked copy is the host's")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
-    # the sidecar keeps what `browser-event replay --recording` needs only for a recording the agent may read
-    # anyway (to: work), and only when it can replay (event_relay); otherwise, or if that fails, nothing
-    replayable = s.settings.get("event_relay") and rec["to"] == "work"
-    if not replayable or subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid],
-                                        capture_output=True, check=False).returncode != 0:
+    # the sidecar keeps what `browser-event replay --recording` needs only for a recording the agent can read
+    # anyway (written to browser-output/), and only when it can replay (event_relay); otherwise, or if that
+    # fails, nothing
+    copy = None
+    if s.settings.get("event_relay") and in_work:
+        copy = subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid],
+                              capture_output=True, text=True, check=False)
+    if copy is None or copy.returncode != 0:
         subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
                        capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
     for p in saved:
         console.print(f"  {p}")
+    if copy is not None and copy.returncode == 0 and copy.stdout.strip():
+        console.print(f"  [dim]{escape(capture.printable(copy.stdout.strip()[:300]))}[/dim]")
 
 
 @app.command("status")

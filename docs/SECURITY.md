@@ -457,8 +457,9 @@ has no server-side switch for it). The controls:
     (out of the agent's reach). A recording's plan is built from the files
     the recorder keeps in the sidecar (`/tmp/capture/.saved/`, which the agent
     can't reach), read without following links, bounded, and cut to the
-    fields a plan has. Only recordings with `to: work` are kept there, so
-    `--recording` shows the agent nothing it couldn't already read;
+    fields a plan has. Only recordings with `to: work` whose copy into
+    `browser-output/` succeeded are kept there, so `--recording` shows the
+    agent nothing it couldn't already read;
   - one event at a time, killed at `event_timeout`, with no network (no proxy:
     there is nothing for it to reach);
   - a replay and the operator's recorder exclude each other (claimed under one

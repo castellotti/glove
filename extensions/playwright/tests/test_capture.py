@@ -239,6 +239,7 @@ def test_summary_and_titles_are_printable():
     (True, "work", 2, ["saved", "rm"]),       # `saved` failed (e.g. an older image): remove it all
     (True, "session", 0, ["rm"]),             # the agent may not read it: nothing kept
     (False, "work", 0, ["rm"]),               # nothing could replay it
+    (True, "planted", 0, ["rm"]),             # browser-output/ refused it: the agent can't read it anyway
 ])
 def test_record_keeps_a_replayable_copy_only_with_event_relay_and_to_work(tmp_path, monkeypatch, event_relay, to,
                                                                           saved_rc, want):
@@ -247,7 +248,7 @@ def test_record_keeps_a_replayable_copy_only_with_event_relay_and_to_work(tmp_pa
 
     def run(argv, **_kw):
         ran.append("saved" if "saved" in argv else "rm" if "rm" in argv else argv)
-        return type("R", (), {"returncode": saved_rc})()
+        return type("R", (), {"returncode": saved_rc, "stdout": "kept"})()
 
     monkeypatch.setattr(cli, "_exec", lambda *a: CID)
     monkeypatch.setattr(cli, "_read_capped", lambda *a: _tar(_good()))
@@ -256,5 +257,7 @@ def test_record_keeps_a_replayable_copy_only_with_event_relay_and_to_work(tmp_pa
         (tmp_path / d).mkdir()
     s = type("S", (), {"runtime": "docker", "settings": {"event_relay": event_relay}, "root": tmp_path,
                        "container": lambda self, n: f"glove-s-{n}", "state_dir": lambda self: tmp_path / "st"})()
-    cli._collect(s, CID, {"to": to})
+    if to == "planted":  # the sidecar can write browser-output/: glove refuses what it didn't write
+        (tmp_path / "browser-output" / capture.DIR / CID).mkdir(parents=True)
+    cli._collect(s, CID, {"to": "work" if to == "planted" else to})
     assert ran == want

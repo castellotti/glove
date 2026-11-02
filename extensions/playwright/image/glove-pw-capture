@@ -36,10 +36,11 @@ Output, on the sidecar's tmpfs, which `glove playwright record` copies out
 
 With `event_relay` and `to: work`, once the host has its copy, `record` runs
 `saved`: it keeps the capture's events.jsonl and meta.json in
-/tmp/capture/.saved/<id>/ (if the events fit a replay's plan, at most
-SAVED_MAX bytes; the newest SAVED_KEEP captures, apart from `event_keep`),
-where `browser-event replay --recording <id>` reads them, and removes the
-rest.
+/tmp/capture/.saved/<id>/ (if they replay: at most SAVED_MAX and META_MAX
+bytes, a plan browser_event.py accepts that ends within the event timeout;
+the newest SAVED_KEEP captures, apart from `event_keep`), where
+`browser-event replay --recording <id>` reads them, and removes the rest. It
+prints whether it kept them, and why not.
 
 `t` is ms since arm when the event was read; `xt` is the X server's own
 timestamp of the input (ms, wrapping at 2^32), which a busy recorder can't skew.
@@ -51,6 +52,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import importlib.util
 import json
 import os
 import re
@@ -72,7 +74,9 @@ REPLAY = ROOT / ".replay"  # "<pid>" while a replay sends input (browser_event.p
 OVERLAP_OK = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # playwright `replay_while_recording`
 SAVED = ROOT / ".saved"  # relay_policy.py reads it (through browser_event.py)
 SAVED_KEEP = 20
-SAVED_MAX = 2 * 1024 * 1024  # relay_policy.py's PLAN_MAX: a longer one can't be replayed
+SAVED_MAX = 2 * 1024 * 1024  # events.jsonl; relay_policy.py reads at most this much
+META_MAX = 64 * 1024  # meta.json; likewise
+EVENTS_PROGRAM = "/opt/glove/events/browser_event.py"  # its plan checks: what `saved` keeps, a replay accepts
 ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")
 MAX_SHOTS = 400
 MAX_BYTES = 150 * 1024 * 1024
@@ -397,20 +401,43 @@ def stop(reason: str) -> int:
     return 1
 
 
+def _unreplayable(src: Path) -> str | None:
+    """None when the capture in `src` replays (`browser-event replay --recording`, which checks the same);
+    otherwise why not."""
+    if not (src / "meta.json").is_file():
+        return "unfinished (no meta.json)"
+    for name, limit in (("events.jsonl", SAVED_MAX), ("meta.json", META_MAX)):
+        if (size := (src / name).stat().st_size) > limit:
+            return f"{name} is {size} bytes (at most {limit})"
+    spec = importlib.util.spec_from_file_location("browser_event", EVENTS_PROGRAM)
+    events = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(events)
+    try:
+        plan = events.from_recording((src / "meta.json").read_bytes(), (src / "events.jsonl").read_bytes())
+    except ValueError as e:
+        return f"not JSON ({e})"
+    return events.validate(plan) or events.fits(plan)
+
+
 def saved(cid: str) -> int:
     """`record` has the capture safe on the host: keep events.jsonl and meta.json in .saved/<cid>/ when a
-    replay could use them, remove the rest, and prune .saved/ to the newest SAVED_KEEP."""
+    replay can use them (printing whether it did, and why not), remove the rest, and prune .saved/ to the
+    newest SAVED_KEEP."""
     if not ID.fullmatch(cid):
         return 1
-    src = ROOT / cid
+    src, made = ROOT / cid, False
     try:
-        if (src / "meta.json").is_file() and (src / "events.jsonl").stat().st_size <= SAVED_MAX:
+        if (why := _unreplayable(src)) is None:
             SAVED.mkdir(mode=0o700, exist_ok=True)
             (SAVED / cid).mkdir(mode=0o700)
+            made = True
             for name in ("events.jsonl", "meta.json"):
                 os.replace(src / name, SAVED / cid / name)
-    except OSError:  # e.g. the tmpfs is full: never a half-kept recording
-        shutil.rmtree(SAVED / cid, ignore_errors=True)
+    except OSError as e:  # e.g. the tmpfs is full: never a half-kept recording (and only ever our own)
+        why = e.strerror or str(e)
+        if made:
+            shutil.rmtree(SAVED / cid, ignore_errors=True)
+    print(f"kept for `browser-event replay --recording {cid}`" if why is None else f"not kept for replay: {why}")
     shutil.rmtree(src, ignore_errors=True)
     (ROOT / f".{cid}.log").unlink(missing_ok=True)
     kept = sorted(p for p in SAVED.iterdir() if ID.fullmatch(p.name)) if SAVED.is_dir() else []

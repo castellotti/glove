@@ -176,9 +176,11 @@ def test_a_plan_must_be_a_small_regular_json_file(pol):
     assert "not JSON" in _prepare(pol, "replay", "bad.json")[0]
     _stage(pol, "v2.json", {**PLAN, "v": 2})
     assert "not a v1 plan" in _prepare(pol, "replay", "v2.json")[0]
-    long = {**PLAN, "events": [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.TIMEOUT_S}]}
+    long = {**PLAN, "events": [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.program.TIMEOUT_S}]}
     _stage(pol, "long.json", long)
     assert "must end within" in _prepare(pol, "replay", "long.json")[0]
+    _stage(pol, "deep.json", "[" * 100_000 + "]" * 100_000)
+    assert "not JSON" in _prepare(pol, "replay", "deep.json")[0]  # RecursionError, refused
     assert all("refused" in e for e in _log(pol))  # nothing refused is logged as run
 
 
@@ -233,6 +235,21 @@ def test_event_keep_reaches_the_policy(monkeypatch):
     assert _load("relay_policy").KEEP == 200
     monkeypatch.delenv("PW_EVENT_KEEP")
     assert _load("relay_policy").KEEP == 20
+
+
+@pytest.mark.parametrize(("value", "want"), [("0", 5), ("1", 5), ("99999", 1000), ("lots", 20)])
+def test_event_keep_is_bounded_in_the_policy_too(monkeypatch, value, want):
+    monkeypatch.setenv("PW_EVENT_KEEP", value)  # an image run by hand: never prune every replay, never fail
+    assert want == _load("relay_policy").KEEP
+
+
+def test_the_policy_and_the_recorder_agree_on_ids():
+    from glove_ext.playwright import capture
+
+    prog = _load("browser_event")
+    prog.RECORDER = str(IMAGE / "glove-pw-capture")
+    # a capture's id: the policy's replays look the same, and `record` (on the host) checks it too
+    assert prog._recorder().ID.pattern == _load("relay_policy").ID.pattern == capture.ID.pattern.removeprefix("^")
 
 
 def test_recordings_lists_them_and_is_logged(pol):
@@ -293,9 +310,15 @@ def test_no_saved_recordings_at_all(pol):
 
 
 def test_a_recording_too_long_for_the_timeout_is_refused(pol):
-    _save(pol, events=[EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.TIMEOUT_S}])
+    _save(pol, events=[EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.program.TIMEOUT_S}])
     msg, _ = _prepare(pol, "replay", "--recording", CID)
-    assert msg.startswith(f"recording {CID} lasts") and "split it" in msg
+    assert msg.startswith(f"recording {CID} lasts") and "copy its rows from browser-output/" in msg
+
+
+def test_a_deeply_nested_recording_is_refused(pol):
+    d = _save(pol)
+    (d / "events.jsonl").write_text("[" * 100_000 + "]" * 100_000 + "\n")
+    assert "nested too deeply" in _prepare(pol, "replay", "--recording", CID)[0]
 
 
 def test_no_recording_replays_while_the_operator_records(pol, monkeypatch):
@@ -373,6 +396,7 @@ def _with_recorder(prog, tmp_path, monkeypatch, recording=False):
     """browser_event's recorder module (its wall(), png() and claim), on a fake /tmp/capture."""
     monkeypatch.setattr(prog, "RECORDER", str(IMAGE / "glove-pw-capture"))
     rec = prog._recorder()
+    monkeypatch.setattr(rec, "EVENTS_PROGRAM", str(IMAGE / "browser_event.py"))
     root = tmp_path / "capture"
     for name, path in (("ROOT", root), ("LOCK", root / ".lock"), ("REPLAY", root / ".replay"),
                        ("CURRENT", root / ".current"), ("SAVED", root / ".saved")):
@@ -510,35 +534,46 @@ def test_recordings_lists_the_saved_ones(tmp_path, monkeypatch, capsys):
 
 # --- what the recorder keeps once `record` has saved a capture -------------------------------------------------
 
-def _capture(rec, cid, events_size=100):
+def _capture(rec, cid, events=EVENTS):
     d = rec.ROOT / cid
     (d / "shots").mkdir(parents=True)
     (d / "shots" / "1-arm.png").write_bytes(b"png")
-    (d / "events.jsonl").write_text("x" * events_size)
+    (d / "events.jsonl").write_text(events if isinstance(events, str) else
+                                    "".join(json.dumps(e) + "\n" for e in events))
     (d / "windows.jsonl").write_text("{}\n")
-    (d / "meta.json").write_text("{}")
+    (d / "meta.json").write_text(json.dumps({"display": PLAN["display"]}))
     (rec.ROOT / f".{cid}.log").write_text("")
     return d
 
 
-def test_saved_keeps_what_a_replay_needs(tmp_path, monkeypatch):
+def test_saved_keeps_what_a_replay_needs(tmp_path, monkeypatch, capsys):
     prog = _load("browser_event")
     rec = _with_recorder(prog, tmp_path, monkeypatch)
     _capture(rec, CID)
     assert rec.saved(CID) == 0
+    assert capsys.readouterr().out.startswith(f"kept for `browser-event replay --recording {CID}`")
     assert sorted(os.listdir(rec.ROOT)) == [".saved"]  # the capture and its log are gone
     assert sorted(p.name for p in (rec.SAVED / CID).iterdir()) == ["events.jsonl", "meta.json"]
     assert rec.saved("../x") == 1
 
 
-def test_saved_keeps_nothing_a_replay_could_not_use(tmp_path, monkeypatch):
+def test_saved_keeps_nothing_a_replay_would_refuse(tmp_path, monkeypatch, capsys):
     prog = _load("browser_event")
     rec = _with_recorder(prog, tmp_path, monkeypatch)
-    _capture(rec, CID, events_size=rec.SAVED_MAX + 1)
-    rec.saved(CID)
-    unfinished = _capture(rec, "20261020-101741-000001")
-    (unfinished / "meta.json").unlink()
-    rec.saved("20261020-101741-000001")
+    too_long = [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * prog.TIMEOUT_S}]
+    whys = []
+    for i, (events, why) in enumerate([("x" * (rec.SAVED_MAX + 1), "bytes (at most"),
+                                       ("", "events: want a list of 1 to"),
+                                       ([EVENTS[0]] * (prog.MAX_EVENTS + 1), "events: want a list of 1 to"),
+                                       (too_long, "must end within"), ("{\n", "not JSON"),
+                                       (EVENTS, "unfinished (no meta.json)")]):
+        cid = f"20261020-101741-00000{i}"
+        d = _capture(rec, cid, events)
+        if why.startswith("unfinished"):
+            (d / "meta.json").unlink()
+        assert rec.saved(cid) == 0
+        whys.append((why, capsys.readouterr().out))
+    assert all(out.startswith("not kept for replay: ") and why in out for why, out in whys), whys
     assert os.listdir(rec.ROOT) == []
 
 
@@ -556,6 +591,16 @@ def test_saved_never_keeps_half_a_recording(tmp_path, monkeypatch):
     monkeypatch.setattr(rec.os, "replace", full)
     assert rec.saved(CID) == 0
     assert not (rec.SAVED / CID).exists() and not (rec.ROOT / CID).exists()
+
+
+def test_saved_never_removes_a_copy_it_did_not_make(tmp_path, monkeypatch, capsys):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    _capture(rec, CID)
+    (rec.SAVED / CID).mkdir(parents=True)  # another `record` of the same capture kept it first
+    (rec.SAVED / CID / "events.jsonl").write_text("theirs")
+    assert rec.saved(CID) == 0 and "not kept for replay" in capsys.readouterr().out
+    assert (rec.SAVED / CID / "events.jsonl").read_text() == "theirs"
 
 
 def test_saved_keeps_the_newest(tmp_path, monkeypatch):
