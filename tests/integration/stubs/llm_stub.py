@@ -125,21 +125,24 @@ class H(BaseHTTPRequestHandler):
     def _responses(self, req):
         """The Responses API: an optional reasoning item, then the reply (a
         message) or the tool call (a function_call); streamed as a server
-        does it (each item `added` empty, filled by deltas, whole at `done`),
-        or one JSON response with `stream: false`. Ids are per request."""
+        does it (each item `added` empty, its part `added`, filled by deltas,
+        whole at `done`), or one JSON response with `stream: false`. Ids are
+        per request. A top-level `instructions` is the system prompt."""
         tools = [t.get("name") for t in req.get("tools") or [] if t.get("type") == "function"]
         effort = (req.get("reasoning") or {}).get("effort")
         print(f"stub: responses model={req.get('model')} stream={req.get('stream')} reasoning={effort} "
               f"tools={','.join(tools)}", flush=True)
-        reply, call = answer([_chat_message(i) for i in req.get("input") or []], tools)
+        system = [{"role": "system", "content": req["instructions"]}] if req.get("instructions") else []
+        reply, call = answer(system + [_chat_message(i) for i in req.get("input") or []], tools)
         n = next(RESPONSE_IDS)
         # (item, its empty form for `added`, the delta events that fill it)
         items = []
         if effort and effort != "none":
             thought = f"stub reasoning at {effort}"
-            summary = [{"type": "summary_text", "text": thought}]
-            items.append(({"type": "reasoning", "id": f"rs_{n}", "summary": summary}, {"summary": []},
-                          [("response.reasoning_summary_text.delta", {"summary_index": 0, "delta": thought})]))
+            part = {"type": "summary_text", "text": thought}
+            items.append(({"type": "reasoning", "id": f"rs_{n}", "summary": [part]}, {"summary": []},
+                          _text_events("response.reasoning_summary_part", "response.reasoning_summary_text",
+                                       {"summary_index": 0}, part)))
         if call:
             fn = call["function"]
             items.append(({"type": "function_call", "id": f"fc_{n}", "call_id": call["id"], "name": fn["name"],
@@ -148,10 +151,11 @@ class H(BaseHTTPRequestHandler):
                           [("response.function_call_arguments.delta", {"delta": fn["arguments"]}),
                            ("response.function_call_arguments.done", {"arguments": fn["arguments"]})]))
         else:
+            part = {"type": "output_text", "text": reply, "annotations": []}
             items.append(({"type": "message", "id": f"msg_{n}", "role": "assistant", "status": "completed",
-                           "content": [{"type": "output_text", "text": reply, "annotations": []}]},
+                           "content": [part]},
                           {"content": [], "status": "in_progress"},
-                          [("response.output_text.delta", {"content_index": 0, "delta": reply})]))
+                          _text_events("response.content_part", "response.output_text", {"content_index": 0}, part)))
         response = {"id": f"resp_{n}", "object": "response", "status": "completed", "model": MODEL,
                     "output": [item for item, _, _ in items],
                     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
@@ -168,6 +172,13 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         for e in events:
             self.wfile.write(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode())
+
+
+def _text_events(part_event: str, text_event: str, at: dict, part: dict) -> list[tuple[str, dict]]:
+    """A text part's events: the part `added` empty, one delta, the text and the part `done`."""
+    text = part["text"]
+    return [(f"{part_event}.added", {**at, "part": {**part, "text": ""}}), (f"{text_event}.delta", {**at, "delta": text}),
+            (f"{text_event}.done", {**at, "text": text}), (f"{part_event}.done", {**at, "part": part})]
 
 
 def answer(msgs: list[dict], tools: list[str]) -> tuple[str, dict | None]:

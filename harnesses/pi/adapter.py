@@ -137,11 +137,16 @@ def describe(actx: AdapterContext) -> list[str]:
             *(f"mcp server: {n}" for n in _mcp_servers(actx))]
 
 
-def _check_compat(compat: Any) -> None:
+def _check_compat(compat: Any, api: str) -> None:
     """Refuse a `compat` value Pi's schema would refuse (it would then load no
-    provider at all, and say only "No API key found for the selected model")."""
+    provider at all, and say only "No API key found for the selected model").
+    Those keys are openai-completions': Pi loads them on a Responses model (its
+    schema merges every API's) and ignores them, so they are refused there."""
     if not isinstance(compat, dict):
         raise ConfigError("pi harness_config.model: `compat` must be a mapping")
+    if api == "openai-responses" and (ignored := sorted(compat.keys() & COMPAT_VALUES.keys())):
+        raise ConfigError(f"pi harness_config.model: compat {ignored} are chat/completions keys; "
+                          "openai-responses ignores them")
     for key, allowed in COMPAT_VALUES.items():
         if key in compat and compat[key] not in allowed:
             raise ConfigError(f"pi harness_config.model: compat.{key} {compat[key]!r} is not one of {sorted(allowed)}")
@@ -227,7 +232,7 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
     model_overrides = actx.harness_config.get("model", {})
     if model_overrides:
         if "compat" in model_overrides:
-            _check_compat(model_overrides["compat"])
+            _check_compat(model_overrides["compat"], model.api)
         models[0].update(model_overrides)
 
     written: list[Path] = []

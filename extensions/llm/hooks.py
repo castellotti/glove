@@ -106,13 +106,18 @@ def _auth(s: dict[str, Any], cat: dict[str, Any], harness: str) -> tuple[dict[st
     oauth = auth.get("oauth")
     if not oauth:
         raise LlmError(f"llm: provider {cat['name']!r} takes no `auth: oauth` (an API key only)")
-    if harness not in (oauth.get("harnesses") or []):
-        raise LlmError(f"llm: an {cat['name']} subscription token (`auth: oauth`) is for "
-                       f"{', '.join(oauth.get('harnesses') or [])} only, not harness {harness!r}; use an API key")
+    _require_harness(oauth.get("harnesses") or [], harness,
+                     f"an {cat['name']} subscription token (`auth: oauth`)", "; use an API key")
     if not s.get("api_key"):
         raise LlmError("llm: `auth: oauth` needs `api_key: keychain:<service>` holding the token")
     headers.update(_headers(oauth))
     return {**auth, **oauth}, headers
+
+
+def _require_harness(allowed: list[str], harness: str, what: str, hint: str = "") -> None:
+    """Refuse `harness` unless `allowed` (a catalog `harnesses:`) names it."""
+    if harness not in allowed:
+        raise LlmError(f"llm: {what} is for harness {', '.join(allowed) or '(none)'} only, not {harness!r}{hint}")
 
 
 def _split_endpoint(endpoint: str, default_port: int | None) -> tuple[str, int, str | None, str | None]:
@@ -132,15 +137,15 @@ def _split_endpoint(endpoint: str, default_port: int | None) -> tuple[str, int, 
 
 
 def _base_path(path: str | None, cat: dict[str, Any]) -> str:
-    """The endpoint URL's path, else the catalog's. The Responses API's must
-    end in the catalog's (`/v1`): the harness posts under it, the model list is
-    under it minus that, so `…/openai` would pass `glove check` and fail every turn."""
+    """The endpoint URL's path, else the catalog's. It must end in the catalog's
+    (`/v1`): the harness posts under it, the model list is under it minus that,
+    so `…/openai` would pass `glove check` and fail every turn."""
     want = cat.get("base_path", "")
     if path is None:
         return want
-    if cat["api"] == "openai-responses" and not path.endswith(want):
-        raise LlmError(f"llm: provider {cat['name']!r} takes the full API prefix as the endpoint, "
-                       f"ending in {want!r} (e.g. …{path}{want}), not {path!r}")
+    if not path.endswith(want):
+        raise LlmError(f"llm: provider {cat['name']!r} takes the full API prefix as the endpoint URL's path, "
+                       f"ending in {want!r} (<prefix>{want}), not {path!r}")
     return path
 
 
@@ -228,9 +233,8 @@ def _capabilities(settings: dict[str, Any], cat: dict[str, Any]) -> dict[str, An
 def contribute(ctx: HookContext) -> dict[str, Any]:
     s = ctx.settings
     cat = load_provider(s["provider"])
-    if cat.get("harnesses") and ctx.harness not in cat["harnesses"]:
-        raise LlmError(f"llm: provider {cat['name']!r} ({cat['api']}) is for harness "
-                       f"{', '.join(cat['harnesses'])} only, not {ctx.harness!r}")
+    if "harnesses" in cat:  # else any harness
+        _require_harness(cat["harnesses"] or [], ctx.harness, f"provider {cat['name']!r} ({cat['api']})")
     auth, headers = _auth(s, cat, ctx.harness)
     if auth.get("required") and not s.get("api_key"):
         raise LlmError(f"llm: provider {cat['name']!r} needs `api_key: keychain:<service>`")

@@ -226,7 +226,7 @@ def main(directory: str, stub_log: str | None) -> int:
         print("== a turn")
         out = s.ask("Say hello.")
         check("a turn answers through llm-auth", "hello from the glove" in out, out[-300:])
-        if responses:  # built from the deltas, not doubled by the `added` or `done` item
+        if responses:  # `pi -p` prints the final text once: the `done` item, not it plus the deltas
             check("the reply arrives once", out.count("hello from the glove") == 1, out[-300:])
 
         if responses:

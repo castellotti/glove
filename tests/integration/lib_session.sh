@@ -53,7 +53,9 @@ start_stub() {
 }
 
 launch_stub() {
-  uv run --quiet --no-project python "$ROOT/tests/integration/stubs/${3:-$STUB_PY}" "$1" > "$2" 2>&1 &
+  local py="${3:-$STUB_PY}"
+  [ -n "$py" ] || { echo "launch_stub: no stub to run (STUB_PY is empty: stub_llm's variant has none, or it was not called)" >&2; return 1; }
+  uv run --quiet --no-project python "$ROOT/tests/integration/stubs/$py" "$1" > "$2" 2>&1 &
   STUB=$!; disown "$STUB"
 }
 
@@ -90,7 +92,7 @@ new_session() {
 #     claude-code-oauth: Claude Code with a subscription token for the
 #     provider itself (no STUB_PY: the driver stands in for it).
 #     pi-responses: Pi over the OpenAI Responses API (openai-responses-compatible),
-#     a reasoning model, against the same stub.
+#     a reasoning model (the catalog's default), against the same stub.
 stub_llm() {
   export GLOVE_TEST_LLM_KEY=sk-test-llm-inject-1
   local key='api_key: "env:GLOVE_TEST_LLM_KEY"'
@@ -99,7 +101,7 @@ stub_llm() {
     LLM="{provider: anthropic, auth: oauth, model: claude-stub, $key}"
   elif [ "$1" = pi-responses ]; then
     STUB_PY=llm_stub.py
-    LLM="{provider: openai-responses-compatible, location: host, endpoint: \"http://127.0.0.1:$2/v1\", model: auto, capabilities: {reasoning: true}, $key}"
+    LLM="{provider: openai-responses-compatible, location: host, endpoint: \"http://127.0.0.1:$2/v1\", model: auto, $key}"
   elif [ "$1" = claude-code ]; then
     STUB_PY=anthropic_stub.py
     LLM="{provider: anthropic-compatible, location: host, endpoint: \"127.0.0.1:$2\", model: claude-stub, $key}"
