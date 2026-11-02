@@ -13,7 +13,8 @@ extensions:
                                  # | openai-responses-compatible | anthropic-compatible | llama.cpp | ollama
                                  # | lmstudio | openai | anthropic | mistral | openrouter
     location: lan              # host (this Mac) | lan | internet
-    endpoint: <host>:<port>    # host/lan; cloud providers use the catalog host
+    endpoint: <host>:<port>    # host/lan; cloud providers use the catalog host. A URL's path is
+                               # the full API prefix, ending in the catalog's (…/openai/v1)
     model: auto                # or an id
     capabilities: auto         # or explicit keys, e.g. {vision: true}; probes fill the rest
     api_key: keychain:<service>  # optional for local servers; a reference, never the key
@@ -182,15 +183,22 @@ extensions:
   `…/openai/v1/responses` and `…/openai/v1/models`. An endpoint path that
   doesn't end in `/v1` (e.g. `…/openai`) is refused: the model list would
   still answer, so `glove check` would pass, but every turn would post to
-  `…/openai/responses`.
+  `…/openai/responses`. The same holds for every provider whose catalog
+  names a `base_path` (`openai-compatible` posts to `<endpoint>/chat/completions`).
 - llm-auth allows `POST <prefix>/responses` and the model list, and nothing
   else (`chat/completions` included). Pi 1.4.0 calls only `responses.create`
   (streamed, `store: false`).
 - **Set `capabilities:` explicitly.** There is no capability probe: a gateway
   lists many models, and none of them reports its window in a way glove can
-  match to the model (else the catalog defaults apply).
+  match to the model (else the catalog defaults apply). The default is
+  `reasoning: true`, the reason to pick this provider; set
+  `capabilities: {reasoning: false}` for a model that refuses an effort.
 - Pi's `models.json` gets no `compat` block: pi-ai's defaults for this API
-  (no strict mode, no grammar tools) are what a gateway wants. A reasoning
+  (no strict mode, no grammar tools) are what a gateway wants. A
+  `harness_config.model.compat` override may set the Responses API's keys
+  (`supportsStrictMode`, …); the chat/completions keys glove checks
+  (`thinkingFormat`, `maxTokensField`) are refused, since Pi would load them
+  and ignore them. A reasoning
   model's `thinkingLevelMap` is the same as on chat/completions; `max`
   clamps to `xhigh`.
 

@@ -289,12 +289,21 @@ def test_the_responses_api_allows_only_responses_under_the_full_prefix():
             [["POST", f"{want}/responses"], ["GET", f"{want}/models"]]
 
 
+@pytest.mark.parametrize("provider", ["openai-responses-compatible", "openai-compatible", "ollama"])
 @pytest.mark.parametrize("endpoint", ["http://localhost:6655/openai", "http://localhost:6655/openai/v1x"])
-def test_a_responses_endpoint_must_be_the_full_api_prefix(endpoint):
+def test_an_endpoint_path_must_be_the_full_api_prefix(provider, endpoint):
     # …/openai would list models at …/openai/v1/models (glove check passes) and post to …/openai/responses
-    cat = hooks.load_provider("openai-responses-compatible")
-    with pytest.raises(hooks.LlmError, match="full API prefix"):
-        hooks.route({**RESPONSES, "endpoint": endpoint}, cat)
+    # (or …/openai/chat/completions): any catalog base_path, not one API's
+    cat = hooks.load_provider(provider)
+    with pytest.raises(hooks.LlmError, match="full API prefix") as e:
+        hooks.route({**RESPONSES, "provider": provider, "endpoint": endpoint}, cat)
+    assert "(<prefix>/v1)" in str(e.value)
+
+
+def test_an_empty_base_path_takes_any_endpoint_path():
+    cat = hooks.load_provider("anthropic-compatible")
+    r = hooks.route({"location": "host", "endpoint": "http://localhost:6655/anthropic"}, cat)
+    assert r["base_path"] == "/anthropic"
 
 
 def test_a_responses_session_goes_through_llm_auth_with_its_wire(tmp_path):
@@ -317,6 +326,18 @@ def test_only_pi_speaks_the_responses_api(tmp_path, harness):
     # refused at plan time (glove check), by the catalog's `harnesses:`
     with pytest.raises((ExtensionError, ValueError), match=f"is for harness pi only, not '{harness}'"):
         _plan(tmp_path, harness=harness, **RESPONSES)
+
+
+def test_an_oauth_block_without_harnesses_refuses_every_harness():
+    cat = {"name": "x", "auth": {"oauth": {"paths": []}}}
+    with pytest.raises(hooks.LlmError, match=r"is for harness \(none\) only, not 'pi'"):
+        hooks._auth({"auth": "oauth", "api_key": "env:K"}, cat, "pi")
+
+
+def test_the_responses_api_reasons_by_default(tmp_path):
+    # the reason to pick the provider: Pi sends a reasoning effort without `capabilities:`
+    plan, _, _ = _plan(tmp_path, **RESPONSES)
+    assert plan.model.reasoning is True
 
 
 def test_oauth_paths_join_the_allowlist_under_the_server_root():
@@ -390,6 +411,28 @@ def test_pi_models_json_for_the_responses_api(tmp_path):
     assert (m["id"], m["reasoning"], m["input"], m["contextWindow"], m["maxTokens"]) == \
         ("gpt-6-luna", True, ["text", "image"], 1050000, 128000)
     assert m["thinkingLevelMap"]["xhigh"] == "xhigh"
+
+
+def _responses_home(tmp_path, compat):
+    from glove.harnessconfig import render_home
+
+    plan, _, _ = _plan(tmp_path, **RESPONSES)
+    cfg = make_cfg(harness="pi", name="s")
+    cfg.harness_config = {"model": {"compat": compat}}
+    render_home(cfg, plan, tmp_path / "home")
+    return json.loads((tmp_path / "home/.pi/agent/models.json").read_text())["providers"]["glove"]["models"][0]
+
+
+@pytest.mark.parametrize("compat", [{"thinkingFormat": "openai"}, {"maxTokensField": "max_tokens"}])
+def test_pi_refuses_completions_compat_on_the_responses_api(tmp_path, compat):
+    # Pi would load a completions key on a Responses model and ignore it
+    with pytest.raises(ConfigError, match="openai-responses ignores them"):
+        _responses_home(tmp_path, compat)
+
+
+def test_pi_takes_any_other_compat_on_the_responses_api(tmp_path):
+    compat = {"supportsStrictMode": True, "aNewerKey": 1}
+    assert _responses_home(tmp_path, compat)["compat"] == compat
 
 
 # --- model: auto / capabilities: auto ---------------------------------------------------------
@@ -529,7 +572,7 @@ def test_generic_provider_without_max_model_len_keeps_the_default(tmp_path):
 
 
 def test_oauth_is_for_the_harnesses_the_catalog_names(tmp_path):
-    with pytest.raises(ExtensionError, match="for claude-code only, not harness 'pi'"):
+    with pytest.raises(ExtensionError, match="for harness claude-code only, not 'pi'; use an API key"):
         _plan(tmp_path, **ANTHROPIC, auth="oauth")
 
 

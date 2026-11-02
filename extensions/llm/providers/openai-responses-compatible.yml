@@ -10,6 +10,8 @@
 #
 # No capability probe: a gateway lists many models, and `$.data[0]` would be
 # another model's. Set `capabilities:` explicitly (else the defaults below).
+# `reasoning: true` by default, since a reasoning effort is the reason to pick this
+# entry; set `capabilities: {reasoning: false}` for a model that refuses one.
 name: openai-responses-compatible
 api: openai-responses
 harnesses: [pi]  # Claude Code and Vibe do not speak this API
@@ -18,4 +20,4 @@ default_port: 8080
 locations: [host, lan, internet]
 auth: { header: Authorization, scheme: Bearer, required: false }
 models_endpoint: /v1/models
-defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: false }
+defaults: { vision: false, context_window: 32768, max_tokens: 8192, reasoning: true }

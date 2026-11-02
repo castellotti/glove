@@ -26,6 +26,20 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **`llm` review fixes for `openai-responses-compatible`.** An endpoint URL's
+  path must end in the catalog's `base_path` for every provider, not only the
+  Responses API: `openai-compatible` at `…/litellm` passed `glove check`, then
+  posted every turn to `…/litellm/chat/completions`. The refusal no longer
+  suggests the bad path plus `/v1`. One helper words both harness refusals (an
+  oauth block with no `harnesses:` still refuses every harness). `openai-responses-compatible`
+  defaults to `reasoning: true`, so Pi sends an effort without
+  `capabilities:` (a non-reasoning model needs `capabilities: {reasoning: false}`).
+  glove refuses the chat/completions `compat` keys it checks (`thinkingFormat`,
+  `maxTokensField`) on a Responses model, which ignores them. The llm stub
+  streams the `content_part`/`reasoning_summary_part` events a server sends
+  and reads a top-level `instructions`; `launch_stub` fails fast for a
+  variant with no host stub (`claude-code-oauth`).
+
 - **Session networks are /28 slices** of the session's /24 (were /27): room for
   16 networks of 14 addresses each, up from 8 of 29. The `corporate` template
   with its commented credentialed tools enabled (a relayed Claude Code plugin,
