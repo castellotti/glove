@@ -1,5 +1,5 @@
 """`playwright: {event_relay: true}`: the agent sends events to the browser
-sidecar (`browser-event status|replay`) over the `browser-event` relay channel.
+sidecar (`browser-event status|recordings|replay`) over the `browser-event` relay channel.
 The policy (image/relay_policy.py) against a fake channel, log and recording
 marker; the replay program (image/browser_event.py) against a fake display; and
 what the setting adds to the session."""
@@ -34,6 +34,7 @@ EVENTS = [
      "x": 700, "y": 420, "mask": 0},
 ]
 PLAN = {"v": 1, "display": [1280, 800], "events": EVENTS}
+CID = "20261020-101741-0a1b2c"
 
 
 def _load(name: str):
@@ -56,7 +57,10 @@ def pol(tmp_path, monkeypatch):
     pol = _load("relay_policy")
     (tmp_path / "chan" / "plans").mkdir(parents=True)
     (tmp_path / "log").mkdir()
+    (tmp_path / "saved").mkdir()
     monkeypatch.setattr(pol, "CHANNEL", str(tmp_path / "chan"))
+    monkeypatch.setattr(pol.program, "RECORDER", str(IMAGE / "glove-pw-capture"))
+    monkeypatch.setattr(pol.program._recorder(), "SAVED", tmp_path / "saved")
     monkeypatch.setattr(pol, "LOG_ROOT", str(tmp_path / "log"))
     monkeypatch.setattr(pol.program, "recording", lambda: False)
     yield pol
@@ -67,6 +71,16 @@ def _stage(pol, name: str, plan=PLAN) -> str:
     with open(path, "w") as f:
         f.write(plan if isinstance(plan, str) else json.dumps(plan))
     return path
+
+
+def _save(pol, cid=CID, events=EVENTS, meta=None) -> Path:
+    """A recording `record` saved: what glove-pw-capture `saved` leaves in SAVED/<cid>/."""
+    d = pol.program._recorder().SAVED / cid
+    d.mkdir()
+    (d / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    if meta is not False:
+        (d / "meta.json").write_text(json.dumps(meta or {"capture": 1, "display": [1280, 800], "duration_ms": 3000}))
+    return d
 
 
 def _prepare(pol, *argv):
@@ -121,7 +135,10 @@ def test_dry_run_is_passed_on(pol):
     ((), "usage: browser-event status"),
     (("click",), "usage: browser-event status"),
     (("status", "now"), "status takes no arguments"),
+    (("recordings", "all"), "recordings takes no arguments"),
     (("replay",), "one plan name"),
+    (("replay", "p.json", "--recording", CID), "one plan name, or --recording"),
+    (("replay", "--recording", CID, "--recording", CID), "unexpected --recording"),
     (("replay", "a.json", "b.json"), "one plan name"),
     (("replay", "p.json", "--force"), "unexpected --force"),
     (("replay", "p.json", "--dry-run", "--dry-run"), "unexpected --dry-run"),
@@ -159,9 +176,11 @@ def test_a_plan_must_be_a_small_regular_json_file(pol):
     assert "not JSON" in _prepare(pol, "replay", "bad.json")[0]
     _stage(pol, "v2.json", {**PLAN, "v": 2})
     assert "not a v1 plan" in _prepare(pol, "replay", "v2.json")[0]
-    long = {**PLAN, "events": [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.TIMEOUT_S}]}
+    long = {**PLAN, "events": [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.program.TIMEOUT_S}]}
     _stage(pol, "long.json", long)
     assert "must end within" in _prepare(pol, "replay", "long.json")[0]
+    _stage(pol, "deep.json", "[" * 100_000 + "]" * 100_000)
+    assert "not JSON" in _prepare(pol, "replay", "deep.json")[0]  # RecursionError, refused
     assert all("refused" in e for e in _log(pol))  # nothing refused is logged as run
 
 
@@ -196,7 +215,7 @@ def test_the_session_may_allow_a_replay_while_recording(pol, monkeypatch):
 
 
 def test_the_output_stays_bounded(pol, monkeypatch):
-    monkeypatch.setattr(pol, "KEEP", 3)
+    monkeypatch.setattr(pol, "KEEP", 3)  # `event_keep`
     monkeypatch.setattr(pol, "LOG_MAX", 200)
     old = ["20261020-101741-00000" + str(i) for i in range(4)]
     for rid in old:
@@ -206,9 +225,107 @@ def test_the_output_stays_bounded(pol, monkeypatch):
         _stage(pol, f"p{i}.json")
         _prepare(pol, "replay", f"p{i}.json")
     kept = sorted(os.listdir(pol.LOG_ROOT))
-    replays = [n for n in kept if pol.REPLAY_ID.fullmatch(n)]
+    replays = [n for n in kept if pol.program._recorder().ID.fullmatch(n)]
     assert len(replays) == 3 and not set(old) & set(replays) and "keep-me" in kept
     assert "log.1.jsonl" in kept and os.path.getsize(os.path.join(pol.LOG_ROOT, "log.jsonl")) <= 2 * 200
+
+
+def test_event_keep_reaches_the_policy(monkeypatch):
+    monkeypatch.setenv("PW_EVENT_KEEP", "200")
+    assert _load("relay_policy").KEEP == 200
+    monkeypatch.delenv("PW_EVENT_KEEP")
+    assert _load("relay_policy").KEEP == 20
+
+
+@pytest.mark.parametrize(("value", "want"), [("0", 5), ("1", 5), ("99999", 1000), ("lots", 20)])
+def test_event_keep_is_bounded_in_the_policy_too(monkeypatch, value, want):
+    monkeypatch.setenv("PW_EVENT_KEEP", value)  # an image run by hand: never prune every replay, never fail
+    assert want == _load("relay_policy").KEEP
+
+
+def test_the_recorder_and_the_host_agree_on_ids():
+    from glove_ext.playwright import capture
+
+    prog = _load("browser_event")
+    prog.RECORDER = str(IMAGE / "glove-pw-capture")
+    # a capture's id (the policy's replays look the same): `record` (on the host) checks it too
+    assert prog._recorder().ID.pattern == capture.ID.pattern.removeprefix("^")
+
+
+def test_recordings_lists_them_and_is_logged(pol):
+    argv, _ = _prepare(pol, "recordings")
+    assert argv == ["/usr/bin/python3", pol.PROGRAM, "recordings"] and _log(pol)[0]["event"] == "recordings"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_a_saved_recording_replays_by_id(pol, dry_run):
+    _save(pol)
+    argv, _ = _prepare(pol, "replay", "--recording", CID, *(["--dry-run"] if dry_run else []))
+    out = argv[argv.index("--out") + 1]
+    assert argv[3] == os.path.join(out, "plan.json") and argv[argv.index("--id") + 1] == os.path.basename(out)
+    raw = Path(out, "plan.json").read_bytes()
+    rows = [{k: e[k] for k in ("t", "type", "x", "y", "button")} for e in EVENTS]
+    assert json.loads(raw) == {**PLAN, "events": rows}  # meta.json's display, events.jsonl's rows cut to ROW
+    assert ("--dry-run" in argv) is dry_run
+    assert (pol.program._recorder().SAVED / CID / "events.jsonl").exists()  # a recording replays as often as asked
+    (entry,) = _log(pol)
+    assert entry["recording"] == CID and "plan" not in entry and entry["events"] == 4
+    assert entry["plan_sha256"] == hashlib.sha256(raw).hexdigest() and entry["dry_run"] is dry_run
+
+
+def test_a_recording_is_refused_unless_saved_whole_and_small(pol, tmp_path):
+    msgs = {}
+    msgs["id"] = _prepare(pol, "replay", "--recording", "../" + CID)[0]
+    msgs["none"] = _prepare(pol, "replay", "--recording", CID)[0]
+    msgs["no value"] = _prepare(pol, "replay", "--recording")[0]
+    _save(pol, "20261020-101741-000001", meta=False)  # still recording: meta.json is written last
+    msgs["unfinished"] = _prepare(pol, "replay", "--recording", "20261020-101741-000001")[0]
+    big = _save(pol, "20261020-101741-000002")
+    (big / "events.jsonl").write_text(" " * (pol.PLAN_MAX + 1))
+    msgs["big"] = _prepare(pol, "replay", "--recording", "20261020-101741-000002")[0]
+    os.symlink(_save(pol, "20261020-101741-000003"), pol.program._recorder().SAVED / "20261020-101741-000004")
+    msgs["dir link"] = _prepare(pol, "replay", "--recording", "20261020-101741-000004")[0]
+    files = _save(pol, "20261020-101741-000005", meta=False)
+    os.symlink(big / "meta.json", files / "meta.json")
+    msgs["file link"] = _prepare(pol, "replay", "--recording", "20261020-101741-000005")[0]
+    bad = _save(pol, "20261020-101741-000006")
+    (bad / "events.jsonl").write_text("{\n")
+    msgs["not json"] = _prepare(pol, "replay", "--recording", "20261020-101741-000006")[0]
+    _save(pol, "20261020-101741-000007", meta={"display": [200, 200]})
+    msgs["invalid"] = _prepare(pol, "replay", "--recording", "20261020-101741-000007")[0]
+    assert "want a recording's id" in msgs["id"] and "want a recording's id" in msgs["no value"]
+    assert "No such file" in msgs["none"] and "recordings` lists" in msgs["none"]
+    assert "meta.json (not finished?)" in msgs["unfinished"]
+    assert "events.jsonl" in msgs["big"] and "bytes (at most" in msgs["big"]
+    assert "20261020-101741-000004" in msgs["dir link"] and "meta.json" in msgs["file link"]  # O_NOFOLLOW
+    assert "not JSON" in msgs["not json"] and "inside the display 200x200" in msgs["invalid"]
+    log = _log(pol)
+    assert len(log) == len(msgs) and all("refused" in e for e in log)
+    assert not [n for n in os.listdir(pol.LOG_ROOT) if pol.program._recorder().ID.fullmatch(n)]  # nothing ran
+
+
+def test_no_saved_recordings_at_all(pol):
+    os.rmdir(pol.program._recorder().SAVED)
+    assert "no saved recordings" in _prepare(pol, "replay", "--recording", CID)[0]
+
+
+def test_a_recording_too_long_for_the_timeout_is_refused(pol):
+    _save(pol, events=[EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * pol.program.TIMEOUT_S}])
+    msg, _ = _prepare(pol, "replay", "--recording", CID)
+    assert msg.startswith(f"recording {CID} lasts") and "copy its rows from browser-output/" in msg
+
+
+def test_a_deeply_nested_recording_is_refused(pol):
+    d = _save(pol)
+    (d / "events.jsonl").write_text("[" * 100_000 + "]" * 100_000 + "\n")
+    assert "nested too deeply" in _prepare(pol, "replay", "--recording", CID)[0]
+
+
+def test_no_recording_replays_while_the_operator_records(pol, monkeypatch):
+    _save(pol)
+    monkeypatch.setattr(pol.program, "recording", lambda: True)
+    assert "the operator is recording" in _prepare(pol, "replay", "--recording", CID)[0]
+    assert isinstance(_prepare(pol, "replay", "--recording", CID, "--dry-run")[0], list)
 
 
 def test_an_event_that_cannot_be_logged_does_not_run(pol, monkeypatch):
@@ -279,9 +396,10 @@ def _with_recorder(prog, tmp_path, monkeypatch, recording=False):
     """browser_event's recorder module (its wall(), png() and claim), on a fake /tmp/capture."""
     monkeypatch.setattr(prog, "RECORDER", str(IMAGE / "glove-pw-capture"))
     rec = prog._recorder()
+    monkeypatch.setattr(rec, "EVENTS_PROGRAM", str(IMAGE / "browser_event.py"))
     root = tmp_path / "capture"
     for name, path in (("ROOT", root), ("LOCK", root / ".lock"), ("REPLAY", root / ".replay"),
-                       ("CURRENT", root / ".current")):
+                       ("CURRENT", root / ".current"), ("SAVED", root / ".saved")):
         monkeypatch.setattr(rec, name, path)
     monkeypatch.setattr(rec, "running", lambda: ("20261020-101741-0a1b2c", 1) if recording else None)
     return rec
@@ -294,7 +412,7 @@ def _replay(tmp_path, monkeypatch, screen, plan=PLAN, dry_run=False, recording=F
     monkeypatch.setattr(prog.time, "sleep", lambda _s: None)
     out = tmp_path / "out"
     out.mkdir(parents=True)
-    rc = prog.replay(plan, ":1", str(out), dry_run, while_recording)
+    rc = prog.replay(plan, ":1", str(out), "20261101-090000-abcdef", dry_run, while_recording)
     assert not rec.REPLAY.exists()  # the claim ends with the replay
     return rc, json.loads((out / "result.json").read_text())
 
@@ -308,6 +426,9 @@ def test_replay_sends_the_events_in_order(tmp_path, monkeypatch):
     assert result["sent"] == 4 and result["released"] == [] and result["end_error_px"] == 0
     assert result["duration_ms"] == 963
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["after.png", "before.png", "result.json"]
+    seen = "/work/browser-events/20261101-090000-abcdef"  # the result names itself, as the agent sees it
+    assert result["id"] == "20261101-090000-abcdef" and result["dir"] == seen
+    assert result["frames"] == {"before": f"{seen}/before.png", "after": f"{seen}/after.png"}
 
 
 def test_back_and_forward_buttons_replay(tmp_path, monkeypatch):
@@ -385,6 +506,111 @@ def test_dry_run_sends_nothing(tmp_path, monkeypatch):
     screen = FakeScreen()
     rc, result = _replay(tmp_path, monkeypatch, screen, dry_run=True)
     assert rc == 0 and result["status"] == "dry-run" and screen.calls == []
+    assert result["id"] == "20261101-090000-abcdef" and result["frames"] == {}  # only frames that were written
+
+
+def test_only_the_frames_written_are_named(tmp_path, monkeypatch):
+    screen = FakeScreen(fail_at=2)
+    rc, result = _replay(tmp_path, monkeypatch, screen)
+    assert rc == 2 and list(result["frames"]) == ["before", "after"]
+    screen = FakeScreen()
+    screen.frame = lambda path: (_ for _ in ()).throw(OSError("get_image failed")) if "after" in path else \
+        open(path, "xb").close()
+    rc, result = _replay(tmp_path / "again", monkeypatch, screen)
+    assert rc == 2 and list(result["frames"]) == ["before"]
+
+
+def test_recordings_lists_the_saved_ones(tmp_path, monkeypatch, capsys):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    assert prog.recordings() == 0 and json.loads(capsys.readouterr().out) == {"recordings": []}
+    for name in ("20261020-101741-000002", "20261020-101741-000001", "notes", ".x"):
+        (rec.SAVED / name).mkdir(parents=True)
+    (rec.SAVED / "20261020-101741-000003").write_text("")  # neither a file nor a link is a recording
+    (rec.SAVED / "20261020-101741-000004").symlink_to(rec.SAVED / "20261020-101741-000001")
+    prog.recordings()
+    assert json.loads(capsys.readouterr().out)["recordings"] == ["20261020-101741-000001", "20261020-101741-000002"]
+
+
+# --- what the recorder keeps once `record` has saved a capture -------------------------------------------------
+
+def _capture(rec, cid, events=EVENTS):
+    d = rec.ROOT / cid
+    (d / "shots").mkdir(parents=True)
+    (d / "shots" / "1-arm.png").write_bytes(b"png")
+    (d / "events.jsonl").write_text(events if isinstance(events, str) else
+                                    "".join(json.dumps(e) + "\n" for e in events))
+    (d / "windows.jsonl").write_text("{}\n")
+    (d / "meta.json").write_text(json.dumps({"display": PLAN["display"]}))
+    (rec.ROOT / f".{cid}.log").write_text("")
+    return d
+
+
+def test_saved_keeps_what_a_replay_needs(tmp_path, monkeypatch, capsys):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    _capture(rec, CID)
+    assert rec.saved(CID) == 0
+    assert capsys.readouterr().out.startswith(f"kept for `browser-event replay --recording {CID}`")
+    assert sorted(os.listdir(rec.ROOT)) == [".saved"]  # the capture and its log are gone
+    assert sorted(p.name for p in (rec.SAVED / CID).iterdir()) == ["events.jsonl", "meta.json"]
+    assert rec.saved("../x") == 1
+
+
+def test_saved_keeps_nothing_a_replay_would_refuse(tmp_path, monkeypatch, capsys):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    too_long = [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * prog.TIMEOUT_S}]
+    whys = []
+    for i, (events, why) in enumerate([("x" * (rec.SAVED_MAX + 1), "bytes (at most"),
+                                       ("", "events: want a list of 1 to"),
+                                       ([EVENTS[0]] * (prog.MAX_EVENTS + 1), "events: want a list of 1 to"),
+                                       (too_long, "must end within"), ("{\n", "not JSON"),
+                                       (EVENTS, "unfinished (no meta.json)")]):
+        cid = f"20261020-101741-00000{i}"
+        d = _capture(rec, cid, events)
+        if why.startswith("unfinished"):
+            (d / "meta.json").unlink()
+        assert rec.saved(cid) == 0
+        whys.append((why, capsys.readouterr().out))
+    assert all(out.startswith("not kept for replay: ") and why in out for why, out in whys), whys
+    assert os.listdir(rec.ROOT) == []
+
+
+def test_saved_never_keeps_half_a_recording(tmp_path, monkeypatch):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    _capture(rec, CID)
+    real = os.replace
+
+    def full(src, dst):
+        if str(src).endswith("meta.json"):
+            raise OSError(28, "No space left on device")
+        real(src, dst)
+
+    monkeypatch.setattr(rec.os, "replace", full)
+    assert rec.saved(CID) == 0
+    assert not (rec.SAVED / CID).exists() and not (rec.ROOT / CID).exists()
+
+
+def test_saved_never_removes_a_copy_it_did_not_make(tmp_path, monkeypatch, capsys):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    _capture(rec, CID)
+    (rec.SAVED / CID).mkdir(parents=True)  # another `record` of the same capture kept it first
+    (rec.SAVED / CID / "events.jsonl").write_text("theirs")
+    assert rec.saved(CID) == 0 and "not kept for replay" in capsys.readouterr().out
+    assert (rec.SAVED / CID / "events.jsonl").read_text() == "theirs"
+
+
+def test_saved_keeps_the_newest(tmp_path, monkeypatch):
+    prog = _load("browser_event")
+    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    monkeypatch.setattr(rec, "SAVED_KEEP", 2)
+    for i in range(4):
+        _capture(rec, f"20261020-101741-00000{i}")
+        rec.saved(f"20261020-101741-00000{i}")
+    assert sorted(p.name for p in rec.SAVED.iterdir()) == ["20261020-101741-000002", "20261020-101741-000003"]
 
 
 # --- the session -------------------------------------------------------------------------------------------------
@@ -413,10 +639,11 @@ def test_event_relay_adds_the_channel_the_log_and_the_command(tmp_path):
     copies = [c for ext, layer in comp.image_layers if ext == "playwright" for c in layer.get("copy") or []]
     assert ["shim/browser-event", "/usr/local/bin/browser-event"] in copies
     env = doc["services"]["glove-s-pw"]["environment"]
-    assert env["PW_EVENT_RELAY"] == "true" and env["PW_EVENT_TIMEOUT"] == "30"
+    assert env["PW_EVENT_RELAY"] == "true" and env["PW_EVENT_TIMEOUT"] == "30" and env["PW_EVENT_KEEP"] == "20"
     assert env["PW_REPLAY_WHILE_RECORDING"] == "false"
     brief = dict(comp.rendered_briefs())["playwright"]
     assert "browser-event replay" in brief and "/run/glove/browser-event/plans/" in brief
+    assert "--recording <id>" in brief
 
 
 def test_off_by_default(tmp_path):
@@ -436,3 +663,14 @@ def test_event_relay_needs_novnc(tmp_path):
 def test_event_timeout_is_bounded(tmp_path, timeout):
     with pytest.raises(Exception, match="event_timeout: an integer from 30 to 3600"):
         _session(tmp_path, event_relay=True, event_timeout=timeout)
+
+
+def test_event_keep_is_the_sessions(tmp_path):
+    _, doc = _session(tmp_path, event_relay=True, event_keep=200)
+    assert doc["services"]["glove-s-pw"]["environment"]["PW_EVENT_KEEP"] == "200"
+
+
+@pytest.mark.parametrize("keep", [0, 4, 1001, 5000])
+def test_event_keep_is_bounded(tmp_path, keep):
+    with pytest.raises(Exception, match="event_keep: an integer from 5 to 1000"):
+        _session(tmp_path, event_relay=True, event_keep=keep)

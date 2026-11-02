@@ -230,3 +230,34 @@ def test_summary_and_titles_are_printable():
     assert "1 press(es)" in text and "drags 400 px in 534 ms" in text and "stopped: viewer-closed" in text
     assert "\x1b" not in text and "\x07" not in text and "Results]0;pwned" in text
     assert capture.front_title(WINDOWS[0]) == "Example page"
+
+
+# --- what `record` leaves in the sidecar -------------------------------------------------------------------------
+
+@pytest.mark.parametrize(("event_relay", "to", "saved_rc", "want"), [
+    (True, "work", 0, ["saved"]),             # replayable, and the agent may read it anyway
+    (True, "work", 2, ["saved", "rm"]),       # `saved` failed (e.g. an older image): remove it all
+    (True, "session", 0, ["rm"]),             # the agent may not read it: nothing kept
+    (False, "work", 0, ["rm"]),               # nothing could replay it
+    (True, "planted", 0, ["rm"]),             # browser-output/ refused it: the agent can't read it anyway
+])
+def test_record_keeps_a_replayable_copy_only_with_event_relay_and_to_work(tmp_path, monkeypatch, event_relay, to,
+                                                                          saved_rc, want):
+    cli = importlib.import_module("glove_ext.playwright.cli")
+    ran = []
+
+    def run(argv, **_kw):
+        ran.append("saved" if "saved" in argv else "rm" if "rm" in argv else argv)
+        return type("R", (), {"returncode": saved_rc, "stdout": "kept"})()
+
+    monkeypatch.setattr(cli, "_exec", lambda *a: CID)
+    monkeypatch.setattr(cli, "_read_capped", lambda *a: _tar(_good()))
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    for d in ("browser-output", "st"):
+        (tmp_path / d).mkdir()
+    s = type("S", (), {"runtime": "docker", "settings": {"event_relay": event_relay}, "root": tmp_path,
+                       "container": lambda self, n: f"glove-s-{n}", "state_dir": lambda self: tmp_path / "st"})()
+    if to == "planted":  # the sidecar can write browser-output/: glove refuses what it didn't write
+        (tmp_path / "browser-output" / capture.DIR / CID).mkdir(parents=True)
+    cli._collect(s, CID, {"to": "work" if to == "planted" else to})
+    assert ran == want

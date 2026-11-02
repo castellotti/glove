@@ -11,6 +11,7 @@ novnc display while they use the browser (`glove playwright record`).
                                     stop the running capture and wait for it to
                                     finish; prints its id; exit 1 if it hasn't
     glove-pw-capture list           the finished capture ids under /tmp/capture
+    glove-pw-capture saved <id>     `record` has saved it: keep what a replay needs, remove the rest
 
 Only one recorder runs at a time (`start` holds a lock while it arms). The
 `record` that started it stops and saves it; one that attached only watches.
@@ -33,6 +34,14 @@ Output, on the sidecar's tmpfs, which `glove playwright record` copies out
     /tmp/capture/<id>/shots/<n>-<arm|down|up|stop>.png   the whole display
     /tmp/capture/<id>/meta.json      written last, when it stops
 
+With `event_relay` and `to: work`, once the host has its copy, `record` runs
+`saved`: it keeps the capture's events.jsonl and meta.json in
+/tmp/capture/.saved/<id>/ (if they replay: at most SAVED_MAX and META_MAX
+bytes, a plan browser_event.py accepts that ends within the event timeout;
+the newest SAVED_KEEP captures, apart from `event_keep`), where
+`browser-event replay --recording <id>` reads them, and removes the rest. It
+prints whether it kept them, and why not.
+
 `t` is ms since arm when the event was read; `xt` is the X server's own
 timestamp of the input (ms, wrapping at 2^32), which a busy recorder can't skew.
 """
@@ -43,12 +52,15 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import importlib.util
 import json
 import os
+import re
 import secrets
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -61,6 +73,12 @@ CURRENT = ROOT / ".current"  # "<id> <pid>" while a recorder runs (glove-pw-fron
 LOCK = ROOT / ".lock"
 REPLAY = ROOT / ".replay"  # "<pid>" while a replay sends input (browser_event.py)
 OVERLAP_OK = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # playwright `replay_while_recording`
+SAVED = ROOT / ".saved"  # relay_policy.py reads it (through browser_event.py)
+SAVED_KEEP = 20
+SAVED_MAX = 2 * 1024 * 1024  # events.jsonl; relay_policy.py reads at most this much
+META_MAX = 64 * 1024  # meta.json; likewise
+EVENTS_PROGRAM = "/opt/glove/events/browser_event.py"  # its plan checks: what `saved` keeps, a replay accepts
+ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")
 MAX_SHOTS = 400
 MAX_BYTES = 150 * 1024 * 1024
 TITLE_MAX = 300
@@ -384,6 +402,67 @@ def stop(reason: str) -> int:
     return 1
 
 
+def _unreplayable(src: Path) -> str | None:
+    """None when the capture in `src` replays (`browser-event replay --recording`, which checks the same);
+    otherwise why not."""
+    if not (src / "meta.json").is_file():
+        return "unfinished (no meta.json)"
+    for name, limit in (("events.jsonl", SAVED_MAX), ("meta.json", META_MAX)):
+        if (size := (src / name).stat().st_size) > limit:
+            return f"{name} is {size} bytes (at most {limit})"
+    spec = importlib.util.spec_from_file_location("browser_event", EVENTS_PROGRAM)
+    events = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(events)
+    try:
+        plan = events.from_recording((src / "meta.json").read_bytes(), (src / "events.jsonl").read_bytes())
+    except ValueError as e:
+        return f"not JSON ({e})"
+    return events.validate(plan) or events.fits(plan)
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:  # pruned meanwhile (another `record`)
+        return False
+
+
+def saved_ids() -> list[str]:
+    """The recordings kept in SAVED (directories, never links), oldest first; browser_event.py lists them."""
+    try:
+        names = os.listdir(SAVED)
+    except FileNotFoundError:
+        return []
+    return sorted(n for n in names if ID.fullmatch(n) and _is_dir(SAVED / n))
+
+
+def saved(cid: str) -> int:
+    """`record` has the capture safe on the host: keep events.jsonl and meta.json in .saved/<cid>/ when a
+    replay can use them (printing whether it did, and why not), remove the rest, and prune .saved/ to the
+    newest SAVED_KEEP."""
+    if not ID.fullmatch(cid):
+        return 1
+    src, made = ROOT / cid, False
+    try:
+        if (why := _unreplayable(src)) is None:
+            SAVED.mkdir(mode=0o700, exist_ok=True)
+            (SAVED / cid).mkdir(mode=0o700)
+            made = True
+            for name in ("events.jsonl", "meta.json"):
+                os.replace(src / name, SAVED / cid / name)
+    except OSError as e:  # e.g. the tmpfs is full: never a half-kept recording (and only ever our own)
+        why = e.strerror or str(e)
+        if made:
+            shutil.rmtree(SAVED / cid, ignore_errors=True)
+    print(f"kept for `browser-event replay --recording {cid}`" if why is None else f"not kept for replay: {why}")
+    shutil.rmtree(src, ignore_errors=True)
+    (ROOT / f".{cid}.log").unlink(missing_ok=True)
+    kept = saved_ids()
+    for old in kept[:max(0, len(kept) - SAVED_KEEP)]:
+        shutil.rmtree(SAVED / old, ignore_errors=True)
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(prog="glove-pw-capture")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -394,6 +473,7 @@ def main() -> int:
     sub.add_parser("follow").add_argument("id")
     sub.add_parser("stop").add_argument("--reason", default="stop", choices=sorted(SIGNAL_REASON.values()))
     sub.add_parser("list")
+    sub.add_parser("saved").add_argument("id")
     r = sub.add_parser("record")
     for a in ("id", "max_seconds", "motion_hz", "glove_version"):
         r.add_argument(a)
@@ -404,6 +484,8 @@ def main() -> int:
         return follow(args.id)
     if args.cmd == "stop":
         return stop(args.reason)
+    if args.cmd == "saved":
+        return saved(args.id)
     if args.cmd == "list":
         live = running()
         for d in sorted(ROOT.glob("*")) if ROOT.is_dir() else []:

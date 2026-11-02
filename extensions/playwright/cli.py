@@ -328,8 +328,8 @@ def _read_capped(argv: list[str], cap: int) -> bytes:
 
 def _collect(s: ExtSession, cid: str, rec: dict) -> None:
     """Copy the finished capture `cid` out of the sidecar, check it, write it to the
-    host (and browser-output/ with `to: work`), and remove it from the sidecar once
-    the host copy is safe."""
+    host (and browser-output/ with `to: work`), and once the host copy is safe, remove
+    it from the sidecar (but for what a replay needs, with `event_relay` and `to: work`)."""
     runtime, container = s.runtime, s.container("pw")
     if not capture.ID.fullmatch(cid):
         err.print(f"[yellow]skipped[/yellow] a capture with an unexpected name ({escape(capture.printable(cid[:40]))})")
@@ -354,19 +354,32 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
         shutil.rmtree(state / capture.DIR / cid, ignore_errors=True)  # ours, never the sidecar's
         err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
         return
+    in_work = False
     if rec["to"] == "work":
         try:
             saved.append(capture.write(s.root / "browser-output", cap, private=False))
+            in_work = True
         except FileExistsError:  # ids are unguessable: glove didn't make it, and its files are unchecked
             err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already exists, and glove did not "
                       "write it (the browser sidecar can write there); the checked copy is the host's")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
-    subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
-                   capture_output=True, check=False)
+    # the sidecar keeps what `browser-event replay --recording` needs only for a recording the agent can read
+    # anyway (written to browser-output/), and only when it can replay (event_relay); otherwise, or if that
+    # fails, nothing
+    note = None  # `saved`'s output, when it ran
+    if s.settings.get("event_relay") and in_work:
+        r = subprocess.run([runtime, "exec", container, CAPTURE, "saved", cid], capture_output=True, text=True,
+                           check=False)
+        note = r.stdout.strip() if r.returncode == 0 else None
+    if note is None:
+        subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
+                       capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
     for p in saved:
         console.print(f"  {p}")
+    if note:
+        console.print(f"  [dim]{escape(capture.printable(note[:300]))}[/dim]")
 
 
 @app.command("status")

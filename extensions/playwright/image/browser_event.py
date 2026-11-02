@@ -7,16 +7,24 @@ with the argv relay_policy.py built; the agent never picks its arguments.
         One JSON object: the display's size, the pointer, whether XTest is
         there, and whether the operator is recording. Sends no input.
 
-    browser_event.py replay PLAN --out DIR [--display :1] [--dry-run] [--while-recording]
+    browser_event.py recordings
+        One JSON object: the ids of the recordings `browser-event replay
+        --recording` can replay (glove-pw-capture's SAVED), oldest first.
+
+    browser_event.py replay PLAN --out DIR --id ID [--display :1] [--dry-run] [--while-recording]
         Replay PLAN's input events on the display, then write DIR/result.json
-        (also printed) and DIR/before.png, DIR/after.png. --dry-run checks the
-        plan against the display and sends nothing. Refused while the operator
-        records, unless --while-recording (the session's
-        `replay_while_recording`, which the policy passes on).
+        (also printed) and DIR/before.png, DIR/after.png. The result names
+        itself: the replay's `id`, its `dir` and the `frames` written, as the
+        agent sees them (under SEEN_AT). --dry-run checks the plan against the
+        display and sends nothing. Refused while the operator records, unless
+        --while-recording (the session's `replay_while_recording`, which the
+        policy passes on).
 
 A plan (v1) is a timed input sequence in the recorder's own `events.jsonl`
 shape (`glove playwright record`), so a recording replays as it is (one
-longer than the event timeout allows must be split):
+longer than the event timeout allows must be split; `from_recording` builds
+one, and the recorder keeps a recording for `--recording` only if it passes
+`validate` and `fits`):
 
     {"v": 1, "display": [w, h],
      "events": [{"t": ms, "type": "move|down|up|wheel", "x": X, "y": Y, "button": B}, …]}
@@ -44,8 +52,12 @@ import os
 import sys
 import time
 
-RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png()
+RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png(), SAVED
+SEEN_AT = "/work/browser-events"  # the `browser-events` output, as the harness mounts it
 MAX_EVENTS = 10_000
+TIMEOUT_S = int(os.environ.get("PW_EVENT_TIMEOUT", "120"))  # relayd's --timeout (glove-pw-start)
+MARGIN_S = 10  # what a replay needs besides its events (the display, two frames)
+ROW = ("t", "type", "x", "y", "button")  # what a recording's row keeps in a plan (the sidecar's output is hostile)
 MAX_SIDE = 1 << 14
 PRESS = (1, 2, 3, 8, 9)  # left, middle, right, back, forward
 BUTTONS = {"down": PRESS, "up": PRESS, "wheel": (4, 5, 6, 7), "move": None}
@@ -78,6 +90,25 @@ def validate(plan) -> str | None:
         if (allowed := BUTTONS[e["type"]]) is not None and e.get("button") not in allowed:
             return f"events[{i}]: a {e['type']} needs button {'1-3, 8 or 9' if allowed is PRESS else '4-7'}"
     return None
+
+
+def fits(plan) -> str | None:
+    """None when `plan` (a valid one) ends within the event timeout; otherwise why not."""
+    seconds = (plan["events"][-1]["t"] - plan["events"][0]["t"]) / 1000
+    if seconds > TIMEOUT_S - MARGIN_S:
+        return f"lasts {seconds:.0f} s: a replay must end within {TIMEOUT_S - MARGIN_S} s (event_timeout {TIMEOUT_S} s)"
+    return None
+
+
+def from_recording(meta: bytes, rows: bytes):
+    """The plan of a recording: {"v": 1, "display": meta.json's, "events": events.jsonl's rows, each cut
+    to ROW}, unchecked. ValueError when either isn't JSON."""
+    try:
+        meta, events = json.loads(meta), [json.loads(line) for line in rows.splitlines() if line.strip()]
+    except RecursionError:
+        raise ValueError("nested too deeply") from None
+    events = [{k: e[k] for k in ROW if k in e} if isinstance(e, dict) else e for e in events]
+    return {"v": 1, "display": meta.get("display") if isinstance(meta, dict) else None, "events": events}
 
 
 def create(path: str, data: bytes) -> None:
@@ -144,14 +175,26 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
-def replay(plan: dict, display: str, out: str, dry_run: bool, while_recording: bool = False) -> int:
-    events = plan["events"]
-    result = {"synthetic": True, "dry_run": dry_run, "events": len(events),
+def recordings() -> int:
+    rec = _recorder()
+    try:
+        out = {"recordings": rec.saved_ids()}
+    except OSError as e:
+        out = {"recordings": [], "error": f"{rec.SAVED}: {e.strerror}"}
+    print(json.dumps(out))
+    return 1 if "error" in out else 0
+
+
+def replay(plan: dict, display: str, out: str, rid: str, dry_run: bool, while_recording: bool = False) -> int:
+    events, seen = plan["events"], f"{SEEN_AT}/{rid}"
+    result = {"id": rid, "dir": seen, "synthetic": True, "dry_run": dry_run, "events": len(events),
               "duration_ms": round(events[-1]["t"] - events[0]["t"])}
     try:
         _replay(plan, Screen(display), out, dry_run, while_recording, result)
     except Exception as e:  # the display or a frame: still a result, and exit 2
         result.update(status="error", error=result.get("error") or f"{type(e).__name__}: {e}"[:300])
+    result["frames"] = {k: f"{seen}/{k}.png" for k in ("before", "after")
+                        if os.path.exists(os.path.join(out, f"{k}.png"))}
     body = json.dumps(result, indent=1)
     with contextlib.suppress(OSError):
         create(os.path.join(out, "result.json"), (body + "\n").encode())
@@ -213,21 +256,25 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="event", required=True)
     st = sub.add_parser("status")
     st.add_argument("--display", default=":1")
+    sub.add_parser("recordings")
     rp = sub.add_parser("replay")
     rp.add_argument("plan")
     rp.add_argument("--out", required=True)
+    rp.add_argument("--id", required=True)
     rp.add_argument("--display", default=":1")
     rp.add_argument("--dry-run", action="store_true")
     rp.add_argument("--while-recording", action="store_true")
     a = ap.parse_args(argv)
     if a.event == "status":
         return status(a.display)
+    if a.event == "recordings":
+        return recordings()
     with open(a.plan, encoding="utf-8") as f:
         plan = json.load(f)
     if (err := validate(plan)) is not None:
         print(f"browser_event: {err}", file=sys.stderr)
         return 2
-    return replay(plan, a.display, a.out, a.dry_run, a.while_recording)
+    return replay(plan, a.display, a.out, a.id, a.dry_run, a.while_recording)
 
 
 if __name__ == "__main__":
