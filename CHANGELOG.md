@@ -8,18 +8,20 @@ All notable changes to glove are documented here.
 
 - **`browser-event replay --recording <id>`** (playwright `event_relay`):
   replay a recording `glove playwright record` saved, by its id, without the
-  agent copying its rows into `plans/`. With `event_relay` and
-  `recording: {to: work}` (only recordings the agent may read anyway), once the
-  host has its copy, `record` leaves the sidecar the recording's `events.jsonl`
-  and `meta.json` (in `/tmp/capture/.saved/<id>/`, the newest 20 that would
-  replay: at most 2 MiB, accepted by the plan validator, within the event
-  timeout) instead of removing it all, and says whether it kept it and why
-  not. Nothing is kept when the copy into `browser-output/` failed or was
-  refused. The policy builds
-  `{"v": 1, "display", "events"}` from them (no links followed, each bounded,
-  rows cut to a plan's fields) and runs it through the same
-  validator, timeout, log and `plan.json` as a staged plan. `browser-event
-  recordings` lists the ids.
+  agent copying its rows into `plans/`. It needs `recording: {to: work}`: the
+  policy reads the checked copy `record` wrote to
+  `browser-output/recordings/<id>/` (which the agent reads anyway and can't
+  write; the sidecar has it mounted with `downloads: work`, which `to: work`
+  needs). So a recording replays for as long as it is there, across sidecar
+  restarts, and nothing is kept in the sidecar. The policy builds
+  `{"v": 1, "display", "events"}` from its `events.jsonl` and `meta.json` (no
+  links followed, each bounded, rows cut to a plan's fields) and runs it
+  through the same validator, timeout, log and `plan.json` as a staged plan;
+  a too-long one is refused with how to shorten it. `browser-event
+  recordings` lists the ids (the newest 200, and how many more). `record`
+  now writes each copy whole (a hidden name, renamed into place), and moves
+  one the sidecar planted under the same id aside (`.planted-<id>-…`) before
+  writing its own, so `--recording` never replays a planted or partial one.
 - **A replay's result names itself**: `id`, `dir` (`/work/browser-events/<id>`)
   and `frames` (the `before`/`after` PNGs written), so a caller needn't search
   `log.jsonl` for the replay it just caused.

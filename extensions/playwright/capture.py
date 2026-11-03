@@ -13,11 +13,15 @@ a link planted there is refused, never followed.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import io
 import json
 import math
 import os
 import re
+import secrets
+import shutil
 import tarfile
 import unicodedata
 from dataclasses import dataclass, field
@@ -36,6 +40,7 @@ COORD = 1 << 14
 STOP_REASONS = {"viewer-closed", "interrupted", "stop", "max_seconds", "cap", "error"}
 DEFAULTS = {"to": "session", "max_seconds": 600, "motion_hz": 120}
 DIR = "recordings"  # under the session state dir and, with `to: work`, browser-output/
+_DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
 def spec(settings: dict[str, Any]) -> dict[str, Any] | None:
@@ -218,33 +223,69 @@ def read_tar(data: bytes, cid: str) -> Capture:
     return cap
 
 
+def _dir(base: Path, mode: int = 0o755) -> int:
+    """`<base>/recordings/` (made if missing), opened without following a link (nor at `base`)."""
+    fd = os.open(base, _DIRFLAGS)
+    try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(DIR, mode, dir_fd=fd)
+        return os.open(DIR, _DIRFLAGS, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 def write(base: Path, cap: Capture, *, private: bool) -> Path:
     """Write `cap` to `<base>/recordings/<id>/`, never following a link and never
-    overwriting: `base` must exist; `recordings/` is made if missing; `<id>/` must not exist."""
+    overwriting: `base` must exist; `recordings/` is made if missing; `<id>/` must not
+    exist (FileExistsError). It is written as a hidden `.<id>.<token>/` and renamed into
+    place once whole, so `<id>/` is never partial (`browser-event replay --recording` reads it)."""
     dmode, fmode = (0o700, 0o600) if private else (0o755, 0o644)
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fds = [os.open(base, flags)]
+    top, tmp = _dir(base, dmode), f".{cap.id}.{secrets.token_hex(4)}"
     try:
-        for part, exist_ok in ((DIR, True), (cap.id, False)):
+        os.mkdir(tmp, dmode, dir_fd=top)
+        try:
+            fds = [os.open(tmp, _DIRFLAGS, dir_fd=top)]
             try:
-                os.mkdir(part, dmode, dir_fd=fds[-1])
-            except FileExistsError:
-                if not exist_ok:
-                    raise
-            fds.append(os.open(part, flags, dir_fd=fds[-1]))
-        if any(rel.startswith("shots/") for rel in cap.files):
-            os.mkdir("shots", dmode, dir_fd=fds[-1])
-            fds.append(os.open("shots", flags, dir_fd=fds[-1]))
-        for rel, body in sorted(cap.files.items()):
-            where = fds[-1] if rel.startswith("shots/") else fds[2]
-            fd = os.open(rel.split("/")[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, fmode,
-                         dir_fd=where)
-            with os.fdopen(fd, "wb") as f:
-                f.write(body)
+                if any(rel.startswith("shots/") for rel in cap.files):
+                    os.mkdir("shots", dmode, dir_fd=fds[0])
+                    fds.append(os.open("shots", _DIRFLAGS, dir_fd=fds[0]))
+                for rel, body in sorted(cap.files.items()):
+                    where = fds[-1] if rel.startswith("shots/") else fds[0]
+                    fd = os.open(rel.split("/")[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, fmode,
+                                 dir_fd=where)
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(body)
+            finally:
+                for fd in fds:
+                    os.close(fd)
+            if _exists(cap.id, top):  # rename would replace an empty directory: never over one
+                raise FileExistsError(errno.EEXIST, "already exists", str(base / DIR / cap.id))
+            os.rename(tmp, cap.id, src_dir_fd=top, dst_dir_fd=top)
+        except BaseException:
+            shutil.rmtree(tmp, dir_fd=top, ignore_errors=True)
+            raise
     finally:
-        for fd in fds:
-            os.close(fd)
+        os.close(top)
     return base / DIR / cap.id
+
+
+def _exists(name: str, dfd: int) -> bool:
+    try:
+        os.stat(name, dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def set_aside(base: Path, cid: str) -> str:
+    """Rename `<base>/recordings/<cid>` (whatever it is; never followed) to a hidden name, which no
+    `browser-event recordings` lists; that name."""
+    top, aside = _dir(base), f".planted-{cid}-{secrets.token_hex(4)}"
+    try:
+        os.rename(cid, aside, src_dir_fd=top, dst_dir_fd=top)
+    finally:
+        os.close(top)
+    return aside
 
 
 def printable(s: str) -> str:

@@ -8,8 +8,10 @@ with the argv relay_policy.py built; the agent never picks its arguments.
         there, and whether the operator is recording. Sends no input.
 
     browser_event.py recordings
-        One JSON object: the ids of the recordings `browser-event replay
-        --recording` can replay (glove-pw-capture's SAVED), oldest first.
+        One JSON object: the ids of the recordings in browser-output/
+        (RECORDINGS here; `glove playwright record` writes them), the newest
+        LIST_MAX, oldest first, and how many more there are. `browser-event
+        replay --recording` checks one only when it replays it.
 
     browser_event.py replay PLAN --out DIR --id ID [--display :1] [--dry-run] [--while-recording]
         Replay PLAN's input events on the display, then write DIR/result.json
@@ -23,8 +25,7 @@ with the argv relay_policy.py built; the agent never picks its arguments.
 A plan (v1) is a timed input sequence in the recorder's own `events.jsonl`
 shape (`glove playwright record`), so a recording replays as it is (one
 longer than the event timeout allows must be split; `from_recording` builds
-one, and the recorder keeps a recording for `--recording` only if it passes
-`validate` and `fits`):
+one for `--recording`):
 
     {"v": 1, "display": [w, h],
      "events": [{"t": ms, "type": "move|down|up|wheel", "x": X, "y": Y, "button": B}, …]}
@@ -49,10 +50,17 @@ import importlib.util
 import json
 import math
 import os
+import re
+import stat
 import sys
 import time
 
-RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png(), SAVED
+RECORDER = "/usr/local/bin/glove-pw-capture"  # the operator's recorder: is it running, wall(), png()
+# `recording: {to: work}` (which needs `downloads: work`): where `record` writes each one's checked copy, as core
+# binds the browser-output output here; the harness reads it at /work/browser-output/recordings/
+RECORDINGS = "/run/glove-output/browser-output/recordings"
+LIST_MAX = 200
+ID = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")  # a recording's id (capture.ID on the host)
 SEEN_AT = "/work/browser-events"  # the `browser-events` output, as the harness mounts it
 MAX_EVENTS = 10_000
 TIMEOUT_S = int(os.environ.get("PW_EVENT_TIMEOUT", "120"))  # relayd's --timeout (glove-pw-start)
@@ -175,12 +183,21 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
-def recordings() -> int:
-    rec = _recorder()
+def _is_dir(path: str) -> bool:
     try:
-        out = {"recordings": rec.saved_ids()}
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:  # removed meanwhile
+        return False
+
+
+def recordings() -> int:
+    try:
+        ids = sorted(n for n in os.listdir(RECORDINGS) if ID.fullmatch(n) and _is_dir(os.path.join(RECORDINGS, n)))
+        out = {"recordings": ids[-LIST_MAX:], **({"more": len(ids) - LIST_MAX} if len(ids) > LIST_MAX else {})}
+    except FileNotFoundError:
+        out = {"recordings": []}
     except OSError as e:
-        out = {"recordings": [], "error": f"{rec.SAVED}: {e.strerror}"}
+        out = {"recordings": [], "error": f"{RECORDINGS}: {e.strerror}"}
     print(json.dumps(out))
     return 1 if "error" in out else 0
 

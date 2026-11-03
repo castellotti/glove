@@ -38,6 +38,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -455,6 +456,7 @@ DRAG = {"v": 1, "display": [1280, 800],
                    {"t": 400, "type": "up", "x": 700, "y": 420, "button": 1}]}
 PLANS = "/run/glove/browser-event/plans"
 REC = "20261101-090000-0a1b2c"  # a recording's id
+CAPTURED: list[str] = []  # the recordings capture_checks made (event_checks replays them)
 # 5 s of pointer moves (no button): long enough to try arming a recorder while it runs
 SLOW = {"v": 1, "display": [1280, 800],
         "events": [{"t": 250 * i, "type": "move", "x": 100 + 10 * i, "y": 100} for i in range(21)]}
@@ -512,24 +514,40 @@ def event_checks(live, sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
         check(f"refused (126): {label}", "rc=126" in out and want in out, out[-200:])
     log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
     check("each refusal is logged too, with its reason", sum("refused" in e for e in log) == 4, str(log[-1])[-300:])
-    # a recording `record` saved (glove-pw-capture `saved` on a finished capture of DRAG's rows) replays by id
-    rows = "".join(json.dumps(e) + "\n" for e in DRAG["events"])
-    exec_pw(f"mkdir -p /tmp/capture/{REC} && printf '%s' '{rows}' > /tmp/capture/{REC}/events.jsonl && "
-            f"echo '{{\"display\": [1280, 800]}}' > /tmp/capture/{REC}/meta.json && glove-pw-capture saved {REC}")
-    out = sh("browser-event recordings; echo rc=$?")
-    check("`browser-event recordings` lists the saved recording", f'"{REC}"' in out and "rc=0" in out, out[-200:])
-    out = sh(f"browser-event replay --recording {REC}; echo rc=$?")
-    res = json.loads(out[out.index("{"):out.rindex("}") + 1]) if "{" in out else {}
-    run = sd.root / "browser-events" / str(res.get("id"))
-    check("a saved recording replays by id, and its result names its id, dir and frames",
-          "rc=0" in out and res.get("status") == "ok" and res.get("end_error_px") == 0
-          and res.get("dir") == f"/work/browser-events/{res.get('id')}"
-          and res.get("frames") == {k: f"{res.get('dir')}/{k}.png" for k in ("before", "after")}
-          and (run / "after.png").is_file()
-          and json.loads((run / "plan.json").read_text()) == DRAG, out[-300:])
-    log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
-    check("its log line names the recording", log[-1].get("recording") == REC and "plan" not in log[-1],
-          str(log[-1])[-300:])
+    recs = sd.root / "browser-output" / "recordings"
+    if not (sd.root / "browser-output").is_dir():  # no `downloads: work`, so no `recording: {to: work}`
+        out = sh(f"browser-event replay --recording {REC}; echo rc=$?")
+        check("without browser-output/, --recording is refused: no recordings",
+              "rc=126" in out and "no recordings" in out, out[-200:])
+    else:
+        # what `record` writes with `to: work` (glove's checked copy, on the host), here of DRAG's rows
+        real = sorted(p.name for p in recs.iterdir() if p.is_dir() and re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", p.name)
+                      and p.name != REC) if recs.is_dir() else []
+        (recs / REC).mkdir(parents=True, exist_ok=True)
+        try:
+            (recs / REC / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in DRAG["events"]))
+            (recs / REC / "meta.json").write_text(json.dumps({"display": [1280, 800]}))
+            out = sh("browser-event recordings; echo rc=$?")
+            check("`browser-event recordings` lists those in browser-output/recordings/",
+                  f'"{REC}"' in out and all(f'"{n}"' in out for n in real) and "rc=0" in out, out[-200:])
+            out = sh(f"browser-event replay --recording {REC}; echo rc=$?")
+            res = json.loads(out[out.index("{"):out.rindex("}") + 1]) if "{" in out else {}
+            run = sd.root / "browser-events" / str(res.get("id"))
+            check("a recording replays by id, and its result names its id, dir and frames",
+                  "rc=0" in out and res.get("status") == "ok" and res.get("end_error_px") == 0
+                  and res.get("dir") == f"/work/browser-events/{res.get('id')}"
+                  and res.get("frames") == {k: f"{res.get('dir')}/{k}.png" for k in ("before", "after")}
+                  and (run / "after.png").is_file()
+                  and json.loads((run / "plan.json").read_text()) == DRAG, out[-300:])
+            log = [json.loads(line) for line in (sd.root / "browser-events" / "log.jsonl").read_text().splitlines()]
+            check("its log line names the recording", log[-1].get("recording") == REC and "plan" not in log[-1],
+                  str(log[-1])[-300:])
+        finally:
+            shutil.rmtree(recs / REC, ignore_errors=True)  # never left among the operator's
+        if CAPTURED:  # the operator's own, from capture_checks: `record` -> `replay --recording <id>`
+            out = sh(f"browser-event replay --recording {CAPTURED[-1]} --dry-run; echo rc=$?")
+            check("the recording `record` just made replays by id (dry run)",
+                  "rc=0" in out and '"dry-run"' in out, out[-300:])
     exec_pw("mkdir -p /tmp/capture && echo '20261020-101741-0a1b2c 999999' > /tmp/capture/.current")
     out = sh(stage("drag.json", DRAG) + " && browser-event replay drag.json --dry-run; echo rc=$?")
     check("a marker a dead recorder left behind does not block a replay", "rc=0" in out, out[-200:])
@@ -623,10 +641,8 @@ def capture_checks(sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
     check("to: work: also in browser-output/recordings/ (read-only at /work/browser-output)",
           (work / "meta.json").is_file() and (work / "shots").is_dir())
     left = exec_pw(f"ls -A /tmp/capture 2>/dev/null; test -e /tmp/capture/{cap.name} && echo LEFT").stdout
-    check("removed from the sidecar's tmpfs", "LEFT" not in left, left.strip())
-    kept = exec_pw(f"ls -A /tmp/capture/.saved/{cap.name}").stdout.split()
-    check("but for what `browser-event replay --recording` needs (.saved/<id>/)",
-          kept == ["events.jsonl", "meta.json"], str(kept))
+    check("removed from the sidecar's tmpfs (--recording reads browser-output/)", "LEFT" not in left, left.strip())
+    CAPTURED.append(cap.name)
 
 
 if __name__ == "__main__":

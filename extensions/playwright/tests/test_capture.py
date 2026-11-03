@@ -222,6 +222,31 @@ def test_a_planted_link_is_refused_not_followed(tmp_path):
     assert list(elsewhere.iterdir()) == []
 
 
+def test_a_failed_write_leaves_nothing_partial(tmp_path, monkeypatch):
+    cap = capture.read_tar(_tar(_good()), CID)
+    real, n = os.open, [0]
+
+    def full(path, flags, *a, **kw):  # the disk fills on the third file
+        if flags & os.O_CREAT:
+            n[0] += 1
+            if n[0] == 3:
+                raise OSError(28, "No space left on device")
+        return real(path, flags, *a, **kw)
+
+    monkeypatch.setattr(capture.os, "open", full)
+    with pytest.raises(OSError, match="No space"):
+        capture.write(tmp_path, cap, private=False)
+    assert os.listdir(tmp_path / "recordings") == []  # neither <id>/ nor its hidden working copy
+
+
+def test_never_renamed_over_an_empty_directory(tmp_path):
+    cap = capture.read_tar(_tar(_good()), CID)
+    (tmp_path / "recordings" / CID).mkdir(parents=True)  # what a plain rename would silently replace
+    with pytest.raises(FileExistsError):
+        capture.write(tmp_path, cap, private=False)
+    assert os.listdir(tmp_path / "recordings") == [CID] and not os.listdir(tmp_path / "recordings" / CID)
+
+
 # --- what the operator sees ----------------------------------------------------------------------------------------
 
 def test_summary_and_titles_are_printable():
@@ -234,30 +259,41 @@ def test_summary_and_titles_are_printable():
 
 # --- what `record` leaves in the sidecar -------------------------------------------------------------------------
 
-@pytest.mark.parametrize(("event_relay", "to", "saved_rc", "want"), [
-    (True, "work", 0, ["saved"]),             # replayable, and the agent may read it anyway
-    (True, "work", 2, ["saved", "rm"]),       # `saved` failed (e.g. an older image): remove it all
-    (True, "session", 0, ["rm"]),             # the agent may not read it: nothing kept
-    (False, "work", 0, ["rm"]),               # nothing could replay it
-    (True, "planted", 0, ["rm"]),             # browser-output/ refused it: the agent can't read it anyway
-])
-def test_record_keeps_a_replayable_copy_only_with_event_relay_and_to_work(tmp_path, monkeypatch, event_relay, to,
-                                                                          saved_rc, want):
+def _collecting(tmp_path, monkeypatch, ran: list):
+    """`cli` with the sidecar faked (it holds CID; each `run` goes to `ran`), and a session in tmp_path."""
     cli = importlib.import_module("glove_ext.playwright.cli")
-    ran = []
 
     def run(argv, **_kw):
-        ran.append("saved" if "saved" in argv else "rm" if "rm" in argv else argv)
-        return type("R", (), {"returncode": saved_rc, "stdout": "kept"})()
+        ran.append("rm" if "rm" in argv else argv)
+        return type("R", (), {"returncode": 0})()
 
     monkeypatch.setattr(cli, "_exec", lambda *a: CID)
     monkeypatch.setattr(cli, "_read_capped", lambda *a: _tar(_good()))
     monkeypatch.setattr(cli.subprocess, "run", run)
     for d in ("browser-output", "st"):
-        (tmp_path / d).mkdir()
-    s = type("S", (), {"runtime": "docker", "settings": {"event_relay": event_relay}, "root": tmp_path,
+        (tmp_path / d).mkdir(exist_ok=True)
+    s = type("S", (), {"runtime": "docker", "root": tmp_path,
                        "container": lambda self, n: f"glove-s-{n}", "state_dir": lambda self: tmp_path / "st"})()
-    if to == "planted":  # the sidecar can write browser-output/: glove refuses what it didn't write
-        (tmp_path / "browser-output" / capture.DIR / CID).mkdir(parents=True)
-    cli._collect(s, CID, {"to": "work" if to == "planted" else to})
-    assert ran == want
+    return cli, s
+
+
+@pytest.mark.parametrize("to", ["work", "session"])
+def test_record_leaves_nothing_in_the_sidecar(tmp_path, monkeypatch, to):
+    """`browser-event replay --recording` reads the checked copy in browser-output/ (`to: work`), not the sidecar's."""
+    cli, s = _collecting(tmp_path, monkeypatch, ran := [])
+    cli._collect(s, CID, {"to": to})
+    assert ran == ["rm"]
+    replayable = tmp_path / "browser-output" / capture.DIR / CID
+    assert {(replayable / f).is_file() for f in ("events.jsonl", "meta.json")} == {to == "work"}
+
+
+def test_record_moves_a_planted_recording_aside(tmp_path, monkeypatch):
+    """One the sidecar planted under the capture's id is never what `--recording` replays: glove's checked copy is."""
+    cli, s = _collecting(tmp_path, monkeypatch, [])
+    recs = tmp_path / "browser-output" / capture.DIR
+    (recs / CID).mkdir(parents=True)
+    (recs / CID / "events.jsonl").write_text("planted\n")
+    cli._collect(s, CID, {"to": "work"})
+    aside = [p for p in recs.iterdir() if p.name.startswith(f".planted-{CID}-")]
+    assert len(aside) == 1 and (aside[0] / "events.jsonl").read_text() == "planted\n"
+    assert (recs / CID / "events.jsonl").read_text() != "planted\n" and (recs / CID / "meta.json").is_file()

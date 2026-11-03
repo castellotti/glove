@@ -57,10 +57,10 @@ def pol(tmp_path, monkeypatch):
     pol = _load("relay_policy")
     (tmp_path / "chan" / "plans").mkdir(parents=True)
     (tmp_path / "log").mkdir()
-    (tmp_path / "saved").mkdir()
+    (tmp_path / "recordings").mkdir()
     monkeypatch.setattr(pol, "CHANNEL", str(tmp_path / "chan"))
     monkeypatch.setattr(pol.program, "RECORDER", str(IMAGE / "glove-pw-capture"))
-    monkeypatch.setattr(pol.program._recorder(), "SAVED", tmp_path / "saved")
+    monkeypatch.setattr(pol.program, "RECORDINGS", str(tmp_path / "recordings"))
     monkeypatch.setattr(pol, "LOG_ROOT", str(tmp_path / "log"))
     monkeypatch.setattr(pol.program, "recording", lambda: False)
     yield pol
@@ -74,8 +74,8 @@ def _stage(pol, name: str, plan=PLAN) -> str:
 
 
 def _save(pol, cid=CID, events=EVENTS, meta=None) -> Path:
-    """A recording `record` saved: what glove-pw-capture `saved` leaves in SAVED/<cid>/."""
-    d = pol.program._recorder().SAVED / cid
+    """A recording `record` wrote to browser-output/recordings/<cid>/ (`to: work`)."""
+    d = Path(pol.program.RECORDINGS) / cid
     d.mkdir()
     (d / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     if meta is not False:
@@ -225,7 +225,7 @@ def test_the_output_stays_bounded(pol, monkeypatch):
         _stage(pol, f"p{i}.json")
         _prepare(pol, "replay", f"p{i}.json")
     kept = sorted(os.listdir(pol.LOG_ROOT))
-    replays = [n for n in kept if pol.program._recorder().ID.fullmatch(n)]
+    replays = [n for n in kept if pol.program.ID.fullmatch(n)]
     assert len(replays) == 3 and not set(old) & set(replays) and "keep-me" in kept
     assert "log.1.jsonl" in kept and os.path.getsize(os.path.join(pol.LOG_ROOT, "log.jsonl")) <= 2 * 200
 
@@ -246,10 +246,8 @@ def test_event_keep_is_bounded_in_the_policy_too(monkeypatch, value, want):
 def test_the_recorder_and_the_host_agree_on_ids():
     from glove_ext.playwright import capture
 
-    prog = _load("browser_event")
-    prog.RECORDER = str(IMAGE / "glove-pw-capture")
-    # a capture's id (the policy's replays look the same): `record` (on the host) checks it too
-    assert prog._recorder().ID.pattern == capture.ID.pattern.removeprefix("^")
+    # a recording's id (the policy's replays look the same): `record` (on the host) checks it too
+    assert _load("browser_event").ID.pattern == capture.ID.pattern.removeprefix("^")
 
 
 def test_recordings_lists_them_and_is_logged(pol):
@@ -258,7 +256,7 @@ def test_recordings_lists_them_and_is_logged(pol):
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
-def test_a_saved_recording_replays_by_id(pol, dry_run):
+def test_a_recording_replays_by_id(pol, dry_run):
     _save(pol)
     argv, _ = _prepare(pol, "replay", "--recording", CID, *(["--dry-run"] if dry_run else []))
     out = argv[argv.index("--out") + 1]
@@ -267,23 +265,23 @@ def test_a_saved_recording_replays_by_id(pol, dry_run):
     rows = [{k: e[k] for k in ("t", "type", "x", "y", "button")} for e in EVENTS]
     assert json.loads(raw) == {**PLAN, "events": rows}  # meta.json's display, events.jsonl's rows cut to ROW
     assert ("--dry-run" in argv) is dry_run
-    assert (pol.program._recorder().SAVED / CID / "events.jsonl").exists()  # a recording replays as often as asked
+    assert (Path(pol.program.RECORDINGS) / CID / "events.jsonl").exists()  # a recording replays as often as asked
     (entry,) = _log(pol)
     assert entry["recording"] == CID and "plan" not in entry and entry["events"] == 4
     assert entry["plan_sha256"] == hashlib.sha256(raw).hexdigest() and entry["dry_run"] is dry_run
 
 
-def test_a_recording_is_refused_unless_saved_whole_and_small(pol, tmp_path):
+def test_a_recording_is_refused_unless_whole_and_small(pol, tmp_path):
     msgs = {}
     msgs["id"] = _prepare(pol, "replay", "--recording", "../" + CID)[0]
     msgs["none"] = _prepare(pol, "replay", "--recording", CID)[0]
     msgs["no value"] = _prepare(pol, "replay", "--recording")[0]
-    _save(pol, "20261020-101741-000001", meta=False)  # still recording: meta.json is written last
+    _save(pol, "20261020-101741-000001", meta=False)  # the sidecar can write browser-output/: anything goes
     msgs["unfinished"] = _prepare(pol, "replay", "--recording", "20261020-101741-000001")[0]
     big = _save(pol, "20261020-101741-000002")
     (big / "events.jsonl").write_text(" " * (pol.PLAN_MAX + 1))
     msgs["big"] = _prepare(pol, "replay", "--recording", "20261020-101741-000002")[0]
-    os.symlink(_save(pol, "20261020-101741-000003"), pol.program._recorder().SAVED / "20261020-101741-000004")
+    os.symlink(_save(pol, "20261020-101741-000003"), Path(pol.program.RECORDINGS) / "20261020-101741-000004")
     msgs["dir link"] = _prepare(pol, "replay", "--recording", "20261020-101741-000004")[0]
     files = _save(pol, "20261020-101741-000005", meta=False)
     os.symlink(big / "meta.json", files / "meta.json")
@@ -295,18 +293,18 @@ def test_a_recording_is_refused_unless_saved_whole_and_small(pol, tmp_path):
     msgs["invalid"] = _prepare(pol, "replay", "--recording", "20261020-101741-000007")[0]
     assert "want a recording's id" in msgs["id"] and "want a recording's id" in msgs["no value"]
     assert "No such file" in msgs["none"] and "recordings` lists" in msgs["none"]
-    assert "meta.json (not finished?)" in msgs["unfinished"]
+    assert "meta.json: No such file" in msgs["unfinished"]
     assert "events.jsonl" in msgs["big"] and "bytes (at most" in msgs["big"]
     assert "20261020-101741-000004" in msgs["dir link"] and "meta.json" in msgs["file link"]  # O_NOFOLLOW
     assert "not JSON" in msgs["not json"] and "inside the display 200x200" in msgs["invalid"]
     log = _log(pol)
     assert len(log) == len(msgs) and all("refused" in e for e in log)
-    assert not [n for n in os.listdir(pol.LOG_ROOT) if pol.program._recorder().ID.fullmatch(n)]  # nothing ran
+    assert not [n for n in os.listdir(pol.LOG_ROOT) if pol.program.ID.fullmatch(n)]  # nothing ran
 
 
-def test_no_saved_recordings_at_all(pol):
-    os.rmdir(pol.program._recorder().SAVED)
-    assert "no saved recordings" in _prepare(pol, "replay", "--recording", CID)[0]
+def test_no_recordings_at_all(pol):
+    os.rmdir(pol.program.RECORDINGS)
+    assert "no recordings" in _prepare(pol, "replay", "--recording", CID)[0]
 
 
 def test_a_recording_too_long_for_the_timeout_is_refused(pol):
@@ -396,10 +394,9 @@ def _with_recorder(prog, tmp_path, monkeypatch, recording=False):
     """browser_event's recorder module (its wall(), png() and claim), on a fake /tmp/capture."""
     monkeypatch.setattr(prog, "RECORDER", str(IMAGE / "glove-pw-capture"))
     rec = prog._recorder()
-    monkeypatch.setattr(rec, "EVENTS_PROGRAM", str(IMAGE / "browser_event.py"))
     root = tmp_path / "capture"
     for name, path in (("ROOT", root), ("LOCK", root / ".lock"), ("REPLAY", root / ".replay"),
-                       ("CURRENT", root / ".current"), ("SAVED", root / ".saved")):
+                       ("CURRENT", root / ".current")):
         monkeypatch.setattr(rec, name, path)
     monkeypatch.setattr(rec, "running", lambda: ("20261020-101741-0a1b2c", 1) if recording else None)
     return rec
@@ -520,97 +517,20 @@ def test_only_the_frames_written_are_named(tmp_path, monkeypatch):
     assert rc == 2 and list(result["frames"]) == ["before"]
 
 
-def test_recordings_lists_the_saved_ones(tmp_path, monkeypatch, capsys):
+def test_recordings_lists_them(tmp_path, monkeypatch, capsys):
     prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
+    root = tmp_path / "recordings"
+    monkeypatch.setattr(prog, "RECORDINGS", str(root))
     assert prog.recordings() == 0 and json.loads(capsys.readouterr().out) == {"recordings": []}
     for name in ("20261020-101741-000002", "20261020-101741-000001", "notes", ".x"):
-        (rec.SAVED / name).mkdir(parents=True)
-    (rec.SAVED / "20261020-101741-000003").write_text("")  # neither a file nor a link is a recording
-    (rec.SAVED / "20261020-101741-000004").symlink_to(rec.SAVED / "20261020-101741-000001")
+        (root / name).mkdir(parents=True)
+    (root / "20261020-101741-000003").write_text("")  # neither a file nor a link is a recording
+    (root / "20261020-101741-000004").symlink_to(root / "20261020-101741-000001")
     prog.recordings()
     assert json.loads(capsys.readouterr().out)["recordings"] == ["20261020-101741-000001", "20261020-101741-000002"]
-
-
-# --- what the recorder keeps once `record` has saved a capture -------------------------------------------------
-
-def _capture(rec, cid, events=EVENTS):
-    d = rec.ROOT / cid
-    (d / "shots").mkdir(parents=True)
-    (d / "shots" / "1-arm.png").write_bytes(b"png")
-    (d / "events.jsonl").write_text(events if isinstance(events, str) else
-                                    "".join(json.dumps(e) + "\n" for e in events))
-    (d / "windows.jsonl").write_text("{}\n")
-    (d / "meta.json").write_text(json.dumps({"display": PLAN["display"]}))
-    (rec.ROOT / f".{cid}.log").write_text("")
-    return d
-
-
-def test_saved_keeps_what_a_replay_needs(tmp_path, monkeypatch, capsys):
-    prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
-    _capture(rec, CID)
-    assert rec.saved(CID) == 0
-    assert capsys.readouterr().out.startswith(f"kept for `browser-event replay --recording {CID}`")
-    assert sorted(os.listdir(rec.ROOT)) == [".saved"]  # the capture and its log are gone
-    assert sorted(p.name for p in (rec.SAVED / CID).iterdir()) == ["events.jsonl", "meta.json"]
-    assert rec.saved("../x") == 1
-
-
-def test_saved_keeps_nothing_a_replay_would_refuse(tmp_path, monkeypatch, capsys):
-    prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
-    too_long = [EVENTS[0], {**EVENTS[2], "t": EVENTS[0]["t"] + 1000 * prog.TIMEOUT_S}]
-    whys = []
-    for i, (events, why) in enumerate([("x" * (rec.SAVED_MAX + 1), "bytes (at most"),
-                                       ("", "events: want a list of 1 to"),
-                                       ([EVENTS[0]] * (prog.MAX_EVENTS + 1), "events: want a list of 1 to"),
-                                       (too_long, "must end within"), ("{\n", "not JSON"),
-                                       (EVENTS, "unfinished (no meta.json)")]):
-        cid = f"20261020-101741-00000{i}"
-        d = _capture(rec, cid, events)
-        if why.startswith("unfinished"):
-            (d / "meta.json").unlink()
-        assert rec.saved(cid) == 0
-        whys.append((why, capsys.readouterr().out))
-    assert all(out.startswith("not kept for replay: ") and why in out for why, out in whys), whys
-    assert os.listdir(rec.ROOT) == []
-
-
-def test_saved_never_keeps_half_a_recording(tmp_path, monkeypatch):
-    prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
-    _capture(rec, CID)
-    real = os.replace
-
-    def full(src, dst):
-        if str(src).endswith("meta.json"):
-            raise OSError(28, "No space left on device")
-        real(src, dst)
-
-    monkeypatch.setattr(rec.os, "replace", full)
-    assert rec.saved(CID) == 0
-    assert not (rec.SAVED / CID).exists() and not (rec.ROOT / CID).exists()
-
-
-def test_saved_never_removes_a_copy_it_did_not_make(tmp_path, monkeypatch, capsys):
-    prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
-    _capture(rec, CID)
-    (rec.SAVED / CID).mkdir(parents=True)  # another `record` of the same capture kept it first
-    (rec.SAVED / CID / "events.jsonl").write_text("theirs")
-    assert rec.saved(CID) == 0 and "not kept for replay" in capsys.readouterr().out
-    assert (rec.SAVED / CID / "events.jsonl").read_text() == "theirs"
-
-
-def test_saved_keeps_the_newest(tmp_path, monkeypatch):
-    prog = _load("browser_event")
-    rec = _with_recorder(prog, tmp_path, monkeypatch)
-    monkeypatch.setattr(rec, "SAVED_KEEP", 2)
-    for i in range(4):
-        _capture(rec, f"20261020-101741-00000{i}")
-        rec.saved(f"20261020-101741-00000{i}")
-    assert sorted(p.name for p in rec.SAVED.iterdir()) == ["20261020-101741-000002", "20261020-101741-000003"]
+    monkeypatch.setattr(prog, "LIST_MAX", 1)  # the newest, and how many more
+    prog.recordings()
+    assert json.loads(capsys.readouterr().out) == {"recordings": ["20261020-101741-000002"], "more": 1}
 
 
 # --- the session -------------------------------------------------------------------------------------------------

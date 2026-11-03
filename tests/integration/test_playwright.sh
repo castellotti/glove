@@ -12,7 +12,8 @@
 #   capture   control + recording {to: work}: a second client's window covers the agent's page and
 #             its next call raises it; `glove playwright record` records a drag through its noVNC WebSocket
 #   events    novnc with event_relay: `browser-event status|recordings|replay` from the agent's shell
-#             (a replayed drag lands on the page; a saved recording replays by id), the log, every refusal
+#             (a replayed drag lands on the page; with capture, a recording in browser-output/ replays
+#             by id, the one `record` made too), the log, every refusal
 #   vibe      Vibe, headless, direct egress: the allowlist hides the rest
 #   claude-code  Claude Code, headless, direct egress, observe: the allowlist
 #             is allow rules, every other known tool a managed deny
