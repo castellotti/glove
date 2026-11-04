@@ -8,10 +8,11 @@ with the argv relay_policy.py built; the agent never picks its arguments.
         there, and whether the operator is recording. Sends no input.
 
     browser_event.py recordings
-        One JSON object: the ids of the recordings in browser-output/
-        (RECORDINGS here; `glove playwright record` writes them), the newest
-        LIST_MAX, oldest first, and how many more there are. `browser-event
-        replay --recording` checks one only when it replays it.
+        One JSON object: the ids of the complete recordings in browser-output/
+        (RECORDINGS here; `glove playwright record` writes them): directories
+        holding a regular events.jsonl and meta.json. The newest LIST_MAX,
+        oldest first, and how many more there are. `browser-event replay
+        --recording` checks the rest (the rows, the length) when it replays one.
 
     browser_event.py replay PLAN --out DIR --id ID [--display :1] [--dry-run] [--while-recording]
         Replay PLAN's input events on the display, then write DIR/result.json
@@ -183,16 +184,19 @@ def status(display: str) -> int:
     return 1 if "error" in out else 0
 
 
-def _is_dir(path: str) -> bool:
+def _complete(entry: os.DirEntry) -> bool:
+    """Whether `entry` is a recording's directory (not a link) holding a regular events.jsonl and meta.json."""
     try:
-        return stat.S_ISDIR(os.lstat(path).st_mode)
-    except OSError:  # removed meanwhile
+        return entry.is_dir(follow_symlinks=False) and all(
+            stat.S_ISREG(os.lstat(os.path.join(entry.path, f)).st_mode) for f in ("events.jsonl", "meta.json"))
+    except OSError:  # removed meanwhile, or a file missing
         return False
 
 
 def recordings() -> int:
     try:
-        ids = sorted(n for n in os.listdir(RECORDINGS) if ID.fullmatch(n) and _is_dir(os.path.join(RECORDINGS, n)))
+        with os.scandir(RECORDINGS) as it:
+            ids = sorted(e.name for e in it if ID.fullmatch(e.name) and _complete(e))
         out = {"recordings": ids[-LIST_MAX:], **({"more": len(ids) - LIST_MAX} if len(ids) > LIST_MAX else {})}
     except FileNotFoundError:
         out = {"recordings": []}

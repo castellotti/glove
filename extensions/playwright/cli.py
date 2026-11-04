@@ -346,7 +346,7 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
         return
     state = s.state_dir()
     try:
-        saved = [capture.write(state, cap, private=True)]
+        saved = [capture.write(state, cap, private=True)[0]]
     except FileExistsError:
         saved = []
         console.print(f"[dim]capture {cid} is already saved in {state}/{capture.DIR}/[/dim]")
@@ -354,17 +354,17 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
         err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
         return
     if rec["to"] == "work":
-        out = s.root / "browser-output"
+        asides: list[str] = []
         try:
-            try:
-                saved.append(capture.write(out, cap, private=False))
-            except FileExistsError:  # ids are unguessable: glove didn't make it, and its files are unchecked
-                aside = capture.set_aside(out, cid)  # never replayed by `browser-event replay --recording`
-                err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already existed, and glove did "
-                          f"not write it (the browser sidecar can write there): moved to {aside}")
-                saved.append(capture.write(out, cap, private=False))
+            path, asides = capture.write(s.root / "browser-output", cap, private=False, untrusted=True)
+            saved.append(path)
+        except FileExistsError:  # glove's own copy, from an earlier `record`
+            console.print(f"[dim]capture {cid} is already saved in browser-output/{capture.DIR}/[/dim]")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
+        for aside in asides:  # ids are unguessable: glove didn't make it, and its files are unchecked
+            err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already existed, and glove did "
+                      f"not write it (the browser sidecar can write there): moved to {aside}")
     subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
                    capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")

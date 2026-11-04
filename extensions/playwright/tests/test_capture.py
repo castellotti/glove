@@ -8,6 +8,7 @@ import importlib
 import io
 import json
 import os
+import shutil
 import stat
 import tarfile
 
@@ -197,12 +198,12 @@ def test_not_a_tar_or_a_bad_id_is_refused():
 
 def test_written_private_and_to_work(tmp_path):
     cap = capture.read_tar(_tar(_good()), CID)
-    host = capture.write(tmp_path, cap, private=True)
+    host, _ = capture.write(tmp_path, cap, private=True)
     assert (host / "shots" / "0002-down.png").read_bytes() == PNG
     assert stat.S_IMODE(host.stat().st_mode) == 0o700 and stat.S_IMODE((host / "meta.json").stat().st_mode) == 0o600
     out = tmp_path / "browser-output"
     out.mkdir()
-    work = capture.write(out, cap, private=False)
+    work, _ = capture.write(out, cap, private=False)
     assert stat.S_IMODE((work / "events.jsonl").stat().st_mode) == 0o644
     with pytest.raises(FileExistsError):  # never an overwrite
         capture.write(out, cap, private=False)
@@ -224,27 +225,93 @@ def test_a_planted_link_is_refused_not_followed(tmp_path):
 
 def test_a_failed_write_leaves_nothing_partial(tmp_path, monkeypatch):
     cap = capture.read_tar(_tar(_good()), CID)
-    real, n = os.open, [0]
+    real, n = capture._create, [0]
 
-    def full(path, flags, *a, **kw):  # the disk fills on the third file
-        if flags & os.O_CREAT:
-            n[0] += 1
-            if n[0] == 3:
-                raise OSError(28, "No space left on device")
-        return real(path, flags, *a, **kw)
+    def full(*a):  # the disk fills on the third file
+        n[0] += 1
+        if n[0] == 3:
+            raise OSError(28, "No space left on device")
+        return real(*a)
 
-    monkeypatch.setattr(capture.os, "open", full)
+    monkeypatch.setattr(capture, "_create", full)
     with pytest.raises(OSError, match="No space"):
         capture.write(tmp_path, cap, private=False)
     assert os.listdir(tmp_path / "recordings") == []  # neither <id>/ nor its hidden working copy
 
 
-def test_never_renamed_over_an_empty_directory(tmp_path):
+@pytest.mark.parametrize("atomic", [True, False])
+def test_never_renamed_over_an_entry(tmp_path, monkeypatch, atomic):
+    """Not over an empty directory (which a plain rename replaces), nor a non-empty one (ENOTEMPTY), with libc's
+    no-replace rename or, where the file system has none, without."""
+    if not atomic:
+        monkeypatch.setattr(capture, "_noreplace", lambda: (None, 0))
     cap = capture.read_tar(_tar(_good()), CID)
-    (tmp_path / "recordings" / CID).mkdir(parents=True)  # what a plain rename would silently replace
+    recs = tmp_path / "recordings"
+    (recs / CID).mkdir(parents=True)
     with pytest.raises(FileExistsError):
         capture.write(tmp_path, cap, private=False)
-    assert os.listdir(tmp_path / "recordings") == [CID] and not os.listdir(tmp_path / "recordings" / CID)
+    assert os.listdir(recs) == [CID] and not os.listdir(recs / CID)
+    (recs / CID / "x").write_text("")
+    with pytest.raises(FileExistsError):
+        capture.write(tmp_path, cap, private=False)
+    monkeypatch.setattr(capture, "_exists", lambda *a: False)  # planted after the check: ENOTEMPTY, FileExistsError
+    with pytest.raises(FileExistsError):
+        capture.write(tmp_path, cap, private=False)
+    assert sorted(os.listdir(recs)) == [CID] and os.listdir(recs / CID) == ["x"]
+
+
+def test_untrusted_moves_aside_only_what_glove_did_not_write(tmp_path, monkeypatch):
+    cap = capture.read_tar(_tar(_good()), CID)
+    recs = tmp_path / "recordings"
+    path, asides = capture.write(tmp_path, cap, private=False, untrusted=True)
+    with pytest.raises(FileExistsError):  # glove's own copy (a second `record` of the same capture): left as it is
+        capture.write(tmp_path, cap, private=False, untrusted=True)
+    assert asides == [] and sorted(os.listdir(recs)) == [CID]
+    (path / "events.jsonl").write_text("swapped\n")  # any difference: not glove's
+    _, asides = capture.write(tmp_path, cap, private=False, untrusted=True)
+    assert len(asides) == 1 and (recs / asides[0] / "events.jsonl").read_text() == "swapped\n"
+    assert (path / "events.jsonl").read_bytes() == cap.files["events.jsonl"]
+
+
+def test_a_planted_entry_gone_or_planted_again(tmp_path, monkeypatch):
+    cap = capture.read_tar(_tar(_good()), CID)
+    recs = tmp_path / "recordings"
+    (recs / CID).mkdir(parents=True)
+    real = capture._set_aside
+
+    def gone(top, cid):  # removed by the sidecar before glove moves it
+        os.rmdir(cid, dir_fd=top)
+        return real(top, cid)
+
+    monkeypatch.setattr(capture, "_set_aside", gone)
+    assert capture.write(tmp_path, cap, private=False, untrusted=True)[1] == []
+    shutil.rmtree(recs / CID)
+    (recs / CID).mkdir()
+
+    def replant(top, cid):
+        aside = real(top, cid)
+        os.mkdir(cid, dir_fd=top)
+        return aside
+
+    monkeypatch.setattr(capture, "_set_aside", replant)
+    with pytest.raises(OSError, match="planted again") as e:
+        capture.write(tmp_path, cap, private=False, untrusted=True)
+    assert not isinstance(e.value, FileExistsError)
+    assert not [n for n in os.listdir(recs) if capture.TMP.fullmatch(n)]  # no working copy left
+
+
+def test_stale_working_copies_and_old_planted_entries_are_pruned(tmp_path, monkeypatch):
+    monkeypatch.setattr(capture, "PLANTED_KEEP", 2)
+    recs = tmp_path / "recordings"
+    recs.mkdir()
+    old, new = f".{CID}.00000001", f".{CID}.00000002"
+    for i, name in enumerate([old, new] + [f".planted-{CID}-0000000{n}" for n in range(4)]):
+        (recs / name).mkdir()
+        os.utime(recs / name, (1000 + i, 1000 + i) if name != new else None)
+    (recs / ".planted-x").mkdir()  # not glove's naming: left
+    capture.write(tmp_path, capture.read_tar(_tar(_good()), CID), private=False)
+    assert sorted(os.listdir(recs)) == sorted([CID, new, ".planted-x", f".planted-{CID}-00000002",
+                                               f".planted-{CID}-00000003"])
 
 
 # --- what the operator sees ----------------------------------------------------------------------------------------
@@ -285,6 +352,15 @@ def test_record_leaves_nothing_in_the_sidecar(tmp_path, monkeypatch, to):
     assert ran == ["rm"]
     replayable = tmp_path / "browser-output" / capture.DIR / CID
     assert {(replayable / f).is_file() for f in ("events.jsonl", "meta.json")} == {to == "work"}
+
+
+def test_record_twice_leaves_glove_s_own_copy(tmp_path, monkeypatch, capsys):
+    """A second `record` of the same capture (or a retry) never calls glove's own copy planted."""
+    cli, s = _collecting(tmp_path, monkeypatch, [])
+    cli._collect(s, CID, {"to": "work"})
+    cli._collect(s, CID, {"to": "work"})
+    recs = tmp_path / "browser-output" / capture.DIR
+    assert os.listdir(recs) == [CID] and "refused" not in capsys.readouterr().err
 
 
 def test_record_moves_a_planted_recording_aside(tmp_path, monkeypatch):

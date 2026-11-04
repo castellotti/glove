@@ -14,7 +14,9 @@ a link planted there is refused, never followed.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import errno
+import functools
 import io
 import json
 import math
@@ -22,7 +24,10 @@ import os
 import re
 import secrets
 import shutil
+import stat
+import sys
 import tarfile
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +46,11 @@ STOP_REASONS = {"viewer-closed", "interrupted", "stop", "max_seconds", "cap", "e
 DEFAULTS = {"to": "session", "max_seconds": 600, "motion_hz": 120}
 DIR = "recordings"  # under the session state dir and, with `to: work`, browser-output/
 _DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+TMP = re.compile(r"^\.[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.[0-9a-f]{8}\Z")  # a copy being written
+PLANTED = re.compile(r"^\.planted-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}-[0-9a-f]{8}\Z")  # one moved aside
+STALE_S = 3600  # a working copy this old was left by a killed `record`
+PLANTED_KEEP = 10  # entries moved aside kept for the operator to look at
+PLACE_TRIES = 3  # renames tried while the sidecar plants <id> again
 
 
 def spec(settings: dict[str, Any]) -> dict[str, Any] | None:
@@ -234,39 +244,93 @@ def _dir(base: Path, mode: int = 0o755) -> int:
         os.close(fd)
 
 
-def write(base: Path, cap: Capture, *, private: bool) -> Path:
-    """Write `cap` to `<base>/recordings/<id>/`, never following a link and never
-    overwriting: `base` must exist; `recordings/` is made if missing; `<id>/` must not
-    exist (FileExistsError). It is written as a hidden `.<id>.<token>/` and renamed into
-    place once whole, so `<id>/` is never partial (`browser-event replay --recording` reads it)."""
+def write(base: Path, cap: Capture, *, private: bool, untrusted: bool = False) -> tuple[Path, list[str]]:
+    """Write `cap` to `<base>/recordings/<id>/`, never following a link and never over an
+    existing entry; the path, and the names of entries moved aside. `base` must exist;
+    `recordings/` is made if missing. It is written as a hidden `.<id>.<token>/` and renamed
+    into place once whole, so `<id>/` is never partial. An existing `<id>` raises
+    FileExistsError, except with `untrusted` (the sidecar can write in `base`): there one that
+    isn't exactly `cap`'s files is moved aside to a hidden `.planted-<id>-<token>` first, and
+    FileExistsError means glove's copy is already there."""
     dmode, fmode = (0o700, 0o600) if private else (0o755, 0o644)
-    top, tmp = _dir(base, dmode), f".{cap.id}.{secrets.token_hex(4)}"
+    top, tmp, asides = _dir(base, dmode), f".{cap.id}.{secrets.token_hex(4)}", []
     try:
+        _prune(top)
         os.mkdir(tmp, dmode, dir_fd=top)
         try:
-            fds = [os.open(tmp, _DIRFLAGS, dir_fd=top)]
-            try:
-                if any(rel.startswith("shots/") for rel in cap.files):
-                    os.mkdir("shots", dmode, dir_fd=fds[0])
-                    fds.append(os.open("shots", _DIRFLAGS, dir_fd=fds[0]))
-                for rel, body in sorted(cap.files.items()):
-                    where = fds[-1] if rel.startswith("shots/") else fds[0]
-                    fd = os.open(rel.split("/")[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, fmode,
-                                 dir_fd=where)
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(body)
-            finally:
-                for fd in fds:
-                    os.close(fd)
-            if _exists(cap.id, top):  # rename would replace an empty directory: never over one
-                raise FileExistsError(errno.EEXIST, "already exists", str(base / DIR / cap.id))
-            os.rename(tmp, cap.id, src_dir_fd=top, dst_dir_fd=top)
+            _fill(top, tmp, cap.files, dmode, fmode)
+            for _ in range(PLACE_TRIES):
+                try:
+                    _rename_excl(tmp, cap.id, top)
+                    break
+                except FileExistsError:
+                    if not untrusted or _holds(top, cap.id, cap.files):
+                        raise
+                    if aside := _set_aside(top, cap.id):
+                        asides.append(aside)
+            else:  # the sidecar plants it again each time: give up, leaving what was moved aside
+                raise OSError(errno.EBUSY, f"planted again after being moved aside ({', '.join(asides)})",
+                              str(base / DIR / cap.id))
         except BaseException:
             shutil.rmtree(tmp, dir_fd=top, ignore_errors=True)
             raise
     finally:
         os.close(top)
-    return base / DIR / cap.id
+    return base / DIR / cap.id, asides
+
+
+def _create(name: str, mode: int, dir_fd: int) -> int:
+    """A new file in `dir_fd`, never over one nor through a link."""
+    return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dir_fd)
+
+
+def _fill(top: int, tmp: str, files: dict[str, bytes], dmode: int, fmode: int) -> None:
+    fds = [os.open(tmp, _DIRFLAGS, dir_fd=top)]
+    try:
+        if any(rel.startswith("shots/") for rel in files):
+            os.mkdir("shots", dmode, dir_fd=fds[0])
+            fds.append(os.open("shots", _DIRFLAGS, dir_fd=fds[0]))
+        for rel, body in sorted(files.items()):
+            with os.fdopen(_create(rel.split("/")[-1], fmode, fds[-1] if rel.startswith("shots/") else fds[0]),
+                           "wb") as f:
+                f.write(body)
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+@functools.cache
+def _noreplace() -> tuple[Any, int]:
+    """libc's atomic no-replace rename and its flag: renameatx_np(RENAME_EXCL) on macOS,
+    renameat2(RENAME_NOREPLACE) on Linux; (None, 0) where there is none."""
+    name, flag = ("renameatx_np", 0x4) if sys.platform == "darwin" else ("renameat2", 0x1)
+    try:
+        fn = getattr(ctypes.CDLL(None, use_errno=True), name)
+    except (OSError, AttributeError):
+        return None, 0
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn, flag
+
+
+def _rename_excl(src: str, dst: str, dfd: int) -> None:
+    """Rename `src` to `dst` in `dfd`, never over an existing entry (FileExistsError)."""
+    fn, flag = _noreplace()
+    if fn is not None:
+        if fn(dfd, os.fsencode(src), dfd, os.fsencode(dst), flag) == 0:
+            return
+        if (e := ctypes.get_errno()) not in (errno.EINVAL, errno.ENOSYS, errno.ENOTSUP):
+            raise OSError(e, os.strerror(e), dst)  # EEXIST: FileExistsError
+    # no atomic no-replace on this file system: check, then rename (a plain rename replaces an empty
+    # directory, and fails on a non-empty one)
+    if _exists(dst, dfd):
+        raise FileExistsError(errno.EEXIST, "already exists", dst)
+    try:
+        os.rename(src, dst, src_dir_fd=dfd, dst_dir_fd=dfd)
+    except OSError as e:
+        if e.errno in (errno.EEXIST, errno.ENOTEMPTY):
+            raise FileExistsError(errno.EEXIST, "already exists", dst) from e
+        raise
 
 
 def _exists(name: str, dfd: int) -> bool:
@@ -277,15 +341,70 @@ def _exists(name: str, dfd: int) -> bool:
     return True
 
 
-def set_aside(base: Path, cid: str) -> str:
-    """Rename `<base>/recordings/<cid>` (whatever it is; never followed) to a hidden name, which no
-    `browser-event recordings` lists; that name."""
-    top, aside = _dir(base), f".planted-{cid}-{secrets.token_hex(4)}"
+def _holds(top: int, cid: str, files: dict[str, bytes]) -> bool:
+    """Whether `<top>/<cid>/` is a directory holding exactly `files` (nothing followed): glove's copy."""
+    fds: list[int] = []
+    try:
+        fds.append(os.open(cid, _DIRFLAGS, dir_fd=top))
+        shots = {rel[6:] for rel in files if rel.startswith("shots/")}
+        if set(os.listdir(fds[0])) != {rel for rel in files if "/" not in rel} | ({"shots"} if shots else set()):
+            return False
+        if shots:
+            fds.append(os.open("shots", _DIRFLAGS, dir_fd=fds[0]))
+            if set(os.listdir(fds[1])) != shots:
+                return False
+        for rel, body in files.items():
+            fd = os.open(rel.split("/")[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=fds[-1] if rel.startswith("shots/") else fds[0])
+            with os.fdopen(fd, "rb") as f:
+                st = os.fstat(f.fileno())
+                if not stat.S_ISREG(st.st_mode) or st.st_size != len(body) or f.read(len(body) + 1) != body:
+                    return False
+        return True
+    except OSError:  # not a directory, a link, gone meanwhile
+        return False
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _set_aside(top: int, cid: str) -> str | None:
+    """Rename `<top>/<cid>` (whatever it is; never followed) to a hidden name, which no
+    `browser-event recordings` lists; that name, or None if it is gone meanwhile."""
+    aside = f".planted-{cid}-{secrets.token_hex(4)}"
     try:
         os.rename(cid, aside, src_dir_fd=top, dst_dir_fd=top)
-    finally:
-        os.close(top)
+    except FileNotFoundError:
+        return None
     return aside
+
+
+def _prune(top: int) -> None:
+    """Remove the hidden working copies a killed `record` left (older than STALE_S), and all but the
+    newest PLANTED_KEEP entries moved aside, so neither piles up."""
+    now, planted = time.time(), []
+    with os.scandir(top) as it:
+        for e in it:
+            if not e.name.startswith("."):
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if PLANTED.fullmatch(e.name):
+                planted.append((st.st_mtime, e.name, st.st_mode))
+            elif TMP.fullmatch(e.name) and now - st.st_mtime > STALE_S:
+                _remove(top, e.name, st.st_mode)
+    for _, name, mode in sorted(planted)[:-PLANTED_KEEP]:
+        _remove(top, name, mode)
+
+
+def _remove(top: int, name: str, mode: int) -> None:
+    if stat.S_ISDIR(mode):
+        shutil.rmtree(name, dir_fd=top, ignore_errors=True)
+    else:
+        with contextlib.suppress(OSError):
+            os.unlink(name, dir_fd=top)
 
 
 def printable(s: str) -> str:

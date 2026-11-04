@@ -38,6 +38,7 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -455,7 +456,7 @@ DRAG = {"v": 1, "display": [1280, 800],
                    *({"t": 40 * i, "type": "move", "x": 300 + 50 * i, "y": 400 + 2 * i} for i in range(1, 9)),
                    {"t": 400, "type": "up", "x": 700, "y": 420, "button": 1}]}
 PLANS = "/run/glove/browser-event/plans"
-REC = "20261101-090000-0a1b2c"  # a recording's id
+REC = f"20261101-090000-{secrets.token_hex(3)}"  # a recording's id: random, never one of the operator's
 CAPTURED: list[str] = []  # the recordings capture_checks made (event_checks replays them)
 # 5 s of pointer moves (no button): long enough to try arming a recorder while it runs
 SLOW = {"v": 1, "display": [1280, 800],
@@ -523,7 +524,7 @@ def event_checks(live, sd, rt: str, s: str, mcp_argv, exec_pw) -> None:
         # what `record` writes with `to: work` (glove's checked copy, on the host), here of DRAG's rows
         real = sorted(p.name for p in recs.iterdir() if p.is_dir() and re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", p.name)
                       and p.name != REC) if recs.is_dir() else []
-        (recs / REC).mkdir(parents=True, exist_ok=True)
+        (recs / REC).mkdir(parents=True)  # FileExistsError rather than over (and then deleting) a real one
         try:
             (recs / REC / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in DRAG["events"]))
             (recs / REC / "meta.json").write_text(json.dumps({"display": [1280, 800]}))

@@ -9,7 +9,7 @@ All notable changes to glove are documented here.
 - **`browser-event replay --recording <id>`** (playwright `event_relay`):
   replay a recording `glove playwright record` saved, by its id, without the
   agent copying its rows into `plans/`. It needs `recording: {to: work}`: the
-  policy reads the checked copy `record` wrote to
+  policy reads the copy `record` wrote to
   `browser-output/recordings/<id>/` (which the agent reads anyway and can't
   write; the sidecar has it mounted with `downloads: work`, which `to: work`
   needs). So a recording replays for as long as it is there, across sidecar
@@ -18,10 +18,16 @@ All notable changes to glove are documented here.
   links followed, each bounded, rows cut to a plan's fields) and runs it
   through the same validator, timeout, log and `plan.json` as a staged plan;
   a too-long one is refused with how to shorten it. `browser-event
-  recordings` lists the ids (the newest 200, and how many more). `record`
-  now writes each copy whole (a hidden name, renamed into place), and moves
-  one the sidecar planted under the same id aside (`.planted-<id>-…`) before
-  writing its own, so `--recording` never replays a planted or partial one.
+  recordings` lists the ids of the complete ones (a directory holding
+  `events.jsonl` and `meta.json`; the newest 200, and how many more). `record`
+  now writes each copy whole (a hidden name, renamed into place without ever
+  replacing an entry), so `<id>/` is never partial, and moves aside
+  (`.planted-<id>-…`) an entry already at its id that isn't glove's own copy
+  (it prunes stale working copies and keeps the newest 10 moved aside). The
+  sidecar can write to `browser-output/`, though: a recording there is input
+  the browser could have chosen (one planted under any id, or files swapped
+  after `record`), and `--recording` trusts it no further than a plan in
+  `plans/` (the same validator, display check and timeout).
 - **A replay's result names itself**: `id`, `dir` (`/work/browser-events/<id>`)
   and `frames` (the `before`/`after` PNGs written), so a caller needn't search
   `log.jsonl` for the replay it just caused.

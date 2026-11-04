@@ -278,16 +278,21 @@ several plans).
 The agent needn't copy a recording into `plans/`: `browser-event replay
 --recording <id>` builds the plan in the sidecar, from the `events.jsonl` (each
 row cut to `t`, `type`, `x`, `y`, `button`) and `meta.json` (its `display`) of
-a recording that `glove playwright record` has saved: the checked copy it wrote
+a recording that `glove playwright record` has saved: the copy it wrote
 to `browser-output/recordings/<id>/`. This needs `recording: {to: work}`, so
 the agent replays only recordings it reads anyway. A recording replays for as
 long as it is there, across sidecar restarts (the operator retires one by
 deleting `<session>/browser-output/recordings/<id>/`); `events.jsonl` may be at most 2 MiB and must end within
 `event_timeout` (a longer one is replayed by copying its rows into shorter
-plans). `browser-event recordings` lists their ids (the newest 200; each is
-checked only when replayed). A recording still running isn't there yet, and
-`record` writes each one whole (under a hidden name, then renamed): one the
-sidecar planted under the same id is moved aside (`.planted-<id>-…`) first.
+plans). `browser-event recordings` lists the ids of the complete ones (a
+directory holding `events.jsonl` and `meta.json`; the newest 200); the rows and
+length are checked when one is replayed. A recording still running isn't there
+yet, and `record` writes each one whole (under a hidden name, then renamed,
+never over an entry): an entry already at its id that isn't glove's own copy
+is moved aside (`.planted-<id>-…`; the newest 10 are kept). `browser-output/`
+is writable by the sidecar, so a recording there is input the browser could
+have chosen (planted under any id, or its files swapped after `record`):
+`--recording` checks it like any plan and trusts it no further.
 
 Each event is sent `t - events[0].t` ms after the first. It moves the pointer
 to `(x, y)`; `down`/`up` then press or release button 1–3, 8 or 9 (back,

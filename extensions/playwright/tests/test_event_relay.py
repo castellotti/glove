@@ -524,8 +524,15 @@ def test_recordings_lists_them(tmp_path, monkeypatch, capsys):
     assert prog.recordings() == 0 and json.loads(capsys.readouterr().out) == {"recordings": []}
     for name in ("20261020-101741-000002", "20261020-101741-000001", "notes", ".x"):
         (root / name).mkdir(parents=True)
+        for f in ("events.jsonl", "meta.json"):
+            (root / name / f).write_text("")
     (root / "20261020-101741-000003").write_text("")  # neither a file nor a link is a recording
     (root / "20261020-101741-000004").symlink_to(root / "20261020-101741-000001")
+    (root / "20261020-101741-000005").mkdir()  # nor one without its meta.json (unfinished, or planted)
+    (root / "20261020-101741-000005" / "events.jsonl").write_text("")
+    (root / "20261020-101741-000006").mkdir()  # nor one whose meta.json is a link
+    (root / "20261020-101741-000006" / "events.jsonl").write_text("")
+    (root / "20261020-101741-000006" / "meta.json").symlink_to(root / "20261020-101741-000001" / "meta.json")
     prog.recordings()
     assert json.loads(capsys.readouterr().out)["recordings"] == ["20261020-101741-000001", "20261020-101741-000002"]
     monkeypatch.setattr(prog, "LIST_MAX", 1)  # the newest, and how many more
