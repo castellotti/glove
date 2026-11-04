@@ -221,8 +221,8 @@ can't cover the window you are working in.
   holds `events.jsonl`, `windows.jsonl`, `meta.json` and `shots/*.png`. The
   recorder writes to the sidecar's tmpfs; `record` copies the capture out with
   `exec … tar` and then removes it, and the sidecar gets no new mount. With
-  `event_relay` and `to: work` it leaves the sidecar the capture's
-  `events.jsonl` and `meta.json`, so the agent can replay it (below).
+  `event_relay` and `to: work`, the agent can replay the copy in
+  `browser-output/` by its id (below).
 - **The sidecar's output is treated as hostile** (it runs a browser):
   - only known file names are read, and sizes and the screenshot count are
     capped;
@@ -256,7 +256,7 @@ once, with no operator action, no host process and no `docker` CLI:
 
 ```sh
 browser-event status                                       # display size, pointer, XTest, is the operator recording
-browser-event recordings                                   # the recordings it can replay: {"recordings": [id, …]}
+browser-event recordings                                   # the recordings in browser-output/: {"recordings": [id, …]}
 browser-event replay PLAN [--dry-run]                      # a plan the agent staged
 browser-event replay --recording ID [--dry-run]            # a recording `glove playwright record` saved
 ```
@@ -278,17 +278,21 @@ several plans).
 The agent needn't copy a recording into `plans/`: `browser-event replay
 --recording <id>` builds the plan in the sidecar, from the `events.jsonl` (each
 row cut to `t`, `type`, `x`, `y`, `button`) and `meta.json` (its `display`) of
-a recording that `glove playwright record` has saved. This needs
-`recording: {to: work}`, so the agent replays only recordings it may read
-anyway (and nothing is kept when the copy into `browser-output/` failed). Once
-the host has its copy, `record` leaves the sidecar only those two files, in
-`/tmp/capture/.saved/<id>/`, where the agent can't write. It keeps them only if
-they would replay (`events.jsonl` at most 2 MiB, a valid plan, within
-`event_timeout`; `record` says whether it kept them, and why not), for the
-newest 20 recordings (a fixed limit, apart from `event_keep`), and only while
-the sidecar runs. A longer one is replayed by copying its rows from
-`browser-output/` into shorter plans. `browser-event recordings` lists their ids. A recording still
-running isn't there yet.
+a recording that `glove playwright record` has saved: the copy it wrote
+to `browser-output/recordings/<id>/`. This needs `recording: {to: work}`, so
+the agent replays only recordings it reads anyway. A recording replays for as
+long as it is there, across sidecar restarts (the operator retires one by
+deleting `<session>/browser-output/recordings/<id>/`); `events.jsonl` may be at most 2 MiB and must end within
+`event_timeout` (a longer one is replayed by copying its rows into shorter
+plans). `browser-event recordings` lists the ids of the complete ones (a
+directory holding `events.jsonl` and `meta.json`; the newest 200); the rows and
+length are checked when one is replayed. A recording still running isn't there
+yet, and `record` writes each one whole (under a hidden name, then renamed,
+never over an entry): an entry already at its id that isn't glove's own copy
+is moved aside (`.planted-<id>-…`; the newest 10 are kept). `browser-output/`
+is writable by the sidecar, so a recording there is input the browser could
+have chosen (planted under any id, or its files swapped after `record`):
+`--recording` checks it like any plan and trusts it no further.
 
 Each event is sent `t - events[0].t` ms after the first. It moves the pointer
 to `(x, y)`; `down`/`up` then press or release button 1–3, 8 or 9 (back,

@@ -10,8 +10,9 @@ The agent sends an event with the `browser-event` shell command:
       recording (`glove playwright record`). Sends no input.
 
   browser-event recordings
-      The ids of the recordings the agent can replay (`glove playwright
-      record` keeps them in the sidecar once it has saved them).
+      The ids of the recordings in browser-output/recordings/ (`glove
+      playwright record` writes them with `recording: {to: work}`), the
+      newest browser_event.py's LIST_MAX; each is checked when replayed.
 
   browser-event replay PLAN [--dry-run]
   browser-event replay --recording ID [--dry-run]
@@ -24,12 +25,12 @@ The agent sends an event with the `browser-event` shell command:
       copy is what runs. While the operator is recording, a replay is refused
       (its input would end up in their recording); only the session's
       `replay_while_recording` allows it, never the agent.
-      With --recording, the plan is built from a saved recording instead (one
-      the agent may read anyway: `record` keeps them only with event_relay and
-      `to: work`): the recorder's SAVED/ID/events.jsonl (at most its SAVED_MAX
-      bytes) as its events, each row cut to browser_event.py's ROW, and meta.json's display, both
-      read without following a link (the agent can't write there). From then on it is
-      the same: one validator, the timeout, the log, the replay's plan.json.
+      With --recording, the plan is built from a recording instead, the
+      checked copy `record` wrote to browser-output/ (which the agent reads
+      anyway, and can't write): browser_event.py's RECORDINGS/ID/events.jsonl
+      (at most PLAN_MAX bytes) as its events, each row cut to its ROW, and
+      meta.json's display, all read without following a link. From then on it
+      is the same: one validator, the timeout, the log, the replay's plan.json.
 
 What the agent chooses: the event, the plan's name or recording's id, and
 --dry-run. Not the program, the display, the output directory or any other
@@ -70,6 +71,7 @@ LOG_ROOT = "/run/glove-output/browser-events"  # the `browser-events` output, as
 DISPLAY = ":1"
 PROGRAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_event.py")
 PLAN_MAX = 2 * 1024 * 1024
+META_MAX = 64 * 1024  # a recording's meta.json
 PLAN_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\.json\Z")
 WHILE_RECORDING = os.environ.get("PW_REPLAY_WHILE_RECORDING") == "true"  # the session's, never the agent's
 LOG_MAX = 4 * 1024 * 1024
@@ -119,8 +121,7 @@ def _log(entry: dict) -> None:
 
 def _prune() -> None:
     """Leave room for one more replay: remove the oldest directories beyond KEEP - 1."""
-    replay_id = program._recorder().ID  # a replay's id looks like a capture's
-    ids = sorted(n for n in os.listdir(LOG_ROOT) if replay_id.fullmatch(n))
+    ids = sorted(n for n in os.listdir(LOG_ROOT) if program.ID.fullmatch(n))  # a replay's id looks like a recording's
     for rid in ids[:max(0, len(ids) - (KEEP - 1))]:
         shutil.rmtree(os.path.join(LOG_ROOT, rid), ignore_errors=True)
 
@@ -177,22 +178,21 @@ def _take_plan(name: str) -> tuple[bytes, dict]:
 
 
 def _from_recording(cid: str) -> tuple[bytes, dict]:
-    """Build the plan of the saved recording <cid> (the recorder's SAVED and its directory opened without
-    following a link): {"v": 1, "display": meta.json's, "events": events.jsonl's rows, each cut to ROW}.
-    Its bytes and the plan."""
-    what, rec = f"recording {cid}", program._recorder()
-    if not rec.ID.fullmatch(cid):
+    """Build the plan of the recording <cid> in RECORDINGS (it and <cid>/ opened without following a link):
+    {"v": 1, "display": meta.json's, "events": events.jsonl's rows, each cut to ROW}. Its bytes and the plan."""
+    what = f"recording {cid}"
+    if not program.ID.fullmatch(cid):
         raise Refused(f"recording {cid[:40]!r}: want a recording's id, like 20261020-101741-0a1b2c "
                       "(`browser-event recordings` lists them)")
-    root = _opendir(str(rec.SAVED), "no saved recordings (`glove playwright record` keeps them, with "
-                                    "event_relay and recording: {to: work}, once it has saved them)")
+    root = _opendir(program.RECORDINGS, "no recordings (`glove playwright record` writes them to "
+                                        "browser-output/recordings/ with recording: {to: work})")
     try:
-        dfd = _opendir(cid, f"{what} (`browser-event recordings` lists the saved ones)", root)
+        dfd = _opendir(cid, f"{what} (`browser-event recordings` lists them)", root)
     finally:
         os.close(root)
     try:
-        meta = _read(dfd, "meta.json", rec.META_MAX, f"{what}: meta.json (not finished?)")
-        rows = _read(dfd, "events.jsonl", rec.SAVED_MAX, f"{what}: events.jsonl")
+        meta = _read(dfd, "meta.json", META_MAX, f"{what}: meta.json")
+        rows = _read(dfd, "events.jsonl", PLAN_MAX, f"{what}: events.jsonl")
     finally:
         os.close(dfd)
     try:

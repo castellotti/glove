@@ -450,16 +450,17 @@ has no server-side switch for it). The controls:
   can't tell that input from a person's, and it reaches whatever window is in
   front. **Bound:**
   - three events (`status`, `recordings`, `replay`), whose program and
-    arguments the policy fixes; the agent picks only a plan name or a saved
+    arguments the policy fixes; the agent picks only a plan name or a
     recording's id, and `--dry-run`;
   - a plan is data, checked against the display before anything is sent, no
     longer than the timeout allows, and run from the copy that was checked
-    (out of the agent's reach). A recording's plan is built from the files
-    the recorder keeps in the sidecar (`/tmp/capture/.saved/`, which the agent
-    can't reach), read without following links, bounded, and cut to the
-    fields a plan has. Only recordings with `to: work` whose copy into
-    `browser-output/` succeeded are kept there, so `--recording` shows the
-    agent nothing it couldn't already read;
+    (out of the agent's reach). A recording's plan is built from the copy
+    `record` wrote to `browser-output/recordings/<id>/` (`to: work` only:
+    read-only to the agent, which reads it anyway, so `--recording` shows it
+    nothing new), read without following links, bounded, and cut to the
+    fields a plan has. The sidecar can write there (as with downloads), but
+    the policy runs in the sidecar, so that trusts it no further; `record`
+    writes each copy whole and moves aside one planted under its id;
   - one event at a time, killed at `event_timeout`, with no network (no proxy:
     there is nothing for it to reach);
   - a replay and the operator's recorder exclude each other (claimed under one
