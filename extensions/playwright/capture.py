@@ -14,7 +14,6 @@ a link planted there is refused, never followed.
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import errno
 import functools
 import io
@@ -33,7 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\Z")
+_ID = r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}"
+ID = re.compile(rf"^{_ID}\Z")
 NAME = re.compile(r"^[a-z0-9-]+\.(png|json|jsonl)\Z")
 WALL = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z\Z")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -46,8 +46,8 @@ STOP_REASONS = {"viewer-closed", "interrupted", "stop", "max_seconds", "cap", "e
 DEFAULTS = {"to": "session", "max_seconds": 600, "motion_hz": 120}
 DIR = "recordings"  # under the session state dir and, with `to: work`, browser-output/
 _DIRFLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-TMP = re.compile(r"^\.[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.[0-9a-f]{8}\Z")  # a copy being written
-PLANTED = re.compile(r"^\.planted-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}-[0-9a-f]{8}\Z")  # one moved aside
+TMP = re.compile(rf"^\.{_ID}\.[0-9a-f]{{8}}\Z")  # a copy being written
+PLANTED = re.compile(rf"^\.planted-{_ID}-[0-9a-f]{{8}}\Z")  # one moved aside
 STALE_S = 3600  # a working copy this old was left by a killed `record`
 PLANTED_KEEP = 10  # entries moved aside kept for the operator to look at
 PLACE_TRIES = 3  # renames tried while the sidecar plants <id> again
@@ -233,7 +233,7 @@ def read_tar(data: bytes, cid: str) -> Capture:
     return cap
 
 
-def _dir(base: Path, mode: int = 0o755) -> int:
+def _dir(base: Path, mode: int) -> int:
     """`<base>/recordings/` (made if missing), opened without following a link (nor at `base`)."""
     fd = os.open(base, _DIRFLAGS)
     try:
@@ -284,6 +284,11 @@ def _create(name: str, mode: int, dir_fd: int) -> int:
     return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dir_fd)
 
 
+def _at(rel: str, fds: list[int]) -> tuple[str, int]:
+    """`rel`'s file name and the fd of its directory: `<id>/` (fds[0]) or `<id>/shots/` (fds[1])."""
+    return rel.split("/")[-1], fds[-1] if rel.startswith("shots/") else fds[0]
+
+
 def _fill(top: int, tmp: str, files: dict[str, bytes], dmode: int, fmode: int) -> None:
     fds = [os.open(tmp, _DIRFLAGS, dir_fd=top)]
     try:
@@ -291,8 +296,8 @@ def _fill(top: int, tmp: str, files: dict[str, bytes], dmode: int, fmode: int) -
             os.mkdir("shots", dmode, dir_fd=fds[0])
             fds.append(os.open("shots", _DIRFLAGS, dir_fd=fds[0]))
         for rel, body in sorted(files.items()):
-            with os.fdopen(_create(rel.split("/")[-1], fmode, fds[-1] if rel.startswith("shots/") else fds[0]),
-                           "wb") as f:
+            name, where = _at(rel, fds)
+            with os.fdopen(_create(name, fmode, where), "wb") as f:
                 f.write(body)
     finally:
         for fd in fds:
@@ -303,6 +308,8 @@ def _fill(top: int, tmp: str, files: dict[str, bytes], dmode: int, fmode: int) -
 def _noreplace() -> tuple[Any, int]:
     """libc's atomic no-replace rename and its flag: renameatx_np(RENAME_EXCL) on macOS,
     renameat2(RENAME_NOREPLACE) on Linux; (None, 0) where there is none."""
+    import ctypes  # only when a capture is written, not on every session launch
+
     name, flag = ("renameatx_np", 0x4) if sys.platform == "darwin" else ("renameat2", 0x1)
     try:
         fn = getattr(ctypes.CDLL(None, use_errno=True), name)
@@ -317,6 +324,8 @@ def _rename_excl(src: str, dst: str, dfd: int) -> None:
     """Rename `src` to `dst` in `dfd`, never over an existing entry (FileExistsError)."""
     fn, flag = _noreplace()
     if fn is not None:
+        import ctypes  # loaded by _noreplace already
+
         if fn(dfd, os.fsencode(src), dfd, os.fsencode(dst), flag) == 0:
             return
         if (e := ctypes.get_errno()) not in (errno.EINVAL, errno.ENOSYS, errno.ENOTSUP):
@@ -354,8 +363,8 @@ def _holds(top: int, cid: str, files: dict[str, bytes]) -> bool:
             if set(os.listdir(fds[1])) != shots:
                 return False
         for rel, body in files.items():
-            fd = os.open(rel.split("/")[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                         dir_fd=fds[-1] if rel.startswith("shots/") else fds[0])
+            name, where = _at(rel, fds)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=where)
             with os.fdopen(fd, "rb") as f:
                 st = os.fstat(f.fileno())
                 if not stat.S_ISREG(st.st_mode) or st.st_size != len(body) or f.read(len(body) + 1) != body:

@@ -354,17 +354,16 @@ def _collect(s: ExtSession, cid: str, rec: dict) -> None:
         err.print(f"[red]error:[/red] writing capture {cid} into {state}: {e}{kept}")
         return
     if rec["to"] == "work":
-        asides: list[str] = []
         try:
             path, asides = capture.write(s.root / "browser-output", cap, private=False, untrusted=True)
             saved.append(path)
+            for aside in asides:  # glove didn't write it (the sidecar knows the id), and its files are unchecked
+                err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already existed, and glove did "
+                          f"not write it (the browser sidecar can write there): moved to {aside}")
         except FileExistsError:  # glove's own copy, from an earlier `record`
             console.print(f"[dim]capture {cid} is already saved in browser-output/{capture.DIR}/[/dim]")
         except OSError as e:
             err.print(f"[red]error:[/red] writing capture {cid} into browser-output/: {e}")
-        for aside in asides:  # ids are unguessable: glove didn't make it, and its files are unchecked
-            err.print(f"[red]refused:[/red] browser-output/{capture.DIR}/{cid} already existed, and glove did "
-                      f"not write it (the browser sidecar can write there): moved to {aside}")
     subprocess.run([runtime, "exec", container, "rm", "-rf", f"/tmp/capture/{cid}", f"/tmp/capture/.{cid}.log"],
                    capture_output=True, check=False)
     console.print(f"[green]✓[/green] capture {cid}: {escape(capture.summary(cap))}")
