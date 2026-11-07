@@ -79,5 +79,13 @@
       "granted": true,
       "since": "2026-10-01T12:00:00.000Z"
     }
-  }
+  },
+  "models": [
+    {
+      "id": "test-model",
+      "context_window": 32768,
+      "max_tokens": 8192,
+      "reasoning": false
+    }
+  ]
 }

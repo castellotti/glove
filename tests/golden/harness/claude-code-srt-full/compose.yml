@@ -191,40 +191,6 @@ services:
     ipc: private
     pids_limit: 256
     mem_limit: 512m
-  glove-s-netgate:
-    container_name: glove-s-netgate
-    image: glove/ext-gate-netgate:7a756a48ad
-    command:
-    - collect
-    - --net-dir
-    - /var/lib/glove/net
-    - --events
-    - /run/glove-netgate/events.sock
-    - --rules
-    - /etc/glove/netgate-control/rules.json
-    network_mode: none
-    volumes:
-    - type: bind
-      source: <GLOVE_HOME>/observe/s/net
-      target: /var/lib/glove/net
-    - type: volume
-      source: glove-s-observe-events
-      target: /run/glove-netgate
-    - type: bind
-      source: <GLOVE_HOME>/control/s
-      target: /etc/glove/netgate-control
-      read_only: true
-    restart: unless-stopped
-    user: '501:20'
-    cap_drop:
-    - ALL
-    security_opt:
-    - no-new-privileges:true
-    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
-    read_only: true
-    ipc: private
-    pids_limit: 256
-    mem_limit: 512m
   glove-s-llm-auth:
     container_name: glove-s-llm-auth
     image: glove/ext-llm-auth:f339aaed58
@@ -252,6 +218,40 @@ services:
       start_period: 2s
     networks:
       glove-s-llmauth: {}
+    restart: unless-stopped
+    user: '501:20'
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=<REPO>/glove/runtimes/seccomp/default.json
+    read_only: true
+    ipc: private
+    pids_limit: 256
+    mem_limit: 512m
+  glove-s-netgate:
+    container_name: glove-s-netgate
+    image: glove/ext-gate-netgate:7a756a48ad
+    command:
+    - collect
+    - --net-dir
+    - /var/lib/glove/net
+    - --events
+    - /run/glove-netgate/events.sock
+    - --rules
+    - /etc/glove/netgate-control/rules.json
+    network_mode: none
+    volumes:
+    - type: bind
+      source: <GLOVE_HOME>/observe/s/net
+      target: /var/lib/glove/net
+    - type: volume
+      source: glove-s-observe-events
+      target: /run/glove-netgate
+    - type: bind
+      source: <GLOVE_HOME>/control/s
+      target: /etc/glove/netgate-control
+      read_only: true
     restart: unless-stopped
     user: '501:20'
     cap_drop:

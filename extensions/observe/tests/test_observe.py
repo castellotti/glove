@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from helpers import hook_ctx, make_cfg, make_session
+from helpers import STUB_LLM, hook_ctx, make_cfg, make_session
 from typer.testing import CliRunner
 
 from extensions.gate.gatelib import classify_scope, collect_command
@@ -502,6 +502,90 @@ def test_unobserved_session_has_no_exports_and_null_grants(ghome, tmp_path, monk
     assert row["grants"] == {"observe": None, "filter": None}
     out = runner.invoke(app, ["observe", "status"])
     assert out.exit_code == 1 and "observe extension is not enabled" in " ".join(out.output.split())
+
+INFERENCE = {"provider": "llm", "base_url": "http://ps-llm:8080/v1", "api": "openai-completions", "model": "big",
+             "api_key_secret": "api_key", "capabilities": {"context_window": 131072, "max_tokens": 16384,
+                                                           "reasoning": True}}
+
+
+@pytest.mark.parametrize(("extra", "want"), [
+    ([], []),
+    # no overrides: the primary's facts under its id; its own id and limits win
+    ([{}, {"id": "small", "context_window": "8192", "reasoning": False, "vision": True}],
+     [("big", 131072, 16384, True), ("small", 8192, 16384, False)]),
+    # a malformed entry (only Pi parses extra_models) is left out, never fails the launch
+    ([{"id": "long", "max_tokens": 32768}, "not-a-mapping", {"id": "bad", "context_window": "128k"}],
+     [("long", 131072, 32768, True)]),
+])
+def test_session_json_lists_the_models_as_the_harness_has_them(extra, want):
+    models = HOOKS.models(hook_ctx(slot={"inference": {**INFERENCE, "extra_models": extra}}))
+    assert models == [{"id": i, "context_window": c, "max_tokens": t, "reasoning": r}
+                      for i, c, t, r in [("big", 131072, 16384, True), *want]]
+    text = json.dumps(models)  # values only: no URL, no key name
+    assert "http" not in text and "api_key" not in text and "vision" not in text
+
+
+def test_models_take_the_harness_defaults_and_none_without_an_inference_slot():
+    assert HOOKS.models(hook_ctx(slot={"egress": {}})) == []
+    bare = {k: INFERENCE[k] for k in ("base_url", "api", "model")}
+    assert HOOKS.models(hook_ctx(slot={"inference": bare})) == \
+        [{"id": "big", "context_window": 32768, "max_tokens": 8192, "reasoning": False}]
+
+
+@pytest.mark.parametrize("exports", [
+    INFERENCE,
+    {k: INFERENCE[k] for k in ("base_url", "api", "model")},  # core's defaults
+    {**INFERENCE, "extra_models": [{}, {"id": "small", "context_window": 8192, "reasoning": False},
+                                   {"id": "long", "max_tokens": 32768}, {"context_window": "65536"}]},
+])
+def test_models_are_what_the_pi_adapter_renders(exports):
+    """observe copies `_pi_model`'s override rules and takes core's defaults
+    through `glove.api.harness`: Layman's ctx % is right only while the two agree."""
+    from glove.api.harness import HarnessModel
+    from glove.harness import adapter_call, get_profile
+
+    model = HarnessModel.from_exports(dict(exports))
+    pi = [adapter_call(get_profile("pi"), "_pi_model", dict(e), model) for e in [{}, *model.extra_models]]
+    assert HOOKS.models(hook_ctx(slot={"inference": exports})) == [
+        {"id": p["id"], "context_window": p["contextWindow"], "max_tokens": p["maxTokens"],
+         "reasoning": p["reasoning"]} for p in pi]
+
+
+def test_models_refuse_an_inference_slot_the_harness_would_refuse():
+    """`from_exports` is strict, as for the harness: a slot without base_url,
+    api or model fails the write rather than exporting guessed facts."""
+    with pytest.raises(ValueError, match="model"):
+        HOOKS.models(hook_ctx(slot={"inference": {k: INFERENCE[k] for k in ("base_url", "api")}}))
+
+
+def test_resolve_rewrites_session_json_with_the_resolved_models(ghome, tmp_path):
+    from glove import exports
+    from glove.extensions import call_hook
+
+    plan = plan_for(tmp_path, exts={"llm": {**STUB_LLM, "model": "auto", "extra_models": [{"id": "small"}]}})
+    comp = plan.composition
+    names = [a.name for a in comp.active]
+    assert names.index("llm") < names.index("observe")  # its resolve runs first, and its exports are seen
+    comp.grants = exports.grants(comp)
+    exports.prepare(comp, tmp_path / "sess" / ".glove" / "ext")
+    materialize(comp)
+    facts = ghome / "observe" / SID / "net" / "session.json"
+    assert [m["id"] for m in json.loads(facts.read_text())["models"]] == ["auto", "small"]  # not resolved yet
+    llm, obs = comp.by_name("llm"), comp.by_name("observe")
+    planned = dict(llm.exports)
+    llm.set_exports({**planned, "model": "qwen-x", "capabilities": {**planned["capabilities"],
+                                                                    "context_window": 262144}})
+    assert call_hook(comp, obs, "resolve", obs.exports, None) == (obs.exports, [])
+    got = json.loads(facts.read_text())
+    resolved = [{"id": i, "context_window": 262144, "max_tokens": 8192, "reasoning": False}
+                for i in ("qwen-x", "small")]
+    assert got["models"] == resolved
+    assert os.stat(facts).st_mode & 0o777 == 0o600 and got["services"]
+    # a later render (`glove plan` on the live session) keeps them: it only knows `auto`
+    llm.set_exports(planned)
+    materialize(comp)
+    again = json.loads(facts.read_text())
+    assert again["models"] == resolved and again["rendered_at"] and again["services"]
 
 
 def test_observe_status_and_flows(ghome, tmp_path, monkeypatch):
