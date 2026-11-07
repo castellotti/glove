@@ -43,6 +43,12 @@ country or city. An absent file is "not known yet": no record until it appears.
 An `https://` URL makes the gate poll that service through the egress instead
 (geo if it answers ipinfo/echoip-style JSON); `none` records nothing.
 
+`net/session.json` also lists the session's `models` (`[{id, context_window,
+max_tokens, reasoning}]`, the inference slot's model, then its `extra_models`),
+written again at `glove up` once `llm` has resolved them (observe requires the
+`inference` slot so that `llm`'s `resolve` runs first). A render (`glove plan`)
+keeps the models already in the file rather than writing unresolved ones.
+
 Egress consumers get their own gate too: SearXNG leaves the egress network and
 reaches the proxy only through `searxng-egress`.
 

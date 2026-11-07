@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +20,9 @@ from extensions.gate.netgate import GATE_VERSION, SCHEMA_VERSION
 from extensions.gate.netgate.exitid import check_url
 from extensions.gate.netgate.records import iso_utc
 from extensions.gate.netgate.resolver import from_url
-from extensions.gate.netgate.writer import write_json_atomic
+from extensions.gate.netgate.writer import read_json_dict, write_json_atomic
 from glove.api import HookContext, hook
+from glove.api.harness import HarnessModel
 
 EVENTS_VOLUME = "events"  # the fragment's tmpfs volume
 
@@ -222,7 +224,32 @@ def session_facts(ctx: HookContext) -> dict[str, Any]:
         "rendered_at": iso_utc(),
         "services": services,
         "grants": dict(ctx.grants),
+        "models": models(ctx),
     }
+
+
+def models(ctx: HookContext) -> list[dict[str, Any]]:
+    """session.json `models`: the inference slot's models as the harness is
+    configured with them (the ids its transcript names), primary first, then
+    each `extra_models` entry, whose own id, context_window, max_tokens or
+    reasoning wins over the primary's (as the Pi adapter's `_pi_model`
+    resolves them). Values only: no URL, no key name."""
+    ex = ctx.slot.get("inference")
+    if not ex:
+        return []
+    m = HarnessModel.from_exports(dict(ex))  # core's defaults, as the harness gets them
+
+    def one(e: Mapping[str, Any]) -> dict[str, Any] | None:
+        try:
+            return {"id": str(e.get("id", m.model)),
+                    "context_window": int(e.get("context_window", m.context_window)),
+                    "max_tokens": int(e.get("max_tokens", m.max_tokens)),
+                    "reasoning": bool(e.get("reasoning", m.reasoning))}
+        except (TypeError, ValueError):  # a free-form entry no harness parsed (only Pi reads extra_models)
+            return None
+
+    extras = (one(e) for e in m.extra_models if isinstance(e, Mapping))
+    return [one({}), *(x for x in extras if x is not None)]
 
 
 def _exit_fact(exit_id: dict[str, str] | None) -> str:
@@ -231,15 +258,41 @@ def _exit_fact(exit_id: dict[str, str] | None) -> str:
     return f"via-proxy:{exit_id['url']}" if "url" in exit_id else exit_id["source"]
 
 
+def _write_session(ctx: HookContext, *, resolved: bool) -> Path:
+    """Write ``session.json``. Only ``resolve`` (``resolved``) knows the models
+    the harness runs with; at render (``glove plan`` too) the models already
+    there, from the last ``glove up``, are kept rather than replaced by
+    unresolved ones (``model: auto``, default limits)."""
+    net = Path(ctx.export_dirs["observe"]) / "net"
+    net.mkdir(mode=0o700, parents=True, exist_ok=True)
+    net.chmod(0o700)
+    facts = session_facts(ctx)
+    if not resolved:
+        kept = (read_json_dict(net / "session.json") or {}).get("models")
+        if isinstance(kept, list):
+            facts["models"] = kept
+    if not write_json_atomic(net / "session.json", facts):
+        raise OSError(f"could not write {net}/session.json")
+    return net
+
+
+@hook
+def resolve(ctx: HookContext, exports: dict[str, Any], probe) -> tuple[dict[str, Any], list[str]]:
+    """``glove up``, once the sidecars are up: ``session.json`` again, now with
+    the models the inference provider resolved (``model: auto``, probed
+    ``capabilities``). Its ``resolve`` ran first: observe requires the slot."""
+    try:  # the sidecars are up: a stale session.json is no reason to abort the launch
+        _write_session(ctx, resolved=True)
+    except OSError as e:
+        return dict(exports), [f"session.json not refreshed ({e}); its models are the last launch's"]
+    return dict(exports), []
+
+
 @hook
 def materialize(ctx: HookContext) -> None:
     """Lay out ``net/`` in the observe export (0700, the collector writes it as
     this user) and write ``session.json``. Core created the export root."""
-    net = Path(ctx.export_dirs["observe"]) / "net"
-    net.mkdir(mode=0o700, parents=True, exist_ok=True)
-    net.chmod(0o700)
-    if not write_json_atomic(net / "session.json", session_facts(ctx)):
-        raise OSError(f"could not write {net}/session.json")
+    net = _write_session(ctx, resolved=False)
     s = ctx.settings
     if s["record"] == "full":
         print(

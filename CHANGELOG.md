@@ -6,6 +6,18 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **observe: `session.json` lists the session's `models`**:
+  `[{id, context_window, max_tokens, reasoning}]`, the inference slot's model
+  first, then each `llm.extra_models` entry with its overrides, resolved as the
+  Pi adapter resolves them (an entry's `id` defaults to the primary's). So
+  Layman can match Pi's `model_change.modelId` and show a ctx % meter. Additive
+  (the record stays `v: 1`); ids and numbers only. observe now requires the
+  `inference` slot (always filled), so `llm` precedes it and its `resolve` runs
+  first, and observe's own `resolve` hook writes `session.json` again at
+  `glove up` with the resolved `model: auto` and probed `context_window`
+  (a later `glove plan` keeps those rather than writing `auto` back; a
+  session never launched shows `auto`). Rendered compose files list the same
+  services in a slightly different order.
 - **`browser-event replay --recording <id>`** (playwright `event_relay`):
   replay a recording `glove playwright record` saved, by its id, without the
   agent copying its rows into `plans/`. It needs `recording: {to: work}`: the
