@@ -1,7 +1,7 @@
 api: 2
 name: observe
 summary: Network observability (read) — every forwarder becomes a netgate that records flows; exports flows and transcripts to ~/.glove/observe/<id>/.
-requires: [gate]
+requires: [gate, inference]  # inference: its resolve runs first (session.json `models`)
 provides: [forwarder]
 settings:
   record:          { type: enum, values: [metadata, full], default: metadata }

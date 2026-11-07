@@ -826,7 +826,7 @@ scope. Records go to `~/.glove/observe/<id>/net/` through a single collector
 container that has **no network at all** (`network_mode: none`):
 
 ```
-net/session.json    static facts: services, tools, upstreams, record mode, grants (0600)
+net/session.json    static facts: services, tools, upstreams, record mode, grants, models (0600)
 net/flows.ndjson    append-only flow stream + gate start/stop records, size-rotated
                     to flows-<stamp>[-<n>].ndjson (order by (stamp, n), not by name)
 net/exit.ndjson     apparent-origin changes (exit_identity; absent until the exit is known)
@@ -846,6 +846,18 @@ egress forwarders themselves (their target is the egress proxy). observe infers
 it from the networks a hop's target shares with the egress forwarders; an
 endpoint whose sidecar has several names them in `observe: {feeds: [...]}`
 (webfetch's two fetcher hops).
+
+`session.json`'s `models` lists the session's models as the harness is
+configured with them: `[{id, context_window, max_tokens, reasoning}]`, the
+inference slot's model first, then each `llm.extra_models` entry with its own
+overrides (the Pi adapter resolves them the same way). The ids are the ones the
+harness's transcript names (Pi's `model_change.modelId`), so a monitor can show
+how full the context is. `glove up` writes them once `llm` has resolved the
+model (`model: auto`) and probed its capabilities; a later render (`glove plan`,
+or the next `glove up` before its resolve) keeps the models already there, so a
+live session's models never fall back to `auto`. A session never launched shows what
+is known at render (`model: auto` is still `auto`). Values only: no URL, no key
+name.
 
 With `transcripts: true`, glove binds `~/.glove/observe/<id>/transcripts/` over
 the harness's transcript directory (Pi `.pi/agent/sessions`, Vibe
