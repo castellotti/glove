@@ -109,9 +109,10 @@ class Manifest:
     def selectable(self) -> bool:
         return bool(self.raw.get("selectable", True))
 
+    free_form = property(lambda self: self.raw.get("settings") == "*")  # `settings: "*"`: any key, none checked
     @property
-    def settings_schema(self) -> dict[str, dict]:
-        return dict(self.raw.get("settings") or {})
+    def settings_schema(self) -> dict[str, dict]:  # none when free-form
+        return dict(s) if isinstance(s := self.raw.get("settings"), dict) else {}
 
     @property
     def cli(self) -> Path | None:
@@ -145,7 +146,7 @@ def _load_manifest(directory: Path, *, out_of_tree: bool, trusted: set[str]) -> 
     bad_slots = [s for s in raw.get("provides") or [] if s not in SLOTS]
     if bad_slots:
         raise ExtensionError(f"extension {name!r}: unknown slot(s) {bad_slots} (known: {sorted(SLOTS)})")
-    for key, spec in (raw.get("settings") or {}).items():
+    for key, spec in (raw["settings"] if isinstance(raw.get("settings"), dict) else {}).items():
         _check_setting_spec(name, key, spec)
     for key in ("cli", "hooks"):  # code glove imports: only from the extension's own directory
         if raw.get(key) and not (directory / raw[key]).resolve().is_relative_to(directory.resolve()):
@@ -349,7 +350,7 @@ def validate_settings(m: Manifest, given: dict[str, Any] | None) -> dict[str, An
     if given is not None and not isinstance(given, dict):
         raise ExtensionError(f"extension {m.name!r}: settings must be a mapping (use `{m.name}: {{}}` for none)")
     given = dict(given or {})
-    if (m.raw.get("harness") or {}).get("config") == "*" and not m.settings_schema:  # free-form native config
+    if m.free_form:  # no key checked (`_merge_native` drops a null)
         return given
     schema = m.settings_schema
     unknown = set(given) - set(schema)
@@ -399,7 +400,7 @@ def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
             if not isinstance(want, list) or not any(when_matches(w, ctx) for w in want):
                 return False
             continue
-        have = (_lookup(ctx, key) if "." in key else ctx.get(key) if key == "harness"  # never a setting's
+        have = (_lookup(ctx, key) if "." in key else ctx.get(key) if key in ("harness", "renders")  # no setting's
                 else ctx.get("settings", {}).get(key, ctx.get(key)))
         if isinstance(want, dict) and set(want) == {"set"}:
             if (have not in (None, "", [], {})) != bool(want["set"]):
@@ -1103,23 +1104,16 @@ HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief", "config"}) | CO
 
 
 def _merge_native(into: dict, more: dict, where: str, path: str = "") -> None:
-    """`more` deep-merged into `into`; a value another extension set differently is refused."""
-    for k, v in more.items():
-        if isinstance(v, dict) and isinstance(into.get(k), dict):
+    """`more` deep-merged into `into`: lists extend, a null is unset, a scalar set differently is refused."""
+    for k, v in ((k, v) for k, v in more.items() if v is not None):
+        if isinstance(v, dict) and isinstance(into.setdefault(k, {}), dict):  # a nested null is unset too
             _merge_native(into[k], v, where, f"{path}{k}.")
+        elif isinstance(v, list) and isinstance(into.get(k), list):
+            into[k] += [copy.deepcopy(x) for x in v if x not in into[k]]
         elif k in into and into[k] != v:
             raise ExtensionError(f"{where}: config {path}{k} is set differently by another extension")
         else:
             into[k] = copy.deepcopy(v)
-
-
-def _harness_config(comp: Composition, a: Active, key: Any, where: str) -> None:
-    """`config: <a map setting>` or `"*"` (all its free-form settings): native harness config, never rendered."""
-    if key != "*" and (a.manifest.settings_schema.get(key) or {}).get("type") != "map":
-        raise ExtensionError(f"{where}: config names a `type: map` setting, or is \"*\"")
-    if native := (a.settings if key == "*" else a.settings.get(key)):  # a mapping (map settings are)
-        require_trust(a, f"{where} config")
-        _merge_native(comp.harness_config, native, where)
 
 
 def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[str, Any]) -> None:
@@ -1185,8 +1179,13 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[
             if any(s["name"] == server["name"] for _, s in comp.mcp):
                 raise ExtensionError(f"{where}: mcp server {server['name']!r} is already set by another extension")
             comp.mcp.append((a.name, server))
-    if "config" in h:
-        _harness_config(comp, a, h["config"], where)
+    if "config" in h:  # <a map setting>, or "*": all its settings (`settings: "*"`); native config, never rendered
+        if not (a.manifest.free_form if (ck := h["config"]) == "*"
+                else (a.manifest.settings_schema.get(ck) or {}).get("type") == "map"):
+            raise ExtensionError(f"{where}: config names a `type: map` setting, or is \"*\" (with `settings: \"*\"`)")
+        if native := (a.settings if ck == "*" else a.settings.get(ck)):  # a mapping (map settings are)
+            require_trust(a, f"{where} config")
+            _merge_native(comp.harness_config, native, where)
     if h.get(comp.harness) is not None:
         comp.harness_items.append((a, h[comp.harness], ctx))
     brief = h.get("brief")
@@ -1207,7 +1206,7 @@ def _harness_mounts(comp: Composition, a: Active, ctx: dict) -> None:
     the user named in a setting, bound read-only into the harness at
     /mnt/<ext>-<name>. An empty setting mounts nothing. Plan-time checks (it
     exists, exposes no private path) run in the planner, with the user's mounts."""
-    settings = a.manifest.raw.get("settings") or {}
+    settings = a.manifest.settings_schema
     for name, spec in (a.manifest.raw.get("mounts") or {}).items():
         where = f"extension {a.name!r} mount {name!r}"
         if not _NAME.fullmatch(str(name)) or not isinstance(spec, dict) or set(spec) - {"setting", "when"}:
@@ -1294,7 +1293,7 @@ def declares_host_paths(m: Manifest, *, work: bool = False, privileges: dict | N
         return any(isinstance(p, dict) and p.get("work") for v in (privileges or {}).values()
                    for p in (v if isinstance(v, list) else [v]))
     return bool(raw.get("mounts")) or any(isinstance(x, dict) and x.get("type") in ("path", "ca")
-                                          for x in (raw.get("settings") or {}).values())
+                                          for x in m.settings_schema.values())
 
 
 _SHARED = ("harness", "session", "names", "slot", "endpoint", "own_endpoints", "images", "libs", "mount", "output",
@@ -1378,7 +1377,7 @@ def compose(
         a.spec("privileges", ctx)  # no name set twice
         if not all(isinstance(x, str) for x in a.spec("trust")):
             raise ExtensionError(f"{where}: `trust` lists its services")
-        for key, spec in (a.manifest.raw.get("settings") or {}).items():
+        for key, spec in a.manifest.settings_schema.items():
             if spec["type"] == "ca" and a.settings.get(key):  # checked here, so `glove check` fails early
                 comp.trust[f"{a.name}.{key}.pem"] = resolve_ca_file(f"{a.name}.{key}", a.settings[key], session_dir)
         a.set_exports(merge_names(f"{where} exports",

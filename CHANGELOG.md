@@ -11,9 +11,12 @@ All notable changes to glove are documented here.
   `settings.json`), written flat. Model tuning (Pi's `defaultThinkingLevel`,
   `compaction`, a model's `compat`; Claude Code's `ANTHROPIC_DEFAULT_*` env)
   goes beside the model in `llm: {harness: …}`, everything else in
-  `harness-config: …`; glove merges both and refuses a key they set
-  differently. Extensions contribute it with the new manifest key
-  `harness: {config: <map setting> | "*"}` (out of tree: a privilege).
+  `harness-config: …`; glove merges both (lists extend, a null is unset) and
+  refuses a scalar they set differently. Extensions contribute it with the new
+  manifest key `harness: {config: <map setting> | "*"}` (out of tree: a
+  privilege); `"*"` needs free-form settings, the new `settings: "*"`.
+  `harness_options` takes `tools_allow` and the `protect:` opt-ins; a `when:`
+  on `harness` or `renders` is never answered by a setting of that name.
 - **observe: `session.json` lists the session's `models`**:
   `[{id, context_window, max_tokens, reasoning}]`, the inference slot's model
   first, then each `llm.extra_models` entry with its overrides, resolved as the

@@ -118,8 +118,7 @@ def test_native_config_permissions(tmp_path):
 
 @pytest.mark.parametrize("hc", [{"permissions": {"mode": "x"}}, {"permissions": ["x"]},
                                 {"permissions": {"defaultMode": "bypassPermissions"}},
-                                {"permissions": {"allow": "Bash(git:*)"}}, {"permissions": {"deny": [1]}},
-                                {"settings": {"theme": "dark"}}])
+                                {"permissions": {"allow": "Bash(git:*)"}}, {"permissions": {"deny": [1]}}])
 def test_bad_permissions_are_refused(tmp_path, hc):
     with pytest.raises(ConfigError, match="claude-code"):
         _plan(tmp_path, extensions={"harness-config": hc})

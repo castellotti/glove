@@ -290,7 +290,7 @@ def test_pi_refuses_native_config_it_cannot_merge(tmp_path, native, why):
         _home("pi", tmp_path, extensions={**EXTS, "harness-config": native})
 
 
-@pytest.mark.parametrize("own", [None, {"name": "x"}, ["x"]])
+@pytest.mark.parametrize("own", [{"name": "x"}, ["x"]])
 def test_vibe_refuses_mcp_servers_that_are_no_list_of_tables(tmp_path, own):
     with pytest.raises(ConfigError, match="mcp_servers is a list"):
         _home("vibe", tmp_path, extensions={**EXTS, "harness-config": {"mcp_servers": own}})
@@ -300,6 +300,32 @@ def test_two_extensions_may_not_set_one_key_differently(tmp_path):
     with pytest.raises(ExtensionError, match=r"config env\.X is set differently"):
         _home("pi", tmp_path, llm={**STUB_LLM, "harness": {"env": {"X": "1"}}},
               extensions={**EXTS, "harness-config": {"env": {"X": "2"}}})
+
+
+def test_two_extensions_lists_extend(tmp_path):
+    _, _, home = _home("vibe", tmp_path, llm={**STUB_LLM, "harness": {"disabled_tools": ["task"]}},
+                       extensions={**EXTS, "harness-config": {"disabled_tools": ["web_search", "task"]}})
+    tools = tomllib.loads((home / ".vibe" / "config.toml").read_text())["disabled_tools"]
+    assert tools.count("task") == 1 and "web_search" in tools
+
+
+@pytest.mark.parametrize("harness", ["pi", "vibe"])
+def test_a_null_native_key_is_unset(tmp_path, harness):
+    _, plan, _ = _home(harness, tmp_path, extensions={**EXTS, "harness-config": {"env": None, "extensions": None,
+                                                                                 "mcp_servers": None}})
+    assert dict(plan.adapter.harness_config) == {}
+
+
+@pytest.mark.parametrize("harness", ["pi", "vibe"])
+def test_native_config_is_flat(tmp_path, harness):  # core's check, for every harness
+    with pytest.raises(ConfigError, match="flat"):
+        _home(harness, tmp_path, extensions={**EXTS, "harness-config": {"settings": {"theme": "x"}}})
+
+
+@pytest.mark.parametrize("opts", [False, [], "", 0, {"tools_allow": "x"}, {"tools_allow": [1]}])
+def test_harness_options_of_the_wrong_type_are_refused(tmp_path, opts):
+    with pytest.raises(ConfigError, match="harness_options takes"):
+        _home("vibe", tmp_path, harness_options=opts)
 
 
 

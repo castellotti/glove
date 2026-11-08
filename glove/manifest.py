@@ -61,7 +61,7 @@ def check_manifest(name: str, raw: dict[str, Any]) -> None:
     if unknown:
         raise ExtensionError(f"extension {name!r}: unknown manifest keys {unknown}")
     for k, v in raw.items():
-        if v is not None and not _is(v, KEYS[k].type):
+        if v is not None and not _is(v, KEYS[k].type) and not (k == "settings" and v == "*"):  # free-form
             raise ExtensionError(f"extension {name!r}: `{k}` must be a {KEYS[k].type.__name__}")
 
 

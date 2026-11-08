@@ -25,7 +25,7 @@ from .enforcers.base import TOOLS_FILE, WRITE_ROOTS_FILE, argv_lines, srt_suffix
 from .exports import export_dirs, transcripts_wanted
 from .extensions import Composition, compose
 from .hardening import Hardening, Limits
-from .harness import HarnessProfile, _strs, adapter_call, effective_image, get_profile, tool_inventory
+from .harness import HarnessProfile, adapter_call, effective_image, get_profile, tool_inventory
 from .harnessconfig import CONTAINER_HOME, INJECTED_KEY, AdapterContext, adapter_context, with_plan
 from .mounts import (
     Mount,
@@ -153,14 +153,15 @@ def home_mount(home_dir: str) -> Mount:
 
 def _harness_options(opts: object, profile: HarnessProfile, native: dict) -> tuple[set[str], list[str]]:
     """`harness_options`: the `protect:` opt-ins turned on and `tools_allow`; never in `native` config."""
-    opts, known = opts or {}, {"tools_allow", *profile.opt_ins}
-    if not isinstance(opts, dict) or set(opts) - known or not all(isinstance(opts[k], bool)
-                                                                  for k in profile.opt_ins & set(opts)):
+    opts, known = {} if opts is None else opts, {"tools_allow", *profile.opt_ins}
+    allow = opts.get("tools_allow", []) if isinstance(opts, dict) else None
+    if not isinstance(allow, list) or set(opts) - known or not all(isinstance(x, str) for x in allow) \
+            or not all(isinstance(opts[k], bool) for k in profile.opt_ins & set(opts)):
         raise ConfigError(f"harness_options takes {sorted(known)} for {profile.name} (tools_allow: tool names, "
                           f"an opt-in: true or false), got {opts!r}")
-    allow = list(_strs(opts.get("tools_allow", []), "harness_options.tools_allow"))
-    if profile.opt_ins & set(native) or (isinstance(native.get("tools"), dict) and "allow" in native["tools"]):
-        raise ConfigError("native harness config: tools.allow and protect opt-ins go in harness_options")
+    if "settings" in native or profile.opt_ins & set(native) or (isinstance(t := native.get("tools"), dict)
+                                                                 and "allow" in t):
+        raise ConfigError("native harness config is flat (no `settings:`); tools.allow, opt-ins go in harness_options")
     return {k for k in profile.opt_ins if opts.get(k)}, allow
 
 

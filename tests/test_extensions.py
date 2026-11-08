@@ -1128,14 +1128,32 @@ def test_a_harness_setting_never_hides_the_session_harness_in_when(tmp_path, gho
     assert plan.composition.harness_env["ON_PI"] == "1"
 
 
-def test_star_config_with_a_schema_checks_the_settings(tmp_path, ghome):
+def test_star_config_needs_free_form_settings(tmp_path, ghome):
+    # `config: "*"` passes every setting through: a schema's defaults, nulls
+    # and secret references would reach the native config, so it is refused
     _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
         api: 2
         name: tuner
         settings: { theme: { type: string, default: dark } }
         harness: { config: "*" }
         """)
-    with pytest.raises(ExtensionError, match="unknown setting"):
-        _render_with(tmp_path / "a", {"tuner": {"other": 1}})
-    plan, _ = _render_with(tmp_path / "b", {"tuner": {}})
-    assert plan.adapter.harness_config == {"theme": "dark"}
+    with pytest.raises(ExtensionError, match=r'with `settings: "\*"`'):
+        _render_with(tmp_path, {"tuner": {}})
+
+
+def test_free_form_settings_take_any_key_and_a_null_is_unset(tmp_path, ghome):
+    _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: "*"
+        harness: { config: "*" }
+        """)
+    plan, _ = _render_with(tmp_path, {"tuner": {"theme": "light", "env": None, "x": {"y": None}}})
+    assert plan.adapter.harness_config == {"theme": "light", "x": {}}
+
+
+def test_a_setting_never_hides_what_the_harness_renders_in_when():
+    from glove.extensions import when_context
+
+    ctx = when_context({"renders": "nothing", "harness": "vibe"}, "pi")
+    assert when_matches({"renders": "mcp", "harness": "pi"}, ctx)

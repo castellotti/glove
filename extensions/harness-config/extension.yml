@@ -4,5 +4,6 @@ summary: The harness's own native config (Pi settings.json, Vibe config.toml, Cl
 # Its settings are free-form: each is a key of the harness's native config, and
 # the adapter renders it (core checks none of them). Model tuning goes in the
 # `llm` extension's `harness` setting; both are merged.
+settings: "*"
 harness:
   config: "*"

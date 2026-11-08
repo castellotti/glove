@@ -143,11 +143,9 @@ NATIVE_TYPES = {"model": dict, "env": dict, "extensions": list, "skills": list}
 
 
 def _native(actx: AdapterContext) -> Mapping[str, Any]:
-    """The native config (`llm.harness`, `harness-config`): flat, and the keys
-    the adapter merges of the type it merges."""
+    """The native config (`llm.harness`, `harness-config`; core checked it is
+    flat), the keys the adapter merges of the type it merges."""
     native = actx.harness_config
-    if "settings" in native:
-        raise ConfigError("pi native config is flat: move the keys under `settings:` up a level")
     if bad := [f"{k}: {t.__name__}" for k, t in NATIVE_TYPES.items() if not isinstance(native.get(k, t()), t)]:
         raise ConfigError(f"pi native config: want {', '.join(bad)}")
     return native
@@ -240,15 +238,14 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
     # extensions' skills first, then any the session file lists itself
     skills = list(actx.skills)
     # the session's own extensions after glove's, minus any naming the built-in MCP
-    extra_ext = [e for e in extra_settings.pop("extensions", None) or [] if not e.endswith("builtin:mcp")]
+    extra_ext = [e for e in extra_settings.pop("extensions", []) if not e.endswith("builtin:mcp")]
     settings_json.update(extra_settings)
     settings_json["extensions"] = _merged(settings_json["extensions"], extra_ext)
     if skills:
         settings_json["skills"] = _merged(skills, extra_settings.get("skills"))
     if extra_env:
         settings_json.setdefault("env", {}).update(extra_env)
-    model_overrides = native.get("model") or {}
-    if model_overrides:
+    if model_overrides := native.get("model"):
         if "compat" in model_overrides:
             _check_compat(model_overrides["compat"], model.api)
         models[0].update(model_overrides)

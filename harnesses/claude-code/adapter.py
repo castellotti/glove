@@ -75,14 +75,12 @@ def secret_env(model) -> str:
 
 def _permissions(actx: AdapterContext) -> dict[str, Any]:
     """The native config's `permissions`, checked: they join glove's managed
-    rules (every other key goes to settings.json, so the config is flat)."""
-    if "settings" in actx.harness_config:
-        raise ConfigError("claude-code native config is flat: move the keys under `settings:` up a level")
-    perms = actx.harness_config.get("permissions") or {}
+    rules (every other key goes to settings.json; core checked the config is flat)."""
+    perms = actx.harness_config.get("permissions", {})
     if not isinstance(perms, dict) or set(perms) - PERMISSION_KEYS:
         raise ConfigError(f"claude-code permissions take {sorted(PERMISSION_KEYS)}")
     for key in ("allow", "deny"):
-        rules = perms.get(key) or []
+        rules = perms.get(key, [])
         if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
             raise ConfigError(f"claude-code permissions.{key} must be a list of rule strings")
     if perms.get("defaultMode", "default") not in MODES:
@@ -177,10 +175,10 @@ def managed_settings(actx: AdapterContext, servers: dict[str, Any], mcp_allow: l
         "permissions": {
             "defaultMode": perms.get("defaultMode", "default"),
             "allow": [*tools["shell"], *tools["file_write"], *tools["allow"], *([WEB_FETCH] if proxy else []),
-                      *mcp_allow, *(perms.get("allow") or [])],
+                      *mcp_allow, *perms.get("allow", [])],
             # WebFetch is denied unless webfetch hands it the egress proxy
             "deny": [f"Read(/{home}/**)", *_write_denies(actx),
-                     *(d for d in tools["deny"] if not proxy or d != WEB_FETCH), *mcp_deny, *(perms.get("deny") or [])],
+                     *(d for d in tools["deny"] if not proxy or d != WEB_FETCH), *mcp_deny, *perms.get("deny", [])],
         },
         "enableArtifact": False,
         "disableClaudeAiConnectors": True,
