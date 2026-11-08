@@ -57,7 +57,6 @@ HARNESS_WRITABLE = (CONTAINER_HOME, "/dev/shm")
 # egress proxy.
 WEB_FETCH = "WebFetch"
 MODES = ("default", "acceptEdits", "plan", "dontAsk")
-CONFIG_KEYS = frozenset({"settings", "permissions"})
 PERMISSION_KEYS = frozenset({"defaultMode", "allow", "deny"})
 MANAGED_ENV = {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -74,22 +73,21 @@ def secret_env(model) -> str:
     return "CLAUDE_CODE_OAUTH_TOKEN" if model.api_key_kind == "oauth" else "ANTHROPIC_API_KEY"
 
 
-def _config(actx: AdapterContext) -> dict[str, Any]:
-    hc = dict(actx.harness_config)
-    unknown = set(hc) - CONFIG_KEYS
-    perms = hc.get("permissions") or {}
-    if unknown or not isinstance(perms, dict) or set(perms) - PERMISSION_KEYS:
-        raise ConfigError(f"claude-code harness_config takes {sorted(CONFIG_KEYS)} "
-                          f"(permissions: {sorted(PERMISSION_KEYS)})")
-    if not isinstance(hc.get("settings") or {}, dict):
-        raise ConfigError("claude-code harness_config.settings must be a mapping")
+def _permissions(actx: AdapterContext) -> dict[str, Any]:
+    """The native config's `permissions`, checked: they join glove's managed
+    rules (every other key goes to settings.json, so the config is flat)."""
+    if "settings" in actx.harness_config:
+        raise ConfigError("claude-code native config is flat: move the keys under `settings:` up a level")
+    perms = actx.harness_config.get("permissions") or {}
+    if not isinstance(perms, dict) or set(perms) - PERMISSION_KEYS:
+        raise ConfigError(f"claude-code permissions take {sorted(PERMISSION_KEYS)}")
     for key in ("allow", "deny"):
         rules = perms.get(key) or []
         if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
             raise ConfigError(f"claude-code permissions.{key} must be a list of rule strings")
     if perms.get("defaultMode", "default") not in MODES:
         raise ConfigError(f"claude-code permissions.defaultMode must be one of {list(MODES)}")
-    return hc
+    return perms
 
 
 def _mcp(actx: AdapterContext, wrapped: bool = False) -> tuple[dict[str, Any], list[str], list[str], dict[str, str]]:
@@ -156,7 +154,7 @@ def _write_denies(actx: AdapterContext) -> list[str]:
 
 def managed_settings(actx: AdapterContext, servers: dict[str, Any], mcp_allow: list[str],
                      mcp_deny: list[str]) -> dict[str, Any]:
-    perms = _config(actx).get("permissions") or {}
+    perms = _permissions(actx)
     home = actx.config_home
     tools = actx.tool_policy
     env = dict(MANAGED_ENV)
@@ -236,7 +234,6 @@ def image_lines(actx: AdapterContext) -> tuple[list[str], list]:
 
 
 def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
-    hc = _config(actx)
     model = actx.model
     if model.api != "anthropic-messages":
         raise ConfigError(f"Claude Code speaks only the Anthropic Messages API, not {model.api!r}")
@@ -248,7 +245,7 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         "model": model.model,
         "includeCoAuthoredBy": False,
         "attribution": {"commit": "", "pr": ""},
-        **(hc.get("settings") or {}),
+        **{k: v for k, v in actx.harness_config.items() if k != "permissions"},
     }
     p_settings = cfg_dir / "settings.json"
     p_settings.write_text(json.dumps(settings, indent=2) + "\n")

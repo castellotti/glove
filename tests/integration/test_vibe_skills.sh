@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live: Vibe's `harness_config.project_skills` opt-in (the repo's skills, read-only
+# Live: Vibe's `harness_options.project_skills` opt-in (the repo's skills, read-only
 # through the masked .vibe/ and .agents/; the rest still hidden), against the
 # host llm stub.
 #

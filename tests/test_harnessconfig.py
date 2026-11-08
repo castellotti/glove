@@ -11,6 +11,7 @@ from helpers import STUB_LLM, make_cfg
 
 from glove.config import AddDir, ConfigError
 from glove.harnessconfig import INJECTED_KEY, LLM_API_KEY_ENV, ModelDescriptor, build_environment_context, render_home
+from glove.manifest import ExtensionError
 from glove.plan import build_session_plan
 
 EXTS = {"direct": {}, "search": {}, "playwright": {}}
@@ -63,7 +64,7 @@ def test_vibe_config_toml(tmp_path):
 def test_vibe_operator_mcp_servers_render_as_written(tmp_path):
     own = [{"name": "extra", "transport": "http", "url": "http://x:1/mcp"},
            {"name": "local", "transport": "stdio", "command": "/usr/bin/true"}]
-    _, _, home = _home("vibe", tmp_path, harness_config={"mcp_servers": own})
+    _, _, home = _home("vibe", tmp_path, extensions={**EXTS, "harness-config": {"mcp_servers": own}})
     doc = tomllib.loads((home / ".vibe" / "config.toml").read_text())
     assert doc["mcp_servers"][-2:] == own  # no bridge: an operator who wants one writes the stdio form
 
@@ -247,18 +248,18 @@ def test_descriptor_refuses_unknown_api():
         ModelDescriptor.from_exports({"base_url": "http://x", "api": "grpc", "model": "m"})
 
 
-def test_pi_harness_config_overrides(tmp_path):
-    cfg, plan, home = _home("pi", tmp_path)
-    cfg.harness_config = {
-        "settings": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"},
-                     "extensions": ["npm:x", "+builtin:mcp", "builtin:mcp"]},
-        "model": {"contextWindow": 131072, "maxTokens": 100000},
-    }
-    render_home(cfg, plan, home)
+def test_pi_native_config_overrides(tmp_path):
+    # llm's `harness` (model tuning) and `harness-config` (the rest), merged
+    llm = {**STUB_LLM, "harness": {"defaultThinkingLevel": "xhigh", "env": {"FOO": "bar"},
+                                   "model": {"contextWindow": 131072, "maxTokens": 100000}}}
+    hc = {"env": {"BAZ": "1"}, "extensions": ["npm:x", "+builtin:mcp", "builtin:mcp"]}
+    _, plan, home = _home("pi", tmp_path, llm=llm, extensions={**EXTS, "harness-config": hc})
+    assert plan.adapter.harness_config["env"] == {"FOO": "bar", "BAZ": "1"}
     agent = home / ".pi" / "agent"
     settings = json.loads((agent / "settings.json").read_text())
     assert settings["defaultThinkingLevel"] == "xhigh"
-    assert settings["env"]["FOO"] == "bar"
+    assert settings["env"]["FOO"] == "bar" and settings["env"]["BAZ"] == "1"
+    assert "model" not in settings
     # a session's own extensions are added; none names Pi's MCP (on here: glove renders servers)
     assert settings["extensions"] == ["npm:x"]
     model = json.loads((agent / "models.json").read_text())["providers"]["glove"]["models"][0]
@@ -277,17 +278,36 @@ def test_pi_compat_values_are_ones_pi_accepts(tmp_path):
 @pytest.mark.parametrize("compat", [{"thinkingFormat": "reasoning_effort"}, {"maxTokensField": "max_output_tokens"},
                                     "openai"])
 def test_pi_refuses_a_compat_override_pi_would_refuse(tmp_path, compat):
-    cfg, plan, home = _home("pi", tmp_path)
-    cfg.harness_config = {"model": {"compat": compat}}
-    with pytest.raises(ConfigError, match=r"harness_config\.model"):
-        render_home(cfg, plan, home)
+    with pytest.raises(ConfigError, match=r"llm\.harness model"):
+        _home("pi", tmp_path, llm={**STUB_LLM, "harness": {"model": {"compat": compat}}})
+
+
+@pytest.mark.parametrize(("native", "why"), [
+    ({"settings": {"defaultThinkingLevel": "xhigh"}}, "flat"), ({"model": "gpt-x"}, "model: dict"),
+    ({"extensions": "npm:x"}, "extensions: list"), ({"env": ["X=1"]}, "env: dict")])
+def test_pi_refuses_native_config_it_cannot_merge(tmp_path, native, why):
+    with pytest.raises(ConfigError, match=why):
+        _home("pi", tmp_path, extensions={**EXTS, "harness-config": native})
+
+
+@pytest.mark.parametrize("own", [None, {"name": "x"}, ["x"]])
+def test_vibe_refuses_mcp_servers_that_are_no_list_of_tables(tmp_path, own):
+    with pytest.raises(ConfigError, match="mcp_servers is a list"):
+        _home("vibe", tmp_path, extensions={**EXTS, "harness-config": {"mcp_servers": own}})
+
+
+def test_two_extensions_may_not_set_one_key_differently(tmp_path):
+    with pytest.raises(ExtensionError, match=r"config env\.X is set differently"):
+        _home("pi", tmp_path, llm={**STUB_LLM, "harness": {"env": {"X": "1"}}},
+              extensions={**EXTS, "harness-config": {"env": {"X": "2"}}})
+
 
 
 @pytest.mark.parametrize("opt", [None, False, True])
 def test_vibe_project_skills_opt_in(tmp_path, opt):
     # The repo's .vibe/ and .agents/ stay masked; project_skills shows only
     # their skills/ through, read-only, and never reaches Vibe's config.toml.
-    kw = {} if opt is None else {"harness_config": {"project_skills": opt}}
+    kw = {} if opt is None else {"harness_options": {"project_skills": opt}}
     _, plan, home = _home("vibe", tmp_path, **kw)
     got = {p.container_path: p for p in plan.protect if p.container_path.startswith("/work/")}
     assert got["/work/.vibe"].host_path is None and got["/work/.agents"].host_path is None
@@ -310,8 +330,8 @@ def test_pi_never_sees_the_projects_settings(tmp_path):
 
 
 def test_vibe_project_skills_must_be_a_bool(tmp_path):
-    with pytest.raises(ConfigError, match="project_skills must be true or false"):
-        _home("vibe", tmp_path, harness_config={"project_skills": "yes"})
+    with pytest.raises(ConfigError, match="an opt-in: true or false"):
+        _home("vibe", tmp_path, harness_options={"project_skills": "yes"})
 
 
 def test_pi_pins_its_session_dir_and_renders_no_credentials(tmp_path):

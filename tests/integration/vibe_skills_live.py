@@ -1,4 +1,4 @@
-"""Live checks of Vibe's `harness_config.project_skills` opt-in (driven by
+"""Live checks of Vibe's `harness_options.project_skills` opt-in (driven by
 test_vibe_skills.sh).
 
     uv run python tests/integration/vibe_skills_live.py <session-dir>
@@ -45,8 +45,8 @@ def main(directory: str) -> int:
         for n, r in loaded().items():
             check(f"the project skill {n} is not found", f"PROBE-SKILL-BODY-{n}" not in r, r)
 
-        print("== on (harness_config.project_skills: true)")
-        s.reconfigure("harness_config: {project_skills: true}")
+        print("== on (harness_options.project_skills: true)")
+        s.reconfigure("harness_options: {project_skills: true}")
         w = lines(s.run("-c", LIST, entry="bash").stdout)
         check(".vibe/ and .agents/ show only skills/", (w.get("VIBE"), w.get("AGENTS")) == ("skills,", "skills,"),
               str(w))

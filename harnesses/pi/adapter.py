@@ -21,6 +21,7 @@ from the neutral `harness.skills` contribution (`actx.skills`).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -137,19 +138,34 @@ def describe(actx: AdapterContext) -> list[str]:
             *(f"mcp server: {n}" for n in _mcp_servers(actx))]
 
 
+# native config keys the adapter merges rather than sets, and their type
+NATIVE_TYPES = {"model": dict, "env": dict, "extensions": list, "skills": list}
+
+
+def _native(actx: AdapterContext) -> Mapping[str, Any]:
+    """The native config (`llm.harness`, `harness-config`): flat, and the keys
+    the adapter merges of the type it merges."""
+    native = actx.harness_config
+    if "settings" in native:
+        raise ConfigError("pi native config is flat: move the keys under `settings:` up a level")
+    if bad := [f"{k}: {t.__name__}" for k, t in NATIVE_TYPES.items() if not isinstance(native.get(k, t()), t)]:
+        raise ConfigError(f"pi native config: want {', '.join(bad)}")
+    return native
+
+
 def _check_compat(compat: Any, api: str) -> None:
     """Refuse a `compat` value Pi's schema would refuse (it would then load no
     provider at all, and say only "No API key found for the selected model").
     Those keys are openai-completions': Pi loads them on a Responses model (its
     schema merges every API's) and ignores them, so they are refused there."""
     if not isinstance(compat, dict):
-        raise ConfigError("pi harness_config.model: `compat` must be a mapping")
+        raise ConfigError("pi llm.harness model: `compat` must be a mapping")
     if api == "openai-responses" and (ignored := sorted(compat.keys() & COMPAT_VALUES.keys())):
-        raise ConfigError(f"pi harness_config.model: compat {ignored} are chat/completions keys; "
+        raise ConfigError(f"pi llm.harness model: compat {ignored} are chat/completions keys; "
                           "openai-responses ignores them")
     for key, allowed in COMPAT_VALUES.items():
         if key in compat and compat[key] not in allowed:
-            raise ConfigError(f"pi harness_config.model: compat.{key} {compat[key]!r} is not one of {sorted(allowed)}")
+            raise ConfigError(f"pi llm.harness model: compat.{key} {compat[key]!r} is not one of {sorted(allowed)}")
 
 
 def _pi_model(entry: dict[str, Any], model) -> dict[str, Any]:
@@ -214,10 +230,12 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
     # An extension's own Pi code reads what it needs (e.g. an endpoint URL) from
     # container env, its `harness.env`; nothing goes into settings.
 
-    # Let the (git-tracked) session file's `harness_config` override Pi settings
-    # and model fields without a code change — e.g. `defaultThinkingLevel: xhigh`,
-    # or extra per-model tuning if the endpoint supports it. `env` is deep-merged.
-    extra_settings = dict(actx.harness_config.get("settings", {}))
+    # The session's native config (`llm.harness`, `harness-config`) overrides Pi
+    # settings without a code change — e.g. `defaultThinkingLevel: xhigh` — and
+    # its `model` the model's fields (per-model tuning the endpoint supports).
+    # `env` is deep-merged.
+    native = _native(actx)
+    extra_settings = {k: v for k, v in native.items() if k != "model"}
     extra_env = extra_settings.pop("env", None)
     # extensions' skills first, then any the session file lists itself
     skills = list(actx.skills)
@@ -229,7 +247,7 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         settings_json["skills"] = _merged(skills, extra_settings.get("skills"))
     if extra_env:
         settings_json.setdefault("env", {}).update(extra_env)
-    model_overrides = actx.harness_config.get("model", {})
+    model_overrides = native.get("model") or {}
     if model_overrides:
         if "compat" in model_overrides:
             _check_compat(model_overrides["compat"], model.api)

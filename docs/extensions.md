@@ -82,7 +82,7 @@ Legend:
 | `mounts` | map name → `{setting, when}` | entries | | | a read-only harness bind of a directory named by a `path` setting with no default |
 | `trust` | list of services | | `cat` | | these sidecars trust the session's CAs (`corporate_ca` and the extension's `ca` settings): core binds their copies read-only and builds one bundle in an entrypoint of its own (replacing the image's), which then runs the service's whole `command` (which it must set; no `entrypoint`) |
 | `verify` | list of checks `{name, kind, service, …}` | items | `cat` | | run at `glove up`; `kind`: `container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exec-ok`, `hook` (its `verify` hook runs it; argv only in its own sidecars) |
-| `harness` | map: `image`, `env`, `git_config`, `brief`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
+| `harness` | map: `image`, `env`, `git_config`, `brief`, `config`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
 | `hooks` | path, relative (`hooks.py`) | | | | [hooks](#hooks) |
 | `cli` | path, relative (`cli.py`) | | | | [an extension's CLI](#an-extensions-cli) |
 
@@ -105,6 +105,13 @@ Legend:
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
 - `brief`: a file (or `{file, when}`) the agent reads at start.
+- `config`: the name of a `type: map` setting whose value is the harness's
+  native config (Pi `settings.json`, Vibe `config.toml`, Claude Code
+  `settings.json`), passed to the adapter as written (never rendered), or `"*"`:
+  all of the extension's settings: free-form (core checks no key; `harness-config`)
+  when the manifest declares no `settings:`, else those checked settings. Every extension's config is merged, mappings key by key;
+  a key two extensions set to different values is refused. Out of tree, it is a
+  privilege (`trusted_extensions`). `llm` uses it for its `harness` setting.
 - `mcp`: a list of servers: `name`, `transport` (`stdio` or `http`), `url` or
   `command`/`args`/`env`, and `tools`/`all_tools`.
 - `skills`: `SKILL.md` directories, inside the extension or `{mount, path}`.

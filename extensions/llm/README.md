@@ -19,7 +19,24 @@ extensions:
     capabilities: auto         # or explicit keys, e.g. {vision: true}; probes fill the rest
     api_key: keychain:<service>  # optional for local servers; a reference, never the key
     extra_models: []           # e.g. [{id: some-vision-model, vision: true}]
+    harness: {}                # this model's native harness settings, e.g. Pi's {defaultThinkingLevel: xhigh}
 ```
+
+## `harness`: settings tied to the model
+
+`harness` is passed to the harness's own config as written, flat (no
+`settings:` level), so the tuning sits beside the model it is for:
+
+```yaml
+    harness:                   # Pi: settings.json; `model` overrides the model's models.json entry
+      defaultThinkingLevel: xhigh
+      compaction: {reserveTokens: 49152, keepRecentTokens: 32000}   # reserve ≥ max_tokens, plus slack
+      model: {compat: {thinkingFormat: qwen}}
+```
+
+On Claude Code it is `settings.json` (e.g. `env: {ANTHROPIC_DEFAULT_OPUS_MODEL: …}`), on Vibe `config.toml`.
+Settings that are not about the model go in the
+[`harness-config`](../harness-config/README.md) extension; glove merges the two.
 
 ## Auth
 
@@ -195,7 +212,7 @@ extensions:
   `capabilities: {reasoning: false}` for a model that refuses an effort.
 - Pi's `models.json` gets no `compat` block: pi-ai's defaults for this API
   (no strict mode, no grammar tools) are what a gateway wants. A
-  `harness_config.model.compat` override may set the Responses API's keys
+  `harness: {model: {compat: …}}` override may set the Responses API's keys
   (`supportsStrictMode`, …); the chat/completions keys glove checks
   (`thinkingFormat`, `maxTokensField`) are refused, since Pi would load them
   and ignore them. A reasoning

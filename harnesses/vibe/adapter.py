@@ -7,14 +7,14 @@ so it becomes one `disabled_tools` regex that hides every other `<server>_*`
 tool — including ones a later server version adds. Vibe 2.26 calls them only
 from `run_typescript`, as `mcp_<server>.<tool>`: those names join the session's
 tool inventory, which the pre_tool hook refuses every other tool by. A server
-without an allowlist (`harness_config.mcp_servers`) adds none: its tools need
-`harness_config.tools.allow`.
+without an allowlist (`harness-config`'s `mcp_servers`) adds none: its tools need
+`harness_options.tools_allow`.
 
 Vibe (2.26.1; re-check at a bump) opens a new MCP session for every call to
 an HTTP server, so a server that keeps state per session (Playwright's pages)
 forgets it between calls. Each HTTP server from `actx.mcp` is rendered as the
 image's stdio bridge (`glove-mcp-bridge <url>`, one session for Vibe's) under
-the same name, so its tool names don't change. `harness_config.mcp_servers`
+the same name, so its tool names don't change. `harness-config`'s `mcp_servers`
 render as written.
 
 Contributed skills are linked from one baked directory, listed in `skill_paths`.
@@ -28,6 +28,7 @@ from typing import Any
 
 import tomli_w
 
+from glove.api import ConfigError
 from glove.api.harness import AdapterContext
 
 # Descriptor api → Vibe (backend, api_style).
@@ -45,7 +46,7 @@ def image_lines(actx: AdapterContext) -> tuple[list[str], list]:
 
 
 def _mcp_servers(actx: AdapterContext) -> tuple[list[dict[str, Any]], list[str]]:
-    """Each extension's MCP server, then explicit `harness_config.mcp_servers` —
+    """Each extension's MCP server, then explicit `harness-config`'s `mcp_servers` —
     and the `disabled_tools` patterns their `tools` allowlists imply."""
     servers: list[dict[str, Any]] = []
     disabled: list[str] = []
@@ -60,7 +61,10 @@ def _mcp_servers(actx: AdapterContext) -> tuple[list[dict[str, Any]], list[str]]
         if item["transport"] == "http":  # core allows only the url: the bridge drops nothing
             item.update(transport="stdio", command=MCP_BRIDGE, args=[item.pop("url")])
         servers.append(item)
-    servers.extend(actx.harness_config.get("mcp_servers", []))
+    own = actx.harness_config.get("mcp_servers", [])
+    if not isinstance(own, list) or not all(isinstance(s, dict) for s in own):
+        raise ConfigError("vibe native config: mcp_servers is a list of server tables")
+    servers.extend(own)
     return servers, disabled
 
 
@@ -125,8 +129,8 @@ def render_home(actx: AdapterContext, home_dir: Path) -> list[Path]:
         ],
     }
 
-    # Pass through arbitrary Vibe config from the (git-tracked) session file's
-    # `harness_config`, keeping it the single reproducible source of truth.
+    # Pass through the session file's native Vibe config (`llm.harness`,
+    # `harness-config`), keeping it the single reproducible source of truth.
     # mcp_servers is already merged above; lists extend, scalars/tables override.
     for key, value in actx.harness_config.items():
         if key == "mcp_servers":

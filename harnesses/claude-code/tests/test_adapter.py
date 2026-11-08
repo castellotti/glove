@@ -109,20 +109,20 @@ def test_base_url_only_off_the_default_host(tmp_path):
         assert _managed(_plan(tmp_path / sub, llm)[1])["env"]["ANTHROPIC_BASE_URL"] == "http://glove-s-llm:8080"
 
 
-def test_harness_config_permissions(tmp_path):
+def test_native_config_permissions(tmp_path):
     hc = {"permissions": {"defaultMode": "acceptEdits", "allow": ["Bash(git:*)"], "deny": ["Bash(rm:*)"]}}
-    m = _managed(_plan(tmp_path, harness_config=hc)[1])
+    m = _managed(_plan(tmp_path, extensions={"harness-config": hc})[1])
     assert m["permissions"]["defaultMode"] == "acceptEdits"
     assert "Bash(git:*)" in m["permissions"]["allow"] and "Bash(rm:*)" in m["permissions"]["deny"]
 
 
-@pytest.mark.parametrize("hc", [{"mcp_servers": []}, {"permissions": {"mode": "x"}},
+@pytest.mark.parametrize("hc", [{"permissions": {"mode": "x"}}, {"permissions": ["x"]},
                                 {"permissions": {"defaultMode": "bypassPermissions"}},
                                 {"permissions": {"allow": "Bash(git:*)"}}, {"permissions": {"deny": [1]}},
-                                {"settings": ["theme"]}])
-def test_bad_harness_config_is_refused(tmp_path, hc):
+                                {"settings": {"theme": "dark"}}])
+def test_bad_permissions_are_refused(tmp_path, hc):
     with pytest.raises(ConfigError, match="claude-code"):
-        _plan(tmp_path, harness_config=hc)
+        _plan(tmp_path, extensions={"harness-config": hc})
 
 
 def test_mcp_contributions_become_managed_servers_and_rules(tmp_path):
@@ -208,7 +208,8 @@ def test_system_files_only_in_a_dir_of_their_own_under_etc(tmp_path, target):
 
 
 def test_home_seeds_onboarding_and_trust_and_keeps_claude_codes_state(tmp_path):
-    cfg, plan = _plan(tmp_path, harness_config={"settings": {"theme": "dark"}})
+    llm = {**ANTHROPIC, "harness": {"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-x"}}}
+    cfg, plan = _plan(tmp_path, llm, extensions={"harness-config": {"theme": "dark", "permissions": {"allow": []}}})
     home = tmp_path / "h"
     state = home / ".claude" / ".claude.json"
     state.parent.mkdir(parents=True)
@@ -219,6 +220,8 @@ def test_home_seeds_onboarding_and_trust_and_keeps_claude_codes_state(tmp_path):
     assert doc["projects"]["/work"] == {"allowedTools": ["x"], "hasTrustDialogAccepted": True}
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert settings["model"] == "claude-x" and settings["theme"] == "dark"
+    # llm's `harness` and `harness-config`, merged; `permissions` stay managed-only
+    assert settings["env"] == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-x"} and "permissions" not in settings
     assert settings["includeCoAuthoredBy"] is False
     assert (home / ".claude" / "projects").is_dir()  # observe binds over it before the first turn
     assert "How your environment works" in (home / ".claude" / "CLAUDE.md").read_text()

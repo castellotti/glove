@@ -53,13 +53,15 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}-[0-9a-f]{6}\Z")
 # Keys a v3 session file may hold. Everything else is refused, with a pointer
 # for the keys round 16 moved into extensions.
 FILE_KEYS = frozenset({
-    "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_config",
+    "glove", "template", "harness", "enforcer", "runtime", "mounts", "limits", "extensions", "harness_options",
     "env", "git_config", "brief", "corporate_ca", "tools", "enforcer_options", "apt_packages", "pip_packages",
     "protect_ide_files", "allow_root", "allow_sensitive",
 })
 MOVED_KEYS = {
     "host_services": "a session starts no host processes; `playwright: {mode: host}` runs the host's Chrome",
     "toolchains": "an extension now: `extensions: {toolchains: {blocks: [...]}}`",
+    "harness_config": "model tuning → `extensions: {llm: {harness: …}}`, the rest → `extensions: {harness-config: "
+                      "…}` (no `settings:` level), `tools.allow`/opt-ins → `harness_options: {tools_allow: …}`",
 }
 
 

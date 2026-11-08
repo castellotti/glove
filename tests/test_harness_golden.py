@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 import pytest
-from helpers import make_cfg
+from helpers import STUB_LLM, make_cfg
 
 GOLDEN = Path(__file__).parent / "golden" / "harness"
 UPDATE = os.environ.get("GLOVE_UPDATE_GOLDEN") == "1"
@@ -29,9 +29,9 @@ CASES = {
     "pi-nono-min": {"harness": "pi", "enforcer": "nono", "extensions": {}},
     "pi-srt-full": {
         "harness": "pi", "enforcer": "nono+srt",
-        "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"}},
-        "harness_config": {"settings": {"defaultThinkingLevel": "medium", "env": {"X": "1"}},
-                           "model": {"maxTokens": 4096}},
+        "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"}, "harness-config": {"env": {"X": "1"}},
+                       "llm": {**STUB_LLM, "harness": {"defaultThinkingLevel": "medium",
+                                                       "model": {"maxTokens": 4096}}}},
         "brief": "# brief\n\nDo the thing.",
     },
     "vibe-nono-min": {"harness": "vibe", "enforcer": "nono", "extensions": {}},
@@ -44,15 +44,16 @@ CASES = {
         "harness": "claude-code", "enforcer": "nono+srt",
         "extensions": {**WEB, "rag": {"models_dir": "{tmp}/models"},
                        "llm": {"provider": "anthropic-compatible", "location": "host", "endpoint": "127.0.0.1:8080",
-                               "model": "claude-stub", "api_key": "env:TEST_KEY"}},
-        "harness_config": {"settings": {"theme": "dark"},
-                           "permissions": {"defaultMode": "acceptEdits", "deny": ["Bash(rm -rf:*)"]}},
+                               "model": "claude-stub", "api_key": "env:TEST_KEY"},
+                       "harness-config": {"theme": "dark",
+                                          "permissions": {"defaultMode": "acceptEdits", "deny": ["Bash(rm -rf:*)"]}}},
         "brief": "# brief\n\nDo the thing.",
     },
     "vibe-srt-full": {
-        "harness": "vibe", "enforcer": "nono+srt", "extensions": dict(WEB),
-        "harness_config": {"include_commit_signature": False, "disabled_tools": ["task"],
-                           "mcp_servers": [{"name": "extra", "transport": "http", "url": "http://x:1/mcp"}]},
+        "harness": "vibe", "enforcer": "nono+srt",
+        "extensions": {**WEB, "harness-config": {
+            "include_commit_signature": False, "disabled_tools": ["task"],
+            "mcp_servers": [{"name": "extra", "transport": "http", "url": "http://x:1/mcp"}]}},
         "brief": "# brief\n\nDo the thing.",
     },
     "pi-downloads": {"harness": "pi", "enforcer": "nono+srt", "extensions": dict(DOWNLOADS)},

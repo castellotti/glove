@@ -349,6 +349,8 @@ def validate_settings(m: Manifest, given: dict[str, Any] | None) -> dict[str, An
     if given is not None and not isinstance(given, dict):
         raise ExtensionError(f"extension {m.name!r}: settings must be a mapping (use `{m.name}: {{}}` for none)")
     given = dict(given or {})
+    if (m.raw.get("harness") or {}).get("config") == "*" and not m.settings_schema:  # free-form native config
+        return given
     schema = m.settings_schema
     unknown = set(given) - set(schema)
     if unknown:
@@ -397,7 +399,8 @@ def when_matches(when: dict[str, Any] | None, ctx: dict[str, Any]) -> bool:
             if not isinstance(want, list) or not any(when_matches(w, ctx) for w in want):
                 return False
             continue
-        have = _lookup(ctx, key) if "." in key else ctx.get("settings", {}).get(key, ctx.get(key))
+        have = (_lookup(ctx, key) if "." in key else ctx.get(key) if key == "harness"  # never a setting's
+                else ctx.get("settings", {}).get(key, ctx.get(key)))
         if isinstance(want, dict) and set(want) == {"set"}:
             if (have not in (None, "", [], {})) != bool(want["set"]):
                 return False
@@ -607,6 +610,7 @@ class Composition:
     # or None for a path under a mount, container path); MCP servers as (ext, spec).
     skills: list[tuple[str, Path | None, str]] = field(default_factory=list)
     mcp: list[tuple[str, dict]] = field(default_factory=list)
+    harness_config: dict[str, Any] = field(default_factory=dict)  # every `harness.config`, merged (native config)
     # `harness.<this harness>:` sections, for its adapter: (extension, section, template context)
     harness_items: list[tuple[Active, Any, dict]] = field(default_factory=list)
     # (ext, host dir, container path): read-only harness binds from `mounts:`
@@ -1095,7 +1099,27 @@ def mcp_server(where: str, item: Any) -> dict[str, Any]:
 
 # `harness:` keys every extension may use; a harness's own name keys a section
 # only its adapter reads (e.g. `pi: {extensions: [...]}`).
-HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief"}) | CONTRIBUTIONS
+HARNESS_KEYS = frozenset({"image", "env", "git_config", "brief", "config"}) | CONTRIBUTIONS
+
+
+def _merge_native(into: dict, more: dict, where: str, path: str = "") -> None:
+    """`more` deep-merged into `into`; a value another extension set differently is refused."""
+    for k, v in more.items():
+        if isinstance(v, dict) and isinstance(into.get(k), dict):
+            _merge_native(into[k], v, where, f"{path}{k}.")
+        elif k in into and into[k] != v:
+            raise ExtensionError(f"{where}: config {path}{k} is set differently by another extension")
+        else:
+            into[k] = copy.deepcopy(v)
+
+
+def _harness_config(comp: Composition, a: Active, key: Any, where: str) -> None:
+    """`config: <a map setting>` or `"*"` (all its free-form settings): native harness config, never rendered."""
+    if key != "*" and (a.manifest.settings_schema.get(key) or {}).get("type") != "map":
+        raise ExtensionError(f"{where}: config names a `type: map` setting, or is \"*\"")
+    if native := (a.settings if key == "*" else a.settings.get(key)):  # a mapping (map settings are)
+        require_trust(a, f"{where} config")
+        _merge_native(comp.harness_config, native, where)
 
 
 def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[str, Any]) -> None:
@@ -1161,6 +1185,8 @@ def _harness_contrib(comp: Composition, a: Active, ctx: dict, contributed: dict[
             if any(s["name"] == server["name"] for _, s in comp.mcp):
                 raise ExtensionError(f"{where}: mcp server {server['name']!r} is already set by another extension")
             comp.mcp.append((a.name, server))
+    if "config" in h:
+        _harness_config(comp, a, h["config"], where)
     if h.get(comp.harness) is not None:
         comp.harness_items.append((a, h[comp.harness], ctx))
     brief = h.get("brief")

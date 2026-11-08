@@ -43,8 +43,8 @@ explicitly with `capabilities: {vision: true, context_window: 131072}` when the
 server can't be probed.
 
 - Raise the default reasoning effort with
-  `harness_config.settings.defaultThinkingLevel` (`off|low|medium|xhigh`).
-- Override any generated model field via `harness_config.model`.
+  the llm extension's `harness: {defaultThinkingLevel: …}` (`off|low|medium|xhigh`).
+- Override any generated model field via `harness: {model: {…}}`.
 - A model that refuses tools with a reasoning effort on chat/completions
   (gpt-6-luna) needs the Responses API: `provider: openai-responses-compatible`,
   see [the llm README](../extensions/llm/README.md#responses-api-servers-openai-responses-compatible).

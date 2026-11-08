@@ -25,7 +25,7 @@ context_file: /home/agent/.vibe/AGENTS.md
 # The project's own config (a trusted /work): hooks there run before glove's
 # and shadow a hook of the same name, and its config, prompts (one replaces
 # Vibe's system prompt), tools and plugins load into Vibe. Masked: an empty
-# read-only directory, whatever the repo holds. `harness_config.project_skills:
+# read-only directory, whatever the repo holds. `harness_options.project_skills:
 # true` shows the repo's skills through it, read-only.
 protect:
   - ~/.vibe/config.toml

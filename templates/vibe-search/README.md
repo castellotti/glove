@@ -15,7 +15,7 @@ glove check && glove up
 ```
 
 The model must speak an OpenAI-style API (Vibe has no Anthropic backend).
-`harness_config` is passed through to Vibe's `config.toml`. OCR (`glove-ocr`)
+The `harness-config` extension's settings pass through to Vibe's `config.toml`. OCR (`glove-ocr`)
 and the media tools run offline in the shell, like every tool.
 
 `tools.mcp_webdownload.web_download` (from `webfetch: {downloads: work}`) saves files the agent

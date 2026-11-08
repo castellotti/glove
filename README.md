@@ -124,6 +124,9 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
     model: auto             # or an id; auto = the single model /v1/models lists
     capabilities: auto      # or explicit keys, e.g. {vision: true}; probes fill the rest
     # api_key: keychain:my-llm   # a reference only (keychain:<service> | env:<VAR>)
+    harness:                # this model's native harness settings (Pi settings.json; flat, no `settings:`)
+      defaultThinkingLevel: xhigh
+      compaction: { reserveTokens: 49152, keepRecentTokens: 32000 }
   vpn:                      # egress: exactly one of vpn | tor | direct
     provider: <set-me>      # a gluetun provider name, or custom
     wireguard_key: keychain:my-vpn-wg
@@ -136,6 +139,8 @@ extensions:                 # name → settings; unlisted = nothing in the sessi
   # ssh: { key: keychain:my-ssh, hosts: [{name: build, to: "build.lan:22", user: me}], known_hosts: local/known_hosts }
   observe: {}               # network observability (read) — see below
   # filter: {}              # network rules (write); needs observe
+  # harness-config: { theme: light }   # other native harness settings, as written (extensions/harness-config/README.md)
+# harness_options: { tools_allow: [mcp_myserver.lookup], project_skills: true }   # glove's switches: added tools, protect opt-ins
 tools: { allow_commands: [cp, mv, rm] }   # nono's tool policy (nono, nono+srt only): allow_commands, deny_commands; unknown keys are refused
 limits: { pids: 512, memory: 4g, cpus: 2 }
 enforcer_options: { srt: { nested: weak } }   # nono+srt also: hide_env (default true); nono / nono+srt: nono: { browsers: true }; unknown keys are refused
@@ -354,14 +359,14 @@ protect:
                                               # (an empty placeholder when missing)
   - {path: .vibe/, source: empty}             # the working dir: always the empty placeholder
   - ~/.claude/settings.json                   # the home: its own copy (glove renders it)
-  - {path: .vibe/skills/, opt_in: project_skills}  # the repo's copy, if that harness_config key is true
+  - {path: .vibe/skills/, opt_in: project_skills}  # the repo's copy, if that harness_options key is true
 ```
 
 - **The working dir.** Claude Code's `.claude/settings*.json`, as the repo
   holds them. Vibe's `.vibe/` and `.agents/` are always the empty placeholder:
   a project hook runs before glove's and shadows one of the same name, so a
   repo's own Vibe config is not loaded under glove (put it in
-  `harness_config`).
+  `harness-config`).
 - **The home** (`~/`): its own copy (glove renders the files; a missing one
   is created empty). Pi: `settings.json`, `models.json`, `trust.json`,
   `auth.json` (rendered `{}`: `llm-auth` holds the key, and `/login` can't
@@ -375,7 +380,7 @@ protect:
   glove re-renders the files at each start, so a choice the harness saves
   there (Pi's `/model` default, Vibe's `/theme`) never outlived a session; now
   the save fails silently (Pi even reports it as saved). A lasting choice goes
-  in the session file (`harness_config`, or `llm`'s `model`). Claude Code:
+  in the session file (`llm`'s `model` and `harness`, or `harness-config`). Claude Code:
   `settings.json`, `CLAUDE.md` and `agents/`, `commands/`, `skills/`,
   `plugins/`, `output-styles/`, `rules/`, `dev-mods/`; it still writes
   `.claude.json`, `projects/`, `sessions/` and its history, and `/model`'s
@@ -383,7 +388,7 @@ protect:
 
 Pi also skips the project's `.pi/` and `.agents/skills` (rendered
 `defaultProjectTrust: never` and an empty trust store; a session may set
-`harness_config.settings.defaultProjectTrust` to relax it). Its `AGENTS.md`
+`harness-config: {defaultProjectTrust: …}` to relax it). Its `AGENTS.md`
 and Vibe's still load: they are prompts, like any file the agent reads.
 
 Pi's session dir is pinned to its default (`PI_CODING_AGENT_SESSION_DIR`), and
@@ -397,7 +402,7 @@ in such a repo (Vibe's `.vibe/` is masked the same way).
 **Vibe: the repo's skills, opt-in.** With
 
 ```yaml
-harness_config:
+harness_options:
   project_skills: true
 ```
 
@@ -426,19 +431,18 @@ the session's own additions. Pi's enforcer
 extension and Vibe's hook refuse any other tool, and every tool when the file
 is missing, so a tool a new release adds or renames stays refused until glove
 classifies it. **If you add your own Pi extension or a Vibe
-`harness_config.mcp_servers` server, list its tools** (pass-through only):
+`harness-config` `mcp_servers` server, list its tools** (pass-through only):
 
 ```yaml
-harness_config:
-  tools:
-    allow: [mcp_myserver.lookup]   # Vibe: a session MCP server's tool; Pi: an extension's tool name
+harness_options:
+  tools_allow: [mcp_myserver.lookup]   # Vibe: a session MCP server's tool; Pi: an extension's tool name
 ```
 
 A name glove wraps, holds or denies is refused at plan time. A Vibe MCP tool
 is listed as `mcp_<server>.<tool>`, the name the agent calls from
-`run_typescript`. The rest of Vibe's `harness_config.tools` (its own
-`[tools.<name>]` tables) still goes to its `config.toml`. Your own
-`harness_config.mcp_servers` render as written: one that keeps state per
+`run_typescript`. Vibe's own `tools` (its `[tools.<name>]` tables) in
+`harness-config` go to its `config.toml`. Your own
+`harness-config` `mcp_servers` render as written: one that keeps state per
 session can use glove's bridge (`transport: stdio`, `command:
 /opt/glove/bin/glove-mcp-bridge`, `args: [<url>]`).
 
@@ -449,10 +453,10 @@ Pi 1.x features, as glove renders them:
   "hidden"` but for its allowed tools (`direct`), which Pi names
   `mcp__<server>__<tool>` and the enforcer extension passes; without a server
   it is off (`extensions: ["-builtin:mcp"]`). A session's own
-  `harness_config.settings.extensions` are added after glove's, and any naming
+  `extensions` (in `harness-config`) are added after glove's, and any naming
   `builtin:mcp` is dropped.
-- **Codemode: off**, as Pi ships it. `harness_config: {settings: {defaultTools:
-  ["+codemode"]}}` turns it on; its nested `tools.bash` and `tools.write` go
+- **Codemode: off**, as Pi ships it. `harness-config: {defaultTools:
+  ["+codemode"]}` turns it on; its nested `tools.bash` and `tools.write` go
   through the enforcer like direct calls.
 - **The fullscreen TUI** (Pi's default) works under glove's pty relay as is.
 
@@ -510,14 +514,14 @@ extensions:
   - the tools its inventory (`harnesses/claude-code/harness.yml`) classes
     `shell`, `file_write` or `allow` are pre-approved; the `ask` ones
     (`Workflow`, `Skill`, `Cron*`, …) and any a new release adds prompt, as
-    Claude Code ships, unless `harness_config.tools.allow` pre-approves them;
+    Claude Code ships, unless `harness_options.tools_allow` pre-approves them;
     `EnterWorktree`/`ExitWorktree` are denied (they run git from the harness
     process, outside ring 1);
     `WebFetch` is allowed with `webfetch` (through the egress proxy:
     `HTTPS_PROXY` in the managed env, every session forwarder in `NO_PROXY`; see
     [SECURITY.md](docs/SECURITY.md) for what that widens) and denied without it;
     `defaultMode` is pinned to `default`
-    (`harness_config.permissions.defaultMode` may pick `acceptEdits`, `plan` or
+    (`harness-config: {permissions: {defaultMode: …}}` may pick `acceptEdits`, `plan` or
     `dontAsk`);
   - extensions' MCP servers are the only ones (`managed-mcp.json`): a server's
     `tools` allowlist becomes allow rules, and every other tool it is known to
@@ -532,14 +536,16 @@ extensions:
   ([extensions/llm/README.md](extensions/llm/README.md), residuals in
   [docs/SECURITY.md](docs/SECURITY.md)). The `anthropic` provider allows
   `auth: oauth` for `claude-code` only.
-- **Home:** `settings.json` (model, no co-author trailer, `harness_config.settings`),
+- **Home:** `settings.json` (model, no co-author trailer, the native config),
   `.claude.json` onboarding and `/work` trust merged into whatever Claude Code
   keeps there, `CLAUDE.md` (environment + brief). Contributed skills are linked
   from `/opt/glove/cc/.claude/skills` (baked) and loaded with `--add-dir`, so
   the agent can read a skill's files by the path Claude Code shows it.
   Transcripts: `projects/<cwd>/<uuid>.jsonl`, exported by `observe`.
-- `harness_config` takes `settings` (user-scope settings), `permissions`
-  (`defaultMode`, extra `allow`/`deny` rules) and `tools.allow`.
+- The native config (`llm`'s `harness`, `harness-config`) goes to user-scope
+  `settings.json`, except `permissions` (`defaultMode`, extra `allow`/`deny`
+  rules), which join the managed ones. Pre-approve an `ask` tool with
+  `harness_options.tools_allow`.
 - `anthropic-compatible` runs Claude Code against any server that speaks the
   Anthropic Messages API (llama.cpp, vLLM, LiteLLM, a gateway).
 

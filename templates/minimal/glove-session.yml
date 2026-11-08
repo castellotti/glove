@@ -15,4 +15,4 @@ extensions:
     model: auto                # auto → the single model the server lists, or an explicit id
     capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
     # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
-harness_config: {}
+    # harness: {defaultThinkingLevel: medium}   # this model's native harness settings (Pi settings.json)

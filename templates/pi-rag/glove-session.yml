@@ -16,6 +16,8 @@ extensions:
     model: auto                # auto → the single model the server lists, or an explicit id
     capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
     # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
+    harness:                   # this model's Pi settings (settings.json), e.g. compaction: {reserveTokens: …}
+      defaultThinkingLevel: xhigh
   # No egress provider: nothing but the model is reachable, and shell commands have no network.
   ocr: {}                      # tesseract/ocrmypdf/poppler + glove-ocr; e.g. {languages: [eng, deu]}
   rag:                         # kstore: keyword (Obsidian) + vector (FAISS) stores, skills rag-parse/rag-query
@@ -25,9 +27,6 @@ extensions:
     # obsidian_dir: ~/src/claude-obsidian   # optional: its wiki-ingest/… skills, read-only
   media: {}
   # observe: {}                # transcripts (and model-call flows) to ~/.glove/observe/<id>/ for Layman
-harness_config:
-  settings:
-    defaultThinkingLevel: xhigh
 brief: |
   # pi-rag — session brief
 

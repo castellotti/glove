@@ -11,9 +11,6 @@ glove: 3
 harness: pi
 runtime: docker
 enforcer: nono
-harness_config:
-  settings:
-    defaultThinkingLevel: xhigh
 extensions:
   llm:
     provider: openai-compatible
@@ -21,6 +18,7 @@ extensions:
     endpoint: 127.0.0.1:8899
     model: auto
     capabilities: auto
+    harness: {defaultThinkingLevel: xhigh}   # this model's Pi settings
     # api_key: keychain:my-llm
   playwright:
     mode: host
