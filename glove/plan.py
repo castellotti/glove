@@ -151,16 +151,18 @@ def home_mount(home_dir: str) -> Mount:
     return Mount(host_path=os.path.realpath(home_dir), container_path=CONTAINER_HOME, mode="ro")
 
 
-def _opt_ins(cfg: Config, profile: HarnessProfile) -> set[str]:
-    """The harness's `protect:` opt-ins the session turns on
-    (`harness_config.<key>: true`)."""
-    on = set()
-    for key in sorted(profile.opt_ins & set(cfg.harness_config)):
-        if not isinstance(cfg.harness_config[key], bool):
-            raise ConfigError(f"harness_config.{key} must be true or false")
-        if cfg.harness_config[key]:
-            on.add(key)
-    return on
+def _harness_options(opts: object, profile: HarnessProfile, native: dict) -> tuple[set[str], list[str]]:
+    """`harness_options`: the `protect:` opt-ins turned on and `tools_allow`; never in `native` config."""
+    opts, known = {} if opts is None else opts, {"tools_allow", *profile.opt_ins}
+    allow = opts.get("tools_allow", []) if isinstance(opts, dict) else None
+    if not isinstance(allow, list) or set(opts) - known or not all(isinstance(x, str) for x in allow) \
+            or not all(isinstance(opts[k], bool) for k in profile.opt_ins & set(opts)):
+        raise ConfigError(f"harness_options takes {sorted(known)} for {profile.name} (tools_allow: tool names, "
+                          f"an opt-in: true or false), got {opts!r}")
+    if "settings" in native or profile.opt_ins & set(native) or (isinstance(t := native.get("tools"), dict)
+                                                                 and "allow" in t):
+        raise ConfigError("native harness config is flat (no `settings:`); tools.allow, opt-ins go in harness_options")
+    return {k for k in profile.opt_ins if opts.get(k)}, allow
 
 
 def _resolve_env(cfg: Config, profile: HarnessProfile) -> dict[str, str]:
@@ -372,7 +374,7 @@ def build_session_plan(
     _check_baked_sources(comp, mount_plan.mounts)
     session_roots = [m.container_path for m in mount_plan.mounts]  # /work and the add-dirs
     mount_plan = replace(mount_plan, mounts=[*mount_plan.mounts, *_extension_mounts(comp, mount_plan.mounts)])
-    opted = _opt_ins(cfg, profile)
+    opted, tools_allow = _harness_options(cfg.harness_options, profile, comp.harness_config)
     files = [(posixpath.join(mount_plan.working_dir, e.path), e.source) for e in profile.protect
              if not e.home and (e.opt_in is None or e.opt_in in opted)]
     home = home_mount(home_dir)
@@ -436,7 +438,7 @@ def build_session_plan(
 
     suffix = srt_suffix() if uses_srt(cfg.enforcer) else ""
     base = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages)}{suffix}"
-    actx = adapter_context(comp, cfg)
+    actx = adapter_context(comp)
     derived_df, staged = render_dockerfile(base, profile, comp, actx)
     derived = content_hash(derived_df, staged) if derived_df is not None else None
     image = f"{effective_image(profile, cfg.apt_packages, cfg.pip_packages, derived)}{suffix}"
@@ -487,7 +489,7 @@ def build_session_plan(
         entry += profile.resume_args(session_id)
     plan.policies = enforcer.render_policies(plan)
     plan.policies[WRITE_ROOTS_FILE] = json.dumps({"roots": write_roots(plan)}, indent=2) + "\n"
-    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, cfg.tool_allow, actx), indent=2) + "\n"
+    plan.policies[TOOLS_FILE] = json.dumps(tool_inventory(profile, tools_allow, actx), indent=2) + "\n"
     wrapper = enforcer.tool_wrapper_argv(plan)
     if wrapper:
         plan.policies["tool-wrapper.argv"] = argv_lines(wrapper)

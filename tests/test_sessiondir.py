@@ -52,6 +52,12 @@ def test_the_schema_version_is_required(tmp_path):
         sdm.load_file(sdm.SessionDir(d))
 
 
+def test_the_old_harness_config_key_says_where_it_moved(tmp_path):
+    sd = sdm.SessionDir(make_session(tmp_path / "s", "harness_config: {settings: {defaultThinkingLevel: xhigh}}\n"))
+    with pytest.raises(sdm.SessionError, match=r"harness_config.*llm: \{harness.*harness-config.*harness_options"):
+        sdm.load_file(sd)
+
+
 @pytest.mark.parametrize(("extra", "runtime", "enforcer"), [
     ("", "docker", "nono+srt"), ("runtime: podman\n", "podman", "nono"),
     ("enforcer: nono\n", "docker", "nono"), ("runtime: podman\nenforcer: none\n", "podman", "none")])
@@ -143,6 +149,7 @@ def test_pi_search_template_plans_once_filled(tmp_path, monkeypatch):
                               session_dir=str(sd.root))
     comp = plan.composition
     assert [a.name for a in comp.active] == ["exitcheck", "llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert comp.harness_config == {"defaultThinkingLevel": "medium"}  # llm's `harness`
     assert comp.slot_exports("egress")["route"] == "vpn"
 
 
@@ -308,7 +315,9 @@ def test_vibe_search_template_plans_once_filled(tmp_path, monkeypatch):
         .replace("provider: <set-me>", "provider: custom").replace("keychain:<set-me>", "keychain:wg")))
     comp = plan.composition
     assert cfg.harness == "vibe"
-    assert [a.name for a in comp.active] == ["exitcheck", "llm", "media", "ocr", "vpn", "search", "webfetch"]
+    assert [a.name for a in comp.active] == ["exitcheck", "harness-config", "llm", "media", "ocr", "vpn", "search",
+                                             "webfetch"]
+    assert comp.harness_config == {"include_commit_signature": False, "show_thinking_nodes": True}
     assert {"search-mcp", "webfetch-mcp"} <= {e.name for e in comp.endpoints}
 
 

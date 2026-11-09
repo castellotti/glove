@@ -19,7 +19,7 @@
  *
  * Every tool call is classified by the session's inventory
  * (/etc/glove/enforcer/tools.json, rendered by glove from harness.yml, the
- * session's extensions and its `harness_config.tools.allow`): `shell` is
+ * session's extensions and its `harness_options.tools_allow`): `shell` is
  * wrapped, `file_write` held to the write roots, `allow` passed through, and any
  * other tool blocked, so a tool a new Pi release or an operator extension adds
  * fails closed. Without a readable inventory every tool is blocked.
@@ -189,7 +189,7 @@ export function toolCallHandler(roots: string[] | null, tools: Tools | null) {
     if (tools.allow.has(event.toolName)) return;
     return {
       block: true,
-      reason: `glove enforcer: tool ${event.toolName} is not in this session's tool inventory (harness_config.tools.allow can add one)`,
+      reason: `glove enforcer: tool ${event.toolName} is not in this session's tool inventory (harness_options.tools_allow can add one)`,
     };
   };
 }

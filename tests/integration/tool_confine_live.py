@@ -24,7 +24,7 @@ extension, Vibe's pre_tool hook), by the tool names each harness uses today
      is in it (Vibe: also run_typescript's functions); a tool not in it is
      refused (Pi: an operator extension's tool; Vibe: vibe.todo taken out of
      the file), and every tool is when the file is missing; Pi: the session's
-     `harness_config.tools.allow` lets the extension's tool run.
+     `harness_options.tools_allow` lets the extension's tool run.
 Prints PASS/FAIL per check; exits non-zero on any failure.
 """
 
@@ -220,9 +220,9 @@ def main(directory: str) -> int:
             r = tool_result(s.call(s.bash_tool, {"command": "echo SHELL-RAN"}), 300)
         check("no tools.json: every tool refused (the shell too)", "SHELL-RAN" not in r and "inventory" in r, r)
         if h == "pi":
-            s.reconfigure("harness_config: {tools: {allow: [glove_probe]}}")
+            s.reconfigure("harness_options: {tools_allow: [glove_probe]}")
             r = tool_result(s.call("glove_probe", {}), 300)
-            check("… listed in harness_config.tools.allow, it runs",
+            check("… listed in harness_options.tools_allow, it runs",
                   "glove_probe" in json.loads(inventory.read_text())["allow"] and "PROBE-RAN" in r, r)
     return summary()
 

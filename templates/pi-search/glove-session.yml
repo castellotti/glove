@@ -16,6 +16,8 @@ extensions:
     model: auto                # auto → the single model the server lists, or an explicit id
     capabilities: auto         # auto (probe) | {vision: true, context_window: 32768}
     # api_key: keychain:<set-me>   # store it with `glove keychain set <service>`
+    harness:                   # this model's Pi settings (settings.json), e.g. compaction: {reserveTokens: …}
+      defaultThinkingLevel: medium
   # Egress: exactly one of vpn | tor | direct. See extensions/vpn/README.md.
   vpn:
     provider: <set-me>         # a gluetun provider name, or `custom`
@@ -39,9 +41,6 @@ extensions:
   # Network observability (Layman reads it): flows + transcripts to ~/.glove/observe/<id>/.
   # observe: {}                # exit_identity: auto (default) records the exit the egress reports
   # filter: {}                 # also let `glove filter …` / Layman block destinations (needs observe)
-harness_config:
-  settings:
-    defaultThinkingLevel: medium
 brief: |
   # pi-search — session brief
 

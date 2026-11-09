@@ -1082,3 +1082,78 @@ def test_image_tag_hashes_an_image_context_once_per_selection(monkeypatch):
     tags = {image_tag(a, "netgate") for _ in range(3)}
     assert len(tags) == 1 and len(calls) == 1
     assert image_tag(Active(m, {}), "netgate") in tags and len(calls) == 2  # a new selection hashes again
+
+
+# --- harness.config: native harness config --------------------------------------------
+
+
+def test_harness_config_names_a_map_setting(tmp_path, ghome):
+    _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: { level: { type: string, default: x } }
+        harness: { config: level }
+        """)
+    with pytest.raises(ExtensionError, match="config names a `type: map` setting"):
+        _render_with(tmp_path, {"tuner": {}})
+
+
+@pytest.mark.parametrize("trusted", [True, False])
+def test_native_config_from_out_of_tree_needs_trust(tmp_path, ghome, trusted):
+    _ext(_oot(tmp_path, ghome, trusted=trusted, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: { native: { type: map, default: {} } }
+        harness: { config: native }
+        """)
+    _render_with(tmp_path / "empty", {"tuner": {}})  # nothing given, nothing to trust
+    if trusted:
+        plan, _ = _render_with(tmp_path / "set", {"tuner": {"native": {"theme": "light"}}})
+        assert plan.adapter.harness_config == {"theme": "light"}
+    else:
+        with pytest.raises(ExtensionError, match="config is a privilege"):
+            _render_with(tmp_path / "set", {"tuner": {"native": {"theme": "light"}}})
+
+
+def test_a_harness_setting_never_hides_the_session_harness_in_when(tmp_path, ghome):
+    _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: { harness: { type: map, default: {} } }
+        harness:
+          config: harness
+          env: { ON_PI: { value: "1", when: { harness: pi } } }
+        """)
+    plan, _ = _render_with(tmp_path, {"tuner": {"harness": {"theme": "light"}}})
+    assert plan.composition.harness_env["ON_PI"] == "1"
+
+
+def test_star_config_needs_free_form_settings(tmp_path, ghome):
+    # `config: "*"` passes every setting through: a schema's defaults, nulls
+    # and secret references would reach the native config, so it is refused
+    _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: { theme: { type: string, default: dark } }
+        harness: { config: "*" }
+        """)
+    with pytest.raises(ExtensionError, match=r'with `settings: "\*"`'):
+        _render_with(tmp_path, {"tuner": {}})
+
+
+def test_free_form_settings_take_any_key_and_a_null_is_unset(tmp_path, ghome):
+    _ext(_oot(tmp_path, ghome, trusted=True, name="tuner"), "tuner", """\
+        api: 2
+        name: tuner
+        settings: "*"
+        harness: { config: "*" }
+        """)
+    plan, _ = _render_with(tmp_path, {"tuner": {"theme": "light", "env": None, "x": {"y": None}}})
+    assert plan.adapter.harness_config == {"theme": "light", "x": {}}
+
+
+def test_a_setting_never_hides_what_the_harness_renders_in_when():
+    from glove.extensions import when_context
+
+    ctx = when_context({"renders": "nothing", "harness": "vibe"}, "pi")
+    assert when_matches({"renders": "mcp", "harness": "pi"}, ctx)

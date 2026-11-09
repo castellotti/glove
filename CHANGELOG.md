@@ -6,6 +6,17 @@ All notable changes to glove are documented here.
 
 ### Added
 
+- **`harness-config` extension** and **`llm`'s `harness` setting**: the
+  harness's native config (Pi `settings.json`, Vibe `config.toml`, Claude Code
+  `settings.json`), written flat. Model tuning (Pi's `defaultThinkingLevel`,
+  `compaction`, a model's `compat`; Claude Code's `ANTHROPIC_DEFAULT_*` env)
+  goes beside the model in `llm: {harness: …}`, everything else in
+  `harness-config: …`; glove merges both (lists extend, a null is unset) and
+  refuses a scalar they set differently. Extensions contribute it with the new
+  manifest key `harness: {config: <map setting> | "*"}` (out of tree: a
+  privilege); `"*"` needs free-form settings, the new `settings: "*"`.
+  `harness_options` takes `tools_allow` and the `protect:` opt-ins; a `when:`
+  on `harness` or `renders` is never answered by a setting of that name.
 - **observe: `session.json` lists the session's `models`**:
   `[{id, context_window, max_tokens, reasoning}]`, the inference slot's model
   first, then each `llm.extra_models` entry with its overrides, resolved as the
@@ -67,6 +78,22 @@ All notable changes to glove are documented here.
 
 ### Changed
 
+- **Breaking: the top-level `harness_config` is gone** (refused, with where
+  each part moved). Migrate by hand:
+  `harness_config: {settings: {defaultThinkingLevel: xhigh, compaction: …}}` →
+  `extensions: {llm: {…, harness: {defaultThinkingLevel: xhigh, compaction: …}}}`;
+  Pi's `harness_config.model` → `llm: {harness: {model: …}}`; Vibe's flat keys →
+  `extensions: {harness-config: {…}}`; Claude Code's `settings` and
+  `permissions` → `harness-config` (or `llm.harness` for model ids), without
+  the `settings:` level; `harness_config.tools.allow` →
+  `harness_options: {tools_allow: […]}`; Vibe's `project_skills` →
+  `harness_options: {project_skills: true}`. `harness_options` refuses unknown
+  keys, and native config refuses them (and a leftover `settings:` level on Pi
+  and Claude Code). Claude Code: `permissions` in native config are glove's
+  managed rules (`defaultMode`, `allow`, `deny`); user-scope `permissions`
+  (`settings.permissions` before) can no longer be set — with managed rules
+  only, Claude Code ignored their rules anyway. The bundled templates use the
+  new layout.
 - **`llm` review fixes for `openai-responses-compatible`.** An endpoint URL's
   path must end in the catalog's `base_path` for every provider, not only the
   Responses API: `openai-compatible` at `…/litellm` passed `glove check`, then

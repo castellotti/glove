@@ -416,9 +416,9 @@ def test_pi_models_json_for_the_responses_api(tmp_path):
 def _responses_home(tmp_path, compat):
     from glove.harnessconfig import render_home
 
-    plan, _, _ = _plan(tmp_path, **RESPONSES)
-    cfg = make_cfg(harness="pi", name="s")
-    cfg.harness_config = {"model": {"compat": compat}}
+    cfg = make_cfg(harness="pi", name="s", workdir=str(tmp_path))
+    cfg.extensions = _llm(**RESPONSES, harness={"model": {"compat": compat}})  # llm's `harness` setting
+    plan, _ = render(cfg, tmp_path)
     render_home(cfg, plan, tmp_path / "home")
     return json.loads((tmp_path / "home/.pi/agent/models.json").read_text())["providers"]["glove"]["models"][0]
 

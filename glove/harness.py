@@ -56,7 +56,7 @@ class ProtectEntry:
     `path` is relative to the working dir, or to the home when `home`; a
     trailing `/` marks a directory. `source` is one of PROTECT_SOURCES, or
     "own" in the home.
-    `opt_in` names a `harness_config` boolean: the entry (inside a masked
+    `opt_in` names a `harness_options` boolean: the entry (inside a masked
     directory) is bound only when it is true, so the working dir's own copy
     shows through the placeholder, read-only."""
 
@@ -125,7 +125,7 @@ class HarnessProfile:
 
     @property
     def opt_ins(self) -> frozenset[str]:
-        """The `harness_config` keys that open a `protect:` entry."""
+        """The `harness_options` keys that open a `protect:` entry."""
         return frozenset(e.opt_in for e in self.protect if e.opt_in)
 
     @property
@@ -183,7 +183,7 @@ def _protect(raw: object, where: str) -> tuple[ProtectEntry, ...]:
         source = "own" if home else source or "auto"
         if opt_in is not None and (not isinstance(opt_in, str) or not OPT_IN.fullmatch(opt_in)
                                    or source != "auto"):
-            raise ConfigError(f"{where}: protect {item!r}: opt_in names a harness_config key, on a "
+            raise ConfigError(f"{where}: protect {item!r}: opt_in names a harness_options key, on a "
                               "working-dir entry (source auto)")
         out.append(ProtectEntry(path=path, home=home, source=source, opt_in=opt_in))
     # an opt-in entry is bound only when opted in: inside a masked dir, which
@@ -206,13 +206,12 @@ def _tool_classes(raw: object, where: str) -> dict[str, tuple[str, ...]]:
     return out
 
 
-def tool_inventory(profile: HarnessProfile, tool_allow: list[str], actx) -> dict[str, list[str]]:
+def tool_inventory(profile: HarnessProfile, tools_allow: list[str], actx) -> dict[str, list[str]]:
     """The session's tool inventory (`tools.json`), every class: the harness's,
     with the passthrough tools the session's extensions add (the adapter's
-    `tool_names`) and its own `harness_config.tools.allow` (`tool_allow`) in
-    `allow`."""
+    `tool_names`) and its own `harness_options.tools_allow` in `allow`."""
     fixed = {n for c in TOOL_FIXED for n in profile.tools.get(c, ())}
-    added = [*adapter_call(profile, "tool_names", actx, default=[]), *tool_allow]
+    added = [*adapter_call(profile, "tool_names", actx, default=[]), *tools_allow]
     bad = [n for n in added if n in fixed or not TOOL_NAME.fullmatch(n)]
     if bad:
         raise ConfigError(f"tools {bad}: an added tool only passes through; {profile.name}'s shell, file-write "

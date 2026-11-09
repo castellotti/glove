@@ -207,6 +207,14 @@ Every capability (the model, search, the browser, …) is an extension in
   name, security keys or privileges. Filling the slot is itself a privilege
   (its service sits on every endpoint's traffic): an untrusted out-of-tree
   provider is refused before its hooks load.
+- **Native harness config** (`harness: {config: …}`). An extension's
+  contribution to the harness's own config files (`llm`'s `harness`,
+  `harness-config`) is the session file's text, passed as written: the same
+  trust as before, when it was the top-level `harness_config`. Out of tree it is
+  a privilege (`trusted_extensions`). It never reaches glove's switches: tools
+  added to the inventory and `protect:` opt-ins are the top-level
+  `harness_options`, which core checks, and Claude Code's `permissions` still
+  only extend glove's managed rules.
 - **Names rendered into compose.** An extension's harness env keys (from its
   manifest or a `contribute` hook) must match `^[A-Z][A-Z0-9_]*$` and may not
   overwrite another extension's; endpoint and forwarder aliases must be
@@ -861,7 +869,7 @@ wrapper and the planted hook ran in the harness.
   start in a repo with an `AGENTS.md`, and answering it fails on a read-only
   trust store.
 - **Vibe's project skills: a documented widening, off by default.**
-  `harness_config.project_skills: true` binds the repo's `.vibe/skills/` and
+  `harness_options.project_skills: true` binds the repo's `.vibe/skills/` and
   `.agents/skills/` read-only inside the masked placeholders (the placeholder
   holds their mount points); everything else in `.vibe/` and `.agents/` stays
   empty. A skill is a prompt plus files the agent can read, loaded as the
@@ -920,7 +928,7 @@ wrapper and the planted hook ran in the harness.
   rename like the one above would otherwise have unwrapped the shell silently
   (how the list is built: README, "The tool inventory fails closed"). An
   operator's Pi extension or a session's own Vibe MCP server stays refused
-  until `harness_config.tools.allow` lists it, a documented widening.
+  until `harness_options.tools_allow` lists it, a documented widening.
   `test_tool_confine.sh` pins every name by its effect and checks that every
   tool the harness offers is listed.
 - **A checked call can't be changed after the check** (Pi). Pi runs every
@@ -940,7 +948,7 @@ wrapper and the planted hook ran in the harness.
   `mcp` items and binds it read-only (`/mcp` exposure changes fail to save),
   and the project's `.pi/mcp.json` stays behind `defaultProjectTrust: never`.
   Without a server the file is empty and MCP is off (`extensions:
-  ["-builtin:mcp"]`). A session's own `harness_config.settings.extensions` are
+  ["-builtin:mcp"]`). A session's own `extensions` (in `harness-config`) are
   added after glove's entry, and any naming `builtin:mcp` is dropped.
   Each server is `"exposure": "hidden"` with only its allowlisted tools
   `direct` (Pi's default, `codemode`, would let a script reach every tool), and
@@ -952,7 +960,7 @@ wrapper and the planted hook ran in the harness.
   values, so glove refuses an `env` value that looks like either; it renders no
   `headers`.
 - **Pi's codemode** (model-written JavaScript in QuickJS calling Pi's tools)
-  is off as Pi ships it; `harness_config.settings.defaultTools: ["+codemode"]`
+  is off as Pi ships it; `harness-config: {defaultTools: ["+codemode"]}`
   turns it on. Its nested calls are wrapped and held like direct ones
   (above; checked live).
 - **Pi's session dir is pinned.** Pi reads a `sessionDir` from the project's

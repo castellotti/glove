@@ -65,7 +65,7 @@ Legend:
 | `requires` | list: extension, slot, or `{extension\|slot, when}` | items | | | a required library with `auto: true` is added; anything else must be selected |
 | `auto` | bool | | | | a library, added when required |
 | `selectable` | bool | | | | `false`: a library only |
-| `settings` | map name → `{type, default, required, …}` | | | | `type`: `string`, `enum` (`values`), `bool`, `int`, `number`, `list`, `map`, `secret`, `path` (`within: session`), `ca` (a CA PEM its `trust` sidecars trust, checked and copied by core); `pattern`, `also` (literals accepted besides the type, e.g. `auto`). A `secret` is a `keychain:`/`env:` reference, never a value |
+| `settings` | map name → `{type, default, required, …}` | | | | `type`: `string`, `enum` (`values`), `bool`, `int`, `number`, `list`, `map`, `secret`, `path` (`within: session`), `ca` (a CA PEM its `trust` sidecars trust, checked and copied by core); `pattern`, `also` (literals accepted besides the type, e.g. `auto`). A `secret` is a `keychain:`/`env:` reference, never a value. `"*"`: free-form, any key, none checked (a null is unset) |
 | `host_files` | bool | | | yes | the hooks read files in the session directory that no other key declares (see [the context](#the-context)) |
 | `validate` | list of `{when, error}` or `{when, require, message}` | items | | | cross-setting rules, checked when the session is planned |
 | `exports` | map | | `add` | | values other extensions and templates read; a slot's are typed ([slot exports](#slot-exports)) |
@@ -82,7 +82,7 @@ Legend:
 | `mounts` | map name → `{setting, when}` | entries | | | a read-only harness bind of a directory named by a `path` setting with no default |
 | `trust` | list of services | | `cat` | | these sidecars trust the session's CAs (`corporate_ca` and the extension's `ca` settings): core binds their copies read-only and builds one bundle in an entrypoint of its own (replacing the image's), which then runs the service's whole `command` (which it must set; no `entrypoint`) |
 | `verify` | list of checks `{name, kind, service, …}` | items | `cat` | | run at `glove up`; `kind`: `container-healthy`, `tcp-open`, `http-ok`, `http-refused`, `exec-ok`, `hook` (its `verify` hook runs it; argv only in its own sidecars) |
-| `harness` | map: `image`, `env`, `git_config`, `brief`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
+| `harness` | map: `image`, `env`, `git_config`, `brief`, `config`, `mcp`, `skills`, `<harness>` | parts | `add` | | what the harness gets ([below](#harness)) |
 | `hooks` | path, relative (`hooks.py`) | | | | [hooks](#hooks) |
 | `cli` | path, relative (`cli.py`) | | | | [an extension's CLI](#an-extensions-cli) |
 
@@ -105,6 +105,14 @@ Legend:
   set by one extension only.
 - `git_config`: pairs added to git's config in the harness.
 - `brief`: a file (or `{file, when}`) the agent reads at start.
+- `config`: the name of a `type: map` setting whose value is the harness's
+  native config (Pi `settings.json`, Vibe `config.toml`, Claude Code
+  `settings.json`), passed to the adapter as written (never rendered), or `"*"`:
+  all of the extension's settings, which must then be free-form (`settings: "*"`:
+  core checks no key; `harness-config`). Every extension's config is merged:
+  mappings key by key, lists extended, a null is unset, and a scalar two
+  extensions set to different values is refused. Out of tree, it is a
+  privilege (`trusted_extensions`). `llm` uses it for its `harness` setting.
 - `mcp`: a list of servers: `name`, `transport` (`stdio` or `http`), `url` or
   `command`/`args`/`env`, and `tools`/`all_tools`.
 - `skills`: `SKILL.md` directories, inside the extension or `{mount, path}`.

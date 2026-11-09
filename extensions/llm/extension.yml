@@ -13,6 +13,7 @@ settings:
   capabilities: { type: map, also: [auto], default: auto }          # auto, or explicit keys (probes fill the rest)
   extra_models: { type: list, default: [] }
   route:        { type: enum, values: [direct, egress], default: direct }   # cloud providers only
+  harness:      { type: map, default: {} }                          # this model's native harness config (thinking, compaction, …)
 hooks: hooks.py
 # With an API key or a subscription token, the key lives only in the llm-auth
 # sidecar: the harness's `llm` forwarder leads to it, and it dials the server
@@ -29,4 +30,5 @@ channels:
 verify:
   - { name: llm-auth-up, kind: container-healthy, service: llm-auth, when: { api_key: { set: true } } }
 harness:
+  config: harness                       # the `harness` setting, as the harness's native config
   brief: brief.md

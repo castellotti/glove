@@ -67,8 +67,12 @@ def test_models_dir_is_a_read_only_mount_the_env_points_at(tmp_path, models):
 def test_skills_reach_pis_settings(tmp_path, models, obsidian):
     from glove.harnessconfig import render_home
 
-    cfg, plan = _plan(tmp_path, models_dir=str(models), obsidian_dir=str(obsidian))
-    cfg.harness_config = {"settings": {"skills": ["/work/my-skill"]}}
+    work = tmp_path / "work"
+    work.mkdir()
+    cfg = make_cfg(harness="pi", name="s", workdir=str(work), extensions={
+        "ocr": {}, "rag": {"models_dir": str(models), "obsidian_dir": str(obsidian)},
+        "harness-config": {"skills": ["/work/my-skill"]}})
+    plan = build_session_plan(cfg, home_dir=str(tmp_path / "h"), state_dir=str(tmp_path / "x"))
     render_home(cfg, plan, tmp_path / "home")
     settings = json.loads(next((tmp_path / "home").rglob("settings.json")).read_text())
     assert settings["skills"] == [

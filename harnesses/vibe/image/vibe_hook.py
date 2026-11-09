@@ -5,7 +5,7 @@ Baked at /opt/glove/vibe-hook and declared in ~/.vibe/hooks.toml as a `pre_tool`
 hook with `strict = true`. Vibe passes each tool call as JSON on stdin
 (`tool_name`, `tool_input`, session context); the hook classifies the tool by
 the session's inventory (/etc/glove/enforcer/tools.json, rendered by glove from
-harness.yml, the session's MCP allowlists and its `harness_config.tools.allow`):
+harness.yml, the session's MCP allowlists and its `harness_options.tools_allow`):
 
   - a `shell` tool's `command` is rewritten to `/opt/glove/bin/glove-tool -c
     <command>`, which runs it under the enforcer's per-command wrapper
@@ -144,7 +144,7 @@ def process(payload: dict, tools: dict[str, frozenset[str]] | None,
 
     if tool_name in tools["allow"]:
         return None  # passthrough
-    return _deny(f"tool {tool_name!r} is not in this session's tool inventory (harness_config.tools.allow "
+    return _deny(f"tool {tool_name!r} is not in this session's tool inventory (harness_options.tools_allow "
                  "can add one)")
 
 
