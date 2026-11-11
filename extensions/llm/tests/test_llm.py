@@ -493,6 +493,26 @@ def test_explicit_model_must_be_served(tmp_path):
         _resolve(tmp_path, FakeServer(["other"]), model="test-model")
 
 
+ROUTER_MODELS = {"object": "list", "data": [  # llama-server --models-preset: each preset lists its aliases
+    {"id": "flash-q4-balanced", "aliases": ["flash", "default"], "object": "model"},
+    {"id": "gemma-q8", "aliases": ["gemma"], "object": "model"},
+]}
+
+
+def _router(url, method="GET", body=None, auth=False):
+    return (200, json.dumps(ROUTER_MODELS)) if url.endswith("/v1/models") else (404, "not found")
+
+
+def test_a_listed_alias_is_served(tmp_path):
+    ex, _ = _resolve(tmp_path, _router, model="flash", capabilities={"context_window": 32768})
+    assert ex["model"] == "flash"  # sent as written: the router routes on the alias
+
+
+def test_an_unlisted_alias_is_not_served(tmp_path):
+    with pytest.raises(hooks.LlmError, match=r"'flash-next' is not served \(available: \['flash-q4-balanced'"):
+        _resolve(tmp_path, _router, model="flash-next")
+
+
 def test_server_down_fails_with_a_hint(tmp_path):
     with pytest.raises(hooks.LlmError, match="is the server running"):
         _resolve(tmp_path, FakeServer([], status=502), model="auto")
@@ -661,6 +681,7 @@ def _models(*ids, status=200):
     ({}, _models(status=502), "fail", "HTTP 502"),
     ({"api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
     ({}, _models(status=401), "fail", "HTTP 401"),
+    ({"model": "gemma"}, _router, "ok", "serves gemma"),
     ({**RESPONSES, "model": "gpt-6-luna"}, _models("gpt-6-luna"), "ok", "http://localhost:6655/openai; serves"),
     ({**RESPONSES, "api_key": "keychain:k"}, _models(status=401), "ok", "HTTP 401 without the key"),
 ])
