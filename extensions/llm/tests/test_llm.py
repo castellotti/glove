@@ -450,7 +450,7 @@ class FakeServer:
             return self.status, "down"
         if url.endswith("/v1/models"):
             return 200, json.dumps({"object": "list", "data": [{"id": m} for m in self.models]})
-        if url.endswith("/props") and self.props is not None:
+        if url.split("?", 1)[0].endswith("/props") and self.props is not None:
             return 200, json.dumps(self.props)
         return 404, "not found"
 
@@ -475,7 +475,8 @@ def test_model_auto_with_one_model_and_capability_probe(tmp_path):
     assert ex["capabilities"]["context_window"] == 65536
     assert ex["capabilities"]["reasoning"] is True
     assert any("model: auto → qwen3.7-27b" in n for n in notes)
-    assert [c[1] for c in server.calls] == ["http://glove-s-llm:8080/v1/models", "http://glove-s-llm:8080/props"]
+    assert [c[1] for c in server.calls] == ["http://glove-s-llm:8080/v1/models",
+                                            "http://glove-s-llm:8080/props?model=qwen3.7-27b"]
 
 
 def test_model_auto_with_several_models_lists_them(tmp_path):
@@ -500,16 +501,25 @@ ROUTER_MODELS = {"object": "list", "data": [  # llama-server --models-preset: ea
 
 
 def _router(url, method="GET", body=None, auth=False):
-    return (200, json.dumps(ROUTER_MODELS)) if url.endswith("/v1/models") else (404, "not found")
+    """The router: `/props` describes a model only when `?model=` names it (else a placeholder)."""
+    if url.endswith("/v1/models"):
+        return 200, json.dumps(ROUTER_MODELS)
+    if url.endswith("/props?model=flash"):
+        return 200, json.dumps(PROPS)
+    if url.endswith("/props"):
+        return 200, json.dumps({"role": "router", "default_generation_settings": {"n_ctx": 0}})
+    return 404, "not found"
 
 
-def test_a_listed_alias_is_served(tmp_path):
-    ex, _ = _resolve(tmp_path, _router, model="flash", capabilities={"context_window": 32768})
+def test_a_listed_alias_is_served_and_probed(tmp_path):
+    ex, _ = _resolve(tmp_path, _router, model="flash", capabilities="auto")
     assert ex["model"] == "flash"  # sent as written: the router routes on the alias
+    assert ex["capabilities"]["context_window"] == 65536 and ex["capabilities"]["vision"] is True
 
 
 def test_an_unlisted_alias_is_not_served(tmp_path):
-    with pytest.raises(hooks.LlmError, match=r"'flash-next' is not served \(available: \['flash-q4-balanced'"):
+    with pytest.raises(hooks.LlmError, match=r"'flash-next' is not served \(available: \['flash-q4-balanced', "
+                                             r"'gemma-q8'\]; aliases: \['default', 'flash', 'gemma'\]\)"):
         _resolve(tmp_path, _router, model="flash-next")
 
 

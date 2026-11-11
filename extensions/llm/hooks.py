@@ -203,7 +203,7 @@ def allowed_paths(cat: dict[str, Any], base_path: str, extra: list | None = None
     paths.append(("GET", root + cat.get("models_endpoint", "/v1/models").split("?", 1)[0]))
     probe = (cat.get("probes") or {}).get("capabilities")
     if probe:
-        paths.append((probe.get("method", "GET").upper(), root + probe["path"]))
+        paths.append((probe.get("method", "GET").upper(), root + probe["path"].split("?", 1)[0]))
     return [list(p) for p in dict.fromkeys(paths)]
 
 
@@ -352,7 +352,7 @@ def _model_ids(cat: dict[str, Any], root: str, probe) -> tuple[list[str], set[st
             models = [m for m in (doc.get("data") or []) if isinstance(m, dict)]
         except (ValueError, AttributeError) as e:
             raise LlmError(f"llm: {endpoint} returned non-JSON: {text[:200]}") from e
-        ids += [m.get("id") for m in models]
+        ids += [m["id"] for m in models if isinstance(m.get("id"), str)]
         aliases.update(a for m in models if isinstance(m.get("aliases"), list)
                        for a in m["aliases"] if isinstance(a, str))
         if not (cursor and doc.get("has_more") and doc.get("last_id")):
@@ -377,7 +377,8 @@ def _pick_model(model: str, ids: list[str], aliases: set[str], cat: dict[str, An
                            f"found {ids or 'none'} — set `model:` to one of them")
         return ids[0]
     if ids and not _served(model, ids, aliases, cat):
-        raise LlmError(f"llm: model {model!r} is not served (available: {ids})")
+        listed = f"available: {ids}" + (f"; aliases: {sorted(aliases)}" if aliases else "")
+        raise LlmError(f"llm: model {model!r} is not served ({listed})")
     return model
 
 
@@ -390,13 +391,14 @@ def resolve(ctx: HookContext, exports: dict[str, Any], probe) -> tuple[dict[str,
     root = _server_root(exports["base_url"], cat)
     notes: list[str] = []
     out = dict(exports)
-    out["model"] = _pick_model(exports["model"], *_model_ids(cat, root, probe), cat)
+    ids, aliases = _model_ids(cat, root, probe)
+    out["model"] = _pick_model(exports["model"], ids, aliases, cat)
     if exports["model"] == "auto":
         notes.append(f"model: auto → {out['model']}")
     caps = dict(exports["capabilities"])
     spec = (cat.get("probes") or {}).get("capabilities")
     if spec:
-        path = spec["path"].replace("{model}", out["model"])
+        path = spec["path"].replace("{model}", quote(out["model"], safe="/"))
         body = None
         if spec.get("body"):
             body = json.loads(json.dumps(spec["body"]).replace("{model}", out["model"]))

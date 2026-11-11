@@ -154,7 +154,11 @@ All notable changes to glove are documented here.
 
 - **llm: a model alias the server lists is served.** A `model:` named by
   one of a model's `aliases` (llama.cpp's router lists a preset's `alias =`
-  names there) no longer fails with "is not served"; it is sent as written.
+  names there) no longer fails with "is not served"; it is sent as written,
+  and the error lists the aliases beside the ids. `provider: llama.cpp`'s
+  capability probe asks `/props?model=<model>`: a router answers a bare
+  `/props` with a placeholder (`n_ctx: 0`, no modalities), and a single-model
+  llama-server ignores the parameter.
 
 - A session directory whose name has an `_` (e.g. `agent_model`) no longer
   fails `glove check`/`up` with "aliases must be hostnames" once `observe` is

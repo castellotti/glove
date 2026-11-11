@@ -62,6 +62,8 @@ its snapshot `claude-haiku-4-5-20251001` (`dated_aliases`).
 
 A model object's `aliases` (llama.cpp's router, `--models-preset`, lists a
 preset's `alias =` names there) are accepted as `model:` too, and sent as written.
+The `llama.cpp` probe names the model (`/props?model=<model>`), so `capabilities: auto`
+describes that preset; a router loads it to answer, if it is not loaded already.
 
 ## Routing
 
