@@ -203,7 +203,7 @@ def allowed_paths(cat: dict[str, Any], base_path: str, extra: list | None = None
     paths.append(("GET", root + cat.get("models_endpoint", "/v1/models").split("?", 1)[0]))
     probe = (cat.get("probes") or {}).get("capabilities")
     if probe:
-        paths.append((probe.get("method", "GET").upper(), root + probe["path"]))
+        paths.append((probe.get("method", "GET").upper(), root + probe["path"].split("?", 1)[0]))
     return [list(p) for p in dict.fromkeys(paths)]
 
 
@@ -335,11 +335,12 @@ def _extract(doc: Any, spec: Any) -> Any:
 MAX_MODEL_PAGES = 20
 
 
-def _model_ids(cat: dict[str, Any], root: str, probe) -> list[str]:
-    """Every id the models endpoint lists, following a paginated list
-    (`has_more` + `last_id`, the catalog's `models_cursor` names the parameter)."""
+def _model_ids(cat: dict[str, Any], root: str, probe) -> tuple[list[str], set[str]]:
+    """Every id the models endpoint lists, and every alias it lists for them
+    (llama.cpp's router: `aliases` on a model object), following a paginated
+    list (`has_more` + `last_id`, the catalog's `models_cursor` names the parameter)."""
     endpoint, cursor = cat.get("models_endpoint", "/v1/models"), cat.get("models_cursor")
-    url, ids = root + endpoint, []
+    url, ids, aliases = root + endpoint, [], set()
     for _ in range(MAX_MODEL_PAGES):
         status, text = probe(url)  # core retries while a forwarder is still starting
         if status != 200:
@@ -348,31 +349,36 @@ def _model_ids(cat: dict[str, Any], root: str, probe) -> list[str]:
                            status)
         try:
             doc = json.loads(text)
-            ids += [m.get("id") for m in (doc.get("data") or []) if isinstance(m, dict)]
+            models = [m for m in (doc.get("data") or []) if isinstance(m, dict)]
         except (ValueError, AttributeError) as e:
             raise LlmError(f"llm: {endpoint} returned non-JSON: {text[:200]}") from e
+        ids += [m["id"] for m in models if isinstance(m.get("id"), str)]
+        aliases.update(a for m in models if isinstance(m.get("aliases"), list)
+                       for a in m["aliases"] if isinstance(a, str))
         if not (cursor and doc.get("has_more") and doc.get("last_id")):
-            return ids
+            return ids, aliases
         url = f"{root}{endpoint}{'&' if '?' in endpoint else '?'}{cursor}={quote(str(doc['last_id']))}"
     raise LlmError(f"llm: {endpoint} listed more than {MAX_MODEL_PAGES} pages")
 
 
-def _served(model: str, ids: list[str], cat: dict[str, Any]) -> bool:
-    """`model` is listed, or (`dated_aliases`) a dated snapshot `<model>-YYYYMMDD` is."""
-    return model in ids or (bool(cat.get("dated_aliases")) and any(
-        re.fullmatch(re.escape(model) + r"-\d{8}", i or "") for i in ids))
+def _served(model: str, ids: list[str], aliases: set[str], cat: dict[str, Any]) -> bool:
+    """`model` is listed as an id or an alias, or (`dated_aliases`) a dated
+    snapshot `<model>-YYYYMMDD` is."""
+    return model in ids or model in aliases or (bool(cat.get("dated_aliases")) and any(
+        re.fullmatch(re.escape(model) + r"-\d{8}", i) for i in ids))
 
 
-def _pick_model(model: str, ids: list[str], cat: dict[str, Any]) -> str:
-    """`model` as the server lists it: `auto` is the one model listed; an id must
-    be listed, unless the server lists none (it is taken at its word)."""
+def _pick_model(model: str, ids: list[str], aliases: set[str], cat: dict[str, Any]) -> str:
+    """`model` as the server lists it: `auto` is the one model listed; an id or
+    alias must be listed, unless the server lists none (it is taken at its word)."""
     if model == "auto":
         if len(ids) != 1:
             raise LlmError(f"llm: model: auto needs exactly one model at {cat.get('models_endpoint', '/v1/models')}, "
                            f"found {ids or 'none'} — set `model:` to one of them")
         return ids[0]
-    if ids and not _served(model, ids, cat):
-        raise LlmError(f"llm: model {model!r} is not served (available: {ids})")
+    if ids and not _served(model, ids, aliases, cat):
+        listed = f"available: {ids}" + (f"; aliases: {sorted(aliases)}" if aliases else "")
+        raise LlmError(f"llm: model {model!r} is not served ({listed})")
     return model
 
 
@@ -385,13 +391,14 @@ def resolve(ctx: HookContext, exports: dict[str, Any], probe) -> tuple[dict[str,
     root = _server_root(exports["base_url"], cat)
     notes: list[str] = []
     out = dict(exports)
-    out["model"] = _pick_model(exports["model"], _model_ids(cat, root, probe), cat)
+    ids, aliases = _model_ids(cat, root, probe)
+    out["model"] = _pick_model(exports["model"], ids, aliases, cat)
     if exports["model"] == "auto":
         notes.append(f"model: auto → {out['model']}")
     caps = dict(exports["capabilities"])
     spec = (cat.get("probes") or {}).get("capabilities")
     if spec:
-        path = spec["path"].replace("{model}", out["model"])
+        path = spec["path"].replace("{model}", quote(out["model"], safe="/"))
         body = None
         if spec.get("body"):
             body = json.loads(json.dumps(spec["body"]).replace("{model}", out["model"]))
@@ -427,8 +434,8 @@ def server_check(s: dict[str, Any], cat: dict[str, Any], r: dict[str, Any], prob
     root = f"{r['scheme']}://{_hostport(r['host'], r['port'], r['scheme'])}{_server_root(r['base_path'], cat)}"
     want = s.get("model") or "auto"
     try:
-        ids = _model_ids(cat, root, probe)
-        model = _pick_model(want, ids, cat)
+        ids, aliases = _model_ids(cat, root, probe)
+        model = _pick_model(want, ids, aliases, cat)
     except LlmError as e:
         if e.status in (401, 403) and s.get("api_key"):
             return "llm server", "ok", f"answers at {root} (HTTP {e.status} without the key; glove adds it)"

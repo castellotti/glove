@@ -7,7 +7,7 @@ auth: { header: Authorization, scheme: Bearer, required: false }   # llama-serve
 models_endpoint: /v1/models
 probes:
   capabilities:
-    path: /props
+    path: /props?model={model}   # names the model for the router (--models-preset); one model ignores it
     # field names verified against llama.cpp tools/server/server-context.cpp (/props)
     vision: "$.modalities.vision"
     context_window: "$.default_generation_settings.n_ctx"
