@@ -365,7 +365,7 @@ def _served(model: str, ids: list[str], aliases: set[str], cat: dict[str, Any]) 
     """`model` is listed as an id or an alias, or (`dated_aliases`) a dated
     snapshot `<model>-YYYYMMDD` is."""
     return model in ids or model in aliases or (bool(cat.get("dated_aliases")) and any(
-        re.fullmatch(re.escape(model) + r"-\d{8}", i or "") for i in ids))
+        re.fullmatch(re.escape(model) + r"-\d{8}", i) for i in ids))
 
 
 def _pick_model(model: str, ids: list[str], aliases: set[str], cat: dict[str, Any]) -> str:
